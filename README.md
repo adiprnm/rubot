@@ -77,6 +77,10 @@ rubot -d -m "Test"
 
 # Disable tools
 rubot -n -m "Just chat"
+
+# Telegram channel
+export TELEGRAM_BOT_TOKEN="123456:ABC-DEF..."
+rubot -C telegram
 ```
 
 ## Usage
@@ -127,6 +131,7 @@ $ rubot
 | `-n, --no-tools` | Disable tools |
 | `--no-stream` | Disable streaming output |
 | `-v, --version` | Show version |
+| `-C, --channel CHANNEL` | Channel to use: repl, telegram (default: repl) |
 | `-h, --help` | Show help |
 
 ## Configuration
@@ -197,6 +202,116 @@ Each entry in `model_list` defines a model with its provider and credentials:
 | `OPENAI_API_BASE` | Fallback for OpenAI base URL |
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `OLLAMA_HOST` | Ollama host (default: http://localhost:11434) |
+
+## Channels
+
+Rubot supports multiple communication channels — the terminal REPL is just the default.
+Channels are configured in `~/.rubot/config.yml` under the `channels:` key, and multiple
+can run simultaneously.
+
+### Available Channels
+
+| Channel | Description |
+|---------|-------------|
+| `repl` | Terminal REPL (default if no channels configured) |
+| `telegram` | Telegram Bot via long polling or webhook |
+
+### Telegram Setup
+
+1. **Create a bot** via [@BotFather](https://t.me/BotFather) on Telegram and get your bot token.
+2. **Configure** your `~/.rubot/config.yml`:
+
+```yaml
+channels:
+  telegram:
+    token: "123456:ABC-DEF..."  # or set TELEGRAM_BOT_TOKEN env var
+    # Optional security: restrict who can talk to your bot
+    allowed_user_ids: [123456789]   # your Telegram user ID
+    typing_indicator: true          # show "typing..." while processing
+    max_message_length: 4096        # Telegram's max message length
+```
+
+3. **Run** with the Telegram channel:
+
+```bash
+# Check configuration before starting
+rubot check
+
+# Via CLI flag
+rubot -C telegram
+
+# Or via config (add to config.yml and just run `rubot`)
+rubot
+```
+
+Telegram uses long polling by default. For production use with webhooks:
+
+```yaml
+channels:
+  telegram:
+    token: "123456:ABC-DEF..."
+    webhook: true
+    webhook_url: "https://your-domain.com/webhook"
+    webhook_port: 8443
+```
+
+### Running Multiple Channels
+
+You can run both REPL and Telegram simultaneously:
+
+```yaml
+channels:
+  repl:
+    stream: true
+  telegram:
+    token: "123456:ABC-DEF..."
+```
+
+### Adding New Channels
+
+Channels are pluggable. To add a new channel (e.g., Discord, Slack, WhatsApp):
+
+1. Create `lib/rubot/channels/your_channel.rb`
+2. Subclass `Rubot::Channel`:
+
+```ruby
+module Rubot
+  module Channels
+    class Discord < Channel
+      def start
+        @running = true
+        register_signal_handlers
+        # Connect to Discord API, listen for messages
+        # On message: response = process_message(text)
+        # Then: send_response(channel_id, response)
+      end
+
+      def stop
+        @running = false
+        # Disconnect from Discord API
+      end
+    end
+  end
+end
+```
+
+3. Register it in `lib/rubot/channels/registry.rb`:
+
+```ruby
+CHANNEL_MAP = {
+  "telegram" => Telegram,
+  "repl" => REPLChannel,
+  "discord" => Discord,    # add your channel
+}.freeze
+```
+
+4. Configure in `config.yml`:
+
+```yaml
+channels:
+  discord:
+    bot_token: "your-discord-bot-token"
+```
 
 ## Workspace: Soul, Agents & Memory
 

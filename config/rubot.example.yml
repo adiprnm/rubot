@@ -32,6 +32,33 @@ tools:
     enabled: true
   # memory is always enabled when workspace exists
 
+# Channels — how users interact with Rubot.
+# Multiple channels can run simultaneously.
+#
+# Available channels:
+#   repl     — Terminal REPL (default if no channels configured)
+#   telegram — Telegram Bot (long polling or webhook)
+
+channels:
+
+  repl:
+    enabled: true
+    stream: true
+
+  telegram:
+    enabled: true
+    token: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"  # or set TELEGRAM_BOT_TOKEN env var
+    # allowed_user_ids: [123456789]   # optional: restrict to specific Telegram user IDs
+    # allowed_chat_ids: [123456789]   # optional: restrict to specific chat IDs
+    stream: false                    # streaming is not supported for Telegram yet
+    typing_indicator: true           # show "typing..." while processing
+    max_message_length: 4096         # Telegram max message length
+
+    # Webhook mode (alternative to long polling):
+    # webhook: true
+    # webhook_url: "https://your-domain.com/webhook"
+    # webhook_port: 8443
+
 # Workspace files (placed in ~/.rubot/workspace/):
 #
 # SOUL.md — The bot's personality and identity.

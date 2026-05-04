@@ -27,7 +27,7 @@ module Rubot
       config.ensure_workspace
 
       # Register the memory tool so the bot can manage its own memory
-      @tools.register(MemoryTool.new(@memory)) if @memory.enabled?
+      @tools.register(Tools::MemoryTool.new(@memory)) if @memory.enabled?
 
       # Apply AGENTS.md overrides to config
       apply_agents_overrides if @agents_file.enabled?
@@ -112,6 +112,13 @@ module Rubot
 
     def clear_session
       @session.clear!
+    end
+
+    # Switch to a different session (e.g. per-topic in Telegram)
+    def switch_session(session_id)
+      return @session if @session.id == session_id
+      @session = Session.new(session_id, workspace: @config.workspace)
+      @session
     end
 
     def startup_info

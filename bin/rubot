@@ -102,6 +102,120 @@ if ARGV.first == "init"
   exit
 end
 
+if ARGV.first == "check"
+  ARGV.shift
+  puts "╔══════════════════════════════════════════════╗"
+  puts "║        🤖  Rubot Configuration Check  🤖   ║"
+  puts "╚══════════════════════════════════════════════╝"
+  puts
+
+  ok = true
+  issues = []
+
+  # Parse -c/--config from remaining ARGV
+  check_config_path = nil
+  check_argv = ARGV.dup
+  while check_argv.any?
+    arg = check_argv.shift
+    if arg == "-c" || arg == "--config"
+      check_config_path = check_argv.shift
+    elsif arg.start_with?("-c=")
+      check_config_path = arg[3..]
+    elsif arg.start_with?("--config=")
+      check_config_path = arg[9..]
+    end
+  end
+
+  # 1. Config file
+  config = Rubot::Config.new(check_config_path)
+  if File.exist?(config.config_path)
+    puts "✅ Config file: #{config.config_path}"
+  else
+    puts "⚠️  Config file not found: #{config.config_path}"
+    puts "   Run `rubot init` to create one."
+    ok = false
+  end
+
+  # 2. API provider
+  if config.api_key || %w[ollama].include?(config.provider)
+    puts "✅ Provider: #{config.provider} (model: #{config.model})"
+  else
+    puts "❌ No API key found for provider: #{config.provider}"
+    puts "   Set RUBOT_API_KEY or configure in #{config.config_path}"
+    issues << :api_key
+    ok = false
+  end
+
+  # 3. Workspace
+  if Dir.exist?(config.workspace)
+    puts "✅ Workspace: #{config.workspace}"
+  else
+    puts "⚠️  Workspace not found: #{config.workspace}"
+    puts "   Run `rubot init` to create it."
+  end
+
+  # 4. Channels
+  channels = config.data["channels"]
+  if channels.nil? || channels.empty?
+    puts "ℹ️  No channels configured — will use default REPL"
+  elsif channels.is_a?(Hash)
+    channels.each do |name, cfg|
+      cfg ||= {}
+      enabled = cfg["enabled"] != false
+      status = enabled ? "enabled" : "disabled"
+      icon = enabled ? "✅" : "⏸️"
+      puts "#{icon} Channel: #{name} (#{status})"
+      next unless enabled
+
+      # Channel-specific checks
+      if name == "telegram"
+        token = cfg["token"] || ENV["TELEGRAM_BOT_TOKEN"]
+        if token
+          puts "   ✅ Bot token: configured"
+          # Test the token against Telegram API
+          begin
+            require "net/http"
+            require "json"
+            require "uri"
+            uri = URI("https://api.telegram.org/bot#{token}/getMe")
+            resp = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.get(uri) }
+            result = JSON.parse(resp.body)
+            if result["ok"]
+              bot = result["result"]
+              puts "   ✅ Connected: @#{bot['username']} (id: #{bot['id']})"
+            else
+              puts "   ❌ Telegram API error: #{result['description']}"
+              issues << :telegram_token
+              ok = false
+            end
+          rescue StandardError => e
+            puts "   ❌ Connection failed: #{e.message}"
+            issues << :telegram_connection
+            ok = false
+          end
+        else
+          puts "   ❌ No bot token — set 'token' in config or TELEGRAM_BOT_TOKEN env var"
+          issues << :telegram_token
+          ok = false
+        end
+      end
+    end
+  end
+
+  puts
+  if ok
+    puts "✅ All checks passed! Ready to run:"
+    puts "   rubot"
+    puts "   rubot -C telegram  # Telegram only"
+    puts "   rubot -C repl      # REPL only"
+  else
+    puts "❌ Some checks failed. Fix the issues above before running."
+    exit 1
+  end
+
+  exit
+end
+
 options = {}
 parser = OptionParser.new do |opts|
   opts.banner = "Usage: rubot [options] [message]"
@@ -143,8 +257,16 @@ parser = OptionParser.new do |opts|
     exit
   end
 
+  opts.on("-C", "--channel CHANNEL", "Channel to use: repl, telegram (default: repl)") do |c|
+    options[:channel] = c
+  end
+
   opts.on("-h", "--help", "Show this help") do
     puts opts
+    puts
+    puts "Subcommands:"
+    puts "  init    Initialize config, workspace, and default files"
+    puts "  check   Validate config and test channel connections"
     exit
   end
 end
@@ -185,11 +307,13 @@ agent = Rubot::Agent.new(
 )
 
 if options[:message]
-  # Non-interactive mode
+  # Non-interactive mode — skip channel system
   puts agent.process(options[:message])
 else
-  # Interactive REPL mode
-  stream = options.key?(:stream) ? options[:stream] : true
-  repl = Rubot::REPL.new(agent, stream: stream)
-  repl.run
+  # Channel mode — start configured channels
+  Rubot::Channels::Registry.start_channels(
+    data: config.data,
+    agent: agent,
+    options: options
+  )
 end

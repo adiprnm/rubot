@@ -17,8 +17,14 @@ require_relative "rubot/repl"
 require_relative "rubot/soul"
 require_relative "rubot/memory"
 require_relative "rubot/agents_file"
+require_relative "rubot/channel"
+require_relative "rubot/channels/registry"
 
 module Rubot
   VERSION = "0.1.0"
   NAME    = "🤖 rubot"
+
+  def self.debug?
+    ENV["RUBOT_DEBUG"] == "1"
+  end
 end
