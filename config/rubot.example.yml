@@ -1,0 +1,29 @@
+agents:
+  defaults:
+    workspace: ~/.rubot/workspace
+    name: gpt-4o-mini
+    max_tokens: 4096
+    temperature: 0.7
+    system_prompt: "You are Rubot, a helpful AI assistant running in the terminal.\nBe concise and helpful."
+    max_tool_iterations: 50
+
+models:
+  - name: gpt-4o-mini
+    model: openai/gpt-4o-mini
+    api_key: sk-your-key
+    api_base: https://api.openai.com/v1
+  - name: llama3
+    model: ollama/llama3
+    api_base: http://localhost:11434
+
+tools:
+  exec:
+    enabled: true
+  read_file:
+    enabled: true
+  write_file:
+    enabled: true
+  list_dir:
+    enabled: true
+  web_fetch:
+    enabled: true

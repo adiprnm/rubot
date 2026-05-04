@@ -1,0 +1,148 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# rubot - AI Assistant in Ruby
+# Usage: rubot [options] [message]
+
+$LOAD_PATH.unshift File.expand_path("../lib", __dir__)
+require "rubot"
+require "optparse"
+require "fileutils"
+
+# Handle subcommands
+if ARGV.first == "init"
+  ARGV.shift
+
+  rubot_dir = File.expand_path("~/.rubot")
+  config_dir = rubot_dir
+  config_file = File.join(config_dir, "config.yml")
+  workspace_dir = File.join(rubot_dir, "workspace")
+  example_config = File.expand_path("../config/rubot.example.yml", __dir__)
+
+  # Create config directory
+  unless Dir.exist?(config_dir)
+    FileUtils.mkdir_p(config_dir)
+    puts "Created directory: #{config_dir}"
+  else
+    puts "Directory already exists: #{config_dir}"
+  end
+
+  # Copy example config if it doesn't exist
+  if File.exist?(config_file)
+    puts "Config file already exists: #{config_file}"
+    puts "Edit it to set your API key: vim #{config_file}"
+  else
+    FileUtils.cp(example_config, config_file)
+    puts "Created config: #{config_file}"
+    puts "Edit it to set your API key: vim #{config_file}"
+  end
+
+  # Create workspace directory
+  unless Dir.exist?(workspace_dir)
+    FileUtils.mkdir_p(workspace_dir)
+    puts "Created workspace: #{workspace_dir}"
+  else
+    puts "Workspace already exists: #{workspace_dir}"
+  end
+
+  puts
+  puts "Rubot initialized successfully."
+  puts "Set your API key in #{config_file}, then run:"
+  puts "  rubot"
+  puts "Or use environment variables:"
+  puts "  export RUBOT_API_KEY=\"sk-your-key-here\""
+  puts "  rubot"
+  exit
+end
+
+options = {}
+parser = OptionParser.new do |opts|
+  opts.banner = "Usage: rubot [options] [message]"
+
+  opts.on("-m", "--message MESSAGE", "Send a single message (non-interactive)") do |m|
+    options[:message] = m
+  end
+
+  opts.on("-s", "--session SESSION", "Session ID (default: default)") do |s|
+    options[:session] = s
+  end
+
+  opts.on("-p", "--provider PROVIDER", "Provider: openai, anthropic, ollama") do |p|
+    options[:provider] = p
+  end
+
+  opts.on("-M", "--model MODEL", "Model name to use") do |m|
+    options[:model] = m
+  end
+
+  opts.on("-c", "--config PATH", "Path to config file") do |c|
+    options[:config] = c
+  end
+
+  opts.on("-d", "--debug", "Enable debug output") do
+    options[:debug] = true
+  end
+
+  opts.on("-n", "--no-tools", "Disable tools") do
+    options[:no_tools] = true
+  end
+
+  opts.on("--no-stream", "Disable streaming output") do
+    options[:stream] = false
+  end
+
+  opts.on("-v", "--version", "Show version") do
+    puts "rubot #{Rubot::VERSION}"
+    exit
+  end
+
+  opts.on("-h", "--help", "Show this help") do
+    puts opts
+    exit
+  end
+end
+
+parser.parse!
+
+# Build configuration
+config = Rubot::Config.new(options[:config])
+
+# Override with CLI options
+config.data["debug"] = true if options[:debug]
+config.data["tools"] = false if options[:no_tools]
+
+if options[:provider]
+  config.data["provider"] = options[:provider]
+end
+
+if options[:model]
+  config.data["model"] = options[:model]
+end
+
+# Validate config
+unless config.api_key || %w[ollama].include?(config.provider)
+  $stderr.puts "Error: No API key found."
+  $stderr.puts "Set RUBOT_API_KEY or configure in #{config.config_path}"
+  $stderr.puts "For Ollama, set provider to 'ollama'."
+  exit 1
+end
+
+# Build tools
+tools = Rubot::Tools::Registry.new
+
+# Build agent
+agent = Rubot::Agent.new(
+  config: config,
+  session_id: options[:session] || "default",
+  tools: tools
+)
+
+if options[:message]
+  # Non-interactive mode
+  puts agent.process(options[:message])
+else
+  # Interactive REPL mode
+  stream = options.key?(:stream) ? options[:stream] : true
+  repl = Rubot::REPL.new(agent, stream: stream)
+  repl.run
+end

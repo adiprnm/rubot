@@ -1,0 +1,20 @@
+# frozen_string_literal: true
+
+require_relative "rubot/config"
+require_relative "rubot/session"
+require_relative "rubot/provider"
+require_relative "rubot/providers/openai"
+require_relative "rubot/providers/anthropic"
+require_relative "rubot/providers/ollama"
+require_relative "rubot/tool"
+require_relative "rubot/tools/shell"
+require_relative "rubot/tools/file_tool"
+require_relative "rubot/tools/web"
+require_relative "rubot/tools/registry"
+require_relative "rubot/agent"
+require_relative "rubot/repl"
+
+module Rubot
+  VERSION = "0.1.0"
+  NAME    = "🤖 rubot"
+end
