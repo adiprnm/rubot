@@ -8,9 +8,12 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 
 - 🪶 **Zero dependencies** — only Ruby standard library
 - 🔌 **Multiple providers** — OpenAI, Anthropic, Ollama, or any OpenAI-compatible API
-- 🛠️ **Built-in tools** — shell execution, file operations, web fetching
+- 🛠️ **Built-in tools** — shell execution, file operations, web fetching, persistent memory
 - 💬 **Interactive REPL** — with streaming, command history, and tab completion
 - 📝 **Session management** — persistent conversation history
+- 🧬 **SOUL.md** — personality and identity file for persistent character
+- 📋 **AGENTS.md** — YAML frontmatter config + markdown behavior rules
+- 🧠 **MEMORY.md** — persistent memory the bot can read and update across sessions
 - 🎛️ **CLI options** — single-message mode or interactive chat
 - 🔒 **Tool safety** — dangerous command filtering
 
@@ -103,8 +106,11 @@ $ rubot
 | `/help` | Show available commands |
 | `/clear` | Clear conversation history |
 | `/session [name]` | Show or switch session |
-| `/info` | Show agent info |
+| `/info` | Show agent info (includes soul/memory status) |
 | `/tools` | List available tools |
+| `/soul` | Show the bot's soul (SOUL.md) |
+| `/memory` | Show persistent memory (MEMORY.md) |
+| `/agents` | Show agent rules (AGENTS.md) |
 | `/stream on\|off` | Toggle streaming |
 | `/quit` | Exit |
 
@@ -192,9 +198,82 @@ Each entry in `model_list` defines a model with its provider and credentials:
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `OLLAMA_HOST` | Ollama host (default: http://localhost:11434) |
 
+## Workspace: Soul, Agents & Memory
+
+Run `rubot init` to create `~/.rubot/workspace/` with default files.
+
+### SOUL.md — Personality & Identity
+
+A freeform Markdown file describing the bot's personality, values, and
+communication style. Loaded into the system prompt on every session.
+
+```markdown
+# Soul
+
+You are Rubot, a concise and pragmatic terminal assistant.
+You are written in Ruby and value simplicity.
+You prefer small, composable solutions over complex architectures.
+```
+
+### AGENTS.md — Agent Configuration & Rules
+
+A Markdown file with **YAML frontmatter** for machine-readable settings
+and a body of behavior rules. Frontmatter can override:
+`name`, `model`, `max_tokens`, `temperature`, `max_tool_iterations`, and
+individual tool enable/disable settings.
+
+```yaml
+---
+name: Rubot
+model: gpt-4o-mini
+max_tokens: 4096
+temperature: 0.7
+max_tool_iterations: 50
+tools:
+  exec: true
+  file_ops: true
+  web_fetch: true
+---
+```
+
+```markdown
+# Agent Rules
+
+- Be concise and direct in responses.
+- Explain before executing commands.
+- Use tools when they can help.
+- Remember important details using the memory tool.
+```
+
+### MEMORY.md — Persistent Memory
+
+A Markdown file that the bot reads on every session and can update via
+the built-in `memory` tool. Organized into sections:
+
+- **Facts** — Things the bot should remember about you
+- **Preferences** — Your communication style and preferences
+- **Context** — Current project/task context
+
+The bot uses the memory tool to `read`, `write`, `append`, and
+`update_section`. This lets it remember information across sessions.
+
+```markdown
+# Memory
+
+## Facts
+- User prefers Ruby over JavaScript
+- Works on a personal AI assistant project
+
+## Preferences
+- Concise responses, no fluff
+
+## Context
+- Currently working on tool registry
+```
+
 ## Tools
 
-Rubot comes with 3 built-in tools:
+Rubot comes with 4 built-in tools:
 
 ### `shell_exec`
 Execute shell commands. The LLM can run commands and see their output.
@@ -205,6 +284,16 @@ File operations: read, write, append, list directories, get file info.
 
 ### `web_fetch`
 Fetch content from URLs via HTTP GET.
+
+### `memory`
+Read and update the bot's persistent MEMORY.md file.
+
+| Operation | Description |
+|-----------|-------------|
+| `read` | Read the entire memory file |
+| `write` | Replace all memory with new content |
+| `append` | Add a fact to a section (Facts, Preferences, or Context) |
+| `update_section` | Replace all items in a section |
 
 ### Adding Custom Tools
 
@@ -258,6 +347,9 @@ rubot/
 │       ├── agent.rb       # Agent loop (process messages, call tools)
 │       ├── config.rb      # Configuration management
 │       ├── session.rb     # Session/history management
+│       ├── soul.rb        # SOUL.md personality loader
+│       ├── memory.rb      # MEMORY.md persistent memory
+│       ├── agents_file.rb # AGENTS.md config & rules parser
 │       ├── provider.rb    # Base provider interface
 │       ├── providers/
 │       │   ├── openai.rb  # OpenAI-compatible provider
@@ -268,6 +360,7 @@ rubot/
 │       │   ├── shell.rb   # Shell execution tool
 │       │   ├── file_tool.rb # File operations tool
 │       │   ├── web.rb     # Web fetch tool
+│       │   ├── memory_tool.rb # Memory management tool
 │       │   └── registry.rb # Tool registry
 │       └── repl.rb        # REPL interface
 ├── config/

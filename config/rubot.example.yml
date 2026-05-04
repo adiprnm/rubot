@@ -1,3 +1,6 @@
+# Rubot Configuration
+# Copy this file to ~/.rubot/config.yml and edit it.
+
 agents:
   defaults:
     workspace: ~/.rubot/workspace
@@ -27,3 +30,21 @@ tools:
     enabled: true
   web_fetch:
     enabled: true
+  # memory is always enabled when workspace exists
+
+# Workspace files (placed in ~/.rubot/workspace/):
+#
+# SOUL.md — The bot's personality and identity.
+#   A freeform Markdown file describing who the bot is,
+#   its values, communication style, and character.
+#
+# AGENTS.md — Agent configuration with YAML frontmatter + behavior rules.
+#   Frontmatter can override: name, model, max_tokens, temperature,
+#   max_tool_iterations, and tool enable/disable settings.
+#   The body contains behavior rules injected into the system prompt.
+#
+# MEMORY.md — Persistent memory managed by the bot itself.
+#   The bot reads this on every session and can update it via the
+#   memory tool to remember facts, preferences, and context.
+#
+# Run "rubot init" to create the workspace with default files.

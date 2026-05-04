@@ -45,6 +45,53 @@ if ARGV.first == "init"
     puts "Workspace already exists: #{workspace_dir}"
   end
 
+  # Create default SOUL.md
+  soul_file = File.join(workspace_dir, "SOUL.md")
+  unless File.exist?(soul_file)
+    File.write(soul_file, Rubot::Soul::DEFAULT_SOUL)
+    puts "Created soul file: #{soul_file}"
+  else
+    puts "Soul file already exists: #{soul_file}"
+  end
+
+  # Create default MEMORY.md
+  memory_file = File.join(workspace_dir, "MEMORY.md")
+  unless File.exist?(memory_file)
+    File.write(memory_file, Rubot::Memory::DEFAULT_MEMORY)
+    puts "Created memory file: #{memory_file}"
+  else
+    puts "Memory file already exists: #{memory_file}"
+  end
+
+  # Create default AGENTS.md
+  agents_file = File.join(workspace_dir, "AGENTS.md")
+  unless File.exist?(agents_file)
+    File.write(agents_file, <<~AGENTS)
+      ---
+      # AGENTS.md frontmatter — override agent settings here
+      # name: Rubot
+      # model: gpt-4o-mini
+      # max_tokens: 4096
+      # temperature: 0.7
+      # max_tool_iterations: 50
+      # tools:
+      #   exec: true
+      #   file_ops: true
+      #   web_fetch: true
+      ---
+
+      # Agent Rules
+
+      - Be concise and direct in your responses.
+      - Explain what you're doing before executing commands.
+      - Use tools when they can help accomplish the task.
+      - Remember important details by using the memory tool.
+    AGENTS
+    puts "Created agent rules: #{agents_file}"
+  else
+    puts "Agent rules already exist: #{agents_file}"
+  end
+
   puts
   puts "Rubot initialized successfully."
   puts "Set your API key in #{config_file}, then run:"

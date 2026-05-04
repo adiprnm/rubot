@@ -11,6 +11,9 @@ module Rubot
       "/session NAME" => "Switch to a new session",
       "/info"     => "Show agent info (provider, model, tools)",
       "/tools"    => "List available tools",
+      "/soul"     => "Show the bot's soul (SOUL.md)",
+      "/memory"   => "Show persistent memory (MEMORY.md)",
+      "/agents"   => "Show agent rules (AGENTS.md)",
       "/stream on|off" => "Toggle streaming output",
       "/quit"     => "Exit rubot"
     }
@@ -131,6 +134,38 @@ module Rubot
         puts "\nAvailable tools:"
         @agent.tools.all.each do |tool|
           puts "  - #{tool.name}: #{tool.description.lines.first.strip}"
+        end
+        puts
+      when "/soul"
+        if @agent.soul.enabled?
+          puts "\n🧬 Soul (SOUL.md):"
+          puts "---"
+          puts @agent.soul.to_s
+          puts "---"
+        else
+          puts "\n🧬 No soul file (SOUL.md) found in workspace."
+          puts "Create one at: #{@agent.config.workspace}/SOUL.md"
+        end
+        puts
+      when "/memory"
+        if @agent.memory.enabled?
+          puts "\n🧠 Memory (MEMORY.md):"
+          puts "---"
+          puts @agent.memory.read
+          puts "---"
+        else
+          puts "\n🧠 Memory not available (no workspace configured)."
+        end
+        puts
+      when "/agents"
+        if @agent.agents_file.enabled?
+          puts "\n📋 Agent Rules (AGENTS.md):"
+          puts "---"
+          puts @agent.agents_file.raw
+          puts "---"
+        else
+          puts "\n📋 No AGENTS.md found in workspace."
+          puts "Create one at: #{@agent.config.workspace}/AGENTS.md"
         end
         puts
       when "/stream"

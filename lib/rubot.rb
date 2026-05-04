@@ -10,9 +10,13 @@ require_relative "rubot/tool"
 require_relative "rubot/tools/shell"
 require_relative "rubot/tools/file_tool"
 require_relative "rubot/tools/web"
+require_relative "rubot/tools/memory_tool"
 require_relative "rubot/tools/registry"
 require_relative "rubot/agent"
 require_relative "rubot/repl"
+require_relative "rubot/soul"
+require_relative "rubot/memory"
+require_relative "rubot/agents_file"
 
 module Rubot
   VERSION = "0.1.0"

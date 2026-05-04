@@ -5,19 +5,32 @@ require_relative "config"
 require_relative "session"
 require_relative "provider"
 require_relative "tools/registry"
+require_relative "soul"
+require_relative "memory"
+require_relative "agents_file"
+require_relative "tools/memory_tool"
 
 module Rubot
   class Agent
     MAX_TOOL_ITERATIONS = 10
 
-    attr_reader :config, :provider, :session, :tools
+    attr_reader :config, :provider, :session, :tools, :soul, :memory, :agents_file
 
     def initialize(config:, provider: nil, session_id: "default", tools: nil)
       @config = config
       @provider = provider || build_provider
       @session = Session.new(session_id, workspace: config.workspace)
       @tools = tools || Tools::Registry.new
+      @soul = Soul.new(workspace: config.workspace)
+      @memory = Memory.new(workspace: config.workspace)
+      @agents_file = AgentsFile.new(workspace: config.workspace)
       config.ensure_workspace
+
+      # Register the memory tool so the bot can manage its own memory
+      @tools.register(MemoryTool.new(@memory)) if @memory.enabled?
+
+      # Apply AGENTS.md overrides to config
+      apply_agents_overrides if @agents_file.enabled?
     end
 
     # Process a user message and return the final assistant response
@@ -102,21 +115,88 @@ module Rubot
     end
 
     def startup_info
-      {
+      info = {
         provider: @provider.name,
         model: @config.model,
         tools: @tools.count,
         messages: @session.message_count
       }
+      info[:soul] = "yes" if @soul.enabled?
+      info[:memory] = "yes" if @memory.enabled?
+      info[:agents] = "yes" if @agents_file.enabled?
+      info
+    end
+
+    # Build the full system prompt from all sources
+    def build_system_prompt
+      parts = []
+
+      # 1. AGENTS.md rules (behavior guidelines)
+      if @agents_file.enabled? && !@agents_file.rules.empty?
+        parts << "# Agent Rules\n\n#{@agents_file.rules}"
+      end
+
+      # 2. SOUL.md (personality and identity)
+      if @soul.enabled?
+        parts << "# Soul\n\n#{@soul.to_s}"
+      end
+
+      # 3. MEMORY.md (persistent context)
+      if @memory.enabled?
+        parts << "# Memory\n\n#{@memory.to_s}"
+      end
+
+      # 4. Default/config system prompt
+      config_prompt = @config.system_prompt
+      parts << config_prompt unless config_prompt.empty?
+
+      parts.join("\n\n---\n\n")
     end
 
     private
 
+    def apply_agents_overrides
+      ag = @agents_file
+
+      # Override config values if set in AGENTS.md frontmatter
+      if ag.name
+        @config.data.dig("agents", "defaults") || @config.data["agents"] = { "defaults" => {} }
+        @config.data.dig("agents", "defaults")["name"] = ag.name
+      end
+
+      if ag.model
+        @config.data["model"] = ag.model
+      end
+
+      if ag.max_tokens
+        @config.data.dig("agents", "defaults") || @config.data["agents"] = { "defaults" => {} }
+        @config.data.dig("agents", "defaults")["max_tokens"] = ag.max_tokens
+      end
+
+      if ag.temperature
+        @config.data.dig("agents", "defaults") || @config.data["agents"] = { "defaults" => {} }
+        @config.data.dig("agents", "defaults")["temperature"] = ag.temperature
+      end
+
+      if ag.max_tool_iterations
+        @config.data.dig("agents", "defaults") || @config.data["agents"] = { "defaults" => {} }
+        @config.data.dig("agents", "defaults")["max_tool_iterations"] = ag.max_tool_iterations
+      end
+
+      # Apply tool overrides from AGENTS.md
+      return if ag.tools_config.empty?
+      tools = @config.data["tools"] || {}
+      ag.tools_config.each do |tool_name, enabled|
+        tools[tool_name.to_s] = { "enabled" => enabled }
+      end
+      @config.data["tools"] = tools unless ag.tools_config.empty?
+    end
+
     def build_messages
       messages = []
 
-      # Add system prompt
-      messages << { "role" => "system", "content" => @config.system_prompt }
+      # Add system prompt (composed from all sources)
+      messages << { "role" => "system", "content" => build_system_prompt }
 
       # Add conversation history (limited)
       history_limit = @config.history_limit
@@ -162,7 +242,16 @@ module Rubot
       return nil unless @config.tools_enabled
       enabled_list = @config.enabled_tools
       return nil if enabled_list.nil? || enabled_list.empty?
-      @tools.all.select { |t| enabled_list.include?(t.name) }
+
+      tools = @tools.all.select { |t| enabled_list.include?(t.name) }
+
+      # Always include memory tool if memory is enabled, regardless of config
+      if @memory.enabled?
+        memory_tool = @tools.get("memory")
+        tools << memory_tool if memory_tool && !tools.include?(memory_tool)
+      end
+
+      tools
     end
 
     def parse_tool_call(tc)
