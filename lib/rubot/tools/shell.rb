@@ -9,17 +9,28 @@ module Rubot
     class Shell < Tool
       MAX_OUTPUT = 10_000 # characters
 
+      attr_accessor :safety_guard
+
+      def initialize(safety_guard: nil)
+        @safety_guard = safety_guard
+      end
+
       def name
         "shell_exec"
       end
 
       def description
-        <<~DESC.strip
+        desc = <<~DESC.strip
           Execute a shell command and return its output.
           Use this for running system commands, scripts, git operations, etc.
           The command will be executed in the current working directory.
           Output is limited to #{MAX_OUTPUT} characters.
         DESC
+        if @safety_guard&.restrict_to_workspace
+          desc + "\nCommands are restricted to the workspace directory."
+        else
+          desc
+        end
       end
 
       def parameters
@@ -39,11 +50,8 @@ module Rubot
         cmd = arguments["command"]
         raise "No command provided" if cmd.nil? || cmd.strip.empty?
 
-        # Safety: reject obviously dangerous commands
-        if dangerous_command?(cmd)
-          return "ERROR: Command rejected for safety reasons. " \
-                 "Commands like 'rm -rf /', 'dd', 'mkfs', 'curl|sh', etc. are not allowed."
-        end
+        # Safety guard checks
+        check_command_safety(cmd)
 
         stdout, stderr, status = Open3.capture3(cmd)
         output = ""
@@ -63,7 +71,36 @@ module Rubot
 
       private
 
-      def dangerous_command?(cmd)
+      def check_command_safety(cmd)
+        # Always check for dangerous patterns
+        guard = @safety_guard
+        if guard.nil?
+          # Fallback to inline check if no safety guard configured
+          if dangerous_command_fallback?(cmd)
+            raise "Command rejected for safety: dangerous pattern detected"
+          end
+          warn "[shell:safety] NO safety guard configured" if Rubot.debug?
+          return
+        end
+
+        warn "[shell:safety] restrict=#{guard.restrict_to_workspace} cmd=#{cmd[0..60]}" if Rubot.debug?
+
+        # Always block dangerous commands regardless of mode
+        if guard.dangerous_command?(cmd)
+          raise "Command rejected for safety: dangerous pattern detected"
+        end
+
+        # In workspace-restricted mode, verify command path
+        return unless guard.restrict_to_workspace
+
+        begin
+          guard.check_command(cmd)
+        rescue SafetyGuard::SecurityError => e
+          raise e.message
+        end
+      end
+
+      def dangerous_command_fallback?(cmd)
         patterns = [
           /\brm\s+(-rf?|--recursive)\s+\/\s*$/,
           /\brm\s+(-rf?|--recursive)\s+\*\s*$/,

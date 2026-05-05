@@ -5,6 +5,7 @@ require_relative "config"
 require_relative "session"
 require_relative "provider"
 require_relative "tools/registry"
+require_relative "safety_guard"
 require_relative "soul"
 require_relative "memory"
 require_relative "agents_file"
@@ -14,13 +15,33 @@ module Rubot
   class Agent
     MAX_TOOL_ITERATIONS = 10
 
-    attr_reader :config, :provider, :session, :tools, :soul, :memory, :agents_file, :skill_registry
+    attr_reader :config, :provider, :session, :tools, :soul, :memory, :agents_file, :skill_registry, :safety_guard
 
     def initialize(config:, provider: nil, session_id: "default", tools: nil)
       @config = config
       @provider = provider || build_provider
       @session = Session.new(session_id, workspace: config.workspace)
+
+      # Build safety guard from config
+      @safety_guard = SafetyGuard.new(
+        workspace: config.workspace,
+        restrict_to_workspace: config.restrict_to_workspace,
+        allow_read_outside: config.allow_read_outside_workspace
+      )
+
       @tools = tools || Tools::Registry.new
+      # Always inject safety guard into tools, even when passed from outside
+      inject_safety_guard
+
+      # Warn if safety guard is disabled
+      unless @safety_guard.restrict_to_workspace
+        warn "[safety] WARNING: restrict_to_workspace is DISABLED — agent has full system access"
+        warn "[safety] Set restrict_to_workspace: true in config.yml to enable sandboxing"
+      else
+        mode = @safety_guard.allow_read_outside ? "restrict-write" : "strict"
+        warn "[safety] Safety guard ENABLED (mode: #{mode}, workspace: #{@safety_guard.workspace})"
+      end
+
       @soul = Soul.new(workspace: config.workspace)
       @memory = Memory.new(workspace: config.workspace)
       @agents_file = AgentsFile.new(workspace: config.workspace)
@@ -169,6 +190,7 @@ module Rubot
       info[:soul] = "yes" if @soul.enabled?
       info[:memory] = "yes" if @memory.enabled?
       info[:agents] = "yes" if @agents_file.enabled?
+      info[:safety] = @safety_guard.restrict_to_workspace ? "restricted" : "permissive"
       info[:skills] = @skill_registry.count if @skill_registry.any?
       info
     end
@@ -247,6 +269,18 @@ module Rubot
       cron_tool = @tools.get("cron")
       return unless cron_tool && cron_tool.respond_to?(:workspace=)
       cron_tool.workspace = @config.workspace
+    end
+
+    # Inject the safety guard into all tools that support it.
+    # Called after @tools is assigned, ensuring the guard is applied
+    # regardless of whether tools came from the Agent's constructor
+    # or were passed in externally (e.g. from bin/rubot or REPL).
+    def inject_safety_guard
+      return unless @tools.respond_to?(:all)
+      @tools.all.each do |tool|
+        next unless tool.respond_to?(:safety_guard=)
+        tool.safety_guard = @safety_guard
+      end
     end
 
     # Fire any due cron jobs and return their results.

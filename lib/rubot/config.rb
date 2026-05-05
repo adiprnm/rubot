@@ -76,6 +76,18 @@ module Rubot
       ws.start_with?("~") ? File.expand_path(ws) : ws
     end
 
+    def restrict_to_workspace
+      val = agent_defaults["restrict_to_workspace"]
+      # Default to true for security (matches PicoClaw default)
+      return true if val.nil?
+      !!val
+    end
+
+    def allow_read_outside_workspace
+      val = agent_defaults["allow_read_outside_workspace"]
+      !!val
+    end
+
     def max_tool_iterations
       agent_defaults["max_tool_iterations"] || 50
     end

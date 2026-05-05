@@ -3,10 +3,11 @@
 module Rubot
   module Tools
     class Registry
-      attr_reader :tools
+      attr_reader :tools, :safety_guard
 
-      def initialize
+      def initialize(safety_guard: nil)
         @tools = {}
+        @safety_guard = safety_guard
         register_defaults
       end
 
@@ -52,8 +53,8 @@ module Rubot
       private
 
       def register_defaults
-        register Shell.new
-        register FileTool.new
+        register Shell.new(safety_guard: @safety_guard)
+        register FileTool.new(safety_guard: @safety_guard)
         register Web.new
         register Cron.new
       end

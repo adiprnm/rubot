@@ -9,6 +9,13 @@ agents:
     temperature: 0.7
     system_prompt: "You are Rubot, a helpful AI assistant running in the terminal.\nBe concise and helpful."
     max_tool_iterations: 50
+    # Safety guard — restrict agent access to the workspace directory.
+    # When true, file operations and command execution are confined to `workspace`.
+    # Set to false to disable sandboxing (not recommended).
+    restrict_to_workspace: true
+    # When restrict_to_workspace is true, allow read-only access outside the workspace.
+    # Write operations are always blocked outside the workspace.
+    allow_read_outside_workspace: false
 
 models:
   - name: gpt-4o-mini
@@ -57,6 +64,21 @@ channels:
     # webhook_url: "https://your-domain.com/webhook"
     # webhook_port: 8443
 
+# Safety Guard
+#
+# The safety guard mechanism protects your system by restricting what the
+# agent can do. It has two layers:
+#
+#   1. Workspace restriction — confines file operations (read, write, append,
+#      list, info) and command execution to the `workspace` directory.
+#   2. Dangerous command blocking — always blocks harmful patterns regardless
+#      of workspace mode (e.g. `rm -rf /`, `mkfs`, `curl | sh`, etc.).
+#
+# The web tool also blocks requests to private/internal IPs (SSRF protection).
+#
+# Safe paths like /dev/null, /dev/urandom, /dev/stdin, etc. are always
+# accessible even in restricted mode.
+#
 # Workspace files (placed in ~/.rubot/workspace/):
 #
 # SOUL.md — The bot's personality and identity.

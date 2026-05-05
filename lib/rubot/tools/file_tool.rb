@@ -10,12 +10,18 @@ module Rubot
       MAX_READ = 20_000  # characters
       MAX_LIST = 100     # entries
 
+      attr_accessor :safety_guard
+
+      def initialize(safety_guard: nil)
+        @safety_guard = safety_guard
+      end
+
       def name
         "file_ops"
       end
 
       def description
-        <<~DESC.strip
+        desc = <<~DESC.strip
           Perform file operations: read, write, append, list directory, or check file info.
           Operations: read, write, append, list, info
           - read: Read file contents
@@ -24,6 +30,12 @@ module Rubot
           - list: List directory contents
           - info: Get file/directory information
         DESC
+        if @safety_guard&.restrict_to_workspace
+          ws = @safety_guard.workspace
+          desc + "\nAll operations are restricted to the workspace: #{ws}"
+        else
+          desc
+        end
       end
 
       def parameters
@@ -70,8 +82,18 @@ module Rubot
       def safe_path(path)
         Pathname.new(path).expand_path
       end
+      def check_path(path, operation:)
+        guard = @safety_guard
+        if guard.nil?
+          warn "[file:safety] NO safety guard configured for #{operation} #{path}" if Rubot.debug?
+          return true
+        end
+        warn "[file:safety] restrict=#{guard.restrict_to_workspace} #{operation}=#{path}" if Rubot.debug?
+        guard.check_path(path, operation: operation)
+      end
 
       def read_file(path)
+        check_path(path, operation: :read)
         p = safe_path(path)
         raise "File not found: #{path}" unless File.exist?(p)
         raise "Not a file: #{path}" unless File.file?(p)
@@ -85,6 +107,7 @@ module Rubot
       end
 
       def write_file(path, content)
+        check_path(path, operation: :write)
         raise "No content provided" if content.nil?
         p = safe_path(path)
         FileUtils.mkdir_p(File.dirname(p))
@@ -93,6 +116,7 @@ module Rubot
       end
 
       def append_file(path, content)
+        check_path(path, operation: :write)
         raise "No content provided" if content.nil?
         p = safe_path(path)
         FileUtils.mkdir_p(File.dirname(p))
@@ -101,6 +125,7 @@ module Rubot
       end
 
       def list_dir(path)
+        check_path(path, operation: :read)
         p = safe_path(path)
         raise "Directory not found: #{path}" unless Dir.exist?(p)
 
@@ -120,6 +145,7 @@ module Rubot
       end
 
       def file_info(path)
+        check_path(path, operation: :read)
         p = safe_path(path)
         raise "Path not found: #{path}" unless File.exist?(p)
 
