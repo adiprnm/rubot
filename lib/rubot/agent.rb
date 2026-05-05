@@ -31,10 +31,18 @@ module Rubot
 
       # Apply AGENTS.md overrides to config
       apply_agents_overrides if @agents_file.enabled?
+
+      # Set workspace on cron tool so jobs persist to disk
+      configure_cron_tool
     end
 
-    # Process a user message and return the final assistant response
+    # Process a user message and return the final assistant response.
+    # Due cron jobs are fired first, their output prepended to the response.
     def process(message, &on_chunk)
+      # Fire any due cron jobs and collect their results
+      cron_results = fire_due_cron_jobs
+      warn "[cron] fire_due_cron_jobs returned #{cron_results.size} result(s)" if Rubot.debug?
+
       # Add user message to session
       @session.add("user", message)
 
@@ -107,7 +115,36 @@ module Rubot
 
       # Add final assistant response to session
       @session.add("assistant", response) unless response.empty?
-      response
+
+      # Prepend cron results to the user's response
+      # Skip inline processing if a callback is registered (Telegram handles it)
+      parts = []
+      cron_tool = @tools.get("cron")
+      has_callback = cron_tool && cron_tool.respond_to?(:has_fire_callback?) && cron_tool.has_fire_callback?
+
+      unless has_callback
+        cron_results.each do |cr|
+          warn "[cron] Processing job #{cr[:job_id]} mode=#{cr[:mode]}" if Rubot.debug?
+          case cr[:mode]
+          when "agent_turn"
+            cron_response = process_cron(cr[:result][:agent_message])
+            warn "[cron] agent_turn response: #{(cron_response || '(nil)')[0..100]}" if Rubot.debug?
+            parts << cron_response if cron_response && !cron_response.empty?
+          when "deliver"
+            warn "[cron] deliver message: #{(cr[:result][:deliver_message] || '(nil)')[0..100]}" if Rubot.debug?
+            parts << cr[:result][:deliver_message]
+          when "command"
+            output = cr[:result][:output] || "(no output)"
+            warn "[cron] command output: #{output[0..100]}" if Rubot.debug?
+            parts << "⏰ Cron job fired: #{cr[:result][:output]}"
+          end
+        end
+      end
+      parts << response if response && !response.empty?
+
+      combined = parts.join("\n\n---\n\n")
+      warn "[cron] Combined response (#{parts.size} parts): #{combined[0..200]}" if Rubot.debug?
+      combined
     end
 
     def clear_session
@@ -199,6 +236,24 @@ module Rubot
       @config.data["tools"] = tools unless ag.tools_config.empty?
     end
 
+    # Set the workspace on the cron tool so jobs persist to disk
+    def configure_cron_tool
+      cron_tool = @tools.get("cron")
+      return unless cron_tool && cron_tool.respond_to?(:workspace=)
+      cron_tool.workspace = @config.workspace
+    end
+
+    # Fire any due cron jobs and return their results.
+    def fire_due_cron_jobs
+      cron_tool = @tools.get("cron")
+      return [] unless cron_tool && cron_tool.respond_to?(:scheduler)
+      scheduler = cron_tool.scheduler
+      scheduler.fire_due_jobs
+    rescue StandardError => e
+      warn "[cron] Error firing due jobs: #{e.class}: #{e.message}"
+      []
+    end
+
     def build_messages
       messages = []
 
@@ -248,9 +303,13 @@ module Rubot
     def tool_definitions
       return nil unless @config.tools_enabled
       enabled_list = @config.enabled_tools
-      return nil if enabled_list.nil? || enabled_list.empty?
 
-      tools = @tools.all.select { |t| enabled_list.include?(t.name) }
+      # If no explicit tool configuration, use all registered tools
+      tools = if enabled_list.nil? || enabled_list.empty?
+        @tools.all
+      else
+        @tools.all.select { |t| enabled_list.include?(t.name) }
+      end
 
       # Always include memory tool if memory is enabled, regardless of config
       if @memory.enabled?
@@ -280,6 +339,91 @@ module Rubot
 
     def log_debug(msg)
       warn "[debug] #{msg}" if @config.debug?
+    end
+
+    # -- Public methods accessible from background threads and channels --
+    public
+
+    # Process a cron message through the LLM. Called by the cron scheduler's
+    # background thread.
+    def process_cron(message)
+      # Build local messages from session history ONLY (up to the last assistant response)
+      # Do NOT include the current user message — this is a separate conversation turn
+      local_messages = build_cron_messages
+      local_messages << { "role" => "user", "content" => "⏰ Scheduled task fired:\n#{message}" }
+
+      response = ""
+      tool_calls = nil
+      iterations = 0
+
+      loop do
+        break if iterations >= MAX_TOOL_ITERATIONS
+
+        result = @provider.chat(local_messages, tools: tool_definitions)
+
+        if result.is_a?(Array)
+          response, tool_calls = result
+        elsif result.is_a?(Hash) && result["tool_calls"]
+          response = result["content"] || ""
+          tool_calls = result["tool_calls"]
+        else
+          response = result.to_s
+          tool_calls = nil
+        end
+
+        if tool_calls && !tool_calls.empty?
+          local_messages << { "role" => "assistant", "content" => response, "tool_calls" => tool_calls }
+
+          tool_calls.each do |tc|
+            tool_name, arguments = parse_tool_call(tc)
+            begin
+              tool_result = @tools.execute(tool_name, arguments)
+            rescue StandardError => e
+              tool_result = "ERROR: #{e.class}: #{e.message}"
+            end
+
+            tool_call_id = tc.is_a?(Hash) ? (tc["id"] || tool_name) : tool_name
+            local_messages << { "role" => "tool", "content" => tool_result, "tool_call_id" => tool_call_id }
+          end
+
+          response = ""
+          tool_calls = nil
+          iterations += 1
+        else
+          break
+        end
+      end
+
+      # If the LLM returned empty, use the cron message itself as the response
+      response = message if response.nil? || response.strip.empty?
+
+      @session.add("assistant", response) unless response.empty?
+      response
+    end
+
+    # Build messages for cron processing — uses conversation history
+    # but excludes the current user message being processed.
+    def build_cron_messages
+      messages = []
+      messages << { "role" => "system", "content" => build_system_prompt }
+
+      history_limit = @config.history_limit
+      all_history = @session.conversation_history
+
+      # If the last message is a user message (the current one being processed),
+      # exclude it so cron processing has clean context
+      history = all_history.dup
+      history.pop if history.last && history.last["role"] == "user"
+
+      recent = history_limit ? history.last(history_limit) : history
+      recent.each do |msg|
+        formatted = { "role" => msg["role"], "content" => msg["content"] }
+        formatted["tool_calls"] = msg["tool_calls"] if msg["role"] == "assistant" && msg["tool_calls"]
+        formatted["tool_call_id"] = msg["tool_call_id"] if msg["role"] == "tool"
+        messages << formatted
+      end
+
+      messages
     end
   end
 end

@@ -55,6 +55,7 @@ module Rubot
         register Shell.new
         register FileTool.new
         register Web.new
+        register Cron.new
       end
     end
   end

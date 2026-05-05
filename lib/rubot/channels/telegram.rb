@@ -34,6 +34,9 @@ module Rubot
         @offset = 0
         @mutex = Mutex.new
         @active_typing = {}  # chat_id => thread
+        @last_chat_id = nil
+        @last_thread_id = nil
+        @process_mutex = Mutex.new
       end
 
       def start
@@ -49,6 +52,9 @@ module Rubot
         bot_info = resp["result"]
         warn "[telegram] Connected as @#{bot_info['username']} (id: #{bot_info['id']})"
 
+        # Start cron scheduler with callback for automatic cron execution
+        start_cron_scheduler
+
         @webhook = @config["webhook"] == true
         if @webhook
           start_webhook
@@ -63,6 +69,7 @@ module Rubot
         @poll_thread&.join(5)
         @active_typing.each_value(&:kill)
         @active_typing.clear
+        stop_cron_scheduler
       end
 
       # Override signal handlers to interrupt the polling thread.
@@ -115,13 +122,85 @@ module Rubot
           [:skip, "👋 Welcome to Rubot!\n\nI'm your AI assistant. Send me any message and I'll help you out.\n\nUse /help to see available commands."]
         when "/help"
           bot_name = @config.fetch("bot_name", "Rubot")
-          [:skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help.\n\nBuilt-in commands:\n/start - Start the bot\n/help - Show this help message"]
+          [:skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help.\n\nBuilt-in commands:\n/start - Start the bot\n/help - Show this help message\n/cron - List scheduled cron jobs\n/cron delete <id> - Delete a cron job"]
+        when /^\/cron(\s+(.*))?$/
+          handle_cron_command($2&.strip)
         else
           message
         end
       end
 
       private
+
+      # --------------- Cron Scheduler ---------------
+
+      def start_cron_scheduler
+        cron_tool = @agent.tools.get("cron")
+        return unless cron_tool
+
+        cron_tool.on_fire do |result|
+          cron_fire_callback(result)
+        end
+
+        scheduler = cron_tool.scheduler
+        scheduler.start
+      end
+
+      def stop_cron_scheduler
+        cron_tool = @agent.tools.get("cron")
+        return unless cron_tool
+        scheduler = cron_tool.scheduler
+        scheduler&.stop
+      end
+
+      def cron_fire_callback(result)
+        return unless @last_chat_id
+
+        case result[:mode]
+        when "command"
+          output = result[:result][:output] || "(no output)"
+          text = "⏰ **Cron: #{result[:description] || result[:job_id]}**\n\n```\n#{output}\n```"
+          send_message(@last_chat_id, text, @last_thread_id)
+        when "deliver"
+          send_message(@last_chat_id, result[:result][:deliver_message], @last_thread_id)
+        when "agent_turn"
+          # Process through the LLM with mutex protection
+          response = @process_mutex.synchronize do
+            @agent.process_cron(result[:result][:agent_message])
+          end
+          send_message(@last_chat_id, response, @last_thread_id) if response && !response.empty?
+        end
+      rescue StandardError => e
+        warn "[cron] Callback error: #{e.class}: #{e.message}"
+      end
+
+      # Handle /cron slash command
+      def handle_cron_command(args)
+        cron_tool = @agent.tools.get("cron")
+        return [:skip, "❌ Cron tool not available."] unless cron_tool
+
+        if args.nil? || args.empty?
+          # List all cron jobs
+          result = cron_tool.execute({ "operation" => "list" })
+          [:skip, result]
+        elsif args.start_with?("delete ")
+          job_id = args[7..].strip
+          result = cron_tool.execute({ "operation" => "remove", "job_id" => job_id })
+          [:skip, result]
+        elsif args.start_with?("enable ")
+          job_id = args[7..].strip
+          result = cron_tool.execute({ "operation" => "enable", "job_id" => job_id })
+          [:skip, result]
+        elsif args.start_with?("disable ")
+          job_id = args[8..].strip
+          result = cron_tool.execute({ "operation" => "disable", "job_id" => job_id })
+          [:skip, result]
+        else
+          [:skip, "❌ Unknown /cron subcommand. Use:\n/cron — list jobs\n/cron delete <id>\n/cron enable <id>\n/cron disable <id>"]
+        end
+      rescue StandardError => e
+        [:skip, "❌ Error: #{e.message}"]
+      end
 
       # --------------- Long Polling ---------------
 
@@ -207,14 +286,27 @@ module Rubot
         # Per-topic (or per-DM) session isolation
         session_id = thread_id ? "tg_#{chat_id}_#{thread_id}" : "tg_#{chat_id}"
 
+        # Track last active chat for cron message delivery
+        @last_chat_id = chat_id
+        @last_thread_id = thread_id
+
         warn "[telegram] #{username} (#{user_id})#{thread_id ? " [topic:#{thread_id}]" : ""}: #{text[0..80]}"
 
         # Show typing indicator
-        start_typing(chat_id, thread_id) if @config.fetch("typing_indicator", true)
+        # Note: Telegram API has a known bug where typing indicators don't display
+        # in the General topic of forum-enabled groups. See:
+        # https://github.com/NousResearch/hermes-agent/issues/7877
+        is_forum = message.dig("chat", "is_forum") == true
+        is_general_topic = is_forum && thread_id.nil?
+        if is_general_topic
+          warn "[telegram] Skipping typing indicator for General topic (Telegram API limitation)"
+        else
+          start_typing(chat_id, thread_id) if @config.fetch("typing_indicator", true)
+        end
 
         response = process_message(text, session_id: session_id)
 
-        stop_typing(chat_id, thread_id)
+        stop_typing(chat_id, thread_id) unless is_general_topic
 
         if response && !response.empty?
           warn "[telegram] Sending response (#{response.length} chars)"
@@ -256,7 +348,7 @@ module Rubot
             "chat_id" => chat_id,
             "text" => chunk,
           }
-          body["message_thread_id"] = thread_id if thread_id
+          body["message_thread_id"] = thread_id if thread_id && thread_id != 1
           url = URI("#{API_BASE}#{@token}/sendMessage")
           req = Net::HTTP::Post.new(url)
           req["Content-Type"] = "application/json"
@@ -295,9 +387,10 @@ module Rubot
       # --------------- Typing Indicator ---------------
 
       def start_typing(chat_id, thread_id = nil)
-        return if @active_typing[chat_id]
+        key = typing_key(chat_id, thread_id)
+        return if @active_typing[key]
 
-        @active_typing[chat_id] = Thread.new do
+        @active_typing[key] = Thread.new do
           loop do
             send_action(chat_id, "typing", thread_id)
             sleep 3
@@ -306,13 +399,18 @@ module Rubot
       end
 
       def stop_typing(chat_id, thread_id = nil)
-        thread = @active_typing.delete(chat_id)
+        key = typing_key(chat_id, thread_id)
+        thread = @active_typing.delete(key)
         thread&.kill
+      end
+
+      def typing_key(chat_id, thread_id)
+        "#{chat_id}:#{thread_id}"
       end
 
       def send_action(chat_id, action, thread_id = nil)
         body = { "chat_id" => chat_id, "action" => action }
-        body["message_thread_id"] = thread_id if thread_id
+        body["message_thread_id"] = thread_id if thread_id && thread_id != 1
         body_json = body.to_json
         url = URI("#{API_BASE}#{@token}/sendChatAction")
         req = Net::HTTP::Post.new(url)

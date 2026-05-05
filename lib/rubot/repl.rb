@@ -14,6 +14,7 @@ module Rubot
       "/soul"     => "Show the bot's soul (SOUL.md)",
       "/memory"   => "Show persistent memory (MEMORY.md)",
       "/agents"   => "Show agent rules (AGENTS.md)",
+      "/cron"     => "List scheduled cron jobs",
       "/stream on|off" => "Toggle streaming output",
       "/quit"     => "Exit rubot"
     }
@@ -166,6 +167,15 @@ module Rubot
         else
           puts "\n📋 No AGENTS.md found in workspace."
           puts "Create one at: #{@agent.config.workspace}/AGENTS.md"
+        end
+        puts
+      when "/cron"
+        cron_tool = @agent.tools.get("cron")
+        if cron_tool
+          result = cron_tool.execute({ "operation" => "list" })
+          puts "\n#{result}"
+        else
+          puts "\nCron tool not available."
         end
         puts
       when "/stream"

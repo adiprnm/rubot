@@ -19,7 +19,8 @@ class TestTools < Minitest::Test
     assert_includes names, "shell_exec"
     assert_includes names, "file_ops"
     assert_includes names, "web_fetch"
-    assert_equal 3, @registry.count
+    assert_includes names, "cron"
+    assert_equal 4, @registry.count
   end
 
   def test_registry_get_tool
@@ -45,13 +46,13 @@ class TestTools < Minitest::Test
     end.new
 
     @registry.register(custom)
-    assert_equal 4, @registry.count
+    assert_equal 5, @registry.count
     assert_equal "done: {}", @registry.execute("custom_tool", {})
   end
 
   def test_registry_provider_definitions
     defs = @registry.to_provider_definitions("openai")
-    assert_equal 3, defs.size
+    assert_equal 4, defs.size
     assert defs.all? { |d| d["type"] == "function" }
     assert defs.all? { |d| d["function"]["name"] }
     assert defs.all? { |d| d["function"]["description"] }

@@ -20,16 +20,14 @@ models:
     api_base: http://localhost:11434
 
 tools:
-  exec:
-    enabled: true
-  read_file:
-    enabled: true
-  write_file:
-    enabled: true
-  list_dir:
-    enabled: true
+  shell_exec:
+    enabled: true          # Execute shell commands
+  file_ops:
+    enabled: true          # Read/write/list files
   web_fetch:
-    enabled: true
+    enabled: true          # Search and fetch web content
+  cron:
+    enabled: true          # Schedule recurring and one-time jobs
   # memory is always enabled when workspace exists
 
 # Channels — how users interact with Rubot.
@@ -73,5 +71,12 @@ channels:
 # MEMORY.md — Persistent memory managed by the bot itself.
 #   The bot reads this on every session and can update it via the
 #   memory tool to remember facts, preferences, and context.
+#
+# Cron — scheduled jobs are stored in:
+#   ~/.rubot/workspace/cron/jobs.json     (job definitions)
+#   ~/.rubot/workspace/cron_pending/       (pending agent-turn messages)
+#
+# To disable the cron tool, set tools.cron.enabled: false above.
+# Jobs are processed automatically on your next interaction with the bot.
 #
 # Run "rubot init" to create the workspace with default files.
