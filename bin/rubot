@@ -92,6 +92,67 @@ if ARGV.first == "init"
     puts "Agent rules already exist: #{agents_file}"
   end
 
+  # Create default skill: skill-creator
+  skills_dir = File.join(workspace_dir, "skills", "skill-creator")
+  unless Dir.exist?(skills_dir)
+    FileUtils.mkdir_p(skills_dir)
+    File.write(File.join(skills_dir, "SKILL.md"), <<~SKILL)
+      ---
+      name: skill-creator
+      description: Create new skills by writing SKILL.md files into the workspace skills directory.
+      ---
+
+      # Skill Creator
+
+      Use this skill to create new skills for Rubot. A skill is a set of specialized
+      instructions stored as a `SKILL.md` file in a subdirectory of the workspace skills
+      directory.
+
+      ## Skill Structure
+
+      Each skill lives in its own directory under:
+
+          ~/.rubot/workspace/skills/{skill-name}/SKILL.md
+
+      The directory name becomes the skill name. The `SKILL.md` file should contain:
+
+      1. **YAML frontmatter** (optional but recommended):
+         ```yaml
+         ---
+         name: my-skill
+         description: A brief description of what this skill does and when to use it.
+         ---
+         ```
+
+      2. **Skill instructions** (markdown body):
+         - Describe when this skill should be activated
+         - Provide specialized knowledge or procedures
+         - Include examples if helpful
+         - If referencing relative paths, instruct to resolve them against the skill directory
+
+      ## When to Use
+
+      Activate this skill when the user asks to create, add, or install a new skill.
+
+      ## Process
+
+      1. Determine the skill name (kebab-case, e.g., `code-reviewer`, `data-analyst`)
+      2. Create the directory: `~/.rubot/workspace/skills/{skill-name}/`
+      3. Write `SKILL.md` with frontmatter and instructions
+      4. Confirm the skill was created and explain when it will be used
+
+      ## Example
+
+      To create a "git-expert" skill:
+      - Directory: `~/.rubot/workspace/skills/git-expert/`
+      - File: `~/.rubot/workspace/skills/git-expert/SKILL.md`
+      - Content: Git best practices, branching strategies, commit message conventions, etc.
+    SKILL
+    puts "Created skill: skill-creator"
+  else
+    puts "Skill already exists: skill-creator"
+  end
+
   puts
   puts "Rubot initialized successfully."
   puts "Set your API key in #{config_file}, then run:"

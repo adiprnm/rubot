@@ -14,7 +14,7 @@ module Rubot
   class Agent
     MAX_TOOL_ITERATIONS = 10
 
-    attr_reader :config, :provider, :session, :tools, :soul, :memory, :agents_file
+    attr_reader :config, :provider, :session, :tools, :soul, :memory, :agents_file, :skill_registry
 
     def initialize(config:, provider: nil, session_id: "default", tools: nil)
       @config = config
@@ -24,6 +24,7 @@ module Rubot
       @soul = Soul.new(workspace: config.workspace)
       @memory = Memory.new(workspace: config.workspace)
       @agents_file = AgentsFile.new(workspace: config.workspace)
+      @skill_registry = SkillRegistry.new(workspace: config.workspace)
       config.ensure_workspace
 
       # Register the memory tool so the bot can manage its own memory
@@ -168,6 +169,7 @@ module Rubot
       info[:soul] = "yes" if @soul.enabled?
       info[:memory] = "yes" if @memory.enabled?
       info[:agents] = "yes" if @agents_file.enabled?
+      info[:skills] = @skill_registry.count if @skill_registry.any?
       info
     end
 
@@ -190,7 +192,11 @@ module Rubot
         parts << "# Memory\n\n#{@memory.to_s}"
       end
 
-      # 4. Default/config system prompt
+      # 4. Skills (specialized instruction sets)
+      skill_prompt = @skill_registry.to_system_prompt
+      parts << skill_prompt unless skill_prompt.empty?
+
+      # 5. Default/config system prompt
       config_prompt = @config.system_prompt
       parts << config_prompt unless config_prompt.empty?
 

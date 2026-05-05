@@ -20,6 +20,8 @@ require_relative "rubot/memory"
 require_relative "rubot/agents_file"
 require_relative "rubot/channel"
 require_relative "rubot/channels/registry"
+require_relative "rubot/skill"
+require_relative "rubot/skill_registry"
 
 module Rubot
   VERSION = "0.1.0"

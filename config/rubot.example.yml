@@ -72,6 +72,14 @@ channels:
 #   The bot reads this on every session and can update it via the
 #   memory tool to remember facts, preferences, and context.
 #
+# Skills — specialized instruction sets loaded on demand.
+#   Stored in: ~/.rubot/workspace/skills/{skill-name}/SKILL.md
+#   Each skill has a SKILL.md with YAML frontmatter (name, description)
+#   and markdown body (specialized instructions).
+#   Skills appear in the system prompt as <available_skills> XML,
+#   telling the bot when and how to use them.
+#   Run "rubot init" to get the built-in "skill-creator" skill.
+#
 # Cron — scheduled jobs are stored in:
 #   ~/.rubot/workspace/cron/jobs.json     (job definitions)
 #   ~/.rubot/workspace/cron_pending/       (pending agent-turn messages)
