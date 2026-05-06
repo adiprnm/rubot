@@ -50,7 +50,7 @@ module Rubot
         raise "Telegram API error: #{resp["description"] || resp}" unless resp["ok"]
 
         bot_info = resp["result"]
-        warn "[telegram] Connected as @#{bot_info['username']} (id: #{bot_info['id']})"
+        warn "[telegram] Connected as @#{bot_info['username']} (id: #{bot_info['id']})" if Rubot.debug?
 
         # Register bot commands with Telegram
         register_bot_commands
@@ -89,7 +89,7 @@ module Rubot
       # Run polling in a background thread so the main thread
       # stays responsive to signals (Ctrl+C).
       def start_polling_thread
-        warn "[telegram] Starting long polling (timeout: #{DEFAULT_POLL_TIMEOUT}s)"
+        warn "[telegram] Starting long polling (timeout: #{DEFAULT_POLL_TIMEOUT}s)" if Rubot.debug?
 
         @poll_thread = Thread.new do
           poll_loop
@@ -98,7 +98,7 @@ module Rubot
         # Block main thread on the polling thread — signals are handled
         # by Ruby on the main thread, which then interrupts @poll_thread.
         @poll_thread.join
-        warn "[telegram] Polling stopped."
+        warn "[telegram] Polling stopped." if Rubot.debug?
       end
 
       def poll_loop
@@ -232,7 +232,7 @@ module Rubot
         begin
           result = http_post(url, req)
           if result["ok"]
-            warn "[telegram] Registered #{commands.size} bot commands."
+            warn "[telegram] Registered #{commands.size} bot commands." if Rubot.debug?
           else
             warn "[telegram] Failed to register commands: #{result["description"]}"
           end
@@ -399,7 +399,7 @@ module Rubot
         @last_chat_id = chat_id
         @last_thread_id = thread_id
 
-        warn "[telegram] #{username} (#{user_id})#{thread_id ? " [topic:#{thread_id}]" : ""}: #{text[0..80]}"
+        warn "[telegram] #{username} (#{user_id})#{thread_id ? " [topic:#{thread_id}]" : ""}: #{text[0..80]}" if Rubot.debug?
 
         # Show typing indicator
         # Note: Telegram API has a known bug where typing indicators don't display
@@ -408,7 +408,7 @@ module Rubot
         is_forum = message.dig("chat", "is_forum") == true
         is_general_topic = is_forum && thread_id.nil?
         if is_general_topic
-          warn "[telegram] Skipping typing indicator for General topic (Telegram API limitation)"
+          warn "[telegram] Skipping typing indicator for General topic (Telegram API limitation)" if Rubot.debug?
         else
           start_typing(chat_id, thread_id) if @config.fetch("typing_indicator", true)
         end
@@ -418,10 +418,10 @@ module Rubot
         stop_typing(chat_id, thread_id) unless is_general_topic
 
         if response && !response.empty?
-          warn "[telegram] Sending response (#{response.length} chars)"
+          warn "[telegram] Sending response (#{response.length} chars)" if Rubot.debug?
           send_message(chat_id, response, thread_id)
         else
-          warn "[telegram] No response to send"
+          warn "[telegram] No response to send" if Rubot.debug?
         end
       end
 
