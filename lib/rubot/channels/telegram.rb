@@ -669,6 +669,7 @@ module Rubot
       # Delete the current status message (called before sending the final response).
       def clear_status_message
         @status_mutex.synchronize do
+          @tool_count = 0
           return unless @status_message
           chat_id = @status_message[:chat_id]
           message_id = @status_message[:message_id]
