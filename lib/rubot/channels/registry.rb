@@ -11,7 +11,7 @@ module Rubot
         "telegram" => Telegram,
         "repl" => REPLChannel,
         "terminal" => REPLChannel,
-        "console" => REPLChannel,
+        "console" => REPLChannel
       }.freeze
 
       # Load and start all channels configured in `data["channels"]`.
@@ -61,7 +61,7 @@ module Rubot
           name = options[:channel].downcase
           channels = data["channels"]
           config = channels.is_a?(Hash) ? channels[name] : nil
-          return [[ name, config || {} ]]
+          return [ [ name, config || {} ] ]
         end
 
         # Config-based channels

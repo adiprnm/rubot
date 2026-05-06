@@ -206,12 +206,12 @@ module Rubot
 
       # 2. SOUL.md (personality and identity)
       if @soul.enabled?
-        parts << "# Soul\n\n#{@soul.to_s}"
+        parts << "# Soul\n\n#{@soul}"
       end
 
       # 3. MEMORY.md (persistent context)
       if @memory.enabled?
-        parts << "# Memory\n\n#{@memory.to_s}"
+        parts << "# Memory\n\n#{@memory}"
       end
 
       # 4. Skills (specialized instruction sets)

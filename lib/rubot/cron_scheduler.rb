@@ -141,7 +141,7 @@ module Rubot
         return :not_found unless job
         job["enabled"] = !job["enabled"]
         save!
-        [:ok, job["enabled"]]
+        [ :ok, job["enabled"] ]
       end
     end
 

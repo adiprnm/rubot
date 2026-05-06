@@ -180,11 +180,11 @@ class TestCronScheduler < Minitest::Test
     assert @scheduler.get(id)["enabled"]
 
     result = @scheduler.toggle(id)
-    assert_equal [:ok, false], result
+    assert_equal [ :ok, false ], result
     refute @scheduler.get(id)["enabled"]
 
     result = @scheduler.toggle(id)
-    assert_equal [:ok, true], result
+    assert_equal [ :ok, true ], result
     assert @scheduler.get(id)["enabled"]
   end
 
@@ -265,7 +265,7 @@ class TestCronScheduler < Minitest::Test
     original_next = job["next_run"]
 
     sleep_until = Time.parse(original_next) + 1
-    sleep_time = [sleep_until - Time.now, 0.1].max
+    sleep_time = [ sleep_until - Time.now, 0.1 ].max
     sleep(sleep_time) if sleep_time > 0
 
     @scheduler.fire_due_jobs

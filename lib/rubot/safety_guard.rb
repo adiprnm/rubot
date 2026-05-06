@@ -47,7 +47,7 @@ module Rubot
       # Filesystem destruction
       /\bmke2fs\b/,
       /\bmkswap\b/,
-      /\bfsck\b.*-y\s+\/dev\//,
+      /\bfsck\b.*-y\s+\/dev\//
     ].freeze
 
     # Device path patterns to block in exec commands
@@ -264,9 +264,9 @@ module Rubot
       status = @restrict_to_workspace ? "ENABLED" : "DISABLED"
       mode = if @restrict_to_workspace
                @allow_read_outside ? "restrict-write" : "strict"
-             else
+      else
                "permissive"
-             end
+      end
       "SafetyGuard: #{status} (mode: #{mode}, workspace: #{@workspace || 'none'})"
     end
 

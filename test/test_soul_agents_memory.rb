@@ -121,7 +121,7 @@ class TestMemory < Minitest::Test
   def test_update_section
     mem = Rubot::Memory.new(workspace: @tmpdir)
     mem.append("Facts", "old fact")
-    mem.update_section("Facts", ["new fact 1", "new fact 2"])
+    mem.update_section("Facts", [ "new fact 1", "new fact 2" ])
     content = mem.read
     refute_includes content, "old fact"
     assert_includes content, "- new fact 1"

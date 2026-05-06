@@ -97,7 +97,7 @@ module Rubot
     def test_before_process_skip_with_custom_response
       channel = DummyChannel.new(agent: @agent)
       def channel.before_process(message)
-        return [:skip, "Handled!"] if message == "/cmd"
+        return [ :skip, "Handled!" ] if message == "/cmd"
         message
       end
       assert_equal "Handled!", channel.process_message("/cmd")
@@ -129,8 +129,8 @@ module Rubot
       data = {
         "channels" => {
           "repl" => { "stream" => true },
-          "telegram" => { "token" => "test" },
-        },
+          "telegram" => { "token" => "test" }
+        }
       }
       result = Channels::Registry.build_channel_list(data, {})
       assert_equal 2, result.size
@@ -166,8 +166,8 @@ module Rubot
       data = {
         "channels" => {
           "repl" => { "enabled" => true },
-          "telegram" => { "enabled" => false },
-        },
+          "telegram" => { "enabled" => false }
+        }
       }
       result = Channels::Registry.build_channel_list(data, {})
       assert_equal 2, result.size
@@ -179,8 +179,8 @@ module Rubot
       data = {
         "channels" => {
           "repl" => { "enabled" => false },
-          "telegram" => { "enabled" => false },
-        },
+          "telegram" => { "enabled" => false }
+        }
       }
       config = Rubot::Config.new
       tools = Rubot::Tools::Registry.new

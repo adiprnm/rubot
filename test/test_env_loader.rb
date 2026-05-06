@@ -123,7 +123,7 @@ module Rubot
         Dir.chdir(dir) do
           # Make sure ~/.rubot has no .env
           rubot_dir = File.join(File.expand_path("~"), ".rubot")
-          backup = Dir.glob(File.join(rubot_dir, ".env*")).map { |f| [f, File.read(f)] }
+          backup = Dir.glob(File.join(rubot_dir, ".env*")).map { |f| [ f, File.read(f) ] }
           begin
             backup.each { |f, _| File.delete(f) }
             result = EnvLoader.load

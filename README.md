@@ -8,14 +8,18 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 
 - 🪶 **Zero dependencies** — only Ruby standard library
 - 🔌 **Multiple providers** — OpenAI, Anthropic, Ollama, or any OpenAI-compatible API
-- 🛠️ **Built-in tools** — shell execution, file operations, web fetching, persistent memory
+- 🛠️ **Built-in tools** — shell execution, file operations, web fetching, persistent memory, cron scheduling
 - 💬 **Interactive REPL** — with streaming, command history, and tab completion
 - 📝 **Session management** — persistent conversation history
 - 🧬 **SOUL.md** — personality and identity file for persistent character
 - 📋 **AGENTS.md** — YAML frontmatter config + markdown behavior rules
 - 🧠 **MEMORY.md** — persistent memory the bot can read and update across sessions
+- ⏰ **Cron scheduling** — schedule reminders, recurring tasks, and timed alerts
+- 🔒 **Safety guard** — dangerous command filtering (PicoClaw-style sandboxing)
+- 🎯 **Skills system** — pluggable skill definitions via SKILL.md files in the workspace
+- 📡 **Multi-channel** — REPL and Telegram, with a pluggable channel architecture
+- 📄 **`.env` support** — automatic environment variable loading from `.env` files
 - 🎛️ **CLI options** — single-message mode or interactive chat
-- 🔒 **Tool safety** — dangerous command filtering
 
 ## Requirements
 
@@ -26,7 +30,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 Clone the repository and add `bin/` to your PATH:
 
 ```bash
-git clone https://github.com/yourname/rubot.git
+git clone https://github.com/adipurnm/rubot.git
 cd rubot
 export PATH="$PWD/bin:$PATH"  # or add to ~/.bashrc
 ```
@@ -39,14 +43,19 @@ ruby bin/rubot --help
 
 ## Quick Start
 
-### 1. Configure
-
-Copy the example config and set your API key:
+### 1. Initialize
 
 ```bash
-mkdir -p ~/.rubot
-cp config/rubot.example.yml ~/.rubot/config.yml
-# Edit the file and set your API key
+rubot init
+```
+
+This creates `~/.rubot/` with a default config, workspace, SOUL.md, MEMORY.md, AGENTS.md, and the skill-creator skill.
+
+### 2. Configure
+
+Edit the generated config:
+
+```bash
 vim ~/.rubot/config.yml
 ```
 
@@ -56,7 +65,15 @@ Or use environment variables:
 export RUBOT_API_KEY="sk-your-key-here"
 ```
 
-### 2. Run
+### 3. Validate
+
+```bash
+rubot check
+```
+
+Checks your config, API key, workspace, and channel connections before you start.
+
+### 4. Run
 
 ```bash
 # Interactive mode
@@ -109,12 +126,15 @@ $ rubot
 |---------|-------------|
 | `/help` | Show available commands |
 | `/clear` | Clear conversation history |
+| `/new` | Clear chat and start a new session |
 | `/session [name]` | Show or switch session |
 | `/info` | Show agent info (includes soul/memory status) |
 | `/tools` | List available tools |
 | `/soul` | Show the bot's soul (SOUL.md) |
 | `/memory` | Show persistent memory (MEMORY.md) |
 | `/agents` | Show agent rules (AGENTS.md) |
+| `/cron` | List scheduled cron jobs |
+| `/cron delete <id>` | Delete a cron job |
 | `/stream on\|off` | Toggle streaming |
 | `/quit` | Exit |
 
@@ -130,9 +150,17 @@ $ rubot
 | `-d, --debug` | Enable debug output |
 | `-n, --no-tools` | Disable tools |
 | `--no-stream` | Disable streaming output |
+| `-e, --env-file PATH` | Load environment variables from a file |
 | `-v, --version` | Show version |
 | `-C, --channel CHANNEL` | Channel to use: repl, telegram (default: repl) |
 | `-h, --help` | Show help |
+
+### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `rubot init` | Initialize config, workspace, and default files |
+| `rubot check` | Validate config and test channel connections |
 
 ## Configuration
 
@@ -202,6 +230,22 @@ Each entry in `model_list` defines a model with its provider and credentials:
 | `OPENAI_API_BASE` | Fallback for OpenAI base URL |
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `OLLAMA_HOST` | Ollama host (default: http://localhost:11434) |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token |
+
+### `.env` File Loading
+
+Rubot automatically loads environment variables from `.env` files on startup. It searches:
+
+1. `.env` in the current working directory
+2. `.env` files in `~/.rubot/` (e.g., `.env`, `.env.local`, `.env.production`)
+
+Or specify a file explicitly:
+
+```bash
+rubot -e /path/to/.env -m "Hello!"
+```
+
+Variables are loaded in order — later files override earlier ones. Use `KEY=VALUE` syntax with support for double-quoted, single-quoted, and unquoted values.
 
 ## Channels
 
@@ -388,7 +432,7 @@ The bot uses the memory tool to `read`, `write`, `append`, and
 
 ## Tools
 
-Rubot comes with 4 built-in tools:
+Rubot comes with 5 built-in tools:
 
 ### `shell_exec`
 Execute shell commands. The LLM can run commands and see their output.
@@ -409,6 +453,16 @@ Read and update the bot's persistent MEMORY.md file.
 | `write` | Replace all memory with new content |
 | `append` | Add a fact to a section (Facts, Preferences, or Context) |
 | `update_section` | Replace all items in a section |
+
+### `cron`
+Schedule reminders, recurring tasks, and timed alerts. The LLM can:
+
+- Set one-time reminders (e.g., "remind me in 5 minutes")
+- Create recurring tasks (e.g., "every hour", "daily at 9am")
+- Schedule shell commands to run on a schedule
+- Deliver messages through the active channel
+
+Jobs are stored in the workspace and checked each time the agent processes a message.
 
 ### Adding Custom Tools
 
@@ -450,6 +504,43 @@ end
 
 Then register it in `lib/rubot/tools/registry.rb`.
 
+## Skills
+
+Skills are pluggable domain-specific instructions stored as `SKILL.md` files in the workspace. They let you teach Rubot specialized procedures without changing the core code.
+
+### Skill Structure
+
+Each skill lives in its own directory:
+
+```
+~/.rubot/workspace/skills/{skill-name}/SKILL.md
+```
+
+The `SKILL.md` file contains:
+
+1. **YAML frontmatter**:
+   ```yaml
+   ---
+   name: my-skill
+   description: A brief description of what this skill does and when to use it.
+   ---
+   ```
+
+2. **Markdown body** — instructions for when and how to use the skill.
+
+### Creating Skills
+
+Use the built-in `skill-creator` skill (installed by `rubot init`) or manually create a directory and `SKILL.md`. Skills are automatically loaded from the workspace `skills/` directory on startup.
+
+## Safety Guard
+
+Rubot includes a PicoClaw-style safety guard that blocks dangerous commands before execution. It operates in two modes:
+
+- **strict** — blocks commands matching known dangerous patterns (e.g., `rm -rf /`, `mkfs`, `dd if=`, `fsck -y /dev/`)
+- **permissive** — allows all commands
+
+The mode is configured in `AGENTS.md` frontmatter or the workspace settings.
+
 ## Project Structure
 
 ```
@@ -476,8 +567,18 @@ rubot/
 │       │   ├── file_tool.rb # File operations tool
 │       │   ├── web.rb     # Web fetch tool
 │       │   ├── memory_tool.rb # Memory management tool
+│       │   ├── cron.rb    # Cron scheduling tool
 │       │   └── registry.rb # Tool registry
-│       └── repl.rb        # REPL interface
+│       ├── channel.rb     # Base channel class
+│       ├── channels/
+│       │   ├── repl_channel.rb # Terminal REPL
+│       │   ├── telegram.rb  # Telegram bot channel
+│       │   └── registry.rb  # Channel registry
+│       ├── safety_guard.rb # Dangerous command filter
+│       ├── skill.rb       # Skill loader
+│       ├── skill_registry.rb # Skill registry
+│       ├── cron_scheduler.rb # Cron job scheduler
+│       └── env_loader.rb  # .env file loader
 ├── config/
 │   └── rubot.example.yml # Example config
 ├── test/                  # Minitest tests

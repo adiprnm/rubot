@@ -20,7 +20,7 @@ module Rubot
         "0.0.0.0/8",        # Current network
         "::1/128",           # IPv6 loopback
         "fc00::/7",         # IPv6 unique local
-        "fe80::/10",        # IPv6 link-local
+        "fe80::/10"        # IPv6 link-local
       ].freeze
 
       def name

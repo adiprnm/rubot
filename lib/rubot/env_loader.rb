@@ -38,7 +38,7 @@ module Rubot
         # Search common locations
         search_paths = [
           *DEFAULT_ENV_FILES,
-          *DEFAULT_ENV_FILES.map { |f| File.join(File.expand_path("~/.rubot"), f) },
+          *DEFAULT_ENV_FILES.map { |f| File.join(File.expand_path("~/.rubot"), f) }
         ]
 
         search_paths.each do |p|
@@ -91,7 +91,7 @@ module Rubot
 
       def parse_assignment(line, line_num)
         eq_index = line.index("=")
-        return [nil, nil] unless eq_index
+        return [ nil, nil ] unless eq_index
 
         key = line[0...eq_index].strip
         raw_value = line[(eq_index + 1)..].strip
@@ -100,13 +100,13 @@ module Rubot
 
         value = if raw_value.start_with?('"')
                   parse_double_quoted(raw_value, line_num)
-                elsif raw_value.start_with?("'")
+        elsif raw_value.start_with?("'")
                   parse_single_quoted(raw_value, line_num)
-                else
+        else
                   raw_value
-                end
+        end
 
-        [key, value]
+        [ key, value ]
       end
 
       def parse_double_quoted(raw, line_num)

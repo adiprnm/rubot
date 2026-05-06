@@ -35,7 +35,7 @@ module Rubot
           "properties" => {
             "operation" => {
               "type" => "string",
-              "enum" => ["read", "write", "append", "update_section"],
+              "enum" => [ "read", "write", "append", "update_section" ],
               "description" => "The memory operation to perform"
             },
             "section" => {
@@ -52,7 +52,7 @@ module Rubot
               "description" => "List of items for update_section"
             }
           },
-          "required" => ["operation"]
+          "required" => [ "operation" ]
         }
       end
 

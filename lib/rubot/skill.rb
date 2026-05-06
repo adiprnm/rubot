@@ -83,7 +83,7 @@ module Rubot
 
     # Parse YAML frontmatter safely, returning nil on any error
     def parse_yaml_safely(yaml_content)
-      YAML.safe_load(yaml_content, permitted_classes: [Symbol])
+      YAML.safe_load(yaml_content, permitted_classes: [ Symbol ])
     rescue Psych::SyntaxError
       nil
     rescue StandardError

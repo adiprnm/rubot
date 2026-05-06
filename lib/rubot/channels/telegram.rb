@@ -121,54 +121,54 @@ module Rubot
       def handle_info_command
         info = @agent.startup_info
         lines = info.map { |k, v| "#{k}: #{v}" }
-        [:skip, "ℹ️ Agent Info\n\n" + lines.join("\n")]
+        [ :skip, "ℹ️ Agent Info\n\n" + lines.join("\n") ]
       end
 
       def handle_models_command
         model = @agent.config.model
         provider = @agent.provider.name
-        [:skip, "🧠 Current Model\n\nProvider: #{provider}\nModel: #{model}"]
+        [ :skip, "🧠 Current Model\n\nProvider: #{provider}\nModel: #{model}" ]
       end
 
       def handle_skills_command
         registry = @agent.skill_registry
-        return [:skip, "📚 Skills\n\nNo skills installed.\n\nPlace skills in the workspace `skills/` directory."] unless registry.any?
+        return [ :skip, "📚 Skills\n\nNo skills installed.\n\nPlace skills in the workspace `skills/` directory." ] unless registry.any?
 
         lines = registry.all.values.map do |skill|
           "• **#{skill.name}** — #{skill.summary}"
         end
-        [:skip, "📚 Available Skills (#{registry.count})\n\n" + lines.join("\n")]
+        [ :skip, "📚 Available Skills (#{registry.count})\n\n" + lines.join("\n") ]
       end
 
       def handle_memory_command
-        return [:skip, "🧠 Memory is not enabled (no workspace configured)."] unless @agent.memory.enabled?
+        return [ :skip, "🧠 Memory is not enabled (no workspace configured)." ] unless @agent.memory.enabled?
 
         content = @agent.memory.read
         max_len = DEFAULT_MAX_LENGTH - 200
         content = content[0, max_len] + "\n\n… (truncated)" if content.length > max_len
-        [:skip, "🧠 Memory\n\n```
+        [ :skip, "🧠 Memory\n\n```
 #{content}
-```"]
+```" ]
       end
 
       def handle_soul_command
-        return [:skip, "🧬 No soul file (SOUL.md) found in workspace."] unless @agent.soul.enabled?
+        return [ :skip, "🧬 No soul file (SOUL.md) found in workspace." ] unless @agent.soul.enabled?
 
         content = @agent.soul.to_s
         max_len = DEFAULT_MAX_LENGTH - 200
         content = content[0, max_len] + "\n\n… (truncated)" if content.length > max_len
-        [:skip, "🧬 Soul\n\n#{content}"]
+        [ :skip, "🧬 Soul\n\n#{content}" ]
       end
 
       def handle_agents_command
-        return [:skip, "📋 No AGENTS.md found in workspace."] unless @agent.agents_file.enabled?
+        return [ :skip, "📋 No AGENTS.md found in workspace." ] unless @agent.agents_file.enabled?
 
         content = @agent.agents_file.raw
         max_len = DEFAULT_MAX_LENGTH - 200
         content = content[0, max_len] + "\n\n… (truncated)" if content.length > max_len
-        [:skip, "📋 Agent Rules\n\n```
+        [ :skip, "📋 Agent Rules\n\n```
 #{content}
-```"]
+```" ]
       end
 
       # --------------- Placeholder Hooks ---------------
@@ -177,13 +177,13 @@ module Rubot
       def before_process(message)
         case message.strip.downcase
         when "/start"
-          [:skip, "👋 Welcome to Rubot!\n\nI'm your AI assistant. Send me any message and I'll help you out.\n\nUse /help to see available commands."]
+          [ :skip, "👋 Welcome to Rubot!\n\nI'm your AI assistant. Send me any message and I'll help you out.\n\nUse /help to see available commands." ]
         when "/new"
           @agent.clear_session
-          [:skip, "✨ Started a new session. Previous conversation has been cleared."]
+          [ :skip, "✨ Started a new session. Previous conversation has been cleared." ]
         when "/help"
           bot_name = @config.fetch("bot_name", "Rubot")
-          [:skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help.\n\nBuilt-in commands:\n/start - Start the bot\n/new - Clear chat and start a new session\n/help - Show this help message\n/info - Show agent info\n/models - Show current model\n/skills - List available skills\n/memory - Show persistent memory\n/soul - Show bot personality\n/agents - Show agent rules\n/cron - List scheduled cron jobs\n/cron delete <id> - Delete a cron job"]
+          [ :skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help.\n\nBuilt-in commands:\n/start - Start the bot\n/new - Clear chat and start a new session\n/help - Show this help message\n/info - Show agent info\n/models - Show current model\n/skills - List available skills\n/memory - Show persistent memory\n/soul - Show bot personality\n/agents - Show agent rules\n/cron - List scheduled cron jobs\n/cron delete <id> - Delete a cron job" ]
         when "/info"
           handle_info_command
         when "/models"
@@ -220,7 +220,7 @@ module Rubot
           { "command" => "memory", "description" => "Show persistent memory" },
           { "command" => "soul", "description" => "Show bot personality" },
           { "command" => "agents", "description" => "Show agent rules" },
-          { "command" => "cron", "description" => "List scheduled cron jobs" },
+          { "command" => "cron", "description" => "List scheduled cron jobs" }
         ]
 
         url = URI("#{API_BASE}#{@token}/setMyCommands")
@@ -286,29 +286,29 @@ module Rubot
       # Handle /cron slash command
       def handle_cron_command(args)
         cron_tool = @agent.tools.get("cron")
-        return [:skip, "❌ Cron tool not available."] unless cron_tool
+        return [ :skip, "❌ Cron tool not available." ] unless cron_tool
 
         if args.nil? || args.empty?
           # List all cron jobs
           result = cron_tool.execute({ "operation" => "list" })
-          [:skip, result]
+          [ :skip, result ]
         elsif args.start_with?("delete ")
           job_id = args[7..].strip
           result = cron_tool.execute({ "operation" => "remove", "job_id" => job_id })
-          [:skip, result]
+          [ :skip, result ]
         elsif args.start_with?("enable ")
           job_id = args[7..].strip
           result = cron_tool.execute({ "operation" => "enable", "job_id" => job_id })
-          [:skip, result]
+          [ :skip, result ]
         elsif args.start_with?("disable ")
           job_id = args[8..].strip
           result = cron_tool.execute({ "operation" => "disable", "job_id" => job_id })
-          [:skip, result]
+          [ :skip, result ]
         else
-          [:skip, "❌ Unknown /cron subcommand. Use:\n/cron — list jobs\n/cron delete <id>\n/cron enable <id>\n/cron disable <id>"]
+          [ :skip, "❌ Unknown /cron subcommand. Use:\n/cron — list jobs\n/cron delete <id>\n/cron enable <id>\n/cron disable <id>" ]
         end
       rescue StandardError => e
-        [:skip, "❌ Error: #{e.message}"]
+        [ :skip, "❌ Error: #{e.message}" ]
       end
 
       # --------------- Long Polling ---------------
@@ -317,7 +317,7 @@ module Rubot
         params = {
           "offset" => @offset,
           "limit" => 10,
-          "timeout" => DEFAULT_POLL_TIMEOUT,
+          "timeout" => DEFAULT_POLL_TIMEOUT
         }
         url = URI("#{API_BASE}#{@token}/getUpdates?#{URI.encode_www_form(params)}")
         resp = http_get(url)
@@ -455,7 +455,7 @@ module Rubot
         chunks.each do |chunk|
           body = {
             "chat_id" => chat_id,
-            "text" => chunk,
+            "text" => chunk
           }
           body["message_thread_id"] = thread_id if thread_id && thread_id != 1
           url = URI("#{API_BASE}#{@token}/sendMessage")
@@ -534,7 +534,7 @@ module Rubot
 
       # Override from base Channel to support Telegram streaming
       def on_stream_chunk(chunk)
-        return unless @config.fetch("stream", false)
+        nil unless @config.fetch("stream", false)
         # For Telegram, streaming is tricky because we can't edit messages
         # in real-time without hitting rate limits. We accumulate and
         # send periodically in a real implementation, but for now we

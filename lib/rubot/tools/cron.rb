@@ -50,7 +50,7 @@ module Rubot
           "properties" => {
             "operation" => {
               "type" => "string",
-              "enum" => ["add", "list", "remove", "enable", "disable"],
+              "enum" => [ "add", "list", "remove", "enable", "disable" ],
               "description" => "The cron operation to perform"
             },
             "message" => {
@@ -82,7 +82,7 @@ module Rubot
               "description" => "Job ID (for remove, enable, disable)"
             }
           },
-          "required" => ["operation"]
+          "required" => [ "operation" ]
         }
       end
 
@@ -166,7 +166,7 @@ module Rubot
         jobs = scheduler.list
         return "No scheduled jobs." if jobs.empty?
 
-        lines = ["Scheduled jobs (#{jobs.size} total):", ""]
+        lines = [ "Scheduled jobs (#{jobs.size} total):", "" ]
         jobs.each do |job|
           status_icon = job["enabled"] ? "✅" : "⏸️"
           mode_icon = case job["mode"]

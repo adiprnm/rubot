@@ -125,7 +125,7 @@ module Rubot
     end
 
     def test_loads_multiple_skills
-      ["skill-a", "skill-b", "skill-c"].each do |name|
+      [ "skill-a", "skill-b", "skill-c" ].each do |name|
         dir = File.join(@tmpdir, "skills", name)
         FileUtils.mkdir_p(dir)
         File.write(File.join(dir, "SKILL.md"), "# #{name}\n\nContent for #{name}.")

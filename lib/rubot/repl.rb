@@ -159,7 +159,7 @@ module Rubot
         if @agent.soul.enabled?
           puts "\n🧬 Soul (SOUL.md):"
           puts "---"
-          puts @agent.soul.to_s
+          puts @agent.soul
           puts "---"
         else
           puts "\n🧬 No soul file (SOUL.md) found in workspace."
