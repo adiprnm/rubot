@@ -31,6 +31,7 @@ module Rubot
       def initialize(agent:, channel_config: {})
         super
         @token = @config["token"] || ENV["TELEGRAM_BOT_TOKEN"]
+        @bot_username = nil
         @offset = 0
         @mutex = Mutex.new
         @active_typing = {}  # chat_id => thread
@@ -50,6 +51,7 @@ module Rubot
         raise "Telegram API error: #{resp["description"] || resp}" unless resp["ok"]
 
         bot_info = resp["result"]
+        @bot_username = bot_info["username"].downcase
         warn "[telegram] Connected as @#{bot_info['username']} (id: #{bot_info['id']})" if Rubot.debug?
 
         # Register bot commands with Telegram
@@ -175,7 +177,11 @@ module Rubot
 
       # Intercept built-in slash commands before they reach the agent.
       def before_process(message)
-        case message.strip.downcase
+        text = message.strip
+        # Strip bot username from commands in groups (e.g. /new@MyBot -> /new)
+        text = text.sub(/\A\/(\w+)@\S+/, '/\1') if text.start_with?("/")
+
+        case text.downcase
         when "/start"
           [ :skip, "👋 Welcome to Rubot!\n\nI'm your AI assistant. Send me any message and I'll help you out.\n\nUse /help to see available commands." ]
         when "/new"
@@ -457,7 +463,7 @@ module Rubot
             "chat_id" => chat_id,
             "text" => chunk
           }
-          body["message_thread_id"] = thread_id if thread_id && thread_id != 1
+          body["message_thread_id"] = thread_id if thread_id
           url = URI("#{API_BASE}#{@token}/sendMessage")
           req = Net::HTTP::Post.new(url)
           req["Content-Type"] = "application/json"
@@ -519,7 +525,7 @@ module Rubot
 
       def send_action(chat_id, action, thread_id = nil)
         body = { "chat_id" => chat_id, "action" => action }
-        body["message_thread_id"] = thread_id if thread_id && thread_id != 1
+        body["message_thread_id"] = thread_id if thread_id
         body_json = body.to_json
         url = URI("#{API_BASE}#{@token}/sendChatAction")
         req = Net::HTTP::Post.new(url)
