@@ -21,6 +21,7 @@ module Rubot
     #       webhook_port: 8443               # port for webhook server
     #       stream: true                     # enable streaming responses
     #       typing_indicator: true           # show typing indicator while processing
+    #       tool_notifications: true         # send status messages for tool execution (default: true)
     #       max_message_length: 4096         # Telegram's max message length
     #
     class Telegram < Channel
@@ -38,6 +39,9 @@ module Rubot
         @last_chat_id = nil
         @last_thread_id = nil
         @process_mutex = Mutex.new
+        @status_message = nil  # { chat_id:, thread_id:, message_id: } for current status msg
+        @tool_count = 0        # tool calls in current processing cycle
+        @status_mutex = Mutex.new
       end
 
       def start
@@ -419,9 +423,18 @@ module Rubot
           start_typing(chat_id, thread_id) if @config.fetch("typing_indicator", true)
         end
 
-        response = process_message(text, session_id: session_id)
+        response = process_message(text, session_id: session_id, on_tool_call: ->(tool_name, args) {
+          notify_tool_started(chat_id, thread_id, tool_name, args)
+        }, on_tool_result: ->(tool_name, result) {
+          notify_tool_finished(chat_id, thread_id, tool_name, result)
+        }, on_progress: ->(iteration, tool_count) {
+          notify_progress(chat_id, thread_id, iteration)
+        })
 
         stop_typing(chat_id, thread_id) unless is_general_topic
+
+        # Clear any lingering status message before sending the real response
+        clear_status_message
 
         if response && !response.empty?
           warn "[telegram] Sending response (#{response.length} chars)" if Rubot.debug?
@@ -566,6 +579,186 @@ module Rubot
           resp = http.request(request)
           JSON.parse(resp.body)
         end
+      end
+
+      # --------------- Tool Progress Notifications ---------------
+
+      TOOL_EMOJIS = {
+        "shell_exec"  => "💻",
+        "file_ops"    => "📄",
+        "web_fetch"   => "🌐",
+        "memory"      => "🧠",
+        "cron"        => "⏰",
+      }.freeze
+
+      # Called before a tool executes. Updates the status message to show what's running.
+      def notify_tool_started(chat_id, thread_id, tool_name, args)
+        warn "[telegram] notify_tool_started: #{tool_name}" if Rubot.debug?
+        @status_mutex.synchronize do
+          @tool_count += 1
+        end
+        emoji = TOOL_EMOJIS[tool_name] || "⚙️"
+
+        preview = case tool_name
+                  when "shell"
+                    # Pre block content is literal in MarkdownV2, no escaping needed
+                    "```\n#{truncate(args["command"] || "...", 80)}\n```"
+                  when "file"
+                    "#{md_escape(args["operation"] || "read")}: #{md_escape(truncate(args["path"] || "...", 60))}"
+                  when "web", "search"
+                    "query: #{md_escape(truncate(args["query"] || args["url"] || "...", 60))}"
+                  when "fetch"
+                    "url: #{md_escape(truncate(args["url"] || "...", 60))}"
+                  when "memory"
+                    "operation: #{md_escape(args["operation"] || "...")}"
+                  when "cron"
+                    "operation: #{md_escape(args["operation"] || "...")}"
+                  else
+                    "#{md_escape(args.keys.first)}: #{md_escape(truncate(args.values.first.to_s, 60))}"
+                  end
+
+        count = @status_mutex.synchronize { @tool_count }
+        # Inline code content is also literal in MarkdownV2, no escaping needed for tool_name
+        text = "#{emoji} *Running tool:* `#{tool_name}`\n"
+        text += "Step #{count}\n\n"
+        text += preview
+
+        warn "[telegram] Sending status message: #{text[0..100]}" if Rubot.debug?
+
+        # Edit existing status message or send a new one
+        update_or_send_status(chat_id, thread_id, text)
+      end
+
+      # Called after a tool finishes. Briefly shows completion before next tool starts.
+      def notify_tool_finished(chat_id, thread_id, tool_name, result)
+        # We don't send a separate "done" message — the next tool_call or final
+        # response will overwrite the status. But we log it for debugging.
+        warn "[telegram] Tool #{tool_name} finished" if Rubot.debug?
+      end
+
+      # Called after each tool-call iteration loop. Shows progress for multi-step operations.
+      def notify_progress(chat_id, thread_id, iteration)
+        return unless iteration >= 2  # Only notify after 2+ iterations
+
+        emoji = "🔄"
+        text = "#{emoji} *Still working* \(iteration #{iteration}\)\n"
+        text += "_Running tool calls to complete your request_"
+
+        update_or_send_status(chat_id, thread_id, text)
+      end
+
+      # Send a new status message or edit the existing one (avoids message spam).
+      def update_or_send_status(chat_id, thread_id, text)
+        return unless @config.fetch("tool_notifications", true)
+
+        warn "[telegram] update_or_send_status: existing=#{!!@status_message}, chat_id=#{chat_id}" if Rubot.debug?
+
+        if @status_message && @status_message[:chat_id] == chat_id && @status_message[:thread_id] == thread_id
+          # Edit the existing status message
+          edit_message(chat_id, @status_message[:message_id], text, thread_id)
+        else
+          # Send a new status message
+          msg_id = send_message_with_id(chat_id, text, thread_id)
+          warn "[telegram] Status message sent, id=#{msg_id}" if Rubot.debug?
+          @status_mutex.synchronize do
+            @status_message = { chat_id: chat_id, thread_id: thread_id, message_id: msg_id }
+          end
+        end
+      end
+
+      # Delete the current status message (called before sending the final response).
+      def clear_status_message
+        @status_mutex.synchronize do
+          return unless @status_message
+          chat_id = @status_message[:chat_id]
+          message_id = @status_message[:message_id]
+          @status_message = nil
+          chat_id && message_id ? delete_message(chat_id, message_id) : nil
+        end
+      end
+
+      # Send a message and return the message_id (for later editing/deletion).
+      def send_message_with_id(chat_id, text, thread_id = nil)
+        max_length = @config.fetch("max_message_length", DEFAULT_MAX_LENGTH)
+        chunks = split_message(text, max_length)
+        last_id = nil
+
+        chunks.each do |chunk|
+          body = {
+            "chat_id" => chat_id,
+            "text" => chunk,
+            "parse_mode" => "MarkdownV2"
+          }
+          body["message_thread_id"] = thread_id if thread_id
+          url = URI("#{API_BASE}#{@token}/sendMessage")
+          req = Net::HTTP::Post.new(url)
+          req["Content-Type"] = "application/json"
+          req.body = body.to_json
+
+          begin
+            result = http_post(url, req)
+            if result["ok"]
+              last_id = result["result"]["message_id"]
+            else
+              warn "[telegram] API error: #{result["description"]}"
+            end
+          rescue StandardError => e
+            warn "[telegram] Failed to send message: #{e.message}"
+          end
+        end
+        last_id
+      end
+
+      # Edit an existing message by ID (used for status updates).
+      def edit_message(chat_id, message_id, text, thread_id = nil)
+        body = {
+          "chat_id" => chat_id,
+          "message_id" => message_id,
+          "text" => text,
+          "parse_mode" => "MarkdownV2"
+        }
+        url = URI("#{API_BASE}#{@token}/editMessageText")
+        req = Net::HTTP::Post.new(url)
+        req["Content-Type"] = "application/json"
+        req.body = body.to_json
+
+        begin
+          result = http_post(url, req)
+          unless result["ok"]
+            warn "[telegram] Edit message error: #{result["description"]}"
+          end
+        rescue StandardError => e
+          warn "[telegram] Failed to edit message: #{e.message}"
+        end
+      end
+
+      # Delete a message by ID.
+      def delete_message(chat_id, message_id)
+        body = { "chat_id" => chat_id, "message_id" => message_id }
+        url = URI("#{API_BASE}#{@token}/deleteMessage")
+        req = Net::HTTP::Post.new(url)
+        req["Content-Type"] = "application/json"
+        req.body = body.to_json
+
+        begin
+          result = http_post(url, req)
+          warn "[telegram] Delete message error: #{result["description"]}" if result["ok"] == false && Rubot.debug?
+        rescue StandardError => e
+          warn "[telegram] Failed to delete message: #{e.message}" if Rubot.debug?
+        end
+      end
+
+      def truncate(str, max_len)
+        return str unless str && str.length > max_len
+        str[0, max_len] + "…"
+      end
+
+      # Escape a string for Telegram MarkdownV2 parse mode.
+      # All special chars must be prefixed with a backslash:
+      #   _ * [ ] ( ) ~ ` > # + - = | { } . ! \ 
+      def md_escape(str)
+        return "" unless str
+        str.gsub(/([_*\[\]()~`>#+\-=|{}.!\\])/) { "\\" + $1 }
       end
     end
   end

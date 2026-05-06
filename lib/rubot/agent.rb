@@ -60,7 +60,12 @@ module Rubot
 
     # Process a user message and return the final assistant response.
     # Due cron jobs are fired first, their output prepended to the response.
-    def process(message, &on_chunk)
+    #
+    # Callbacks (optional):
+    #   on_tool_call:     Called before each tool executes. Yields (tool_name, arguments).
+    #   on_tool_result:   Called after each tool executes. Yields (tool_name, result).
+    #   on_progress:      Called after each full tool-call iteration. Yields (iteration_count, tool_count).
+    def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, &on_chunk)
       # Fire any due cron jobs and collect their results
       cron_results = fire_due_cron_jobs
       warn "[cron] fire_due_cron_jobs returned #{cron_results.size} result(s)" if Rubot.debug?
@@ -111,11 +116,17 @@ module Rubot
             tool_name, arguments = parse_tool_call(tc)
             log_debug("Executing tool: #{tool_name}")
 
+            # Fire pre-execution callback
+            on_tool_call&.call(tool_name, arguments)
+
             begin
               tool_result = @tools.execute(tool_name, arguments)
             rescue StandardError => e
               tool_result = "ERROR: #{e.class}: #{e.message}"
             end
+
+            # Fire post-execution callback
+            on_tool_result&.call(tool_name, tool_result)
 
             log_debug("Tool result: #{tool_result[0..200]}")
 
@@ -129,6 +140,9 @@ module Rubot
           response = ""
           tool_calls = nil
           iterations += 1
+
+          # Fire progress callback after each iteration
+          on_progress&.call(iterations, tool_calls ? tool_calls.size : 0)
         else
           # No tool calls, we're done
           break
