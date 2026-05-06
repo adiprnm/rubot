@@ -248,5 +248,80 @@ module Rubot
       assert_kind_of String, response
       assert_includes response, "Welcome"
     end
+
+    def test_new_command_returns_skip_response
+      result = @tg.before_process("/new")
+      assert_kind_of Array, result
+      assert_equal :skip, result[0]
+      assert_includes result[1], "new session"
+    end
+
+    def test_new_command_is_case_insensitive
+      result = @tg.before_process("/NEW")
+      assert_kind_of Array, result
+      assert_equal :skip, result[0]
+    end
+
+    def test_new_command_clears_session
+      # Add a message to the session first
+      @agent.session.add("user", "hello")
+      refute_empty @agent.session.messages
+
+      @tg.before_process("/new")
+      assert_empty @agent.session.messages
+    end
+
+    def test_help_mentions_new_command
+      result = @tg.before_process("/help")
+      assert_kind_of Array, result
+      assert_includes result[1], "/new"
+    end
+
+    def test_info_command_returns_skip
+      result = @tg.before_process("/info")
+      assert_kind_of Array, result
+      assert_equal :skip, result[0]
+      assert_includes result[1], "Agent Info"
+    end
+
+    def test_models_command_returns_skip
+      result = @tg.before_process("/models")
+      assert_kind_of Array, result
+      assert_equal :skip, result[0]
+      assert_includes result[1], "Model"
+    end
+
+    def test_skills_command_returns_skip
+      result = @tg.before_process("/skills")
+      assert_kind_of Array, result
+      assert_equal :skip, result[0]
+      assert_includes result[1], "Skills"
+    end
+
+    def test_memory_command_returns_skip
+      result = @tg.before_process("/memory")
+      assert_kind_of Array, result
+      assert_equal :skip, result[0]
+    end
+
+    def test_soul_command_returns_skip
+      result = @tg.before_process("/soul")
+      assert_kind_of Array, result
+      assert_equal :skip, result[0]
+    end
+
+    def test_agents_command_returns_skip
+      result = @tg.before_process("/agents")
+      assert_kind_of Array, result
+      assert_equal :skip, result[0]
+    end
+
+    def test_help_lists_all_commands
+      result = @tg.before_process("/help")
+      assert_kind_of Array, result
+      %w[/new /info /models /skills /memory /soul /agents /cron /help /start].each do |cmd|
+        assert_includes result[1], cmd, "help text should mention #{cmd}"
+      end
+    end
   end
 end

@@ -24,6 +24,15 @@ module Rubot
       def stop
         @running = false
       end
+
+      # Override to NOT trap SIGINT — let Reline handle Ctrl+C natively.
+      # The REPL already rescues Interrupt and exits gracefully.
+      def register_signal_handlers
+        Signal.trap("TERM") do
+          warn "\n[repl] Received TERM, stopping..."
+          stop
+        end
+      end
     end
   end
 end

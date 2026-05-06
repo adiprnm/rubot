@@ -6,6 +6,7 @@ module Rubot
 
     COMMANDS = {
       "/help"     => "Show this help message",
+      "/new"      => "Clear conversation and start a new session",
       "/clear"    => "Clear conversation history",
       "/session"  => "Show current session ID",
       "/session NAME" => "Switch to a new session",
@@ -54,7 +55,12 @@ module Rubot
       Reline.completion_proc = completion_handler
 
       loop do
-        input = Reline.readline("#{@logo} You: ")
+        input = begin
+          Reline.readline("#{@logo} You: ")
+        rescue Interrupt
+          puts
+          break
+        end
         break unless input
 
         input = input.strip
@@ -63,12 +69,19 @@ module Rubot
         save_history(input)
         dispatch(input)
       end
+    rescue Interrupt
+      puts
     end
 
     def interactive_simple
       loop do
         print "#{@logo} You: "
-        input = $stdin.gets
+        input = begin
+          $stdin.gets
+        rescue Interrupt
+          puts
+          break
+        end
         break unless input
 
         input = input.strip
@@ -77,6 +90,8 @@ module Rubot
         save_history(input)
         dispatch(input)
       end
+    rescue Interrupt
+      puts
     end
 
     def dispatch(input)
@@ -114,6 +129,9 @@ module Rubot
       when "/clear"
         @agent.clear_session
         puts "\n💬 Session cleared."
+      when "/new"
+        @agent.clear_session
+        puts "\n✨ Started a new session. Previous conversation cleared."
       when "/session"
         if parts[1]
           @agent = Agent.new(

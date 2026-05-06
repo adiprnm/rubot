@@ -52,6 +52,9 @@ module Rubot
         bot_info = resp["result"]
         warn "[telegram] Connected as @#{bot_info['username']} (id: #{bot_info['id']})"
 
+        # Register bot commands with Telegram
+        register_bot_commands
+
         # Start cron scheduler with callback for automatic cron execution
         start_cron_scheduler
 
@@ -113,6 +116,61 @@ module Rubot
         end
       end
 
+      # --------------- Command Handlers ---------------
+
+      def handle_info_command
+        info = @agent.startup_info
+        lines = info.map { |k, v| "#{k}: #{v}" }
+        [:skip, "ℹ️ Agent Info\n\n" + lines.join("\n")]
+      end
+
+      def handle_models_command
+        model = @agent.config.model
+        provider = @agent.provider.name
+        [:skip, "🧠 Current Model\n\nProvider: #{provider}\nModel: #{model}"]
+      end
+
+      def handle_skills_command
+        registry = @agent.skill_registry
+        return [:skip, "📚 Skills\n\nNo skills installed.\n\nPlace skills in the workspace `skills/` directory."] unless registry.any?
+
+        lines = registry.all.values.map do |skill|
+          "• **#{skill.name}** — #{skill.summary}"
+        end
+        [:skip, "📚 Available Skills (#{registry.count})\n\n" + lines.join("\n")]
+      end
+
+      def handle_memory_command
+        return [:skip, "🧠 Memory is not enabled (no workspace configured)."] unless @agent.memory.enabled?
+
+        content = @agent.memory.read
+        max_len = DEFAULT_MAX_LENGTH - 200
+        content = content[0, max_len] + "\n\n… (truncated)" if content.length > max_len
+        [:skip, "🧠 Memory\n\n```
+#{content}
+```"]
+      end
+
+      def handle_soul_command
+        return [:skip, "🧬 No soul file (SOUL.md) found in workspace."] unless @agent.soul.enabled?
+
+        content = @agent.soul.to_s
+        max_len = DEFAULT_MAX_LENGTH - 200
+        content = content[0, max_len] + "\n\n… (truncated)" if content.length > max_len
+        [:skip, "🧬 Soul\n\n#{content}"]
+      end
+
+      def handle_agents_command
+        return [:skip, "📋 No AGENTS.md found in workspace."] unless @agent.agents_file.enabled?
+
+        content = @agent.agents_file.raw
+        max_len = DEFAULT_MAX_LENGTH - 200
+        content = content[0, max_len] + "\n\n… (truncated)" if content.length > max_len
+        [:skip, "📋 Agent Rules\n\n```
+#{content}
+```"]
+      end
+
       # --------------- Placeholder Hooks ---------------
 
       # Intercept built-in slash commands before they reach the agent.
@@ -120,9 +178,24 @@ module Rubot
         case message.strip.downcase
         when "/start"
           [:skip, "👋 Welcome to Rubot!\n\nI'm your AI assistant. Send me any message and I'll help you out.\n\nUse /help to see available commands."]
+        when "/new"
+          @agent.clear_session
+          [:skip, "✨ Started a new session. Previous conversation has been cleared."]
         when "/help"
           bot_name = @config.fetch("bot_name", "Rubot")
-          [:skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help.\n\nBuilt-in commands:\n/start - Start the bot\n/help - Show this help message\n/cron - List scheduled cron jobs\n/cron delete <id> - Delete a cron job"]
+          [:skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help.\n\nBuilt-in commands:\n/start - Start the bot\n/new - Clear chat and start a new session\n/help - Show this help message\n/info - Show agent info\n/models - Show current model\n/skills - List available skills\n/memory - Show persistent memory\n/soul - Show bot personality\n/agents - Show agent rules\n/cron - List scheduled cron jobs\n/cron delete <id> - Delete a cron job"]
+        when "/info"
+          handle_info_command
+        when "/models"
+          handle_models_command
+        when "/skills"
+          handle_skills_command
+        when "/memory"
+          handle_memory_command
+        when "/soul"
+          handle_soul_command
+        when "/agents"
+          handle_agents_command
         when /^\/cron(\s+(.*))?$/
           handle_cron_command($2&.strip)
         else
@@ -131,6 +204,42 @@ module Rubot
       end
 
       private
+
+      # --------------- Bot Commands Registration ---------------
+
+      # Register all slash commands with Telegram so they appear
+      # in the command menu (available via the / button in the chat).
+      def register_bot_commands
+        commands = [
+          { "command" => "start", "description" => "Start the bot" },
+          { "command" => "new", "description" => "Clear chat and start a new session" },
+          { "command" => "help", "description" => "Show help message" },
+          { "command" => "info", "description" => "Show agent info" },
+          { "command" => "models", "description" => "Show current model" },
+          { "command" => "skills", "description" => "List available skills" },
+          { "command" => "memory", "description" => "Show persistent memory" },
+          { "command" => "soul", "description" => "Show bot personality" },
+          { "command" => "agents", "description" => "Show agent rules" },
+          { "command" => "cron", "description" => "List scheduled cron jobs" },
+        ]
+
+        url = URI("#{API_BASE}#{@token}/setMyCommands")
+        body = { "commands" => commands }.to_json
+        req = Net::HTTP::Post.new(url)
+        req["Content-Type"] = "application/json"
+        req.body = body
+
+        begin
+          result = http_post(url, req)
+          if result["ok"]
+            warn "[telegram] Registered #{commands.size} bot commands."
+          else
+            warn "[telegram] Failed to register commands: #{result["description"]}"
+          end
+        rescue StandardError => e
+          warn "[telegram] Error registering commands: #{e.message}"
+        end
+      end
 
       # --------------- Cron Scheduler ---------------
 
