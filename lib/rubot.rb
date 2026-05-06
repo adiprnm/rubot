@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require_relative "rubot/env_loader"
 require_relative "rubot/config"
 require_relative "rubot/session"
 require_relative "rubot/provider"
