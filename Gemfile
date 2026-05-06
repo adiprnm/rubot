@@ -2,5 +2,7 @@
 
 source "https://rubygems.org"
 
-gem "minitest", "~> 5.0"
-gem "rake"
+group :development, :test do
+  gem "minitest", "~> 5.0"
+  gem "rake"
+end
