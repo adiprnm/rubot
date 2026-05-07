@@ -152,4 +152,144 @@ class TestMemory < Minitest::Test
     refute mem.enabled?
     assert_equal "", mem.read
   end
+
+  def test_memory_file_write_still_works_internally
+    # Memory.write is used internally for initial creation and save!
+    mem = Rubot::Memory.new(workspace: @tmpdir)
+    mem.write("# Memory\n\n## Facts\n- Test fact")
+    assert_includes mem.read, "Test fact"
+  end
+end
+
+class TestMemoryToolProtection < Minitest::Test
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @memory = Rubot::Memory.new(workspace: @tmpdir)
+    @tool = Rubot::Tools::MemoryTool.new(@memory)
+  end
+
+  def teardown
+    FileUtils.rm_rf(@tmpdir)
+  end
+
+  def test_memory_tool_has_no_write_operation
+    ops = @tool.parameters["properties"]["operation"]["enum"]
+    refute_includes ops, "write"
+    assert_includes ops, "read"
+    assert_includes ops, "append"
+    assert_includes ops, "update_section"
+  end
+
+  def test_memory_tool_write_operation_rejected
+    result = @tool.execute({ "operation" => "write", "content" => "ERASED" })
+    assert_includes result, "ERROR"
+    assert_includes result, "reset"
+    # Verify memory was not changed
+    assert_includes @memory.read, "## Facts"
+  end
+
+  def test_memory_tool_read_works
+    result = @tool.execute({ "operation" => "read" })
+    assert_includes result, "## Facts"
+  end
+
+  def test_memory_tool_append_works
+    result = @tool.execute({ "operation" => "append", "section" => "Facts", "content" => "New fact" })
+    assert_includes result, "New fact"
+    assert_includes @memory.read, "New fact"
+  end
+
+  def test_memory_tool_update_section_works
+    @memory.append("Facts", "Old fact")
+    result = @tool.execute({
+      "operation" => "update_section",
+      "section" => "Facts",
+      "items" => ["Updated fact 1", "Updated fact 2"]
+    })
+    assert_includes result, "Updated"
+    content = @memory.read
+    refute_includes content, "Old fact"
+    assert_includes content, "Updated fact 1"
+  end
+end
+
+class TestMemoryProtectionViaFileTool < Minitest::Test
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @guard = Rubot::SafetyGuard.new(workspace: @tmpdir, restrict_to_workspace: false)
+    @file_tool = Rubot::Tools::FileTool.new(safety_guard: @guard)
+  end
+
+  def teardown
+    FileUtils.rm_rf(@tmpdir)
+  end
+
+  def test_file_tool_blocks_write_to_memory_md
+    mem_path = File.join(@tmpdir, "MEMORY.md")
+    File.write(mem_path, "Original memory content")
+
+    result = @file_tool.execute({
+      "operation" => "write",
+      "path" => mem_path,
+      "content" => "ERASED BY FILE TOOL"
+    })
+    assert_includes result, "ERROR"
+    assert_includes result, "Cannot overwrite MEMORY.md"
+    # Verify memory was not changed
+    assert_includes File.read(mem_path), "Original memory content"
+  end
+
+  def test_file_tool_allows_write_to_other_files
+    other_path = File.join(@tmpdir, "other.md")
+    result = @file_tool.execute({
+      "operation" => "write",
+      "path" => other_path,
+      "content" => "Other content"
+    })
+    assert_includes result, "Written"
+  end
+
+  def test_file_tool_allows_read_memory_md
+    mem_path = File.join(@tmpdir, "MEMORY.md")
+    File.write(mem_path, "# Memory\n\n## Facts\n- Read test")
+
+    result = @file_tool.execute({
+      "operation" => "read",
+      "path" => mem_path
+    })
+    assert_includes result, "Read test"
+    refute_includes result, "ERROR"
+  end
+end
+
+class TestMemoryProtectionViaShell < Minitest::Test
+  def setup
+    @guard = Rubot::SafetyGuard.new(workspace: nil, restrict_to_workspace: false)
+    @shell = Rubot::Tools::Shell.new(safety_guard: @guard)
+  end
+
+  def test_shell_blocks_rm_memory
+    result = @shell.execute({ "command" => "rm MEMORY.md" })
+    assert_includes result, "rejected"
+    assert_includes result, "MEMORY.md"
+    assert_includes result, "protected"
+  end
+
+  def test_shell_blocks_truncate_memory
+    result = @shell.execute({ "command" => "truncate -s 0 MEMORY.md" })
+    assert_includes result, "rejected"
+    assert_includes result, "MEMORY.md"
+  end
+
+  def test_shell_blocks_echo_empty_to_memory
+    result = @shell.execute({ "command" => "echo '' > MEMORY.md" })
+    assert_includes result, "rejected"
+    assert_includes result, "MEMORY.md"
+  end
+
+  def test_shell_allows_safe_commands
+    result = @shell.execute({ "command" => "echo hello" })
+    assert_includes result, "hello"
+    refute_includes result, "rejected"
+  end
 end

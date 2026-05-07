@@ -108,6 +108,7 @@ module Rubot
 
       def write_file(path, content)
         check_path(path, operation: :write)
+        raise "Cannot overwrite MEMORY.md — use the memory tool (append/update_section) instead. Memory cannot be reset." if memory_file?(path)
         raise "No content provided" if content.nil?
         p = safe_path(path)
         FileUtils.mkdir_p(File.dirname(p))
@@ -158,6 +159,14 @@ module Rubot
           Modified: #{stat.mtime}
           Created: #{stat.ctime}
         INFO
+      end
+
+      # Check if a path targets the memory file.
+      # Prevents the bot from bypassing the memory tool to directly
+      # overwrite or delete MEMORY.md.
+      def memory_file?(path)
+        basename = File.basename(path).downcase
+        basename == "memory.md"
       end
     end
   end

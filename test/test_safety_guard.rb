@@ -152,6 +152,32 @@ class TestSafetyGuard < Minitest::Test
     assert guard.dangerous_command?("mkswap /dev/sda2")
   end
 
+  # --- Memory protection via shell ---
+
+  def test_dangerous_command_rm_memory
+    guard = Rubot::SafetyGuard.new
+    assert guard.dangerous_command?("rm MEMORY.md")
+    assert guard.dangerous_command?("rm -f MEMORY.md")
+    assert guard.dangerous_command?("rm /path/to/MEMORY.md")
+  end
+
+  def test_dangerous_command_truncate_memory
+    guard = Rubot::SafetyGuard.new
+    assert guard.dangerous_command?("truncate MEMORY.md")
+    assert guard.dangerous_command?("truncate -s 0 MEMORY.md")
+  end
+
+  def test_dangerous_command_empty_write_memory
+    guard = Rubot::SafetyGuard.new
+    assert guard.dangerous_command?("echo '' > MEMORY.md")
+    assert guard.dangerous_command?('echo "" > MEMORY.md')
+  end
+
+  def test_dangerous_command_dev_null_memory
+    guard = Rubot::SafetyGuard.new
+    assert guard.dangerous_command?("cp /dev/null MEMORY.md")
+  end
+
   # --- Command path checking ---
 
   def test_check_command_workspace_relative

@@ -47,7 +47,13 @@ module Rubot
       # Filesystem destruction
       /\bmke2fs\b/,
       /\bmkswap\b/,
-      /\bfsck\b.*-y\s+\/dev\//
+      /\bfsck\b.*-y\s+\/dev\//,
+      # Memory destruction — block attempts to delete or reset MEMORY.md
+      /\brm\s+.*MEMORY\.md/,
+      /\btruncate\s+.*MEMORY\.md/,
+      /\b:>\s*.*MEMORY\.md/,
+      /\becho\s+["']?["']?\s*>\s*.*MEMORY\.md/,
+      /\bcp\s+\/dev\/null\s+.*MEMORY\.md/,
     ].freeze
 
     # Device path patterns to block in exec commands

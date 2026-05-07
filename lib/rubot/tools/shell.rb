@@ -50,6 +50,11 @@ module Rubot
         cmd = arguments["command"]
         raise "No command provided" if cmd.nil? || cmd.strip.empty?
 
+        # Block attempts to delete or reset memory via shell
+        if targets_memory?(cmd)
+          raise "Command rejected: cannot delete or reset MEMORY.md via shell. Memory is protected."
+        end
+
         # Safety guard checks
         check_command_safety(cmd)
 
@@ -114,6 +119,12 @@ module Rubot
           /\bmkswap\b/
         ]
         patterns.any? { |p| cmd =~ p }
+      end
+
+      # Check if a command targets MEMORY.md for deletion or truncation.
+      # This is a dedicated defense-in-depth check independent of SafetyGuard.
+      def targets_memory?(cmd)
+        cmd =~ /MEMORY\.md/i && cmd =~ /(\brm\b|\btruncate\b|\b:>\s|\becho\s+.*>\s|cp\s+\/dev\/null)/
       end
     end
   end

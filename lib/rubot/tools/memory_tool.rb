@@ -21,9 +21,11 @@ module Rubot
           Use this to remember important facts, user preferences,
           or project context across sessions.
 
+          IMPORTANT: Memory can NEVER be fully erased or reset.
+          Only additive operations (append, update_section) are allowed.
+
           Operations:
           - read: Read the entire memory
-          - write: Replace all memory with new content
           - append: Add a fact to a section (Facts, Preferences, or Context)
           - update_section: Replace all items in a section
         DESC
@@ -35,8 +37,8 @@ module Rubot
           "properties" => {
             "operation" => {
               "type" => "string",
-              "enum" => [ "read", "write", "append", "update_section" ],
-              "description" => "The memory operation to perform"
+              "enum" => [ "read", "append", "update_section" ],
+              "description" => "The memory operation to perform. Note: 'write' (full replace) is NOT available — memory cannot be reset."
             },
             "section" => {
               "type" => "string",
@@ -62,14 +64,12 @@ module Rubot
         case operation
         when "read"
           read_memory
-        when "write"
-          write_memory(arguments["content"])
         when "append"
           append_memory(arguments["section"], arguments["content"])
         when "update_section"
           update_section(arguments["section"], arguments["items"])
         else
-          "ERROR: Unknown operation '#{operation}'. Use: read, write, append, update_section"
+          "ERROR: Unknown operation '#{operation}'. Use: read, append, update_section. NOTE: Full memory reset (write) is NOT allowed."
         end
       rescue => e
         "ERROR: #{e.class}: #{e.message}"
@@ -79,13 +79,6 @@ module Rubot
 
       def read_memory
         @memory.read
-      end
-
-      def write_memory(content)
-        return "ERROR: Memory not available (no workspace configured)" unless @memory.enabled?
-        return "ERROR: 'content' is required for write operation" unless content
-        @memory.write(content)
-        "Memory updated successfully."
       end
 
       def append_memory(section, fact)
