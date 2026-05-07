@@ -61,6 +61,9 @@ module Rubot
   class CronScheduler
     attr_reader :jobs
 
+    # FIX (VULN-1): Safety guard for command validation
+    attr_accessor :safety_guard
+
     def initialize(workspace:, &on_fire)
       @workspace = workspace
       @jobs = {}
@@ -72,6 +75,7 @@ module Rubot
     end
 
     # Add a new scheduled job. Returns job ID.
+    # FIX (VULN-13): Validates command through safety guard before storing.
     def add(message:, cron_expr: nil, every_seconds: nil, at_seconds: nil, command: nil, mode: nil, description: "", target_chat_id: nil, target_thread_id: nil)
       if at_seconds
         schedule_type = "at"
@@ -89,6 +93,11 @@ module Rubot
       end
 
       mode = command ? :command : (mode || :agent_turn).to_sym
+
+      # FIX (VULN-1): Validate command through safety guard before storing
+      if command && !command.strip.empty?
+        validate_cron_command(command)
+      end
 
       @mutex.synchronize do
         id = generate_id
@@ -218,6 +227,20 @@ module Rubot
       @jobs.values.select { |j| j["enabled"] }
     end
 
+    def validate_cron_command(command)
+      cmd = command.strip
+
+      # Always check dangerous patterns
+      if @safety_guard&.dangerous_command?(cmd)
+        raise SafetyGuard::SecurityError,
+              "Cron command blocked by safety guard (dangerous pattern detected)"
+      end
+
+      # In workspace-restricted mode, verify command path
+      return unless @safety_guard&.restrict_to_workspace
+      @safety_guard.check_command(cmd)
+    end
+
     def execute_job(job)
       case job["mode"]
       when "command"
@@ -234,6 +257,11 @@ module Rubot
     def execute_command(job)
       require "open3"
       cmd = job["command"] || job["message"]
+
+      # FIX (VULN-1): Validate command before execution (defense-in-depth)
+      # Covers jobs loaded from disk that were created before safety guard existed
+      validate_cron_command(cmd)
+
       stdout, stderr, status = Open3.capture3(cmd)
       output = ""
       output += stdout if stdout && !stdout.empty?
@@ -293,6 +321,27 @@ module Rubot
       return unless data_file && File.exist?(data_file)
       data = JSON.parse(File.read(data_file))
       @jobs = data["jobs"] || {}
+
+      # FIX (VULN-13): Validate loaded command-mode jobs through safety guard
+      # Invalid jobs are disabled rather than deleted (preserves audit trail)
+      return unless @safety_guard
+      @jobs.each_value do |job|
+        next unless job["mode"] == "command" && job["command"]
+        validate_cron_command(job["command"])
+      end
+    rescue SafetyGuard::SecurityError => e
+      warn "[cron] Disabling unsafe loaded job: #{e.message}"
+      # Disable the job that failed validation — don't delete, preserve audit trail
+      @jobs.each_value do |job|
+        next unless job["mode"] == "command" && job["command"]
+        begin
+          validate_cron_command(job["command"])
+        rescue SafetyGuard::SecurityError
+          job["enabled"] = false
+          job["last_error"] = "Disabled by safety guard: #{e.message}"
+        end
+      end
+      save!
     rescue JSON::ParserError
       @jobs = {}
     end

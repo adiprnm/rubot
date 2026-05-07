@@ -59,22 +59,42 @@ module Rubot
           return "ERROR: Only http and https URLs are allowed."
         end
 
-        # Safety: block private/internal IPs (SSRF protection)
-        blocked_ip = check_blocked_host(uri.host)
-        if blocked_ip
-          return "ERROR: Access blocked by safety guard: #{uri.host} resolves to internal/private address (#{blocked_ip})"
+        # FIX (VULN-12): Resolve IP FIRST and connect directly to the IP address
+        # to prevent DNS rebinding attacks where the hostname resolves to a
+        # different IP between the safety check and the actual connection.
+        resolved_ip = resolve_and_check_host(uri.host)
+        if resolved_ip.nil?
+          return "ERROR: Access blocked by safety guard: #{uri.host} could not be resolved"
         end
 
-        http = Net::HTTP.new(uri.host, uri.port)
+        http = Net::HTTP.new(resolved_ip, uri.port)
         http.open_timeout = 10
         http.read_timeout = 15
         http.use_ssl = uri.scheme == "https"
         http.verify_mode = OpenSSL::SSL::VERIFY_PEER
 
+        # FIX (VULN-12): For HTTPS, configure SNI with the original hostname
+        # so certificate verification works when connecting by IP address
+        if http.use_ssl
+          http.ssl_context = OpenSSL::SSL::SSLContext.new.tap do |ctx|
+            ctx.verify_mode = OpenSSL::SSL::VERIFY_PEER
+            ctx.verify_hostname = true
+            ctx.servername = uri.host  # SNI uses hostname, not IP
+          end
+        end
+
         path = uri.path.empty? ? "/" : uri.path
         path += "?#{uri.query}" if uri.query
 
-        response = http.get(path, { "User-Agent" => "rubot/#{Rubot::VERSION}" })
+        # FIX (VULN-12): Use original hostname for Host header and SNI,
+        # but we connected to the resolved IP address directly.
+        headers = {
+          "User-Agent" => "rubot/#{Rubot::VERSION}",
+          "Host" => uri.host
+        }
+        http.set_debug_output(nil)  # prevent info leaks
+
+        response = http.get(path, headers)
 
         body = response.body.to_s
         body = body[0...MAX_BODY] + "\n... (body truncated)" if body.length > MAX_BODY
@@ -92,19 +112,22 @@ module Rubot
 
       private
 
-      # Check if a hostname resolves to a blocked (private/internal) IP.
+      # FIX (VULN-12): Resolve a hostname and return the IP address if it's
+      # safe, or nil if it's blocked. This returns the IP for direct connection,
+      # preventing DNS rebinding where the hostname changes between check and use.
+      #
       # @param host [String] Hostname to check
-      # @return [String, nil] The blocked IP address, or nil if safe
-      def check_blocked_host(host)
+      # @return [String, nil] The safe IP address, or nil if blocked
+      def resolve_and_check_host(host)
         # Block obvious localhost patterns
-        return "localhost" if host =~ /\A(localhost|localhost\.localdomain)\z/i
+        return nil if host =~ /\A(localhost|localhost\.localdomain)\z/i
 
         # Resolve all IPs for the host and check each
         begin
           require "resolv"
           addresses = Resolv.getaddresses(host)
         rescue StandardError
-          return nil # If we can't resolve, let the connection attempt handle it
+          return nil # If we can't resolve, block it
         end
 
         blocked_ranges = BLOCKED_IP_RANGES.map { |r| IPAddr.new(r) }
@@ -113,14 +136,27 @@ module Rubot
           begin
             ip = IPAddr.new(addr_str)
             blocked_ranges.each do |range|
-              return addr_str if range.include?(ip)
+              return nil if range.include?(ip) # Blocked — return nil
             end
           rescue IPAddr::InvalidAddressError
             next # Skip invalid addresses
           end
         end
 
-        nil
+        # Return the first non-blocked address for direct connection
+        # This prevents DNS rebinding — we connect to this specific IP
+        addresses.each do |addr_str|
+          begin
+            ip = IPAddr.new(addr_str)
+            unless blocked_ranges.any? { |range| range.include?(ip) }
+              return addr_str
+            end
+          rescue IPAddr::InvalidAddressError
+            next
+          end
+        end
+
+        nil # All addresses blocked
       end
     end
   end

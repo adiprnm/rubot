@@ -131,7 +131,10 @@ module Rubot
 
     def load_config
       return {} unless File.exist?(config_path)
-      YAML.safe_load(File.read(config_path), permitted_classes: [ Symbol ]) || {}
+      # FIX (VULN-14): Remove Symbol from permitted_classes to prevent
+      # YAML-based symbol table exhaustion DoS attacks. All config access
+      # in this codebase uses string keys, so symbols are unnecessary.
+      YAML.safe_load(File.read(config_path), permitted_classes: []) || {}
     rescue Psych::SyntaxError => e
       warn "Warning: Failed to parse config file: #{e.message}"
       {}

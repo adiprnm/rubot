@@ -80,7 +80,18 @@ module Rubot
       private
 
       def safe_path(path)
-        Pathname.new(path).expand_path
+        expanded = Pathname.new(path).expand_path
+        # FIX (VULN-9): Resolve symlinks at operation time to prevent TOCTOU attacks
+        # where a file is replaced with a symlink between check and use
+        return expanded if expanded.to_s.start_with?("/dev/")
+        if File.exist?(expanded.to_s)
+          begin
+            return Pathname.new(File.realpath(expanded.to_s))
+          rescue SystemCallError
+            # File was deleted between check and use — let the operation fail naturally
+          end
+        end
+        expanded
       end
       def check_path(path, operation:)
         guard = @safety_guard

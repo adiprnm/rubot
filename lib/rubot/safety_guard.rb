@@ -16,16 +16,18 @@ module Rubot
       /dev/stdin /dev/stdout /dev/stderr
     ].freeze
 
-    # Dangerous command patterns that are always blocked, even without workspace restriction
+    # Dangerous command patterns that are always blocked, regardless of mode.
+    # Pattern fixes: case-insensitive MEMORY.md, any rm flag order,
+    # leading-zero chmod, sudo pipe bypass, additional destruction methods.
     DANGEROUS_PATTERNS = [
-      # Bulk deletion
-      /\brm\s+-rf\s+\/\s*$/,
-      /\brm\s+-rf\s+\*\s*$/,
-      /\brm\s+--no-preserve-root\s/,
+      # Bulk deletion — any flag order (-rf, -fr, -Rf, -fR)
+      /\brm\s+-(?:r[fF]?|[fF]r|R[fF]?|[fF]R)\s+\/\s*$/,
+      /\brm\s+-(?:r[fF]?|[fF]r|R[fF]?|[fF]R)\s+\*\s*$/,
+      /\brm\s+--no-preserve-root\b/,
       # Disk formatting / low-level writes
       /\bmkfs\b/,
-      /\bdd\s+.*of=\/dev\//,
-      /\bdd\s+if=\/dev\//,
+      /\bdd\b.*\bof=\/dev\//,
+      /\bdd\b.*\bif=\/dev\//,
       /\bformat\s/,
       /\bdiskpart\b/,
       # Direct device writes
@@ -38,22 +40,29 @@ module Rubot
       /\bpoweroff\b/,
       # Fork bomb
       /:\(\)\s*\{.*:\|.*&.*\}\s*;/,
-      # Pipe to shell (remote code execution)
-      /\bcurl\b.*\|\s*(sh|bash|zsh)\b/,
-      /\bwget\b.*-O-.*\|\s*(sh|bash|zsh)\b/,
-      # Permission escalation on root
-      /\bchmod\s+777\s+\/\s*$/,
-      /\bchmod\s+-R\s+777\s+\/\s*$/,
+      # Pipe to shell (remote code execution) — includes sudo bypass
+      /\bcurl\b.*\|\s*(?:sudo\s+)?(?:sh|bash|zsh)\b/,
+      /\bwget\b.*-O-.*\|\s*(?:sudo\s+)?(?:sh|bash|zsh)\b/,
+      # Permission escalation on root — includes leading-zero octal and symbolic mode
+      /\bchmod\s+0?777\s+\/\s*$/,
+      /\bchmod\s+-R\s+0?777\s+\/\s*$/,
+      /\bchmod\s+a\+rwx\s+\/\s*$/,
       # Filesystem destruction
       /\bmke2fs\b/,
       /\bmkswap\b/,
       /\bfsck\b.*-y\s+\/dev\//,
-      # Memory destruction — block attempts to delete or reset MEMORY.md
-      /\brm\s+.*MEMORY\.md/,
-      /\btruncate\s+.*MEMORY\.md/,
-      /\b:>\s*.*MEMORY\.md/,
-      /\becho\s+["']?["']?\s*>\s*.*MEMORY\.md/,
-      /\bcp\s+\/dev\/null\s+.*MEMORY\.md/,
+      # Memory destruction — case-insensitive, multiple methods (VULN-4, VULN-8 expansion)
+      /\brm\b.*memory\.md/i,
+      /\btruncate\b.*memory\.md/i,
+      /\bunlink\b.*memory\.md/i,
+      /\bshred\b.*memory\.md/i,
+      /\bmv\b.*memory\.md/i,
+      /\b:>\s*.*memory\.md/i,
+      /\becho\s+.*>\s*.*memory\.md/i,
+      /\bcp\s+\/dev\/null\s+.*memory\.md/i,
+      /\bdd\b.*\bof=.*memory\.md/i,
+      /\bln\s+-sf.*memory\.md/i,
+      /\bsed\b.*memory\.md/i,
     ].freeze
 
     # Device path patterns to block in exec commands
@@ -92,7 +101,7 @@ module Rubot
       # Always allow safe device paths
       return true if SAFE_PATHS.include?(resolved.to_s)
 
-      # Check if path is within workspace
+      # Check if path is within workspace (symlinks resolved)
       in_workspace = path_within_workspace?(resolved)
 
       if in_workspace
@@ -108,29 +117,40 @@ module Rubot
 
     # Check if a command string is allowed for execution.
     # Modeled after PicoClaw's ExecTool.guardCommand.
+    #
+    # FIX (VULN-3): Dangerous pattern check runs BEFORE the early return,
+    # so dangerous commands are always blocked regardless of workspace mode.
+    #
     # @param command [String] The command to check
     # @return [Boolean] true if the command is allowed
     # @raises [SecurityError] if the command is blocked
     def check_command(command)
-      return true unless @restrict_to_workspace
-      return true unless @workspace
-
       cmd = command.strip
       return true if cmd.empty?
 
-      # 1. Check deny patterns (always enforced)
+      # 0. FIX (VULN-3): Always check deny patterns FIRST — enforced even in permissive mode
       if dangerous_command?(cmd)
         raise SecurityError,
               "Command blocked by safety guard (dangerous pattern detected)"
       end
 
-      # 2. Block path traversal
+      # 0b. FIX (VULN-7): Block shell variable / command-substitution path bypasses
+      if has_unresolved_path_variables?(cmd)
+        raise SecurityError,
+              "Command blocked by safety guard (shell variables could bypass path checking)"
+      end
+
+      # Workspace restriction checks — only apply when mode is strict
+      return true unless @restrict_to_workspace
+      return true unless @workspace
+
+      # 1. Block path traversal
       if cmd.include?("../") || cmd.include?("..\\")
         raise SecurityError,
               "Command blocked by safety guard (path traversal detected)"
       end
 
-      # 3. Find all absolute paths in the command and check each one
+      # 2. Find all absolute paths in the command and check each one
       abs_paths = extract_absolute_paths(cmd)
       abs_paths.each do |raw_path|
         # Skip safe paths
@@ -152,6 +172,10 @@ module Rubot
 
     # Extract all absolute file paths from a command string.
     # Modeled after PicoClaw's absolutePathPattern approach.
+    #
+    # FIX (VULN-6, VULN-10): Strip shell quotes from tokens and handle
+    # command-substitution trailing metacharacters.
+    #
     # @param command [String]
     # @return [Array<String>] List of absolute paths found
     def extract_absolute_paths(command)
@@ -165,14 +189,21 @@ module Rubot
           token = value
         end
 
+        # FIX (VULN-6): Remove all shell quoting characters so that
+        # cat '/etc/passwd' and ls '/etc'/passwd are both detected correctly.
+        token = token.tr("'", '')
+        token = token.tr('"', '')
+
+        # FIX (VULN-10): Strip trailing command-substitution chars
+        # so that $(echo /etc/passwd) → /etc/passwd, not /etc/passwd)
+        token = token.delete_suffix(")").delete_suffix("}").delete_suffix("`")
+
         # Must start with /
         next unless token.start_with?("/")
         # Skip URL path components (//)
         next if token.start_with?("//")
         # Skip bare /
         next if token == "/"
-        # Strip trailing quotes if present
-        token = token.delete_suffix('"').delete_suffix("'")
         # Strip redirect markers
         next if token.start_with?(">", "<")
 
@@ -211,23 +242,68 @@ module Rubot
       cmd =~ BLOCK_DEVICE_PATTERNS
     end
 
-    # Resolve a path to its absolute, expanded form.
+    # Detect shell variable references or command substitution that could
+    # be used to bypass path checking by hiding paths in variables.
+    #
+    # FIX (VULN-7): Only enforced in strict mode to avoid breaking
+    # legitimate variable usage in permissive mode.
+    #
+    # @param command [String]
+    # @return [Boolean]
+    def has_unresolved_path_variables?(command)
+      return false unless @restrict_to_workspace
+      # $VAR, ${VAR}, $(cmd), $((expr)), or backtick substitution
+      command.match?(/\$[\w{(]/) || command.match?(/`[^`]+`/)
+    end
+
+    # Resolve a path to its absolute, symlink-resolved form.
+    #
+    # FIX (VULN-2, VULN-11): Uses File.realpath for existing paths so that
+    # symlinks cannot be used to escape the workspace.
+    #
     # @param path [String, Pathname]
     # @return [Pathname]
     def resolve_path(path)
       p = path.is_a?(Pathname) ? path : Pathname.new(path.to_s)
-      p.expand_path
+      expanded = p.expand_path
+      # Resolve symlinks for existing paths to prevent workspace escape
+      return expanded if expanded.to_s.start_with?("/dev/")
+      if File.exist?(expanded.to_s)
+        begin
+          return Pathname.new(File.realpath(expanded.to_s))
+        rescue SystemCallError
+          # Fall back to expand_path if realpath fails (race condition)
+        end
+      end
+      expanded
     end
 
     # Check if a resolved path is within the workspace.
+    #
+    # FIX (VULN-2, VULN-11): Resolves symlinks for existing paths before
+    # comparison, so a symlink pointing outside the workspace is detected.
+    #
     # @param resolved [Pathname] Already-expanded path
     # @return [Boolean]
     def path_within_workspace?(resolved)
       return false unless @workspace
+
+      # Resolve symlinks for existing paths
+      check = resolved
+      unless resolved.to_s.start_with?("/dev/")
+        if File.exist?(resolved.to_s)
+          begin
+            check = Pathname.new(File.realpath(resolved.to_s))
+          rescue SystemCallError
+            check = resolved
+          end
+        end
+      end
+
       workspace_str = @workspace.to_s + "/"
-      resolved_str = resolved.to_s + "/" if resolved.file?
-      resolved_str ||= resolved.to_s
-      resolved_str.start_with?(workspace_str) || resolved.to_s == @workspace.to_s
+      resolved_str = check.to_s + "/" if check.file?
+      resolved_str ||= check.to_s
+      resolved_str.start_with?(workspace_str) || check.to_s == @workspace.to_s
     end
 
     # Extract the executable path from a command string.

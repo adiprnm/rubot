@@ -8,6 +8,9 @@ module Rubot
     # Cron tool — schedules are checked and executed synchronously
     # each time the agent processes a message. No background thread.
     class Cron < Tool
+      # FIX (VULN-1): Safety guard for cron command validation
+      attr_accessor :safety_guard
+
       def initialize(workspace: nil)
         @workspace = workspace
         @scheduler = nil
@@ -135,6 +138,8 @@ module Rubot
       def ensure_scheduler
         return @scheduler if @scheduler
         @scheduler = CronScheduler.new(workspace: @workspace, &@on_fire)
+        # FIX (VULN-1): Propagate safety guard to scheduler
+        @scheduler.safety_guard = @safety_guard
         @scheduler
       end
 
