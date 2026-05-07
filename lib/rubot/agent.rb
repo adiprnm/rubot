@@ -316,7 +316,7 @@ module Rubot
 
       # Add conversation history (limited)
       history_limit = @config.history_limit
-      recent_messages = history_limit ? @session.conversation_history.last(history_limit) : @session.conversation_history
+      recent_messages = @session.safe_history(limit: history_limit)
 
       recent_messages.each do |msg|
         formatted = { "role" => msg["role"], "content" => msg["content"] }
@@ -462,14 +462,14 @@ module Rubot
       messages << { "role" => "system", "content" => build_system_prompt }
 
       history_limit = @config.history_limit
-      all_history = @session.conversation_history
+      all_history = @session.safe_history(limit: history_limit)
 
       # If the last message is a user message (the current one being processed),
       # exclude it so cron processing has clean context
       history = all_history.dup
       history.pop if history.last && history.last["role"] == "user"
 
-      recent = history_limit ? history.last(history_limit) : history
+      recent = history
       recent.each do |msg|
         formatted = { "role" => msg["role"], "content" => msg["content"] }
         formatted["tool_calls"] = msg["tool_calls"] if msg["role"] == "assistant" && msg["tool_calls"]
