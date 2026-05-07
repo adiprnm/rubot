@@ -126,6 +126,9 @@ module Rubot
       #
       # FIX (VULN-8, VULN-10): Expanded to catch dd, tee, cat /dev/null,
       # variable substitution, find -delete, and other destruction methods.
+      #
+      # FIX (PEN-09): Also blocks commands using indirect variable references
+      # where the destruction keyword appears near a shell variable (defense-in-depth).
       def targets_memory?(cmd)
         cmd =~ /MEMORY\.md/i && cmd =~ %r{
           \brm\b                    |
@@ -138,7 +141,15 @@ module Rubot
           \bfind\b.*\b-delete\b     |
           \$\{?MEMORY               |
           \$\{?memory
-        }x
+        }x ||
+        # Indirect variable: destruction command near any $var reference
+        # (defense-in-depth — catches rm $VAR where VAR was set to MEMORY.md)
+        (cmd =~ /MEMORY\.md/i && cmd =~ /\$[A-Za-z_]/ && cmd =~ %r{
+          \brm\b                    |
+          \btruncate\b              |
+          \bshred\b                 |
+          \bunlink\b
+        }x)
       end
     end
   end

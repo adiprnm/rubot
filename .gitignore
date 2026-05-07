@@ -19,3 +19,6 @@ workspace/
 # Ruby
 *.gem
 /pkg/
+
+# Security reports
+PEN_TEST_REPORT.md

@@ -137,8 +137,14 @@ module Rubot
 
       def ensure_scheduler
         return @scheduler if @scheduler
-        # FIX (VULN-7): Pass safety guard via constructor to avoid TOCTOU
-        @scheduler = CronScheduler.new(workspace: @workspace, safety_guard: @safety_guard, &@on_fire)
+        # FIX (VULN-7, PEN-05): Pass safety guard via lazy reference (proc)
+        # to prevent TOCTOU where the scheduler is created before safety_guard=
+        # is set. The proc always reads the current value of @safety_guard.
+        @scheduler = CronScheduler.new(
+          workspace: @workspace,
+          safety_guard_source: -> { @safety_guard },
+          &@on_fire
+        )
         @scheduler
       end
 

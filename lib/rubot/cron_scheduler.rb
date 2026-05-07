@@ -61,16 +61,21 @@ module Rubot
   class CronScheduler
     attr_reader :jobs
 
-    # FIX (VULN-1, VULN-7): Safety guard for command validation.
-    # Must be passed via constructor to avoid TOCTOU where jobs are
-    # loaded from disk before the guard is attached.
+    # FIX (VULN-1, VULN-7, PEN-05): Safety guard for command validation.
+    # Supports both direct assignment and lazy source (proc) to prevent
+    # TOCTOU where the scheduler is created before the guard is set.
     attr_accessor :safety_guard
+    attr_accessor :safety_guard_source
 
-    # FIX (VULN-7): safety_guard can be passed via constructor so that
-    # load! validates jobs with the guard already in place.
-    def initialize(workspace:, safety_guard: nil, &on_fire)
+    # FIX (VULN-7, PEN-05): safety_guard can be passed via constructor so
+    # that load! validates jobs with the guard already in place. Or
+    # safety_guard_source can be passed as a proc/lambda that returns
+    # the current guard value — this prevents TOCTOU where the guard
+    # is set after the scheduler is created.
+    def initialize(workspace:, safety_guard: nil, safety_guard_source: nil, &on_fire)
       @workspace = workspace
       @safety_guard = safety_guard
+      @safety_guard_source = safety_guard_source
       @jobs = {}
       @mutex = Mutex.new
       @on_fire = on_fire || proc { |_result| }
@@ -234,17 +239,30 @@ module Rubot
 
     def validate_cron_command(command)
       cmd = command.strip
+      guard = resolve_guard
 
       # Always check dangerous patterns
-      if @safety_guard&.dangerous_command?(cmd)
+      if guard&.dangerous_command?(cmd)
         raise SafetyGuard::SecurityError,
               "Cron command blocked by safety guard (dangerous pattern detected)"
       end
 
       # In workspace-restricted mode, verify command path
-      return unless @safety_guard&.restrict_to_workspace
-      @safety_guard.check_command(cmd)
+      return unless guard&.restrict_to_workspace
+      guard.check_command(cmd)
     end
+
+    # Resolve the active safety guard from either direct value or lazy source.
+    # Public method for testing and external validation.
+    # This prevents TOCTOU where the guard is set after the scheduler is created.
+    #
+    # @return [SafetyGuard, nil]
+    public
+    def resolve_guard
+      @safety_guard || (@safety_guard_source&.call)
+    end
+
+    private
 
     def execute_job(job)
       case job["mode"]
@@ -329,7 +347,7 @@ module Rubot
 
       # FIX (VULN-13): Validate loaded command-mode jobs through safety guard
       # Invalid jobs are disabled rather than deleted (preserves audit trail)
-      return unless @safety_guard
+      return unless resolve_guard
       @jobs.each_value do |job|
         next unless job["mode"] == "command" && job["command"]
         validate_cron_command(job["command"])
