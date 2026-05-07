@@ -80,6 +80,14 @@ module Rubot
             "job_id" => {
               "type" => "string",
               "description" => "Job ID (for remove, enable, disable)"
+            },
+            "target_chat_id" => {
+              "type" => "integer",
+              "description" => "Telegram chat ID to deliver results to (set automatically by the channel)"
+            },
+            "target_thread_id" => {
+              "type" => "integer",
+              "description" => "Telegram topic/thread ID to deliver results to (set automatically by the channel)"
             }
           },
           "required" => [ "operation" ]
@@ -107,6 +115,10 @@ module Rubot
       end
 
       attr_writer :workspace
+
+      # Delivery context set by the channel (e.g. Telegram chat/thread IDs).
+      # Used as defaults for target_chat_id/target_thread_id when creating jobs.
+      attr_accessor :delivery_context
 
       # Register a callback to be called when cron jobs fire.
       # The callback receives { job_id:, mode:, result:, description: }.
@@ -136,7 +148,9 @@ module Rubot
           every_seconds: arguments["every_seconds"],
           at_seconds: arguments["at_seconds"],
           command: arguments["command"],
-          description: arguments["description"] || ""
+          description: arguments["description"] || "",
+          target_chat_id: arguments["target_chat_id"] || @delivery_context&.fetch(:chat_id),
+          target_thread_id: arguments["target_thread_id"] || @delivery_context&.fetch(:thread_id)
         )
 
         job = @scheduler.get(id)
@@ -157,6 +171,7 @@ module Rubot
           Next run: #{job['next_run']}
           #{job['command'] ? "Command: #{job['command']}" : "Message: #{message}"}
           Description: #{job['description']}
+          Deliver to: #{delivery_desc(job)}
 
           Use operation=list to see all jobs, or operation=remove with job_id=#{id} to delete it.
         RESULT
@@ -192,10 +207,24 @@ module Rubot
           lines << "   Schedule: #{schedule_desc} | Next: #{job['next_run'] || 'N/A'}"
           lines << (job["command"] ? "   Command: #{job['command']}" : "   Message: #{job['message']}")
           lines << "   Description: #{job['description']}" if job["description"] && !job["description"].empty?
+          lines << "   Deliver to: #{delivery_desc(job)}" if job["target_chat_id"]
           lines << "   Created: #{job['created_at']}#{last_run}#{last_status}#{error}"
           lines << ""
         end
         lines.join("\n")
+      end
+
+      # Describe where cron job results will be delivered.
+      def delivery_desc(job)
+        chat_id = job["target_chat_id"]
+        thread_id = job["target_thread_id"]
+        if chat_id && thread_id
+          "chat #{chat_id}, topic #{thread_id}"
+        elsif chat_id
+          "chat #{chat_id}"
+        else
+          "channel default"
+        end
       end
 
       def remove_job(arguments, scheduler)

@@ -72,7 +72,7 @@ module Rubot
     end
 
     # Add a new scheduled job. Returns job ID.
-    def add(message:, cron_expr: nil, every_seconds: nil, at_seconds: nil, command: nil, mode: nil, description: "")
+    def add(message:, cron_expr: nil, every_seconds: nil, at_seconds: nil, command: nil, mode: nil, description: "", target_chat_id: nil, target_thread_id: nil)
       if at_seconds
         schedule_type = "at"
         at_seconds = at_seconds.to_i
@@ -119,7 +119,9 @@ module Rubot
           "last_run" => nil,
           "last_status" => nil,
           "last_error" => nil,
-          "run_count" => 0
+          "run_count" => 0,
+          "target_chat_id" => target_chat_id,
+          "target_thread_id" => target_thread_id
         }
         save!
         id
@@ -166,7 +168,7 @@ module Rubot
       due.map do |job|
         result = execute_job(job)
         update_after_run(job["id"], result)
-        fire_result = { job_id: job["id"], mode: job["mode"], result: result, description: job["description"] }
+        fire_result = { job_id: job["id"], mode: job["mode"], result: result, description: job["description"], target_chat_id: job["target_chat_id"], target_thread_id: job["target_thread_id"] }
         @on_fire.call(fire_result)
         fire_result
       end

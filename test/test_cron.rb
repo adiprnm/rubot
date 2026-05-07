@@ -284,6 +284,42 @@ class TestCronScheduler < Minitest::Test
     assert_equal "ok", updated["last_status"]
     assert_equal 1, updated["run_count"]
   end
+
+  # --- Delivery targets ---
+
+  def test_add_stores_target_chat_and_thread
+    id = @scheduler.add(message: "Topic reminder", cron_expr: "0 9 * * *", target_chat_id: 123, target_thread_id: 456)
+    job = @scheduler.get(id)
+    assert_equal 123, job["target_chat_id"]
+    assert_equal 456, job["target_thread_id"]
+  end
+
+  def test_add_target_defaults_to_nil
+    id = @scheduler.add(message: "No target", cron_expr: "0 9 * * *")
+    job = @scheduler.get(id)
+    assert_nil job["target_chat_id"]
+    assert_nil job["target_thread_id"]
+  end
+
+  def test_fire_result_includes_target
+    @scheduler.add(message: "echo hi", command: "echo hi", at_seconds: 1, target_chat_id: 789, target_thread_id: 10)
+    sleep 2
+
+    results = @scheduler.fire_due_jobs
+    assert_equal 1, results.size
+    assert_equal 789, results[0][:target_chat_id]
+    assert_equal 10, results[0][:target_thread_id]
+  end
+
+  def test_target_persists_across_reload
+    @scheduler.add(message: "Persistent target", cron_expr: "0 9 * * *", target_chat_id: 999, target_thread_id: 42)
+
+    new_scheduler = Rubot::CronScheduler.new(workspace: @tmpdir)
+    jobs = new_scheduler.list
+    assert_equal 1, jobs.size
+    assert_equal 999, jobs[0]["target_chat_id"]
+    assert_equal 42, jobs[0]["target_thread_id"]
+  end
 end
 
 class TestCronTool < Minitest::Test
@@ -425,5 +461,71 @@ class TestCronTool < Minitest::Test
   def test_registry_includes_cron
     registry = Rubot::Tools::Registry.new
     assert registry.enabled?("cron"), "Registry should include cron tool"
+  end
+
+  def test_delivery_context_is_stored_as_job_target
+    @tool.delivery_context = { chat_id: 111, thread_id: 222 }
+    result = @tool.execute({
+      "operation" => "add",
+      "message" => "Context test",
+      "every_seconds" => 60
+    })
+    job_id = result.match(/ID: (\S+)/)[1]
+    job = @tool.scheduler.get(job_id)
+    assert_equal 111, job["target_chat_id"]
+    assert_equal 222, job["target_thread_id"]
+  end
+
+  def test_explicit_target_overrides_delivery_context
+    @tool.delivery_context = { chat_id: 111, thread_id: 222 }
+    result = @tool.execute({
+      "operation" => "add",
+      "message" => "Explicit target",
+      "every_seconds" => 60,
+      "target_chat_id" => 333
+    })
+    job_id = result.match(/ID: (\S+)/)[1]
+    job = @tool.scheduler.get(job_id)
+    assert_equal 333, job["target_chat_id"]
+    assert_equal 222, job["target_thread_id"]
+  end
+
+  def test_delivery_desc_with_chat_and_thread
+    job = { "target_chat_id" => 100, "target_thread_id" => 200 }
+    assert_equal "chat 100, topic 200", @tool.send(:delivery_desc, job)
+  end
+
+  def test_delivery_desc_with_chat_only
+    job = { "target_chat_id" => 100 }
+    assert_equal "chat 100", @tool.send(:delivery_desc, job)
+  end
+
+  def test_delivery_desc_without_target
+    job = {}
+    assert_equal "channel default", @tool.send(:delivery_desc, job)
+  end
+
+  def test_delivery_context_nil_when_not_set
+    result = @tool.execute({
+      "operation" => "add",
+      "message" => "No context",
+      "every_seconds" => 60
+    })
+    job_id = result.match(/ID: (\S+)/)[1]
+    job = @tool.scheduler.get(job_id)
+    assert_nil job["target_chat_id"]
+    assert_nil job["target_thread_id"]
+  end
+
+  def test_add_with_target_parameters
+    result = @tool.execute({
+      "operation" => "add",
+      "message" => "Targeted job",
+      "cron_expr" => "0 9 * * *",
+      "target_chat_id" => 555,
+      "target_thread_id" => 666
+    })
+    assert_includes result, "created successfully"
+    assert_includes result, "chat 555, topic 666"
   end
 end

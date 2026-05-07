@@ -273,21 +273,24 @@ module Rubot
       end
 
       def cron_fire_callback(result)
-        return unless @last_chat_id
+        # Use stored target from the job; fall back to last-seen for older jobs
+        chat_id = result[:target_chat_id] || @last_chat_id
+        thread_id = result[:target_thread_id] || @last_thread_id
+        return unless chat_id
 
         case result[:mode]
         when "command"
           output = result[:result][:output] || "(no output)"
           text = "⏰ **Cron: #{result[:description] || result[:job_id]}**\n\n```\n#{output}\n```"
-          send_message(@last_chat_id, text, @last_thread_id)
+          send_message(chat_id, text, thread_id)
         when "deliver"
-          send_message(@last_chat_id, result[:result][:deliver_message], @last_thread_id)
+          send_message(chat_id, result[:result][:deliver_message], thread_id)
         when "agent_turn"
           # Process through the LLM with mutex protection
           response = @process_mutex.synchronize do
             @agent.process_cron(result[:result][:agent_message])
           end
-          send_message(@last_chat_id, response, @last_thread_id) if response && !response.empty?
+          send_message(chat_id, response, thread_id) if response && !response.empty?
         end
       rescue StandardError => e
         warn "[cron] Callback error: #{e.class}: #{e.message}"
@@ -408,6 +411,10 @@ module Rubot
         # Track last active chat for cron message delivery
         @last_chat_id = chat_id
         @last_thread_id = thread_id
+
+        # Set delivery context on cron tool so new jobs are tied to this chat/topic
+        cron_tool = @agent.tools.get("cron")
+        cron_tool.delivery_context = { chat_id: chat_id, thread_id: thread_id } if cron_tool
 
         warn "[telegram] #{username} (#{user_id})#{thread_id ? " [topic:#{thread_id}]" : ""}: #{text[0..80]}" if Rubot.debug?
 
