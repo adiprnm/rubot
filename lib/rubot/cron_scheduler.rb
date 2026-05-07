@@ -61,11 +61,16 @@ module Rubot
   class CronScheduler
     attr_reader :jobs
 
-    # FIX (VULN-1): Safety guard for command validation
+    # FIX (VULN-1, VULN-7): Safety guard for command validation.
+    # Must be passed via constructor to avoid TOCTOU where jobs are
+    # loaded from disk before the guard is attached.
     attr_accessor :safety_guard
 
-    def initialize(workspace:, &on_fire)
+    # FIX (VULN-7): safety_guard can be passed via constructor so that
+    # load! validates jobs with the guard already in place.
+    def initialize(workspace:, safety_guard: nil, &on_fire)
       @workspace = workspace
+      @safety_guard = safety_guard
       @jobs = {}
       @mutex = Mutex.new
       @on_fire = on_fire || proc { |_result| }

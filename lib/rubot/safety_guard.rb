@@ -24,6 +24,9 @@ module Rubot
       /\brm\s+-(?:r[fF]?|[fF]r|R[fF]?|[fF]R)\s+\/\s*$/,
       /\brm\s+-(?:r[fF]?|[fF]r|R[fF]?|[fF]R)\s+\*\s*$/,
       /\brm\s+--no-preserve-root\b/,
+      # Mass deletion via find
+      /\bfind\b.*-exec\b.*\brm\b/,
+      /\bfind\b.*-delete\b/,
       # Disk formatting / low-level writes
       /\bmkfs\b/,
       /\bdd\b.*\bof=\/dev\//,
@@ -41,8 +44,23 @@ module Rubot
       # Fork bomb
       /:\(\)\s*\{.*:\|.*&.*\}\s*;/,
       # Pipe to shell (remote code execution) — includes sudo bypass
-      /\bcurl\b.*\|\s*(?:sudo\s+)?(?:sh|bash|zsh)\b/,
-      /\bwget\b.*-O-.*\|\s*(?:sudo\s+)?(?:sh|bash|zsh)\b/,
+      /\bcurl\b.*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|fish)\b/,
+      /\bwget\b.*-O-.*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|fish)\b/,
+      /\bwget\b.*-qO-.*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|fish)\b/,
+      # FIX (VULN-6): Pipe to interpreted languages (python, ruby, perl, node, php)
+      /\bcurl\b.*\|\s*(?:sudo\s+)?(?:python3?|ruby|perl|node|php)\b/,
+      /\bwget\b.*-O-.*\|\s*(?:sudo\s+)?(?:python3?|ruby|perl|node|php)\b/,
+      /\bwget\b.*-qO-.*\|\s*(?:sudo\s+)?(?:python3?|ruby|perl|node|php)\b/,
+      # FIX (VULN-1, VULN-6): Interpreted language inline execution
+      /\b(python3?|ruby|perl|lua|node|php)\s+(-c|-e)\b/,
+      /\b(python3?|ruby|perl)\s+-i\s*$/,  # interactive mode can be abused
+      # FIX (VULN-2): Encoded payload decoders piped to shells
+      /\bbase64\b.*(-d|--decode).*\|\s*(?:sudo\s+)?(?:sh|bash|zsh)\b/,
+      /\bprintf\b.*\|\s*(?:sudo\s+)?(?:sh|bash|zsh)\b/,
+      /\bxxd\b.*-r.*\|\s*(?:sudo\s+)?(?:sh|bash|zsh)\b/,
+      # FIX (VULN-5): eval and exec shell builtins
+      /\A\s*eval\b/,
+      /\A\s*exec\b/,
       # Permission escalation on root — includes leading-zero octal and symbolic mode
       /\bchmod\s+0?777\s+\/\s*$/,
       /\bchmod\s+-R\s+0?777\s+\/\s*$/,
@@ -63,6 +81,42 @@ module Rubot
       /\bdd\b.*\bof=.*memory\.md/i,
       /\bln\s+-sf.*memory\.md/i,
       /\bsed\b.*memory\.md/i,
+      /\btee\s+.*memory\.md/i,
+      # FIX (VULN-10): Memory destruction via variable substitution
+      /\brm\b.*\$.*(?:MEMORY|memory)/i,
+      /\bfind\b.*memory\.md/i,
+      /\bcat\s+\/dev\/null\s*>\s*.*memory\.md/i,
+      # FIX (VULN-4): xargs can execute arbitrary commands
+      /\bxargs\b.*(?:bash|sh|rm)\b/,
+      # FIX (VULN-13): User management / privilege escalation
+      /\buseradd\b/,
+      /\busermod\b/,
+      /\bpasswd\b/,
+      /\bvisudo\b/,
+      /\bchown\s+root/,
+    ].freeze
+
+    # FIX (VULN-3, VULN-12): Sensitive paths blocked in permissive mode.
+    # Even when workspace restriction is disabled, these paths are never accessible
+    # because they contain secrets or are critical system files.
+    SENSITIVE_PATHS = %w[
+      /etc/shadow /etc/gshadow /etc/security/opasswd
+      /proc/self/environ /proc/1/environ
+      /proc/kcore /proc/sysrq-trigger
+      /sys/firmware
+    ].freeze
+
+    # Sensitive path regex patterns for broader matching
+    SENSITIVE_PATH_PATTERNS = [
+      %r{\A/etc/(shadow|gshadow|security/opasswd)\z},
+      %r{\A/proc/\d+/environ\z},
+      %r{\A/proc/kcore\z},
+      %r{\A/proc/sysrq-trigger\z},
+      %r{\A/sys/firmware},
+      %r{\.ssh/id_},
+      %r{\.aws/credentials},
+      %r{\.kube/config},
+      %r{\.env\z},
     ].freeze
 
     # Device path patterns to block in exec commands
@@ -93,10 +147,16 @@ module Rubot
     # @return [Boolean] true if the path is allowed
     # @raises [SecurityError] if the path is blocked
     def check_path(path, operation: :read)
+      resolved = resolve_path(path)
+
+      # FIX (VULN-3, VULN-12): Always block sensitive paths regardless of mode
+      if sensitive_path?(resolved.to_s)
+        raise SecurityError,
+              "Path blocked by safety guard (sensitive system path: #{path})"
+      end
+
       return true unless @restrict_to_workspace
       return true unless @workspace
-
-      resolved = resolve_path(path)
 
       # Always allow safe device paths
       return true if SAFE_PATHS.include?(resolved.to_s)
@@ -134,6 +194,9 @@ module Rubot
               "Command blocked by safety guard (dangerous pattern detected)"
       end
 
+      # FIX (VULN-11): Rate limiting — track command executions
+      check_rate_limit(cmd)
+
       # 0b. FIX (VULN-7): Block shell variable / command-substitution path bypasses
       if has_unresolved_path_variables?(cmd)
         raise SecurityError,
@@ -153,6 +216,12 @@ module Rubot
       # 2. Find all absolute paths in the command and check each one
       abs_paths = extract_absolute_paths(cmd)
       abs_paths.each do |raw_path|
+        # FIX (VULN-3): Block sensitive paths in commands too
+        if sensitive_path?(raw_path)
+          raise SecurityError,
+                "Command blocked by safety guard (sensitive system path: #{raw_path})"
+        end
+
         # Skip safe paths
         next if SAFE_PATHS.include?(raw_path)
 
@@ -276,6 +345,41 @@ module Rubot
         end
       end
       expanded
+    end
+
+    # Check if a path matches a sensitive system path.
+    # Always enforced regardless of workspace mode.
+    #
+    # FIX (VULN-3, VULN-12): Blocks access to credential files,
+    # process environment, and firmware even in permissive mode.
+    #
+    # @param path [String]
+    # @return [Boolean]
+    def sensitive_path?(path)
+      SENSITIVE_PATHS.include?(path) ||
+        SENSITIVE_PATH_PATTERNS.any? { |p| path =~ p }
+    end
+
+    # FIX (VULN-11): Simple rate limiting for shell command execution.
+    # Tracks the number of executions within a sliding window.
+    @@exec_timestamps = []
+    @@exec_mutex = Mutex.new
+
+    EXEC_WINDOW_SECONDS = 10
+    EXEC_MAX_PER_WINDOW = 50
+
+    def check_rate_limit(_command)
+      return unless @restrict_to_workspace
+
+      now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      @@exec_mutex.synchronize do
+        @@exec_timestamps.reject! { |t| now - t > EXEC_WINDOW_SECONDS }
+        if @@exec_timestamps.size >= EXEC_MAX_PER_WINDOW
+          raise SecurityError,
+                "Command blocked by safety guard (rate limit exceeded: #{EXEC_MAX_PER_WINDOW} commands per #{EXEC_WINDOW_SECONDS}s)"
+        end
+        @@exec_timestamps << now
+      end
     end
 
     # Check if a resolved path is within the workspace.

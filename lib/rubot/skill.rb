@@ -81,9 +81,12 @@ module Rubot
       @name
     end
 
-    # Parse YAML frontmatter safely, returning nil on any error
+    # Parse YAML frontmatter safely, returning nil on any error.
+    # FIX (VULN-14): Remove Symbol from permitted_classes to prevent
+    # YAML-based symbol table exhaustion DoS attacks. All skill frontmatter
+    # uses string keys (name, description), so symbols are unnecessary.
     def parse_yaml_safely(yaml_content)
-      YAML.safe_load(yaml_content, permitted_classes: [ Symbol ])
+      YAML.safe_load(yaml_content, permitted_classes: [])
     rescue Psych::SyntaxError
       nil
     rescue StandardError

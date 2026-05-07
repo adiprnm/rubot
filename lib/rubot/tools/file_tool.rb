@@ -129,6 +129,8 @@ module Rubot
 
       def append_file(path, content)
         check_path(path, operation: :write)
+        # FIX (VULN-9): Block append to MEMORY.md — same protection as write
+        raise "Cannot append to MEMORY.md — use the memory tool (append/update_section) instead. Memory cannot be reset." if memory_file?(path)
         raise "No content provided" if content.nil?
         p = safe_path(path)
         FileUtils.mkdir_p(File.dirname(p))

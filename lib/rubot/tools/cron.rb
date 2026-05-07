@@ -137,9 +137,8 @@ module Rubot
 
       def ensure_scheduler
         return @scheduler if @scheduler
-        @scheduler = CronScheduler.new(workspace: @workspace, &@on_fire)
-        # FIX (VULN-1): Propagate safety guard to scheduler
-        @scheduler.safety_guard = @safety_guard
+        # FIX (VULN-7): Pass safety guard via constructor to avoid TOCTOU
+        @scheduler = CronScheduler.new(workspace: @workspace, safety_guard: @safety_guard, &@on_fire)
         @scheduler
       end
 

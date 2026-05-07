@@ -123,8 +123,22 @@ module Rubot
 
       # Check if a command targets MEMORY.md for deletion or truncation.
       # This is a dedicated defense-in-depth check independent of SafetyGuard.
+      #
+      # FIX (VULN-8, VULN-10): Expanded to catch dd, tee, cat /dev/null,
+      # variable substitution, find -delete, and other destruction methods.
       def targets_memory?(cmd)
-        cmd =~ /MEMORY\.md/i && cmd =~ /(\brm\b|\btruncate\b|\b:>\s|\becho\s+.*>\s|cp\s+\/dev\/null)/
+        cmd =~ /MEMORY\.md/i && cmd =~ %r{
+          \brm\b                    |
+          \btruncate\b              |
+          :>\s*                     |
+          echo\s+.*>\s              |
+          cp\s+/dev/(?:null|zero)   |
+          \bdd\b                    |
+          \btee\b                   |
+          \bfind\b.*\b-delete\b     |
+          \$\{?MEMORY               |
+          \$\{?memory
+        }x
       end
     end
   end
