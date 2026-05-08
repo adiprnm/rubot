@@ -17,7 +17,7 @@ module Rubot
   class Agent
     MAX_TOOL_ITERATIONS = 10
 
-    attr_reader :config, :provider, :session, :tools, :soul, :memory, :agents_file, :skill_registry, :safety_guard
+    attr_reader :config, :provider, :session, :tools, :soul, :memory, :agents_file, :skill_registry, :safety_guard, :session_model
 
     def initialize(config:, provider: nil, session_id: "default", tools: nil)
       @config = config
@@ -56,6 +56,10 @@ module Rubot
       # Adaptive features (always on)
       @memory_extractor = MemoryExtractor.new(provider: @provider, memory: @memory)
       @feedback_learner = Tools::FeedbackLearner.new(memory: @memory)
+
+      # Session-level model override (cleared on new session)
+      @session_model = @session.model_override
+      rebuild_provider if @session_model
 
       # Apply AGENTS.md overrides to config
       apply_agents_overrides if @agents_file.enabled?
@@ -200,6 +204,28 @@ module Rubot
 
     def clear_session
       @session.clear!
+      @session_model = nil
+      @provider = build_provider
+    end
+
+    # Switch to a different model for the current session.
+    # The selected model persists within the active session but
+    # is cleared when the user starts a new session.
+    def use_model(model_name)
+      model_name = model_name.to_s.strip
+      entry = @config.model_entry_by_name(model_name)
+      return nil if entry.nil?
+
+      @session_model = model_name
+      @session.model_override = model_name
+      @session.save!
+      rebuild_provider
+      @session_model
+    end
+
+    # Returns the active model name (session override or config default)
+    def active_model_name
+      @session_model || @config.name
     end
 
     # Switch to a different session (e.g. per-topic in Telegram)
@@ -210,12 +236,14 @@ module Rubot
     end
 
     def startup_info
+      model = active_model_name
       info = {
         provider: @provider.name,
-        model: @config.model,
+        model: model,
         tools: @tools.count,
         messages: @session.message_count
       }
+      info[:model_override] = true if model != @config.name
       info[:soul] = "yes" if @soul.enabled?
       info[:memory] = "yes" if @memory.enabled?
       info[:agents] = "yes" if @agents_file.enabled?
@@ -263,6 +291,12 @@ module Rubot
       # 4. Skills (specialized instruction sets)
       skill_prompt = @skill_registry.to_system_prompt
       parts << skill_prompt unless skill_prompt.empty?
+
+      # 4b. Current model identity (so the bot knows which model it's using)
+      model_name = active_model_name
+      model_entry = @config.model_entry_by_name(model_name) || @config.active_model_entry
+      model_provider = model_entry["model"] || @config.model
+      parts << "# Current Model\n\nYou are currently running as model: **#{model_name}** (#{model_provider}).\nWhen asked about which model you are, respond with: #{model_name}."
 
       # 5. Default/config system prompt
       config_prompt = @config.system_prompt
@@ -383,6 +417,32 @@ module Rubot
         # Default to OpenAI-compatible
         warn "Unknown provider '#{provider_name}', falling back to OpenAI-compatible"
         Providers::OpenAI.new(@config)
+      end
+    end
+
+    # Rebuild the provider using the session-level model override.
+    # Temporarily patches config.data so the existing resolution
+    # logic (provider, api_key, api_base, model) picks up the
+    # overridden model entry.
+    def rebuild_provider
+      return if @session_model.nil?
+
+      entry = @config.model_entry_by_name(@session_model)
+      return if entry.nil?
+
+      # Temporarily set the config name to point to the overridden model
+      defaults = @config.data["agents"] ||= {}
+      defaults["defaults"] ||= {}
+      original_name = defaults["defaults"]["name"]
+      defaults["defaults"]["name"] = @session_model
+
+      @provider = build_provider
+
+      # Restore original name so config defaults remain intact
+      if original_name
+        defaults["defaults"]["name"] = original_name
+      else
+        defaults["defaults"].delete("name")
       end
     end
 

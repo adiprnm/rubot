@@ -8,7 +8,7 @@ require "time"
 module Rubot
   class Session
     attr_reader :id, :messages, :workspace
-    attr_accessor :summary, :forced_skill
+    attr_accessor :summary, :forced_skill, :model_override
 
     def initialize(id = "default", workspace: nil)
       @id = id
@@ -16,6 +16,7 @@ module Rubot
       @workspace = workspace
       @summary = nil
       @forced_skill = nil
+      @model_override = nil
       load!
     end
 
@@ -84,6 +85,7 @@ module Rubot
       @messages = []
       @forced_skill = nil
       @summary = nil
+      @model_override = nil
       save!
     end
 
@@ -147,6 +149,7 @@ module Rubot
       }
       data["summary"] = @summary if @summary
       data["forced_skill"] = @forced_skill if @forced_skill
+      data["model_override"] = @model_override if @model_override
       File.write(file_path, JSON.pretty_generate(data))
     end
 
@@ -191,6 +194,7 @@ module Rubot
       @messages = data["messages"] || []
       @summary = data["summary"] if data["summary"]
       @forced_skill = data["forced_skill"] if data["forced_skill"]
+      @model_override = data["model_override"] if data["model_override"]
     end
 
     def trim!

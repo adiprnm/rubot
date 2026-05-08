@@ -133,6 +133,47 @@ class TestSession < Minitest::Test
     session.clear!
     assert_nil session.forced_skill
   end
+
+  def test_model_override_is_nil_by_default
+    session = Rubot::Session.new("model-override-test", workspace: nil)
+    assert_nil session.model_override
+  end
+
+  def test_model_override_can_be_set
+    session = Rubot::Session.new("model-override-test", workspace: nil)
+    session.model_override = "other-model"
+    assert_equal "other-model", session.model_override
+  end
+
+  def test_model_override_persists_with_workspace
+    session = Rubot::Session.new("model-override-persist", workspace: @workspace)
+    session.add("user", "ping")
+    session.model_override = "test-model"
+    session.send(:save!)
+
+    session2 = Rubot::Session.new("model-override-persist", workspace: @workspace)
+    assert_equal "test-model", session2.model_override
+  end
+
+  def test_model_override_persists_to_disk
+    session = Rubot::Session.new("model-override-disk", workspace: @workspace)
+    session.add("user", "ping")
+    session.model_override = "my-model"
+    session.send(:save!)
+
+    data = JSON.parse(File.read(session.file_path))
+    assert_equal "my-model", data["model_override"]
+  end
+
+  def test_model_override_cleared_on_session_clear
+    session = Rubot::Session.new("model-override-clear", workspace: @workspace)
+    session.add("user", "hello")
+    session.model_override = "some-model"
+    refute_nil session.model_override
+
+    session.clear!
+    assert_nil session.model_override
+  end
 end
 
 class TestSessionSummarization < Minitest::Test

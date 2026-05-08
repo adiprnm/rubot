@@ -169,4 +169,32 @@ class TestConfig < Minitest::Test
     config.ensure_workspace
     assert File.directory?(File.join(@tmpdir, "my_workspace"))
   end
+
+  def test_model_entry_by_name_finds_model
+    File.write(@config_path, {
+      "models" => [
+        { "name" => "gpt-4o-mini", "model" => "openai/gpt-4o-mini" },
+        { "name" => "llama3", "model" => "ollama/llama3" }
+      ]
+    }.to_yaml)
+    config = Rubot::Config.new(@config_path)
+    entry = config.model_entry_by_name("llama3")
+    assert_equal "llama3", entry["name"]
+    assert_equal "ollama/llama3", entry["model"]
+  end
+
+  def test_model_entry_by_name_returns_nil_for_unknown
+    File.write(@config_path, {
+      "models" => [
+        { "name" => "gpt-4o-mini", "model" => "openai/gpt-4o-mini" }
+      ]
+    }.to_yaml)
+    config = Rubot::Config.new(@config_path)
+    assert_nil config.model_entry_by_name("nonexistent")
+  end
+
+  def test_model_entry_by_name_with_no_models
+    config = Rubot::Config.new("/nonexistent/config.yml")
+    assert_nil config.model_entry_by_name("anything")
+  end
 end

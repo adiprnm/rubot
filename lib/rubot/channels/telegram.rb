@@ -133,9 +133,48 @@ module Rubot
       end
 
       def handle_models_command
-        model = @agent.config.model
-        provider = @agent.provider.name
-        [ :skip, "🧠 Current Model\n\nProvider: #{provider}\nModel: #{model}" ]
+        models = @agent.config.models
+        active = @agent.active_model_name
+
+        if models.empty?
+          [ :skip, "🧠 No models configured in config.yml." ]
+        else
+          lines = models.map do |m|
+            marker = m["name"] == active ? "→ " : "  "
+            "#{marker}**#{m["name"]}** (`#{m["model"]}`)"
+          end
+          [ :skip, "🧠 **Available Models**\n\n" + lines.join("\n") ]
+        end
+      end
+
+      def handle_model_command
+        active = @agent.active_model_name
+        entry = @agent.config.model_entry_by_name(active) || @agent.config.active_model_entry
+        text = "🧠 **Current Model**\n\n**#{active}** (`#{entry['model']}`)\nProvider: `#{@agent.provider.name}`"
+        text += "\n_Session override — cleared on /new_" if @agent.session.model_override
+        [ :skip, text ]
+      end
+
+      def handle_use_model_command(model_name)
+        if model_name.nil? || model_name.empty?
+          models = @agent.config.models
+          if models.empty?
+            [ :skip, "⚠️ Usage: `/use_model <model_name>`\n\nNo models configured." ]
+          else
+            list = models.map { |m| "• **#{m['name']}**" }.join("\n")
+            [ :skip, "⚠️ Usage: `/use_model <model_name>`\n\nAvailable models:\n#{list}" ]
+          end
+        else
+          result = @agent.use_model(model_name)
+          if result
+            entry = @agent.config.model_entry_by_name(result)
+            [ :skip, "✅ Switched to model: **#{result}** (`#{entry['model']}`)\nProvider: `#{@agent.provider.name}`\n_Persists for this session (cleared on /new)_" ]
+          else
+            models = @agent.config.models
+            list = models.map { |m| "• **#{m['name']}**" }.join("\n")
+            [ :skip, "❌ Model `#{model_name}` not found in config.yml.\n\n*Available models:*\n#{list}" ]
+          end
+        end
       end
 
       def handle_skills_command
@@ -196,11 +235,15 @@ module Rubot
           [ :skip, "✨ Started a new session. Previous conversation has been cleared." ]
         when "/help"
           bot_name = @config.fetch("bot_name", "Rubot")
-          [ :skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help.\n\nBuilt-in commands:\n/start - Start the bot\n/new - Clear chat and start a new session\n/help - Show this help message\n/info - Show agent info\n/models - Show current model\n/skills - List available skills\n/memory - Show persistent memory\n/soul - Show bot personality\n/agents - Show agent rules\n/cron - List scheduled cron jobs\n/cron delete <id> - Delete a cron job\n/use <skill> - Force a skill for the next message\n/unuse - Clear the forced skill" ]
+          [ :skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help.\n\nBuilt-in commands:\n/start - Start the bot\n/new - Clear chat and start a new session\n/help - Show this help message\n/info - Show agent info\n/models - List available models\n/model - Show current model\n/use_model <name> - Switch model for this session\n/skills - List available skills\n/memory - Show persistent memory\n/soul - Show bot personality\n/agents - Show agent rules\n/cron - List scheduled cron jobs\n/cron delete <id> - Delete a cron job\n/use <skill> - Force a skill for the next message\n/unuse - Clear the forced skill" ]
         when "/info"
           handle_info_command
         when "/models"
           handle_models_command
+        when "/model"
+          handle_model_command
+        when /^\/use_model(\s+(.*))?$/
+          handle_use_model_command($2&.strip)
         when "/skills"
           handle_skills_command
         when "/memory"
@@ -232,7 +275,9 @@ module Rubot
           { "command" => "new", "description" => "Clear chat and start a new session" },
           { "command" => "help", "description" => "Show help message" },
           { "command" => "info", "description" => "Show agent info" },
-          { "command" => "models", "description" => "Show current model" },
+          { "command" => "models", "description" => "List available models" },
+          { "command" => "model", "description" => "Show current model" },
+          { "command" => "use_model", "description" => "Switch model for this session" },
           { "command" => "skills", "description" => "List available skills" },
           { "command" => "memory", "description" => "Show persistent memory" },
           { "command" => "soul", "description" => "Show bot personality" },
@@ -816,7 +861,7 @@ module Rubot
 
       # Escape a string for Telegram MarkdownV2 parse mode.
       # All special chars must be prefixed with a backslash:
-      #   _ * [ ] ( ) ~ ` > # + - = | { } . ! \ 
+      #   _ * [ ] ( ) ~ ` > # + - = | { } . ! \
       def md_escape(str)
         return "" unless str
         str.gsub(/([_*\[\]()~`>#+\-=|{}.!\\])/) { "\\" + $1 }

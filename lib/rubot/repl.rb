@@ -11,6 +11,9 @@ module Rubot
       "/session"  => "Show current session ID",
       "/session NAME" => "Switch to a new session",
       "/info"     => "Show agent info (provider, model, tools)",
+      "/models"   => "List available models from config",
+      "/model"    => "Show current active model",
+      "/use-model NAME" => "Switch to a model for this session",
       "/tools"    => "List available tools",
       "/soul"     => "Show the bot's soul (SOUL.md)",
       "/memory"   => "Show persistent memory (MEMORY.md)",
@@ -150,6 +153,50 @@ module Rubot
         info = @agent.startup_info
         puts "\nAgent Info:"
         info.each { |k, v| puts "  #{k}: #{v}" }
+        puts
+      when "/models"
+        models = @agent.config.models
+        if models.empty?
+          puts "\nNo models configured in config.yml."
+        else
+          active = @agent.active_model_name
+          puts "\nAvailable models:"
+          models.each do |m|
+            marker = m["name"] == active ? " → " : "   "
+            puts "  #{marker}#{m["name"]} (#{m["model"]})"
+          end
+          puts
+        end
+      when "/model"
+        active = @agent.active_model_name
+        entry = @agent.config.model_entry_by_name(active) || @agent.config.active_model_entry
+        puts "\nCurrent model: #{active} (#{entry["model"]})"
+        if @agent.session.model_override
+          puts "  (session override — will be cleared on /new)"
+        end
+        puts
+      when "/use-model"
+        model_name = parts[1]
+        if model_name.nil?
+          puts "\n⚠️  Usage: /use-model <model-name>"
+          models = @agent.config.models
+          unless models.empty?
+            puts "\nAvailable models:"
+            models.each { |m| puts "  - #{m['name']}" }
+          end
+        else
+          result = @agent.use_model(model_name)
+          if result
+            entry = @agent.config.model_entry_by_name(result)
+            puts "\n✅ Switched to model: #{result} (#{entry['model']})"
+            puts "  Provider: #{@agent.provider.name}"
+            puts "  Model will persist for this session (cleared on /new)."
+          else
+            puts "\n❌ Model '#{model_name}' not found in config.yml."
+            puts "\nAvailable models:"
+            @agent.config.models.each { |m| puts "  - #{m['name']}" }
+          end
+        end
         puts
       when "/tools"
         puts "\nAvailable tools:"

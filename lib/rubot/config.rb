@@ -51,6 +51,11 @@ module Rubot
       models.find { |m| m["name"] == name } || models.first
     end
 
+    def model_entry_by_name(model_name)
+      return nil if models.empty?
+      models.find { |m| m["name"] == model_name }
+    end
+
     def api_key
       active_model_entry["api_key"] || ENV["RUBOT_API_KEY"] || ENV["OPENAI_API_KEY"]
     end
