@@ -35,6 +35,8 @@ module Rubot
       ## Preferences
 
       ## Context
+
+      ## Learned Corrections
     MEMORY
 
     def initialize(workspace: nil)

@@ -8,12 +8,29 @@ require "time"
 module Rubot
   class Session
     attr_reader :id, :messages, :workspace
+    attr_accessor :summary
 
     def initialize(id = "default", workspace: nil)
       @id = id
       @messages = []
       @workspace = workspace
+      @summary = nil
       load!
+    end
+
+    # Returns true if summarization has already been applied to this session
+    def summarized?
+      !@summary.nil? && !@summary.strip.empty?
+    end
+
+    # Append additional text to the existing summary
+    def append_summary(text)
+      if @summary.nil? || @summary.strip.empty?
+        @summary = text
+      else
+        @summary += "\n" + text
+      end
+      save!
     end
 
     def add(role, content, tool_calls: nil, tool_call_id: nil)
@@ -67,6 +84,49 @@ module Rubot
       save!
     end
 
+    # Summarize the oldest messages that would be trimmed, append to
+    # the running summary, and then trim those messages. Called when
+    # the conversation approaches the history limit.
+    #
+    # Returns the text that was summarized (the new summary fragment),
+    # or nil if nothing was trimmed.
+    def summarize_and_trim!(provider:, system_prompt:)
+      return nil unless @workspace
+      return nil if @messages.empty?
+
+      # Calculate how many messages to trim (keep 60% of the limit)
+      limit = 100  # session hard limit
+      return nil if @messages.size <= limit * 0.6
+
+      trim_count = @messages.size - (limit * 0.6).to_i
+      return nil if trim_count <= 0
+
+      # Collect the messages to be summarized
+      to_summarize = @messages[0...trim_count]
+      summary_text = call_summarizer(provider, system_prompt, to_summarize)
+      return nil if summary_text.nil? || summary_text.strip.empty?
+
+      # Append to existing summary
+      append_summary(summary_text.strip)
+
+      # Trim the messages
+      @messages = @messages[trim_count..]
+
+      # Ensure we don't start with orphaned tool messages
+      while @messages.first && @messages.first["role"] == "tool"
+        @messages.shift
+      end
+
+      save!
+      summary_text.strip
+    end
+
+    # Returns the summary text for inclusion in the system prompt
+    def summary_text
+      return nil if @summary.nil? || @summary.strip.empty?
+      @summary.strip
+    end
+
     def file_path
       return nil unless @workspace
       File.join(@workspace, "sessions", "#{@id}.json")
@@ -74,21 +134,57 @@ module Rubot
 
     private
 
+    # Call the LLM to summarize a batch of old messages into a compact form
+    def call_summarizer(provider, system_prompt, messages)
+      # Build a minimal context for summarization
+      context = messages.map do |msg|
+        role = msg["role"]
+        content = msg["content"] || ""
+        "[#{role}]: #{content}"
+      end.join("\n")
+
+      summarize_prompt = <<~PROMPT.strip
+        Summarize the following conversation history into a concise paragraph.
+        Preserve important facts, decisions, and outcomes. Omit pleasantries
+        and redundant exchanges. Keep it under 200 words.
+
+        Conversation:
+        #{context}
+      PROMPT
+
+      result = provider.chat(
+        [{ "role" => "user", "content" => summarize_prompt }],
+        tools: nil
+      )
+
+      if result.is_a?(Hash)
+        result["content"]
+      else
+        result.to_s
+      end
+    rescue StandardError => e
+      warn "[session:summarize] Failed: #{e.class}: #{e.message}" if Rubot.debug?
+      nil
+    end
+
     def load!
       return unless file_path && File.exist?(file_path)
       data = JSON.parse(File.read(file_path))
       @messages = data["messages"] || []
+      @summary = data["summary"] if data["summary"]
     end
 
     def save!
       return unless file_path
       FileUtils.mkdir_p(File.dirname(file_path))
-      File.write(file_path, JSON.pretty_generate({
+      data = {
         "id" => @id,
         "created_at" => @messages.first&.fetch("timestamp", Time.now.iso8601),
         "updated_at" => Time.now.iso8601,
         "messages" => @messages
-      }))
+      }
+      data["summary"] = @summary if @summary
+      File.write(file_path, JSON.pretty_generate(data))
     end
 
     def trim!

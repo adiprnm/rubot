@@ -10,6 +10,8 @@ require_relative "soul"
 require_relative "memory"
 require_relative "agents_file"
 require_relative "tools/memory_tool"
+require_relative "memory_extractor"
+require_relative "tools/feedback_learner"
 
 module Rubot
   class Agent
@@ -51,6 +53,10 @@ module Rubot
       # Register the memory tool so the bot can manage its own memory
       @tools.register(Tools::MemoryTool.new(@memory)) if @memory.enabled?
 
+      # Adaptive features (always on)
+      @memory_extractor = MemoryExtractor.new(provider: @provider, memory: @memory)
+      @feedback_learner = Tools::FeedbackLearner.new(memory: @memory)
+
       # Apply AGENTS.md overrides to config
       apply_agents_overrides if @agents_file.enabled?
 
@@ -73,12 +79,21 @@ module Rubot
       # Add user message to session
       @session.add("user", message)
 
+      # Adaptive: extract memory from user message (auto-remember facts)
+      run_memory_extraction(message)
+
+      # Adaptive: learn from feedback (detect corrections)
+      run_feedback_learning(message)
+
       response = ""
       tool_calls = nil
       iterations = 0
 
       loop do
         break if iterations >= MAX_TOOL_ITERATIONS
+
+        # Adaptive: summarize old messages if approaching limit
+        run_summarization
 
         messages = build_messages
         log_debug("Sending #{messages.size} messages to provider")
@@ -206,6 +221,7 @@ module Rubot
       info[:agents] = "yes" if @agents_file.enabled?
       info[:safety] = @safety_guard.restrict_to_workspace ? "restricted" : "permissive"
       info[:skills] = @skill_registry.count if @skill_registry.any?
+      info[:adaptive] = "memory+summary+feedback"
       info
     end
 
@@ -227,6 +243,15 @@ module Rubot
       # 3. MEMORY.md (persistent context)
       if @memory.enabled?
         parts << "# Memory\n\n#{@memory}"
+      end
+
+      # 3b. Learned Corrections (from feedback learner)
+      correction_prompt = @feedback_learner.to_system_prompt
+      parts << correction_prompt unless correction_prompt.empty?
+
+      # 3c. Conversation Summary (from session summarization)
+      if @session&.summary_text
+        parts << "# Previous Conversation Summary\n\n#{@session.summary_text}"
       end
 
       # 4. Skills (specialized instruction sets)
@@ -479,6 +504,45 @@ module Rubot
       end
 
       messages
+    end
+
+    # --- Adaptive feature helpers ---
+
+    # Run memory extraction on the user message (always on)
+    def run_memory_extraction(message)
+      return unless @memory_extractor
+      return unless @memory.enabled?
+
+      extracted = @memory_extractor.extract(message)
+      return if extracted.empty?
+
+      if Rubot.debug?
+        extracted.each do |item|
+          warn "[memory_extractor] Stored [#{item[:section]}]: #{item[:fact]}"
+        end
+      end
+    end
+
+    # Run feedback learning — detect if user is correcting the bot (always on)
+    def run_feedback_learning(message)
+      return unless @feedback_learner
+      return unless @memory.enabled?
+
+      # Get previous turns (excluding the current user message)
+      previous_turns = @session.conversation_history
+
+      @feedback_learner.process(message, previous_turns)
+    end
+
+    # Run conversation summarization if approaching the limit (always on)
+    def run_summarization
+      return unless @session.respond_to?(:summarize_and_trim!)
+
+      summary = @session.summarize_and_trim!(
+        provider: @provider,
+        system_prompt: build_system_prompt
+      )
+      warn "[summarization] Generated summary fragment" if summary && Rubot.debug?
     end
   end
 end

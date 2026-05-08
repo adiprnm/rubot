@@ -84,3 +84,122 @@ class TestSession < Minitest::Test
     assert_equal "call-1", tool_msg["tool_call_id"]
   end
 end
+
+class TestSessionSummarization < Minitest::Test
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(@workspace)
+    @session = Rubot::Session.new("summarize-test", workspace: @workspace)
+    @provider = FakeSummarizeProvider.new
+  end
+
+  def teardown
+    FileUtils.rm_rf(@tmpdir)
+  end
+
+  def test_summary_is_nil_by_default
+    session = Rubot::Session.new("new-session", workspace: @workspace)
+    refute session.summarized?
+    assert_nil session.summary_text
+  end
+
+  def test_append_summary_creates_new_summary
+    @session.append_summary("First summary")
+    assert_equal "First summary", @session.summary_text
+    assert @session.summarized?
+  end
+
+  def test_append_summary_appends_to_existing
+    @session.append_summary("First part")
+    @session.append_summary("Second part")
+    assert_includes @session.summary_text, "First part"
+    assert_includes @session.summary_text, "Second part"
+  end
+
+  def test_persistence_of_summary
+    @session.append_summary("Persistent summary")
+    session2 = Rubot::Session.new("summarize-test", workspace: @workspace)
+    assert_includes session2.summary_text, "Persistent summary"
+  end
+
+  def test_summarize_and_trim_does_nothing_without_workspace
+    session = Rubot::Session.new("no-ws", workspace: nil)
+    result = session.summarize_and_trim!(provider: @provider, system_prompt: "")
+    assert_nil result
+  end
+
+  def test_summarize_and_trim_does_nothing_when_under_threshold
+    # Default threshold is 60% of 100 = 60 messages
+    # With only 10 messages, nothing should happen
+    10.times { @session.add("user", "msg") }
+    result = @session.summarize_and_trim!(provider: @provider, system_prompt: "")
+    assert_nil result
+  end
+
+  def test_summarize_and_trim_works_when_over_threshold
+    # Need more than 60 messages to trigger (60% of 100)
+    70.times { |i| @session.add("user", "Message #{i}") }
+
+    @provider.response = "Summary of old messages"
+    result = @session.summarize_and_trim!(provider: @provider, system_prompt: "")
+
+    assert_equal "Summary of old messages", result
+    assert @session.summarized?
+    assert @session.message_count < 70
+  end
+
+  def test_summarize_and_trim_removes_orphaned_tool_messages
+    70.times { |i| @session.add("user", "Message #{i}") }
+    # Add a tool message at the trimming boundary
+    @session.add("assistant", "Let me check", tool_calls: [{ "id" => "t1" }])
+    @session.add("tool", "Result", tool_call_id: "t1")
+
+    @provider.response = "Summary"
+    @session.summarize_and_trim!(provider: @provider, system_prompt: "")
+
+    # First message should not be a tool message
+    first = @session.messages.first
+    refute_equal "tool", first["role"] if first
+  end
+
+  def test_summarize_and_trim_handles_provider_error
+    70.times { |i| @session.add("user", "Message #{i}") }
+    @provider.raise_error = true
+
+    result = @session.summarize_and_trim!(provider: @provider, system_prompt: "")
+    assert_nil result
+    # Messages should be unchanged
+    assert_equal 70, @session.message_count
+  end
+
+  def test_session_persists_summary_to_disk
+    @session.append_summary("Disk test")
+    file_path = @session.file_path
+    assert File.exist?(file_path)
+
+    data = JSON.parse(File.read(file_path))
+    assert_equal "Disk test", data["summary"]
+  end
+
+  def test_session_loads_summary_from_disk
+    @session.append_summary("Saved summary")
+
+    session2 = Rubot::Session.new("summarize-test", workspace: @workspace)
+    assert_equal "Saved summary", session2.summary_text
+  end
+
+  class FakeSummarizeProvider
+    attr_accessor :response, :raise_error
+
+    def initialize
+      @response = "Summary"
+      @raise_error = false
+    end
+
+    def chat(messages, tools: nil)
+      raise StandardError, "Provider error" if @raise_error
+      @response
+    end
+  end
+end
