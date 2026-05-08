@@ -140,6 +140,7 @@ module Rubot
 
       def handle_skills_command
         registry = @agent.skill_registry
+        registry.reload!
         return [ :skip, "📚 Skills\n\nNo skills installed.\n\nPlace skills in the workspace `skills/` directory." ] unless registry.any?
 
         lines = registry.all.values.map do |skill|

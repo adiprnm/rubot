@@ -46,6 +46,12 @@ module Rubot
       @workspace ? File.join(@workspace, SKILLS_DIR_NAME) : nil
     end
 
+    # Re-scan the skills directory and refresh the loaded skills.
+    def reload!
+      @skills = {}
+      load!
+    end
+
     # Generate the <available_skills> XML block for the system prompt
     def to_system_prompt
       return "" if @skills.empty?

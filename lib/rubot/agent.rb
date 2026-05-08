@@ -211,6 +211,7 @@ module Rubot
 
     # Build the full system prompt from all sources
     def build_system_prompt
+      @skill_registry.reload!
       parts = []
 
       # 1. AGENTS.md rules (behavior guidelines)
