@@ -254,6 +254,12 @@ module Rubot
         parts << "# Previous Conversation Summary\n\n#{@session.summary_text}"
       end
 
+      # 3d. Forced skill — injected directly to skip LLM tool-call overhead
+      forced = resolve_forced_skill
+      if forced
+        parts << "# Active Skill: #{forced[:name]}\n\nYou MUST follow the instructions below for this response:\n\n#{forced[:content]}"
+      end
+
       # 4. Skills (specialized instruction sets)
       skill_prompt = @skill_registry.to_system_prompt
       parts << skill_prompt unless skill_prompt.empty?
@@ -419,6 +425,22 @@ module Rubot
 
     def log_debug(msg)
       warn "[debug] #{msg}" if @config.debug?
+    end
+
+    # Resolve the forced skill for the current session, return {name, content} or nil.
+    # Clears the forced_skill flag after use so it only applies once.
+    def resolve_forced_skill
+      skill_name = @session&.forced_skill
+      return nil if skill_name.nil? || skill_name.empty?
+
+      # Clear the flag so it only applies to the next message
+      @session.forced_skill = nil
+      @session.save! if @session.respond_to?(:save!)
+
+      skill = @skill_registry.get(skill_name)
+      return nil unless skill && skill.enabled?
+
+      { name: skill.name, content: skill.content }
     end
 
     # -- Public methods accessible from background threads and channels --

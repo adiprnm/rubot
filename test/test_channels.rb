@@ -319,9 +319,54 @@ module Rubot
     def test_help_lists_all_commands
       result = @tg.before_process("/help")
       assert_kind_of Array, result
-      %w[/new /info /models /skills /memory /soul /agents /cron /help /start].each do |cmd|
+      %w[/new /info /models /skills /memory /soul /agents /cron /help /start /use /unuse].each do |cmd|
         assert_includes result[1], cmd, "help text should mention #{cmd}"
       end
+    end
+
+    def test_use_without_skill_name_shows_usage
+      result = @tg.before_process("/use")
+      assert_kind_of Array, result
+      assert_equal :skip, result[0]
+      assert_includes result[1], "Usage"
+      assert_includes result[1], "/use"
+    end
+
+    def test_use_with_nonexistent_skill_shows_error
+      result = @tg.before_process("/use nonexistent-skill")
+      assert_kind_of Array, result
+      assert_equal :skip, result[0]
+      assert_includes result[1], "not found"
+    end
+
+    def test_use_with_valid_skill_sets_forced_skill
+      # Install a test skill
+      @agent.skill_registry.install("test-skill", "# Test Skill\n\nInstructions.")
+
+      result = @tg.before_process("/use test-skill")
+      assert_kind_of Array, result
+      assert_equal :skip, result[0]
+      assert_includes result[1], "will be used"
+      assert_equal "test-skill", @agent.session.forced_skill
+    end
+
+    def test_unuse_clears_forced_skill
+      @agent.session.forced_skill = "some-skill"
+
+      result = @tg.before_process("/unuse")
+      assert_kind_of Array, result
+      assert_equal :skip, result[0]
+      assert_includes result[1], "cleared"
+      assert_nil @agent.session.forced_skill
+    end
+
+    def test_unuse_when_no_skill_set_shows_info
+      @agent.session.forced_skill = nil
+
+      result = @tg.before_process("/unuse")
+      assert_kind_of Array, result
+      assert_equal :skip, result[0]
+      assert_includes result[1], "No forced skill"
     end
   end
 end

@@ -8,13 +8,14 @@ require "time"
 module Rubot
   class Session
     attr_reader :id, :messages, :workspace
-    attr_accessor :summary
+    attr_accessor :summary, :forced_skill
 
     def initialize(id = "default", workspace: nil)
       @id = id
       @messages = []
       @workspace = workspace
       @summary = nil
+      @forced_skill = nil
       load!
     end
 
@@ -81,6 +82,8 @@ module Rubot
 
     def clear!
       @messages = []
+      @forced_skill = nil
+      @summary = nil
       save!
     end
 
@@ -132,6 +135,21 @@ module Rubot
       File.join(@workspace, "sessions", "#{@id}.json")
     end
 
+    # Persist session to disk
+    def save!
+      return unless file_path
+      FileUtils.mkdir_p(File.dirname(file_path))
+      data = {
+        "id" => @id,
+        "created_at" => @messages.first&.fetch("timestamp", Time.now.iso8601),
+        "updated_at" => Time.now.iso8601,
+        "messages" => @messages
+      }
+      data["summary"] = @summary if @summary
+      data["forced_skill"] = @forced_skill if @forced_skill
+      File.write(file_path, JSON.pretty_generate(data))
+    end
+
     private
 
     # Call the LLM to summarize a batch of old messages into a compact form
@@ -172,19 +190,7 @@ module Rubot
       data = JSON.parse(File.read(file_path))
       @messages = data["messages"] || []
       @summary = data["summary"] if data["summary"]
-    end
-
-    def save!
-      return unless file_path
-      FileUtils.mkdir_p(File.dirname(file_path))
-      data = {
-        "id" => @id,
-        "created_at" => @messages.first&.fetch("timestamp", Time.now.iso8601),
-        "updated_at" => Time.now.iso8601,
-        "messages" => @messages
-      }
-      data["summary"] = @summary if @summary
-      File.write(file_path, JSON.pretty_generate(data))
+      @forced_skill = data["forced_skill"] if data["forced_skill"]
     end
 
     def trim!

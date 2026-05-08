@@ -196,7 +196,7 @@ module Rubot
           [ :skip, "✨ Started a new session. Previous conversation has been cleared." ]
         when "/help"
           bot_name = @config.fetch("bot_name", "Rubot")
-          [ :skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help.\n\nBuilt-in commands:\n/start - Start the bot\n/new - Clear chat and start a new session\n/help - Show this help message\n/info - Show agent info\n/models - Show current model\n/skills - List available skills\n/memory - Show persistent memory\n/soul - Show bot personality\n/agents - Show agent rules\n/cron - List scheduled cron jobs\n/cron delete <id> - Delete a cron job" ]
+          [ :skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help.\n\nBuilt-in commands:\n/start - Start the bot\n/new - Clear chat and start a new session\n/help - Show this help message\n/info - Show agent info\n/models - Show current model\n/skills - List available skills\n/memory - Show persistent memory\n/soul - Show bot personality\n/agents - Show agent rules\n/cron - List scheduled cron jobs\n/cron delete <id> - Delete a cron job\n/use <skill> - Force a skill for the next message\n/unuse - Clear the forced skill" ]
         when "/info"
           handle_info_command
         when "/models"
@@ -211,6 +211,10 @@ module Rubot
           handle_agents_command
         when /^\/cron(\s+(.*))?$/
           handle_cron_command($2&.strip)
+        when /^\/use(\s+(.*))?$/
+          handle_use_command($2&.strip)
+        when "/unuse"
+          handle_unuse_command
         else
           message
         end
@@ -233,7 +237,9 @@ module Rubot
           { "command" => "memory", "description" => "Show persistent memory" },
           { "command" => "soul", "description" => "Show bot personality" },
           { "command" => "agents", "description" => "Show agent rules" },
-          { "command" => "cron", "description" => "List scheduled cron jobs" }
+          { "command" => "cron", "description" => "List scheduled cron jobs" },
+          { "command" => "use", "description" => "Force a skill for the next message" },
+          { "command" => "unuse", "description" => "Clear the forced skill" }
         ]
 
         url = URI("#{API_BASE}#{@token}/setMyCommands")
@@ -325,6 +331,46 @@ module Rubot
         end
       rescue StandardError => e
         [ :skip, "❌ Error: #{e.message}" ]
+      end
+
+      # Handle /use <skill-name> command
+      def handle_use_command(skill_name)
+        return [ :skip, "⚠️ Usage: /use <skill-name>\n\nAvailable skills:\n#{list_skills_text}" ] if skill_name.nil? || skill_name.empty?
+
+        registry = @agent.skill_registry
+        registry.reload!
+        skill = registry.get(skill_name)
+
+        if skill && skill.enabled?
+          @agent.session.forced_skill = skill_name
+          @agent.session.save! if @agent.session.respond_to?(:save!)
+          [ :skip, "✅ Skill '#{skill_name}' will be used for the next message." ]
+        else
+          [ :skip, "❌ Skill '#{skill_name}' not found or not enabled.\n\nAvailable skills:\n#{list_skills_text}" ]
+        end
+      rescue StandardError => e
+        [ :skip, "❌ Error: #{e.message}" ]
+      end
+
+      # Handle /unuse command
+      def handle_unuse_command
+        if @agent.session.forced_skill
+          @agent.session.forced_skill = nil
+          @agent.session.save! if @agent.session.respond_to?(:save!)
+          [ :skip, "✅ Forced skill cleared." ]
+        else
+          [ :skip, "ℹ️ No forced skill is set." ]
+        end
+      rescue StandardError => e
+        [ :skip, "❌ Error: #{e.message}" ]
+      end
+
+      def list_skills_text
+        registry = @agent.skill_registry
+        registry.reload!
+        return "No skills installed." unless registry.any?
+
+        registry.all.values.map { |s| "• **#{s.name}** — #{s.summary}" }.join("\n")
       end
 
       # --------------- Long Polling ---------------

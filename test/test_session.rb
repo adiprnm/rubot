@@ -83,6 +83,56 @@ class TestSession < Minitest::Test
     tool_msg = history.find { |m| m["role"] == "tool" }
     assert_equal "call-1", tool_msg["tool_call_id"]
   end
+
+  def test_forced_skill_is_nil_by_default
+    session = Rubot::Session.new("forced-skill-test", workspace: nil)
+    assert_nil session.forced_skill
+  end
+
+  def test_forced_skill_can_be_set
+    session = Rubot::Session.new("forced-skill-test", workspace: nil)
+    session.forced_skill = "librarian"
+    assert_equal "librarian", session.forced_skill
+  end
+
+  def test_forced_skill_can_be_cleared
+    session = Rubot::Session.new("forced-skill-test", workspace: nil)
+    session.forced_skill = "librarian"
+    session.forced_skill = nil
+    assert_nil session.forced_skill
+  end
+
+  def test_forced_skill_persists_with_workspace
+    session = Rubot::Session.new("forced-skill-persist", workspace: @workspace)
+    session.add("user", "ping")  # trigger save
+    session.forced_skill = "test-skill"
+    session.send(:save!)
+
+    session2 = Rubot::Session.new("forced-skill-persist", workspace: @workspace)
+    assert_equal "test-skill", session2.forced_skill
+  end
+
+  def test_forced_skill_persists_to_disk
+    session = Rubot::Session.new("forced-skill-disk", workspace: @workspace)
+    session.add("user", "ping")  # trigger save
+    session.forced_skill = "my-skill"
+    session.send(:save!)
+    file_path = session.file_path
+    assert File.exist?(file_path)
+
+    data = JSON.parse(File.read(file_path))
+    assert_equal "my-skill", data["forced_skill"]
+  end
+
+  def test_forced_skill_cleared_alongside_session
+    session = Rubot::Session.new("forced-skill-clear", workspace: @workspace)
+    session.add("user", "hello")
+    session.forced_skill = "some-skill"
+    refute_nil session.forced_skill
+
+    session.clear!
+    assert_nil session.forced_skill
+  end
 end
 
 class TestSessionSummarization < Minitest::Test

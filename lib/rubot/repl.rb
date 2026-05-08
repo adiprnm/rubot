@@ -17,6 +17,8 @@ module Rubot
       "/agents"   => "Show agent rules (AGENTS.md)",
       "/cron"     => "List scheduled cron jobs",
       "/stream on|off" => "Toggle streaming output",
+      "/use SKILL" => "Force a specific skill for the next message",
+      "/unuse"    => "Clear the forced skill",
       "/quit"     => "Exit rubot"
     }
 
@@ -202,6 +204,27 @@ module Rubot
           puts "\nStreaming: #{@stream ? 'ON' : 'OFF'}"
         else
           puts "\nStreaming: #{@stream ? 'ON' : 'OFF'} (use /stream on or /stream off)"
+        end
+      when "/use"
+        skill_name = parts[1]
+        if skill_name.nil?
+          puts "\n⚠️  Usage: /use <skill-name>"
+          puts "Available skills: #{@agent.skill_registry.all.keys.join(', ') || '(none)'}"
+        elsif @agent.skill_registry.get(skill_name)&.enabled?
+          @agent.session.forced_skill = skill_name
+          @agent.session.save! if @agent.session.respond_to?(:save!)
+          puts "\n✅ Skill '#{skill_name}' will be used for the next message."
+        else
+          puts "\n❌ Skill '#{skill_name}' not found or not enabled."
+          puts "Available skills: #{@agent.skill_registry.all.keys.join(', ') || '(none)'}"
+        end
+      when "/unuse"
+        if @agent.session.forced_skill
+          @agent.session.forced_skill = nil
+          @agent.session.save! if @agent.session.respond_to?(:save!)
+          puts "\n✅ Forced skill cleared."
+        else
+          puts "\nℹ️  No forced skill is set."
         end
       when "/quit", "/exit"
         puts
