@@ -5,6 +5,8 @@ require "uri"
 require "json"
 require "thread"
 
+require_relative "../telegram_markdown"
+
 module Rubot
   module Channels
     # Telegram channel using the Telegram Bot API (long polling).
@@ -476,12 +478,16 @@ module Rubot
       def send_message(chat_id, text, thread_id = nil)
         max_length = @config.fetch("max_message_length", DEFAULT_MAX_LENGTH)
 
+        # Convert standard Markdown to Telegram MarkdownV2
+        converted_text = Rubot::TelegramMarkdown.convert(text)
+
         # Split long messages
-        chunks = split_message(text, max_length)
+        chunks = split_message(converted_text, max_length)
         chunks.each do |chunk|
           body = {
             "chat_id" => chat_id,
-            "text" => chunk
+            "text" => chunk,
+            "parse_mode" => "MarkdownV2"
           }
           body["message_thread_id"] = thread_id if thread_id
           url = URI("#{API_BASE}#{@token}/sendMessage")
