@@ -17,6 +17,11 @@ module Rubot
   class Agent
     MAX_TOOL_ITERATIONS = 10
 
+    # Class-level mutex to serialize provider rebuilding, which temporarily
+    # mutates shared config data. Without this, concurrent sessions with
+    # different model overrides can clobber each other's config.
+    PROVIDER_BUILD_MUTEX = Mutex.new
+
     attr_reader :config, :provider, :session, :tools, :soul, :memory, :agents_file, :skill_registry, :safety_guard, :session_model
 
     def initialize(config:, provider: nil, session_id: "default", tools: nil)
@@ -66,6 +71,31 @@ module Rubot
 
       # Set workspace on cron tool so jobs persist to disk
       configure_cron_tool
+    end
+
+    # Create a new Agent instance with a different session but sharing
+    # the same config, tools, and all shared resources.
+    # This enables concurrent request processing without cross-session
+    # interference — each request gets an isolated session on its
+    # own agent instance.
+    def for_session(session_id)
+      # Let Agent.new handle session loading and provider building correctly.
+      # Do NOT override @provider — it was already set up for this session.
+      copy = Agent.new(
+        config: @config,
+        session_id: session_id,
+        tools: @tools
+      )
+      # Share stateless/shared resources only (skip @provider, which
+      # Agent#new already built correctly for the target session)
+      copy.instance_variable_set(:@safety_guard, @safety_guard)
+      copy.instance_variable_set(:@soul, @soul)
+      copy.instance_variable_set(:@memory, @memory)
+      copy.instance_variable_set(:@agents_file, @agents_file)
+      copy.instance_variable_set(:@skill_registry, @skill_registry)
+      copy.instance_variable_set(:@memory_extractor, @memory_extractor)
+      copy.instance_variable_set(:@feedback_learner, @feedback_learner)
+      copy
     end
 
     # Process a user message and return the final assistant response.
@@ -433,19 +463,21 @@ module Rubot
       entry = @config.model_entry_by_name(@session_model)
       return if entry.nil?
 
-      # Temporarily set the config name to point to the overridden model
-      defaults = @config.data["agents"] ||= {}
-      defaults["defaults"] ||= {}
-      original_name = defaults["defaults"]["name"]
-      defaults["defaults"]["name"] = @session_model
+      # Serialize provider building to prevent concurrent sessions from
+      # clobbering each other's temporary config mutations.
+      PROVIDER_BUILD_MUTEX.synchronize do
+        defaults = @config.data["agents"] ||= {}
+        defaults["defaults"] ||= {}
+        original_name = defaults["defaults"]["name"]
+        defaults["defaults"]["name"] = @session_model
 
-      @provider = build_provider
+        @provider = build_provider
 
-      # Restore original name so config defaults remain intact
-      if original_name
-        defaults["defaults"]["name"] = original_name
-      else
-        defaults["defaults"].delete("name")
+        if original_name
+          defaults["defaults"]["name"] = original_name
+        else
+          defaults["defaults"].delete("name")
+        end
       end
     end
 

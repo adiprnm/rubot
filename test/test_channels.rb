@@ -122,6 +122,74 @@ module Rubot
       channel = Channel.new(agent: @agent)
       assert_raises(NotImplementedError) { channel.start }
     end
+
+    def test_session_lock_returns_monitor
+      channel = DummyChannel.new(agent: @agent)
+      lock = channel.session_lock("test_session")
+      assert_kind_of Monitor, lock
+    end
+
+    def test_session_lock_same_id_returns_same_mutex
+      channel = DummyChannel.new(agent: @agent)
+      lock1 = channel.session_lock("s1")
+      lock2 = channel.session_lock("s1")
+      assert_same lock1, lock2
+    end
+
+    def test_session_lock_different_ids_return_different_mutexes
+      channel = DummyChannel.new(agent: @agent)
+      lock1 = channel.session_lock("s1")
+      lock2 = channel.session_lock("s2")
+      refute_same lock1, lock2
+    end
+
+    def test_reap_threads_removes_finished_threads
+      channel = DummyChannel.new(agent: @agent)
+      finished = Thread.new { sleep 0.01 }
+      alive = Thread.new { sleep 10 }
+      threads = [ finished, alive ]
+      finished.join(1)  # Ensure finished thread has actually completed
+      channel.reap_threads(threads)
+      refute_includes threads, finished
+      assert_includes threads, alive
+      alive.kill
+      alive.join
+    end
+
+    def test_process_message_is_thread_safe_for_same_session
+      channel = DummyChannel.new(agent: @agent)
+      results = []
+      mutex = Mutex.new
+      threads = 5.times.map do |i|
+        Thread.new do
+          resp = channel.process_message("msg-#{i}", session_id: "shared_session")
+          mutex.synchronize { results << resp }
+        end
+      end
+      threads.each(&:join)
+      # All messages should be processed without errors
+      assert_equal 5, results.size
+    end
+
+    def test_request_agent_returns_per_session_clone
+      channel = DummyChannel.new(agent: @agent)
+      captured = nil
+
+      # Override before_process to capture the request_agent
+      def channel.before_process(message)
+        captured_agent = request_agent
+        # Verify it's different from the shared agent (has its own session)
+        [ :skip, captured_agent.session.id ]
+      end
+
+      response = channel.process_message("test", session_id: "test_req_agent")
+      assert_equal "test_req_agent", response
+    end
+
+    def test_request_agent_returns_shared_agent_outside_process_message
+      channel = DummyChannel.new(agent: @agent)
+      assert_same @agent, channel.request_agent
+    end
   end
 
   class TestChannelRegistry < Minitest::Test
@@ -367,6 +435,28 @@ module Rubot
       assert_kind_of Array, result
       assert_equal :skip, result[0]
       assert_includes result[1], "No forced skill"
+    end
+
+    def test_default_max_concurrent_requests
+      assert_equal 10, @tg.instance_variable_get(:@request_slots)
+    end
+
+    def test_custom_max_concurrent_requests
+      tg = Rubot::Channels::Telegram.new(
+        agent: @agent,
+        channel_config: { "token" => "fake", "max_concurrent_requests" => 5 }
+      )
+      assert_equal 5, tg.instance_variable_get(:@request_slots)
+    end
+
+    def test_active_threads_starts_empty
+      assert_empty @tg.instance_variable_get(:@active_threads)
+    end
+
+    def test_acquire_and_release_request_slot
+      @tg.acquire_request_slot
+      @tg.release_request_slot
+      assert_equal 10, @tg.instance_variable_get(:@request_slots)
     end
   end
 end

@@ -41,9 +41,18 @@ module Rubot
         @last_chat_id = nil
         @last_thread_id = nil
         @process_mutex = Mutex.new
-        @status_message = nil  # { chat_id:, thread_id:, message_id: } for current status msg
-        @tool_count = 0        # tool calls in current processing cycle
+        # Per-chat status tracking — keyed by "#{chat_id}:#{thread_id}"
+        # so concurrent requests to different chats don't interfere.
+        @status_messages = {}   # chat_thread_key => { chat_id:, thread_id:, message_id: }
+        @tool_counts = {}       # chat_thread_key => Integer
         @status_mutex = Mutex.new
+        @active_threads = []   # Track spawned threads for cleanup
+        @threads_mutex = Mutex.new
+        # Limit concurrent request processing (prevents overwhelming the LLM API)
+        max_concurrent = @config.fetch("max_concurrent_requests", 10)
+        @request_semaphore = Mutex.new
+        @request_slots = max_concurrent
+        @request_cv = ConditionVariable.new
       end
 
       def start
@@ -81,6 +90,36 @@ module Rubot
         @active_typing.each_value(&:kill)
         @active_typing.clear
         stop_cron_scheduler
+        # Wait for active request threads to finish
+        wait_for_threads
+      end
+
+      # Wait for all spawned request threads to complete.
+      def wait_for_threads
+        loop do
+          threads = @threads_mutex.synchronize { @active_threads.dup }
+          break if threads.empty?
+          threads.each { |t| t.join(1) }
+          @threads_mutex.synchronize { @active_threads.reject! { |t| !t.alive? } }
+        end
+      end
+
+      # Acquire a slot from the request semaphore (blocks if at capacity).
+      def acquire_request_slot
+        @request_semaphore.synchronize do
+          while @request_slots <= 0
+            @request_cv.wait(@request_semaphore)
+          end
+          @request_slots -= 1
+        end
+      end
+
+      # Release a slot back to the request semaphore.
+      def release_request_slot
+        @request_semaphore.synchronize do
+          @request_slots += 1
+          @request_cv.signal
+        end
       end
 
       # Override signal handlers to interrupt the polling thread.
@@ -113,7 +152,23 @@ module Rubot
         while @running
           begin
             updates = get_updates
-            updates.each { |update| process_update(update) }
+            updates.each do |update|
+              # Spawn each update in its own thread for concurrent processing.
+              # The per-session mutex (in Channel#process_message) ensures that
+              # messages to the same session are serialized.
+              t = Thread.new(update) do |u|
+                acquire_request_slot
+                begin
+                  process_update(u)
+                ensure
+                  release_request_slot
+                end
+              end
+              @threads_mutex.synchronize { @active_threads << t }
+            end
+
+            # Reap finished threads periodically to avoid memory growth
+            @threads_mutex.synchronize { @active_threads.reject! { |t| !t.alive? } }
           rescue Interrupt
             warn "[telegram] Interrupted, stopping..."
             break
@@ -127,14 +182,16 @@ module Rubot
       # --------------- Command Handlers ---------------
 
       def handle_info_command
-        info = @agent.startup_info
+        ra = request_agent
+        info = ra.startup_info
         lines = info.map { |k, v| "#{k}: #{v}" }
         [ :skip, "ℹ️ Agent Info\n\n" + lines.join("\n") ]
       end
 
       def handle_models_command
-        models = @agent.config.models
-        active = @agent.active_model_name
+        ra = request_agent
+        models = ra.config.models
+        active = ra.active_model_name
 
         if models.empty?
           [ :skip, "🧠 No models configured in config.yml." ]
@@ -148,16 +205,18 @@ module Rubot
       end
 
       def handle_model_command
-        active = @agent.active_model_name
-        entry = @agent.config.model_entry_by_name(active) || @agent.config.active_model_entry
-        text = "🧠 **Current Model**\n\n**#{active}** (`#{entry['model']}`)\nProvider: `#{@agent.provider.name}`"
-        text += "\n_Session override — cleared on /new_" if @agent.session.model_override
+        ra = request_agent
+        active = ra.active_model_name
+        entry = ra.config.model_entry_by_name(active) || ra.config.active_model_entry
+        text = "🧠 **Current Model**\n\n**#{active}** (`#{entry['model']}`)\nProvider: `#{ra.provider.name}`"
+        text += "\n_Session override — cleared on /new_" if ra.session.model_override
         [ :skip, text ]
       end
 
       def handle_use_model_command(model_name)
+        ra = request_agent
         if model_name.nil? || model_name.empty?
-          models = @agent.config.models
+          models = ra.config.models
           if models.empty?
             [ :skip, "⚠️ Usage: `/use_model <model_name>`\n\nNo models configured." ]
           else
@@ -165,12 +224,12 @@ module Rubot
             [ :skip, "⚠️ Usage: `/use_model <model_name>`\n\nAvailable models:\n#{list}" ]
           end
         else
-          result = @agent.use_model(model_name)
+          result = ra.use_model(model_name)
           if result
-            entry = @agent.config.model_entry_by_name(result)
-            [ :skip, "✅ Switched to model: **#{result}** (`#{entry['model']}`)\nProvider: `#{@agent.provider.name}`\n_Persists for this session (cleared on /new)_" ]
+            entry = ra.config.model_entry_by_name(result)
+            [ :skip, "✅ Switched to model: **#{result}** (`#{entry['model']}`)\nProvider: `#{ra.provider.name}`\n_Persists for this session (cleared on /new)_" ]
           else
-            models = @agent.config.models
+            models = ra.config.models
             list = models.map { |m| "• **#{m['name']}**" }.join("\n")
             [ :skip, "❌ Model `#{model_name}` not found in config.yml.\n\n*Available models:*\n#{list}" ]
           end
@@ -178,7 +237,8 @@ module Rubot
       end
 
       def handle_skills_command
-        registry = @agent.skill_registry
+        ra = request_agent
+        registry = ra.skill_registry
         registry.reload!
         return [ :skip, "📚 Skills\n\nNo skills installed.\n\nPlace skills in the workspace `skills/` directory." ] unless registry.any?
 
@@ -189,9 +249,10 @@ module Rubot
       end
 
       def handle_memory_command
-        return [ :skip, "🧠 Memory is not enabled (no workspace configured)." ] unless @agent.memory.enabled?
+        ra = request_agent
+        return [ :skip, "🧠 Memory is not enabled (no workspace configured)." ] unless ra.memory.enabled?
 
-        content = @agent.memory.read
+        content = ra.memory.read
         max_len = DEFAULT_MAX_LENGTH - 200
         content = content[0, max_len] + "\n\n… (truncated)" if content.length > max_len
         [ :skip, "🧠 Memory\n\n```
@@ -200,18 +261,20 @@ module Rubot
       end
 
       def handle_soul_command
-        return [ :skip, "🧬 No soul file (SOUL.md) found in workspace." ] unless @agent.soul.enabled?
+        ra = request_agent
+        return [ :skip, "🧬 No soul file (SOUL.md) found in workspace." ] unless ra.soul.enabled?
 
-        content = @agent.soul.to_s
+        content = ra.soul.to_s
         max_len = DEFAULT_MAX_LENGTH - 200
         content = content[0, max_len] + "\n\n… (truncated)" if content.length > max_len
         [ :skip, "🧬 Soul\n\n#{content}" ]
       end
 
       def handle_agents_command
-        return [ :skip, "📋 No AGENTS.md found in workspace." ] unless @agent.agents_file.enabled?
+        ra = request_agent
+        return [ :skip, "📋 No AGENTS.md found in workspace." ] unless ra.agents_file.enabled?
 
-        content = @agent.agents_file.raw
+        content = ra.agents_file.raw
         max_len = DEFAULT_MAX_LENGTH - 200
         content = content[0, max_len] + "\n\n… (truncated)" if content.length > max_len
         [ :skip, "📋 Agent Rules\n\n```
@@ -231,7 +294,7 @@ module Rubot
         when "/start"
           [ :skip, "👋 Welcome to Rubot!\n\nI'm your AI assistant. Send me any message and I'll help you out.\n\nUse /help to see available commands." ]
         when "/new"
-          @agent.clear_session
+          request_agent.clear_session
           [ :skip, "✨ Started a new session. Previous conversation has been cleared." ]
         when "/help"
           bot_name = @config.fetch("bot_name", "Rubot")
@@ -340,9 +403,12 @@ module Rubot
         when "deliver"
           send_message(chat_id, result[:result][:deliver_message], thread_id)
         when "agent_turn"
-          # Process through the LLM with mutex protection
-          response = @process_mutex.synchronize do
-            @agent.process_cron(result[:result][:agent_message])
+          # Process through the LLM with a per-request agent clone to avoid
+          # cross-session interference when cron fires concurrently with user requests.
+          session_id = thread_id ? "tg_#{chat_id}_#{thread_id}" : "tg_#{chat_id}"
+          response = session_lock(session_id).synchronize do
+            request_agent = @agent.for_session(session_id)
+            request_agent.process_cron(result[:result][:agent_message])
           end
           send_message(chat_id, response, thread_id) if response && !response.empty?
         end
@@ -380,15 +446,16 @@ module Rubot
 
       # Handle /use <skill-name> command
       def handle_use_command(skill_name)
+        ra = request_agent
         return [ :skip, "⚠️ Usage: /use <skill-name>\n\nAvailable skills:\n#{list_skills_text}" ] if skill_name.nil? || skill_name.empty?
 
-        registry = @agent.skill_registry
+        registry = ra.skill_registry
         registry.reload!
         skill = registry.get(skill_name)
 
         if skill && skill.enabled?
-          @agent.session.forced_skill = skill_name
-          @agent.session.save! if @agent.session.respond_to?(:save!)
+          ra.session.forced_skill = skill_name
+          ra.session.save! if ra.session.respond_to?(:save!)
           [ :skip, "✅ Skill '#{skill_name}' will be used for the next message." ]
         else
           [ :skip, "❌ Skill '#{skill_name}' not found or not enabled.\n\nAvailable skills:\n#{list_skills_text}" ]
@@ -399,9 +466,10 @@ module Rubot
 
       # Handle /unuse command
       def handle_unuse_command
-        if @agent.session.forced_skill
-          @agent.session.forced_skill = nil
-          @agent.session.save! if @agent.session.respond_to?(:save!)
+        ra = request_agent
+        if ra.session.forced_skill
+          ra.session.forced_skill = nil
+          ra.session.save! if ra.session.respond_to?(:save!)
           [ :skip, "✅ Forced skill cleared." ]
         else
           [ :skip, "ℹ️ No forced skill is set." ]
@@ -411,7 +479,8 @@ module Rubot
       end
 
       def list_skills_text
-        registry = @agent.skill_registry
+        ra = request_agent
+        registry = ra.skill_registry
         registry.reload!
         return "No skills installed." unless registry.any?
 
@@ -464,7 +533,16 @@ module Rubot
         server.mount_proc "/" do |req, res|
           if req.request_method == "POST"
             update = JSON.parse(req.body)
-            process_update(update)
+            # Process in a thread so webhook handler doesn't block other requests
+            t = Thread.new(update) do |u|
+              acquire_request_slot
+              begin
+                process_update(u)
+              ensure
+                release_request_slot
+              end
+            end
+            @threads_mutex.synchronize { @active_threads << t }
             res.status = 200
           else
             res.status = 200
@@ -535,7 +613,7 @@ module Rubot
         stop_typing(chat_id, thread_id) unless is_general_topic
 
         # Clear any lingering status message before sending the real response
-        clear_status_message
+        clear_status_message(chat_id, thread_id)
 
         if response && !response.empty?
           warn "[telegram] Sending response (#{response.length} chars)" if Rubot.debug?
@@ -699,8 +777,10 @@ module Rubot
       # Called before a tool executes. Updates the status message to show what's running.
       def notify_tool_started(chat_id, thread_id, tool_name, args)
         warn "[telegram] notify_tool_started: #{tool_name}" if Rubot.debug?
+        key = status_key(chat_id, thread_id)
         @status_mutex.synchronize do
-          @tool_count += 1
+          @tool_counts[key] ||= 0
+          @tool_counts[key] += 1
         end
         emoji = TOOL_EMOJIS[tool_name] || "⚙️"
 
@@ -719,7 +799,7 @@ module Rubot
                     "#{args.keys.first}: #{truncate(args.values.first.to_s, 60)}"
                   end
 
-        count = @status_mutex.synchronize { @tool_count }
+        count = @status_mutex.synchronize { @tool_counts[key] }
         text = "#{emoji} **Running tool:** `#{tool_name}`\n"
         text += "Step #{count}\n\n"
         text += preview
@@ -756,30 +836,36 @@ module Rubot
         # all reserved characters are properly escaped.
         converted_text = Rubot::TelegramMarkdown.convert(text)
 
-        warn "[telegram] update_or_send_status: existing=#{!!@status_message}, chat_id=#{chat_id}" if Rubot.debug?
+        key = status_key(chat_id, thread_id)
+        existing = @status_mutex.synchronize { @status_messages[key] }
+        warn "[telegram] update_or_send_status: existing=#{!!existing}, key=#{key}" if Rubot.debug?
 
-        if @status_message && @status_message[:chat_id] == chat_id && @status_message[:thread_id] == thread_id
+        if existing
           # Edit the existing status message
-          edit_message(chat_id, @status_message[:message_id], converted_text, thread_id)
+          edit_message(chat_id, existing[:message_id], converted_text, thread_id)
         else
           # Send a new status message
           msg_id = send_message_with_id(chat_id, converted_text, thread_id)
           warn "[telegram] Status message sent, id=#{msg_id}" if Rubot.debug?
           @status_mutex.synchronize do
-            @status_message = { chat_id: chat_id, thread_id: thread_id, message_id: msg_id }
+            @status_messages[key] = { chat_id: chat_id, thread_id: thread_id, message_id: msg_id }
           end
         end
       end
 
-      # Delete the current status message (called before sending the final response).
-      def clear_status_message
+      # Build a unique key for per-chat status tracking.
+      def status_key(chat_id, thread_id)
+        "#{chat_id}:#{thread_id}"
+      end
+
+      # Delete the status message for a specific chat/thread (called before sending the final response).
+      def clear_status_message(chat_id, thread_id)
+        key = status_key(chat_id, thread_id)
         @status_mutex.synchronize do
-          @tool_count = 0
-          return unless @status_message
-          chat_id = @status_message[:chat_id]
-          message_id = @status_message[:message_id]
-          @status_message = nil
-          chat_id && message_id ? delete_message(chat_id, message_id) : nil
+          info = @status_messages.delete(key)
+          @tool_counts.delete(key)
+          return unless info
+          delete_message(info[:chat_id], info[:message_id]) if info[:chat_id] && info[:message_id]
         end
       end
 

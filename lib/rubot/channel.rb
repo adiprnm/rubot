@@ -20,6 +20,21 @@ module Rubot
       @config = channel_config
       @name = self.class.name.split("::").last.downcase
       @running = false
+      @session_locks = {}
+      @locks_mutex = Mutex.new
+    end
+
+    # Returns a per-session monitor (re-entrant mutex), creating one if needed.
+    # This serializes requests to the same session while allowing
+    # different sessions to be processed concurrently.
+    #
+    # A Monitor (rather than Mutex) is used because cron callbacks may fire
+    # from within an already-locked session context — the same thread must
+    # be able to re-enter without deadlocking.
+    def session_lock(session_id)
+      @locks_mutex.synchronize do
+        @session_locks[session_id] ||= Monitor.new
+      end
     end
 
     # Start the channel. Should block until the channel is stopped.
@@ -32,6 +47,13 @@ module Rubot
     # Subclasses should override this if they need cleanup.
     def stop
       @running = false
+    end
+
+    # Clean up finished threads and return the list of active threads.
+    # Subclasses managing their own threads should call this periodically.
+    def reap_threads(threads)
+      threads.reject! { |t| t.join(0) }
+      threads
     end
 
     # Hook called before the agent processes a user message.
@@ -70,23 +92,43 @@ module Rubot
     # @param on_progress [Proc, nil] Callback invoked after each iteration (yields iteration, tool_count)
     # @return [String, nil] The agent's response, or nil if processing was skipped
     def process_message(message, session_id: nil, on_tool_call: nil, on_tool_result: nil, on_progress: nil)
-      @agent.switch_session(session_id) if session_id
+      sid = session_id || "default"
+      session_lock(sid).synchronize do
+        # Create a per-request agent clone with its own isolated session.
+        # This prevents concurrent requests from clobbering each other's
+        # session state on the shared agent instance.
+        request_agent = @agent.for_session(sid)
 
-      result = before_process(message)
+        # Make the per-session agent available to before_process via thread-local
+        # so command handlers (e.g. /model, /use) operate on the correct session.
+        Thread.current[:_rubot_request_agent] = request_agent
 
-      if result.is_a?(Array) && result[0] == :skip
-        return after_process(message, result[1].to_s)
+        result = before_process(message)
+
+        if result.is_a?(Array) && result[0] == :skip
+          return after_process(message, result[1].to_s)
+        end
+
+        return nil if result.nil?
+
+        response = request_agent.process(result, on_tool_call: on_tool_call, on_tool_result: on_tool_result, on_progress: on_progress) do |chunk|
+          on_stream_chunk(chunk) if respond_to?(:on_stream_chunk)
+        end
+
+        after_process(message, response)
       end
-
-      return nil if result.nil?
-
-      response = @agent.process(result, on_tool_call: on_tool_call, on_tool_result: on_tool_result, on_progress: on_progress) do |chunk|
-        on_stream_chunk(chunk) if respond_to?(:on_stream_chunk)
-      end
-
-      after_process(message, response)
     rescue StandardError => e
       handle_error(e, message)
+    ensure
+      Thread.current[:_rubot_request_agent] = nil
+    end
+
+    # Returns the per-request agent clone for the current thread,
+    # or falls back to the shared @agent if called outside process_message.
+    # Subclasses should use this in before_process and callbacks to
+    # access session-specific state (model, session, etc.).
+    def request_agent
+      Thread.current[:_rubot_request_agent] || @agent
     end
 
     # Called for each streaming chunk from the agent.
