@@ -705,26 +705,22 @@ module Rubot
         emoji = TOOL_EMOJIS[tool_name] || "⚙️"
 
         preview = case tool_name
-                  when "shell"
-                    # Pre block content is literal in MarkdownV2, no escaping needed
+                  when "shell_exec"
                     "```\n#{truncate(args["command"] || "...", 80)}\n```"
-                  when "file"
-                    "#{md_escape(args["operation"] || "read")}: #{md_escape(truncate(args["path"] || "...", 60))}"
-                  when "web", "search"
-                    "query: #{md_escape(truncate(args["query"] || args["url"] || "...", 60))}"
-                  when "fetch"
-                    "url: #{md_escape(truncate(args["url"] || "...", 60))}"
+                  when "file_ops"
+                    "#{args["operation"] || "read"}: #{truncate(args["path"] || "...", 60)}"
+                  when "web_fetch"
+                    "query: #{truncate(args["query"] || args["url"] || "...", 60)}"
                   when "memory"
-                    "operation: #{md_escape(args["operation"] || "...")}"
+                    "operation: #{args["operation"] || "..."}"
                   when "cron"
-                    "operation: #{md_escape(args["operation"] || "...")}"
+                    "operation: #{args["operation"] || "..."}"
                   else
-                    "#{md_escape(args.keys.first)}: #{md_escape(truncate(args.values.first.to_s, 60))}"
+                    "#{args.keys.first}: #{truncate(args.values.first.to_s, 60)}"
                   end
 
         count = @status_mutex.synchronize { @tool_count }
-        # Inline code content is also literal in MarkdownV2, no escaping needed for tool_name
-        text = "#{emoji} *Running tool:* `#{tool_name}`\n"
+        text = "#{emoji} **Running tool:** `#{tool_name}`\n"
         text += "Step #{count}\n\n"
         text += preview
 
@@ -746,7 +742,7 @@ module Rubot
         return unless iteration >= 2  # Only notify after 2+ iterations
 
         emoji = "🔄"
-        text = "#{emoji} *Still working* \(iteration #{iteration}\)\n"
+        text = "#{emoji} **Still working** (iteration #{iteration})\n"
         text += "_Running tool calls to complete your request_"
 
         update_or_send_status(chat_id, thread_id, text)
@@ -756,14 +752,18 @@ module Rubot
       def update_or_send_status(chat_id, thread_id, text)
         return unless @config.fetch("tool_notifications", true)
 
+        # Convert standard Markdown to Telegram MarkdownV2 to ensure
+        # all reserved characters are properly escaped.
+        converted_text = Rubot::TelegramMarkdown.convert(text)
+
         warn "[telegram] update_or_send_status: existing=#{!!@status_message}, chat_id=#{chat_id}" if Rubot.debug?
 
         if @status_message && @status_message[:chat_id] == chat_id && @status_message[:thread_id] == thread_id
           # Edit the existing status message
-          edit_message(chat_id, @status_message[:message_id], text, thread_id)
+          edit_message(chat_id, @status_message[:message_id], converted_text, thread_id)
         else
           # Send a new status message
-          msg_id = send_message_with_id(chat_id, text, thread_id)
+          msg_id = send_message_with_id(chat_id, converted_text, thread_id)
           warn "[telegram] Status message sent, id=#{msg_id}" if Rubot.debug?
           @status_mutex.synchronize do
             @status_message = { chat_id: chat_id, thread_id: thread_id, message_id: msg_id }
@@ -859,13 +859,6 @@ module Rubot
         str[0, max_len] + "…"
       end
 
-      # Escape a string for Telegram MarkdownV2 parse mode.
-      # All special chars must be prefixed with a backslash:
-      #   _ * [ ] ( ) ~ ` > # + - = | { } . ! \
-      def md_escape(str)
-        return "" unless str
-        str.gsub(/([_*\[\]()~`>#+\-=|{}.!\\])/) { "\\" + $1 }
-      end
     end
   end
 end
