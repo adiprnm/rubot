@@ -121,6 +121,7 @@ module Rubot
 
       response = ""
       tool_calls = nil
+      reasoning_content = nil
       iterations = 0
 
       loop do
@@ -141,19 +142,15 @@ module Rubot
           @provider.chat(messages, tools: tool_definitions)
         end
 
-        # Parse result
-        if result.is_a?(Array)
-          # Streaming result: [content, tool_calls]
-          response, tool_calls = result
-          reasoning_content = nil
-        elsif result.is_a?(Hash) && result["tool_calls"]
+        # Parse result — both streaming and non-streaming now return Hash
+        if result.is_a?(Hash)
           response = result["content"] || ""
           tool_calls = result["tool_calls"]
           reasoning_content = result["reasoning_content"]
-        elsif result.is_a?(Hash) && result["reasoning_content"]
-          response = result["content"] || ""
-          tool_calls = nil
-          reasoning_content = result["reasoning_content"]
+        elsif result.is_a?(Array)
+          # Legacy streaming format: [content, tool_calls]
+          response, tool_calls = result
+          reasoning_content = nil
         else
           response = result.to_s
           tool_calls = nil
@@ -205,8 +202,8 @@ module Rubot
         end
       end
 
-      # Add final assistant response to session
-      @session.add("assistant", response) unless response.empty?
+      # Add final assistant response to session (only if not already added via tool-call branch)
+      @session.add("assistant", response, reasoning_content: reasoning_content) unless response.empty?
 
       # Prepend cron results to the user's response
       # Skip inline processing if a callback is registered (Telegram handles it)
@@ -571,17 +568,13 @@ module Rubot
 
         result = @provider.chat(local_messages, tools: tool_definitions)
 
-        if result.is_a?(Array)
-          response, tool_calls = result
-          reasoning_content = nil
-        elsif result.is_a?(Hash) && result["tool_calls"]
+        if result.is_a?(Hash)
           response = result["content"] || ""
           tool_calls = result["tool_calls"]
           reasoning_content = result["reasoning_content"]
-        elsif result.is_a?(Hash) && result["reasoning_content"]
-          response = result["content"] || ""
-          tool_calls = nil
-          reasoning_content = result["reasoning_content"]
+        elsif result.is_a?(Array)
+          response, tool_calls = result
+          reasoning_content = nil
         else
           response = result.to_s
           tool_calls = nil
@@ -616,7 +609,7 @@ module Rubot
       # If the LLM returned empty, use the cron message itself as the response
       response = message if response.nil? || response.strip.empty?
 
-      @session.add("assistant", response) unless response.empty?
+      @session.add("assistant", response, reasoning_content: reasoning_content) unless response.empty?
       response
     end
 

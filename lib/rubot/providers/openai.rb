@@ -90,6 +90,7 @@ module Rubot
 
         buffer = ""
         accumulated = ""
+        reasoning_content = ""
         tool_calls_accum = {}
 
         http.request(request, JSON.generate(payload)) do |response|
@@ -120,6 +121,10 @@ module Rubot
                   yield delta["content"], nil if on_chunk
                 end
 
+                if delta["reasoning_content"]
+                  reasoning_content += delta["reasoning_content"]
+                end
+
                 if delta["tool_calls"]
                   delta["tool_calls"].each do |tc|
                     idx = tc["index"]
@@ -145,7 +150,12 @@ module Rubot
         end
 
         tool_calls = tool_calls_accum.empty? ? nil : tool_calls_accum.values
-        [ accumulated, tool_calls ]
+
+        # Return as Hash for consistency with non-streaming extract_content
+        result = { "content" => accumulated }
+        result["tool_calls"] = tool_calls if tool_calls
+        result["reasoning_content"] = reasoning_content if !reasoning_content.empty?
+        result
       end
 
       def extract_content(response)
