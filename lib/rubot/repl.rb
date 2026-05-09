@@ -139,15 +139,16 @@ module Rubot
         puts "\n✨ Started a new session. Previous conversation cleared."
       when "/session"
         if parts[1]
-          @agent = Agent.new(
-            config: @agent.config,
-            provider: @agent.provider,
-            session_id: parts[1],
-            tools: @agent.tools
-          )
+          @agent.switch_session(parts[1])
           puts "\n📝 Session switched to: #{parts[1]}"
+          model = @agent.active_model_name
+          if @agent.session.model_override
+            puts "  Model: #{model} (session override)"
+          end
         else
           puts "\n📝 Current session: #{@agent.session.id}"
+          model = @agent.active_model_name
+          puts "  Model: #{model}"
         end
       when "/info"
         info = @agent.startup_info

@@ -228,10 +228,13 @@ module Rubot
       @session_model || @config.name
     end
 
-    # Switch to a different session (e.g. per-topic in Telegram)
+    # Switch to a different session (e.g. per-topic in Telegram).
+    # Applies the new session's model override if one was previously saved.
     def switch_session(session_id)
       return @session if @session.id == session_id
       @session = Session.new(session_id, workspace: @config.workspace)
+      @session_model = @session.model_override
+      rebuild_provider if @session_model
       @session
     end
 
