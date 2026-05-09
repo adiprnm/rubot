@@ -154,16 +154,24 @@ module Rubot
 
         message = choice["message"]
         content = message["content"] || ""
+        reasoning_content = message["reasoning_content"]
 
         # Handle tool calls
         if message["tool_calls"]
-          return {
+          result = {
             "content" => content,
             "tool_calls" => message["tool_calls"]
           }
+          result["reasoning_content"] = reasoning_content if reasoning_content
+          return result
         end
 
-        content
+        # Return reasoning_content alongside content for non-tool responses
+        if reasoning_content
+          { "content" => content, "reasoning_content" => reasoning_content }
+        else
+          content
+        end
       end
     end
   end

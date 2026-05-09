@@ -145,12 +145,19 @@ module Rubot
         if result.is_a?(Array)
           # Streaming result: [content, tool_calls]
           response, tool_calls = result
+          reasoning_content = nil
         elsif result.is_a?(Hash) && result["tool_calls"]
           response = result["content"] || ""
           tool_calls = result["tool_calls"]
+          reasoning_content = result["reasoning_content"]
+        elsif result.is_a?(Hash) && result["reasoning_content"]
+          response = result["content"] || ""
+          tool_calls = nil
+          reasoning_content = result["reasoning_content"]
         else
           response = result.to_s
           tool_calls = nil
+          reasoning_content = nil
         end
 
         # Handle tool calls
@@ -158,7 +165,7 @@ module Rubot
           log_debug("Got #{tool_calls.size} tool call(s)")
 
           # Add assistant message with tool calls to session
-          @session.add("assistant", response, tool_calls: tool_calls)
+          @session.add("assistant", response, tool_calls: tool_calls, reasoning_content: reasoning_content)
 
           # Execute each tool call
           tool_calls.each do |tc|
@@ -425,6 +432,11 @@ module Rubot
           formatted["tool_calls"] = msg["tool_calls"]
         end
 
+        # Include reasoning_content for DeepSeek and other reasoning models
+        if msg["role"] == "assistant" && msg["reasoning_content"]
+          formatted["reasoning_content"] = msg["reasoning_content"]
+        end
+
         # Handle tool_call_id for tool results
         if msg["role"] == "tool"
           formatted["tool_call_id"] = msg["tool_call_id"]
@@ -551,6 +563,7 @@ module Rubot
 
       response = ""
       tool_calls = nil
+      reasoning_content = nil
       iterations = 0
 
       loop do
@@ -560,16 +573,25 @@ module Rubot
 
         if result.is_a?(Array)
           response, tool_calls = result
+          reasoning_content = nil
         elsif result.is_a?(Hash) && result["tool_calls"]
           response = result["content"] || ""
           tool_calls = result["tool_calls"]
+          reasoning_content = result["reasoning_content"]
+        elsif result.is_a?(Hash) && result["reasoning_content"]
+          response = result["content"] || ""
+          tool_calls = nil
+          reasoning_content = result["reasoning_content"]
         else
           response = result.to_s
           tool_calls = nil
+          reasoning_content = nil
         end
 
         if tool_calls && !tool_calls.empty?
-          local_messages << { "role" => "assistant", "content" => response, "tool_calls" => tool_calls }
+          assistant_msg = { "role" => "assistant", "content" => response, "tool_calls" => tool_calls }
+          assistant_msg["reasoning_content"] = reasoning_content if reasoning_content
+          local_messages << assistant_msg
 
           tool_calls.each do |tc|
             tool_name, arguments = parse_tool_call(tc)
@@ -617,6 +639,7 @@ module Rubot
         formatted = { "role" => msg["role"], "content" => msg["content"] }
         formatted["tool_calls"] = msg["tool_calls"] if msg["role"] == "assistant" && msg["tool_calls"]
         formatted["tool_call_id"] = msg["tool_call_id"] if msg["role"] == "tool"
+        formatted["reasoning_content"] = msg["reasoning_content"] if msg["role"] == "assistant" && msg["reasoning_content"]
         messages << formatted
       end
 

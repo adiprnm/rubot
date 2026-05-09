@@ -35,7 +35,7 @@ module Rubot
       save!
     end
 
-    def add(role, content, tool_calls: nil, tool_call_id: nil)
+    def add(role, content, tool_calls: nil, tool_call_id: nil, reasoning_content: nil)
       msg = {
         "role" => role,
         "content" => content,
@@ -43,6 +43,7 @@ module Rubot
       }
       msg["tool_calls"] = tool_calls if tool_calls
       msg["tool_call_id"] = tool_call_id if tool_call_id
+      msg["reasoning_content"] = reasoning_content if reasoning_content
       @messages << msg
       trim! if @workspace
       save!
@@ -54,6 +55,7 @@ module Rubot
         entry = { "role" => msg["role"], "content" => msg["content"] }
         entry["tool_calls"] = msg["tool_calls"] if msg["tool_calls"]
         entry["tool_call_id"] = msg["tool_call_id"] if msg["tool_call_id"]
+        entry["reasoning_content"] = msg["reasoning_content"] if msg["reasoning_content"]
         entry
       end
       remove_orphaned_tool_messages(history)
