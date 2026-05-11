@@ -31,6 +31,7 @@ module Rubot
     RE_LINK          = /\[([^\]]+)\]\(([^)]+)\)/
     RE_BOLD_ITALIC   = /\*\*\*([^*]+?)\*\*\*/m
     RE_BOLD          = /\*\*([^*]+?)\*\*/m
+    RE_SINGLE_STAR   = /\*([^*]+?)\*/m
     RE_DUNDER        = /__([^_]+?)__/m
     RE_ITALIC        = /(?:^|(?<=\s))_([^_]+?)_(?:$|(?=\s|[^a-zA-Z0-9]))/m
     RE_STRIKE2       = /~~([^~]+?)~~/m
@@ -134,6 +135,8 @@ module Rubot
         text.gsub!(RE_BOLD_ITALIC) { "#{T_BOLD}#{T_ITALIC}#{$1}#{T_ITALIC}#{T_BOLD}" }
         # **bold**
         text.gsub!(RE_BOLD) { "#{T_BOLD}#{$1}#{T_BOLD}" }
+        # *italic*
+        text.gsub!(RE_SINGLE_STAR) { "#{T_ITALIC}#{$1}#{T_ITALIC}" }
         # __underline__
         text.gsub!(RE_DUNDER) { "#{T_UNDERLINE}#{$1}#{T_UNDERLINE}" }
         # ~~strikethrough~~

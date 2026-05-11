@@ -48,6 +48,11 @@ module Rubot
       assert_equal "Hello _world_", result
     end
 
+    def test_single_asterisk_italic
+      result = @converter.convert("Hello *world*")
+      assert_equal "Hello _world_", result
+    end
+
     # ---- Bold italic ----
 
     def test_triple_asterisk_bold_italic
