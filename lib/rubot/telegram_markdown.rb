@@ -37,6 +37,7 @@ module Rubot
     RE_STRIKE1       = /~([^~]+?)~/m
     RE_SPOILER       = /\|\|([^|]+?)\|\|/m
     RE_BLOCKQUOTE    = /^\s*>\s*(.*)/m
+    RE_HEADING       = /^\#{1,6}\s+(.+)$/
 
     # Map internal tokens → Telegram MarkdownV2 delimiters
     FORMAT_RESTORE = {
@@ -127,6 +128,8 @@ module Rubot
       end
 
       def apply_formatting(text)
+        # # headings → **bold** (strip the # prefix)
+        text.gsub!(RE_HEADING) { "#{T_BOLD}#{$1}#{T_BOLD}" }
         # ***bold italic***
         text.gsub!(RE_BOLD_ITALIC) { "#{T_BOLD}#{T_ITALIC}#{$1}#{T_ITALIC}#{T_BOLD}" }
         # **bold**
