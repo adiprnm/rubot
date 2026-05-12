@@ -53,19 +53,25 @@ module Rubot
 
       def make_request(payload)
         uri = URI("#{api_base}/api/chat")
-        http = Net::HTTP.new(uri.host, uri.port)
-        http.use_ssl = uri.scheme == "https"
-        http.open_timeout = 30
-        http.read_timeout = 300
-
-        request = Net::HTTP::Post.new(uri.request_uri)
-        request["Content-Type"] = "application/json"
-
         log_debug("Request: #{JSON.generate(payload)}")
-        response = http.request(request, JSON.generate(payload))
+
+        response = with_retry do
+          http = Net::HTTP.new(uri.host, uri.port)
+          http.use_ssl = uri.scheme == "https"
+          http.open_timeout = 30
+          http.read_timeout = 300
+
+          request = Net::HTTP::Post.new(uri.request_uri)
+          request["Content-Type"] = "application/json"
+
+          http.request(request, JSON.generate(payload))
+        end
         log_debug("Response: #{response.code}")
 
         unless response.code.to_i == 200
+          if response.code.to_i == 429
+            raise RateLimitError.new(parse_retry_after(response))
+          end
           raise "Ollama API error #{response.code}: #{response.body}"
         end
 
@@ -74,55 +80,61 @@ module Rubot
 
       def make_stream_request(payload, &on_chunk)
         uri = URI("#{api_base}/api/chat")
-        http = Net::HTTP.new(uri.host, uri.port)
-        http.use_ssl = uri.scheme == "https"
-        http.open_timeout = 30
-        http.read_timeout = 300
-
-        request = Net::HTTP::Post.new(uri.request_uri)
-        request["Content-Type"] = "application/json"
 
         buffer = ""
         accumulated = ""
         tool_calls = nil
 
-        http.request(request, JSON.generate(payload)) do |response|
-          unless response.code.to_i == 200
-            body = +""
-            response.read_body { |b| body << b }
-            raise "API error #{response.code}: #{body}"
-          end
+        with_retry do
+          http = Net::HTTP.new(uri.host, uri.port)
+          http.use_ssl = uri.scheme == "https"
+          http.open_timeout = 30
+          http.read_timeout = 300
 
-          response.read_body do |chunk|
-            buffer += chunk
-            while (newline_idx = buffer.index("\n"))
-              line = buffer[0...newline_idx].strip
-              buffer = buffer[(newline_idx + 1)..] || ""
-              next if line.empty?
+          request = Net::HTTP::Post.new(uri.request_uri)
+          request["Content-Type"] = "application/json"
 
-              begin
-                data = JSON.parse(line)
-                delta = data.dig("message")
-                next unless delta
+          http.request(request, JSON.generate(payload)) do |response|
+            unless response.code.to_i == 200
+              body = +""
+              response.read_body { |b| body << b }
+              if response.code.to_i == 429
+                raise RateLimitError.new(parse_retry_after(response))
+              end
+              raise "API error #{response.code}: #{body}"
+            end
 
-                if delta["content"]
-                  accumulated += delta["content"]
-                  yield delta["content"], nil if on_chunk
+            response.read_body do |chunk|
+              buffer += chunk
+              while (newline_idx = buffer.index("\n"))
+                line = buffer[0...newline_idx].strip
+                buffer = buffer[(newline_idx + 1)..] || ""
+                next if line.empty?
+
+                begin
+                  data = JSON.parse(line)
+                  delta = data.dig("message")
+                  next unless delta
+
+                  if delta["content"]
+                    accumulated += delta["content"]
+                    yield delta["content"], nil if on_chunk
+                  end
+
+                  if delta["tool_calls"]
+                    tool_calls = delta["tool_calls"]
+                  end
+
+                  break if data["done"] == true
+                rescue JSON::ParserError
+                  # skip malformed chunks
                 end
-
-                if delta["tool_calls"]
-                  tool_calls = delta["tool_calls"]
-                end
-
-                break if data["done"] == true
-              rescue JSON::ParserError
-                # skip malformed chunks
               end
             end
           end
-        end
 
-        [ accumulated, tool_calls ]
+          [ accumulated, tool_calls ]
+        end
       end
 
       def extract_content(response)

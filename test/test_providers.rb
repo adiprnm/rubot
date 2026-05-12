@@ -190,4 +190,129 @@ class TestProviders < Minitest::Test
     provider = Rubot::Provider.new(config)
     assert_raises(NotImplementedError) { provider.parse_stream_chunk("") }
   end
+
+  # --- Rate limit retry mechanism ---
+
+  def test_rate_limit_error_message
+    err = Rubot::RateLimitError.new
+    assert_includes err.message, "429"
+    assert_nil err.retry_after
+  end
+
+  def test_rate_limit_error_with_retry_after
+    err = Rubot::RateLimitError.new(30)
+    assert_equal 30, err.retry_after
+  end
+
+  class RetryTestProvider < Rubot::Provider
+    attr_reader :call_count
+
+    def initialize(config, responses = [])
+      super(config)
+      @responses = responses
+      @call_count = 0
+    end
+
+    def chat(_messages, tools: nil)
+      @call_count += 1
+      resp = @responses.shift
+      raise Rubot::RateLimitError.new if resp == :rate_limit
+      resp
+    end
+  end
+
+  def make_retry_config
+    make_config("debug" => true)
+  end
+
+  def test_with_retry_succeeds_after_rate_limit
+    config = make_retry_config
+    provider = RetryTestProvider.new(config, [:rate_limit, "success"])
+
+    result = provider.send(:with_retry) { provider.chat([]) }
+    assert_equal "success", result
+    assert_equal 2, provider.call_count
+  end
+
+  def test_with_retry_raises_after_max_retries
+    config = make_retry_config
+    provider = RetryTestProvider.new(config, [:rate_limit, :rate_limit, :rate_limit, :rate_limit])
+
+    assert_raises(Rubot::RateLimitError) do
+      provider.send(:with_retry, max_retries: 3) { provider.chat([]) }
+    end
+    assert_equal 4, provider.call_count # initial + 3 retries
+  end
+
+  def test_with_retry_passes_through_other_errors
+    config = make_retry_config
+    provider = RetryTestProvider.new(config, [])
+
+    def provider.chat(_messages, tools: nil)
+      raise StandardError, "boom"
+    end
+
+    assert_raises(StandardError) { provider.send(:with_retry) { provider.chat([]) } }
+  end
+
+  def test_with_retry_succeeds_immediately_without_rate_limit
+    config = make_retry_config
+    provider = RetryTestProvider.new(config, ["ok"])
+
+    result = provider.send(:with_retry) { provider.chat([]) }
+    assert_equal "ok", result
+    assert_equal 1, provider.call_count
+  end
+
+  def test_exponential_backoff_increases_with_attempt
+    config = make_retry_config
+    provider = RetryTestProvider.new(config, [])
+
+    t1 = provider.send(:exponential_backoff, 1)
+    t2 = provider.send(:exponential_backoff, 2)
+    t3 = provider.send(:exponential_backoff, 3)
+
+    assert t1 < t2, "backoff should increase: #{t1} < #{t2}"
+    assert t2 < t3, "backoff should increase: #{t2} < #{t3}"
+    # base values: 1, 2, 4 (plus small jitter)
+    assert_in_delta 1.0, t1, 0.5
+    assert_in_delta 2.0, t2, 0.5
+    assert_in_delta 4.0, t3, 0.5
+  end
+
+  def test_parse_retry_after_returns_integer
+    config = make_retry_config
+    provider = RetryTestProvider.new(config, [])
+
+    mock_resp = Struct.new(:[]).new
+    def mock_resp.[](key)
+      { "Retry-After" => "30" }[key]
+    end
+
+    assert_equal 30, provider.send(:parse_retry_after, mock_resp)
+  end
+
+  def test_parse_retry_after_returns_nil_when_absent
+    config = make_retry_config
+    provider = RetryTestProvider.new(config, [])
+
+    mock_resp = Struct.new(:[]).new
+    def mock_resp.[](key)
+      nil
+    end
+
+    assert_nil provider.send(:parse_retry_after, mock_resp)
+  end
+
+  def test_parse_retry_after_returns_nil_for_zero
+    config = make_retry_config
+    provider = RetryTestProvider.new(config, [])
+
+    mock_resp = Struct.new(:[]).new
+    def mock_resp.[](key)
+      "0"
+    end
+
+    assert_nil provider.send(:parse_retry_after, mock_resp)
+  end
 end

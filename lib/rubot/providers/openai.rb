@@ -55,20 +55,26 @@ module Rubot
 
       def make_request(payload)
         uri = URI("#{api_base}/chat/completions")
-        http = Net::HTTP.new(uri.host, uri.port)
-        http.use_ssl = uri.scheme == "https"
-        http.open_timeout = 30
-        http.read_timeout = 120
-
-        request = Net::HTTP::Post.new(uri.request_uri)
-        request["Content-Type"] = "application/json"
-        request["Authorization"] = "Bearer #{@config.api_key}"
 
         log_debug("Request: #{JSON.generate(payload)}")
-        response = http.request(request, JSON.generate(payload))
+        response = with_retry do
+          http = Net::HTTP.new(uri.host, uri.port)
+          http.use_ssl = uri.scheme == "https"
+          http.open_timeout = 30
+          http.read_timeout = 120
+
+          request = Net::HTTP::Post.new(uri.request_uri)
+          request["Content-Type"] = "application/json"
+          request["Authorization"] = "Bearer #{@config.api_key}"
+
+          http.request(request, JSON.generate(payload))
+        end
         log_debug("Response: #{response.code} - #{response.body[0..500]}")
 
         unless response.code.to_i == 200
+          if response.code.to_i == 429
+            raise RateLimitError.new(parse_retry_after(response))
+          end
           raise "API error #{response.code}: #{response.body}"
         end
 
@@ -77,15 +83,6 @@ module Rubot
 
       def make_stream_request(payload, &on_chunk)
         uri = URI("#{api_base}/chat/completions")
-        http = Net::HTTP.new(uri.host, uri.port)
-        http.use_ssl = uri.scheme == "https"
-        http.open_timeout = 30
-        http.read_timeout = 300
-
-        request = Net::HTTP::Post.new(uri.request_uri)
-        request["Content-Type"] = "application/json"
-        request["Authorization"] = "Bearer #{@config.api_key}"
-
         log_debug("Stream request: #{JSON.generate(payload)}")
 
         buffer = ""
@@ -93,69 +90,83 @@ module Rubot
         reasoning_content = ""
         tool_calls_accum = {}
 
-        http.request(request, JSON.generate(payload)) do |response|
-          unless response.code.to_i == 200
-            body = +""
-            response.read_body { |b| body << b }
-            raise "API error #{response.code}: #{body}"
-          end
+        with_retry do
+          http = Net::HTTP.new(uri.host, uri.port)
+          http.use_ssl = uri.scheme == "https"
+          http.open_timeout = 30
+          http.read_timeout = 300
 
-          response.read_body do |chunk|
-            buffer += chunk
-            while (newline_idx = buffer.index("\n"))
-              line = buffer[0...newline_idx].strip
-              buffer = buffer[(newline_idx + 1)..] || ""
-              next if line.empty?
-              next unless line.start_with?("data: ")
+          request = Net::HTTP::Post.new(uri.request_uri)
+          request["Content-Type"] = "application/json"
+          request["Authorization"] = "Bearer #{@config.api_key}"
 
-              data_str = line[6..]
-              next if data_str == "[DONE]"
+          http.request(request, JSON.generate(payload)) do |response|
+            unless response.code.to_i == 200
+              body = +""
+              response.read_body { |b| body << b }
+              if response.code.to_i == 429
+                raise RateLimitError.new(parse_retry_after(response))
+              end
+              raise "API error #{response.code}: #{body}"
+            end
 
-              begin
-                data = JSON.parse(data_str)
-                delta = data.dig("choices", 0, "delta")
-                next unless delta
+            response.read_body do |chunk|
+              buffer += chunk
+              while (newline_idx = buffer.index("\n"))
+                line = buffer[0...newline_idx].strip
+                buffer = buffer[(newline_idx + 1)..] || ""
+                next if line.empty?
+                next unless line.start_with?("data: ")
 
-                if delta["content"]
-                  accumulated += delta["content"]
-                  yield delta["content"], nil if on_chunk
-                end
+                data_str = line[6..]
+                next if data_str == "[DONE]"
 
-                if delta["reasoning_content"]
-                  reasoning_content += delta["reasoning_content"]
-                end
+                begin
+                  data = JSON.parse(data_str)
+                  delta = data.dig("choices", 0, "delta")
+                  next unless delta
 
-                if delta["tool_calls"]
-                  delta["tool_calls"].each do |tc|
-                    idx = tc["index"]
-                    tool_calls_accum[idx] ||= {
-                      "id" => "",
-                      "type" => "function",
-                      "function" => { "name" => "", "arguments" => "" }
-                    }
-                    tool_calls_accum[idx]["id"] = tc["id"] if tc["id"]
-                    if tc.dig("function", "name")
-                      tool_calls_accum[idx]["function"]["name"] += tc["function"]["name"]
-                    end
-                    if tc.dig("function", "arguments")
-                      tool_calls_accum[idx]["function"]["arguments"] += tc["function"]["arguments"]
+                  if delta["content"]
+                    accumulated += delta["content"]
+                    yield delta["content"], nil if on_chunk
+                  end
+
+                  if delta["reasoning_content"]
+                    reasoning_content += delta["reasoning_content"]
+                  end
+
+                  if delta["tool_calls"]
+                    delta["tool_calls"].each do |tc|
+                      idx = tc["index"]
+                      tool_calls_accum[idx] ||= {
+                        "id" => "",
+                        "type" => "function",
+                        "function" => { "name" => "", "arguments" => "" }
+                      }
+                      tool_calls_accum[idx]["id"] = tc["id"] if tc["id"]
+                      if tc.dig("function", "name")
+                        tool_calls_accum[idx]["function"]["name"] += tc["function"]["name"]
+                      end
+                      if tc.dig("function", "arguments")
+                        tool_calls_accum[idx]["function"]["arguments"] += tc["function"]["arguments"]
+                      end
                     end
                   end
+                rescue JSON::ParserError
+                  # skip malformed chunks
                 end
-              rescue JSON::ParserError
-                # skip malformed chunks
               end
             end
           end
+
+          tool_calls = tool_calls_accum.empty? ? nil : tool_calls_accum.values
+
+          # Return as Hash for consistency with non-streaming extract_content
+          result = { "content" => accumulated }
+          result["tool_calls"] = tool_calls if tool_calls
+          result["reasoning_content"] = reasoning_content if !reasoning_content.empty?
+          result
         end
-
-        tool_calls = tool_calls_accum.empty? ? nil : tool_calls_accum.values
-
-        # Return as Hash for consistency with non-streaming extract_content
-        result = { "content" => accumulated }
-        result["tool_calls"] = tool_calls if tool_calls
-        result["reasoning_content"] = reasoning_content if !reasoning_content.empty?
-        result
       end
 
       def extract_content(response)

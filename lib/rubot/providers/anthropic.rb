@@ -104,21 +104,27 @@ module Rubot
 
       def make_request(payload)
         uri = URI("#{api_base}/v1/messages")
-        http = Net::HTTP.new(uri.host, uri.port)
-        http.use_ssl = uri.scheme == "https"
-        http.open_timeout = 30
-        http.read_timeout = 120
-
-        request = Net::HTTP::Post.new(uri.request_uri)
-        request["Content-Type"] = "application/json"
-        request["x-api-key"] = api_key
-        request["anthropic-version"] = API_VERSION
-
         log_debug("Request: #{JSON.generate(payload)}")
-        response = http.request(request, JSON.generate(payload))
+
+        response = with_retry do
+          http = Net::HTTP.new(uri.host, uri.port)
+          http.use_ssl = uri.scheme == "https"
+          http.open_timeout = 30
+          http.read_timeout = 120
+
+          request = Net::HTTP::Post.new(uri.request_uri)
+          request["Content-Type"] = "application/json"
+          request["x-api-key"] = api_key
+          request["anthropic-version"] = API_VERSION
+
+          http.request(request, JSON.generate(payload))
+        end
         log_debug("Response: #{response.code}")
 
         unless response.code.to_i == 200
+          if response.code.to_i == 429
+            raise RateLimitError.new(parse_retry_after(response))
+          end
           raise "Anthropic API error #{response.code}: #{response.body}"
         end
 
@@ -127,15 +133,6 @@ module Rubot
 
       def make_stream_request(payload, &on_chunk)
         uri = URI("#{api_base}/v1/messages")
-        http = Net::HTTP.new(uri.host, uri.port)
-        http.use_ssl = uri.scheme == "https"
-        http.open_timeout = 30
-        http.read_timeout = 300
-
-        request = Net::HTTP::Post.new(uri.request_uri)
-        request["Content-Type"] = "application/json"
-        request["x-api-key"] = api_key
-        request["anthropic-version"] = API_VERSION
 
         buffer = ""
         accumulated = ""
@@ -144,69 +141,84 @@ module Rubot
         current_tool_id = ""
         current_tool_input = ""
 
-        http.request(request, JSON.generate(payload)) do |response|
-          unless response.code.to_i == 200
-            body = +""
-            response.read_body { |b| body << b }
-            raise "API error #{response.code}: #{body}"
-          end
+        with_retry do
+          http = Net::HTTP.new(uri.host, uri.port)
+          http.use_ssl = uri.scheme == "https"
+          http.open_timeout = 30
+          http.read_timeout = 300
 
-          response.read_body do |chunk|
-            buffer += chunk
-            while (newline_idx = buffer.index("\n"))
-              line = buffer[0...newline_idx].strip
-              buffer = buffer[(newline_idx + 1)..] || ""
-              next if line.empty?
-              next unless line.start_with?("data: ")
+          request = Net::HTTP::Post.new(uri.request_uri)
+          request["Content-Type"] = "application/json"
+          request["x-api-key"] = api_key
+          request["anthropic-version"] = API_VERSION
 
-              data_str = line[6..]
-              begin
-                data = JSON.parse(data_str)
-                type = data["type"]
+          http.request(request, JSON.generate(payload)) do |response|
+            unless response.code.to_i == 200
+              body = +""
+              response.read_body { |b| body << b }
+              if response.code.to_i == 429
+                raise RateLimitError.new(parse_retry_after(response))
+              end
+              raise "API error #{response.code}: #{body}"
+            end
 
-                case type
-                when "content_block_start"
-                  block = data["content_block"]
-                  if block && block["type"] == "tool_use"
-                    current_tool_name = block["name"]
-                    current_tool_id = block["id"]
-                    current_tool_input = block["input"] ? JSON.generate(block["input"]) : ""
-                  end
-                when "content_block_delta"
-                  delta = data["delta"]
-                  if delta
-                    if delta["type"] == "text_delta"
-                      accumulated += delta["text"]
-                      yield delta["text"], nil if on_chunk
-                    elsif delta["type"] == "input_json_delta"
-                      current_tool_input += delta["partial_json"]
+            response.read_body do |chunk|
+              buffer += chunk
+              while (newline_idx = buffer.index("\n"))
+                line = buffer[0...newline_idx].strip
+                buffer = buffer[(newline_idx + 1)..] || ""
+                next if line.empty?
+                next unless line.start_with?("data: ")
+
+                data_str = line[6..]
+                begin
+                  data = JSON.parse(data_str)
+                  type = data["type"]
+
+                  case type
+                  when "content_block_start"
+                    block = data["content_block"]
+                    if block && block["type"] == "tool_use"
+                      current_tool_name = block["name"]
+                      current_tool_id = block["id"]
+                      current_tool_input = block["input"] ? JSON.generate(block["input"]) : ""
+                    end
+                  when "content_block_delta"
+                    delta = data["delta"]
+                    if delta
+                      if delta["type"] == "text_delta"
+                        accumulated += delta["text"]
+                        yield delta["text"], nil if on_chunk
+                      elsif delta["type"] == "input_json_delta"
+                        current_tool_input += delta["partial_json"]
+                      end
+                    end
+                  when "content_block_stop"
+                    if current_tool_name && current_tool_id
+                      idx = tool_calls_accum.size
+                      tool_calls_accum[idx] = {
+                        "id" => current_tool_id,
+                        "type" => "function",
+                        "function" => {
+                          "name" => current_tool_name,
+                          "arguments" => current_tool_input
+                        }
+                      }
+                      current_tool_name = ""
+                      current_tool_id = ""
+                      current_tool_input = ""
                     end
                   end
-                when "content_block_stop"
-                  if current_tool_name && current_tool_id
-                    idx = tool_calls_accum.size
-                    tool_calls_accum[idx] = {
-                      "id" => current_tool_id,
-                      "type" => "function",
-                      "function" => {
-                        "name" => current_tool_name,
-                        "arguments" => current_tool_input
-                      }
-                    }
-                    current_tool_name = ""
-                    current_tool_id = ""
-                    current_tool_input = ""
-                  end
+                rescue JSON::ParserError
+                  # skip malformed chunks
                 end
-              rescue JSON::ParserError
-                # skip malformed chunks
               end
             end
           end
-        end
 
-        tool_calls = tool_calls_accum.empty? ? nil : tool_calls_accum.values
-        [ accumulated, tool_calls ]
+          tool_calls = tool_calls_accum.empty? ? nil : tool_calls_accum.values
+          [ accumulated, tool_calls ]
+        end
       end
 
       def extract_content(response)
