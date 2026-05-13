@@ -77,6 +77,25 @@ module Rubot
         "ERROR: #{e.class}: #{e.message}"
       end
 
+      # Returns true if the operation could cause data loss.
+      # write on an existing file = data loss (overwriting).
+      # write on a new file = safe (creating).
+      # append = safe (never destroys existing data).
+      def dangerous_action?(arguments)
+        return false unless arguments["operation"] == "write"
+
+        path = arguments["path"]
+        return false if path.nil?
+
+        # Only flag if the file already exists (overwriting = data loss)
+        begin
+          p = Pathname.new(path).expand_path
+          File.exist?(p)
+        rescue StandardError
+          false
+        end
+      end
+
       private
 
       def safe_path(path)

@@ -90,8 +90,9 @@ module Rubot
     # @param on_tool_call [Proc, nil] Callback invoked before each tool call (yields tool_name, args)
     # @param on_tool_result [Proc, nil] Callback invoked after each tool call (yields tool_name, result)
     # @param on_progress [Proc, nil] Callback invoked after each iteration (yields iteration, tool_count)
+    # @param on_confirm [Proc, nil] Callback invoked before irreversible actions (yields tool_name, args; return truthy to proceed)
     # @return [String, nil] The agent's response, or nil if processing was skipped
-    def process_message(message, session_id: nil, on_tool_call: nil, on_tool_result: nil, on_progress: nil)
+    def process_message(message, session_id: nil, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil)
       sid = session_id || "default"
       session_lock(sid).synchronize do
         # Create a per-request agent clone with its own isolated session.
@@ -111,7 +112,7 @@ module Rubot
 
         return nil if result.nil?
 
-        response = request_agent.process(result, on_tool_call: on_tool_call, on_tool_result: on_tool_result, on_progress: on_progress) do |chunk|
+        response = request_agent.process(result, on_tool_call: on_tool_call, on_tool_result: on_tool_result, on_progress: on_progress, on_confirm: on_confirm) do |chunk|
           on_stream_chunk(chunk) if respond_to?(:on_stream_chunk)
         end
 

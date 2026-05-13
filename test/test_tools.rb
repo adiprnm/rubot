@@ -203,4 +203,74 @@ class TestTools < Minitest::Test
     assert_equal "object", params["type"]
     assert_instance_of Hash, params["properties"]
   end
+
+  # --- Dangerous action detection (data-loss risk) ---
+
+  def test_base_tool_dangerous_action_returns_false
+    tool = Rubot::Tool.new
+    refute tool.dangerous_action?({})
+  end
+
+  def test_shell_dangerous_destructive_commands
+    shell_tool = @registry.get("shell_exec")
+    assert shell_tool.dangerous_action?({ "command" => "rm -rf some_dir" })
+    assert shell_tool.dangerous_action?({ "command" => "truncate -s 0 file.txt" })
+    assert shell_tool.dangerous_action?({ "command" => "sed -i 's/foo/bar/' file.txt" })
+    assert shell_tool.dangerous_action?({ "command" => "git reset --hard HEAD" })
+    assert shell_tool.dangerous_action?({ "command" => "git push --force origin main" })
+    assert shell_tool.dangerous_action?({ "command" => "shred file.txt" })
+    assert shell_tool.dangerous_action?({ "command" => "dd if=/dev/zero of=/dev/sda" })
+  end
+
+  def test_shell_dangerous_safe_commands
+    shell_tool = @registry.get("shell_exec")
+    refute shell_tool.dangerous_action?({ "command" => "ls -la" })
+    refute shell_tool.dangerous_action?({ "command" => "cat file.txt" })
+    refute shell_tool.dangerous_action?({ "command" => "grep pattern file.txt" })
+    refute shell_tool.dangerous_action?({ "command" => "echo hello > new_file.txt" })
+    refute shell_tool.dangerous_action?({ "command" => "mkdir -p new_dir" })
+    refute shell_tool.dangerous_action?({ "command" => "touch new_file.txt" })
+    refute shell_tool.dangerous_action?({ "command" => "cp src.txt dest.txt" })
+    refute shell_tool.dangerous_action?({ "command" => "git status" })
+    refute shell_tool.dangerous_action?({ "command" => "pwd" })
+  end
+
+  def test_shell_dangerous_empty_command
+    shell_tool = @registry.get("shell_exec")
+    refute shell_tool.dangerous_action?({ "command" => "" })
+    refute shell_tool.dangerous_action?({ "command" => nil })
+  end
+
+  def test_file_tool_dangerous_overwrite_existing_file
+    file_tool = @registry.get("file_ops")
+    filepath = File.join(@tmpdir, "existing.txt")
+    File.write(filepath, "existing content")
+
+    # write on existing file = dangerous (data loss)
+    assert file_tool.dangerous_action?({ "operation" => "write", "path" => filepath })
+  end
+
+  def test_file_tool_dangerous_new_file_is_safe
+    file_tool = @registry.get("file_ops")
+    filepath = File.join(@tmpdir, "new_file.txt")
+
+    # write on non-existent file = safe (creating, not destroying)
+    refute file_tool.dangerous_action?({ "operation" => "write", "path" => filepath })
+  end
+
+  def test_file_tool_dangerous_append_is_always_safe
+    file_tool = @registry.get("file_ops")
+    filepath = File.join(@tmpdir, "append.txt")
+    File.write(filepath, "existing content")
+
+    # append never destroys data
+    refute file_tool.dangerous_action?({ "operation" => "append", "path" => filepath })
+  end
+
+  def test_file_tool_dangerous_read_operations_are_safe
+    file_tool = @registry.get("file_ops")
+    refute file_tool.dangerous_action?({ "operation" => "read", "path" => "test.txt" })
+    refute file_tool.dangerous_action?({ "operation" => "list", "path" => "." })
+    refute file_tool.dangerous_action?({ "operation" => "info", "path" => "test.txt" })
+  end
 end

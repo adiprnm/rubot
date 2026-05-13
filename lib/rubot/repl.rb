@@ -283,10 +283,12 @@ module Rubot
     end
 
     def process_message(message)
+      on_confirm = build_confirm_callback
+
       if @stream
         print "\n#{@logo} Assistant: "
         response = ""
-        @agent.process(message) do |chunk|
+        @agent.process(message, on_confirm: on_confirm) do |chunk|
           print chunk
           $stdout.flush
           response += chunk
@@ -294,12 +296,35 @@ module Rubot
         puts "\n"
       else
         print "\n#{@logo} Assistant: "
-        response = @agent.process(message)
+        response = @agent.process(message, on_confirm: on_confirm)
         puts response
         puts
       end
     rescue StandardError => e
       puts "\n❌ Error: #{e.message}\n"
+    end
+
+    def build_confirm_callback
+      return nil unless @readline_available
+
+      proc do |tool_name, args|
+        description = describe_action(tool_name, args)
+        print "\n⚠️  Dangerous action (could cause data loss): #{description}\nConfirm? [y/N] "
+        $stdout.flush
+        answer = $stdin.gets&.strip&.downcase
+        answer == "y" || answer == "yes"
+      end
+    end
+
+    def describe_action(tool_name, args)
+      case tool_name
+      when "shell_exec"
+        "shell command: #{args["command"][0..120]}"
+      when "file_ops"
+        "#{args["operation"]} #{args["path"]}"
+      else
+        "#{tool_name} #{args.inspect[0..120]}"
+      end
     end
 
     def completion_handler

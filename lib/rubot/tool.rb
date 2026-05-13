@@ -34,6 +34,14 @@ module Rubot
       raise NotImplementedError, "#{self.class} must implement #execute"
     end
 
+    # Returns true if the given arguments represent an action that could cause
+    # data loss (e.g., overwriting an existing file, deleting files, destructive
+    # shell commands). Used by the Agent to request user confirmation before
+    # execution. Override in subclasses to define dangerous operations.
+    def dangerous_action?(arguments)
+      false
+    end
+
     # Convert to the provider's native tool definition format.
     # Delegates to the provider's format_tools method.
     def to_provider_format(provider_name)

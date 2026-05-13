@@ -105,7 +105,9 @@ module Rubot
     #   on_tool_call:     Called before each tool executes. Yields (tool_name, arguments).
     #   on_tool_result:   Called after each tool executes. Yields (tool_name, result).
     #   on_progress:      Called after each full tool-call iteration. Yields (iteration_count, tool_count).
-    def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, &on_chunk)
+    #   on_confirm:       Called before dangerous actions that could cause data loss.
+    #                     Yields (tool_name, arguments). Return truthy to proceed, falsy to skip.
+    def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil, &on_chunk)
       # Fire any due cron jobs and collect their results
       cron_results = fire_due_cron_jobs
       warn "[cron] fire_due_cron_jobs returned #{cron_results.size} result(s)" if Rubot.debug?
@@ -169,6 +171,20 @@ module Rubot
             tool_name, arguments = parse_tool_call(tc)
             log_debug("Executing tool: #{tool_name}")
 
+            # Use the tool call ID for tracking
+            tool_call_id = tc.is_a?(Hash) ? (tc["id"] || tool_name) : tool_name
+
+            # Check for dangerous action that could cause data loss
+            tool = @tools.get(tool_name)
+            if tool && tool.respond_to?(:dangerous_action?) && tool.dangerous_action?(arguments)
+              log_debug("Dangerous action detected: #{tool_name} with args: #{arguments.inspect}")
+              if on_confirm && !on_confirm.call(tool_name, arguments)
+                log_debug("Action cancelled by user: #{tool_name}")
+                @session.add("tool", "Action cancelled by user.", tool_call_id: tool_call_id)
+                next
+              end
+            end
+
             # Fire pre-execution callback
             on_tool_call&.call(tool_name, arguments)
 
@@ -184,8 +200,6 @@ module Rubot
             log_debug("Tool result: #{tool_result[0..200]}")
 
             # Add tool result to session
-            # Use the tool call ID for tracking
-            tool_call_id = tc.is_a?(Hash) ? (tc["id"] || tool_name) : tool_name
             @session.add("tool", tool_result, tool_call_id: tool_call_id)
           end
 

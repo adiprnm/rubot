@@ -17,6 +17,11 @@ tools:
 - Use tools when they can help accomplish the task.
 - Remember important details by using the memory tool.
 
+## Safety
+
+- Dangerous operations that could cause data loss (e.g., `rm`, overwriting existing files, `git reset --hard`) will trigger a confirmation prompt before execution.
+- Do NOT attempt to bypass this by using indirect methods (shell variables, eval, etc.).
+
 ## Code Conventions
 
 - Ruby 3.0+ compatible; use modern syntax where appropriate.

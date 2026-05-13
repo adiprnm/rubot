@@ -74,6 +74,41 @@ module Rubot
         "ERROR: #{e.class}: #{e.message}"
       end
 
+      # Returns true if the command could cause data loss or destructive changes.
+      def dangerous_action?(arguments)
+        cmd = arguments["command"]
+        return false if cmd.nil? || cmd.strip.empty?
+
+        # Destructive patterns that could cause data loss
+        dangerous_patterns = [
+          # File/directory deletion
+          /\brm\b/,
+          # Truncate to zero length
+          /\btruncate\b/,
+          /\b:>\s/,
+          # In-place editing that modifies files destructively
+          /\bsed\s+(-i|--in-place)/,
+          # Disk/partition operations
+          /\bdd\b/,
+          /\bmkfs\b/,
+          /\bmkswap\b/,
+          /\bmke2fs\b/,
+          # Recursive permission changes
+          /\bchmod\s+-R/,
+          # Git destructive
+          /\bgit\s+reset\s+--hard/,
+          /\bgit\s+push\s+--force/,
+          # Docker destructive
+          /\bdocker\s+system\s+prune/,
+          /\bdocker\s+rmi\s+-f/,
+          /\bdocker\s+rm\s+-f/,
+          # shred / secure delete
+          /\bshred\b/,
+        ]
+
+        dangerous_patterns.any? { |p| cmd =~ p }
+      end
+
       private
 
       def check_command_safety(cmd)
