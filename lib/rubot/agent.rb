@@ -232,6 +232,15 @@ module Rubot
       parts << response if response && !response.empty?
 
       combined = parts.join("\n\n---\n\n")
+
+      # Guard: if the LLM produced only tool calls with no text content
+      # (e.g. read_file → grep → etc.), return the cron/tool summary or
+      # a fallback so the user never gets a silent drop.
+      if combined.empty? && iterations > 0
+        fallback = build_fallback_response(iterations)
+        combined = fallback if fallback && !fallback.empty?
+      end
+
       warn "[cron] Combined response (#{parts.size} parts): #{combined[0..200]}" if Rubot.debug?
       combined
     end
@@ -529,6 +538,27 @@ module Rubot
 
     def log_debug(msg)
       warn "[debug] #{msg}" if @config.debug?
+    end
+
+    # Build a fallback response when the LLM produced only tool calls
+    # with no text content, so the user never gets a silent drop.
+    def build_fallback_response(iterations)
+      return nil if iterations == 0
+
+      # Summarize what the agent did
+      tool_names = []
+      @session.safe_history(limit: @config.history_limit).each do |msg|
+        next unless msg["role"] == "tool"
+        result = msg["content"].to_s.strip
+        tool_names << (result.empty? ? "(empty)" : result[0..120])
+      end
+
+      if tool_names.any?
+        "I completed #{iterations} step(s) of tool calls. Results:\n\n" +
+          tool_names.map.with_index(1) { |r, i| "#{i}. #{r}" }.join("\n")
+      else
+        "I completed #{iterations} step(s) of processing but have no text result to share."
+      end
     end
 
     # Resolve the forced skill for the current session, return {name, content} or nil.

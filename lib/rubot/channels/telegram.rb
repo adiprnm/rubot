@@ -617,9 +617,14 @@ module Rubot
 
         if response && !response.empty?
           warn "[telegram] Sending response (#{response.length} chars)" if Rubot.debug?
-          send_message(chat_id, response, thread_id)
+          ok = send_message(chat_id, response, thread_id)
+          unless ok
+            warn "[telegram] Retrying with plain text (markdown may be invalid)"
+            send_message_plain(chat_id, response, thread_id)
+          end
         else
-          warn "[telegram] No response to send" if Rubot.debug?
+          warn "[telegram] ⚠️ Empty response — agent produced no text output"
+          send_message(chat_id, "⚠️ I completed processing but have no text result to share.", thread_id)
         end
       end
 
@@ -645,6 +650,7 @@ module Rubot
 
       # --------------- Sending Messages ---------------
 
+      # Send a message to Telegram. Returns true if all chunks sent successfully.
       def send_message(chat_id, text, thread_id = nil)
         max_length = @config.fetch("max_message_length", DEFAULT_MAX_LENGTH)
 
@@ -653,6 +659,7 @@ module Rubot
 
         # Split long messages
         chunks = split_message(converted_text, max_length)
+        all_ok = true
         chunks.each do |chunk|
           body = {
             "chat_id" => chat_id,
@@ -669,11 +676,41 @@ module Rubot
             result = http_post(url, req)
             unless result["ok"]
               warn "[telegram] API error: #{result["description"]}"
+              all_ok = false
             end
           rescue StandardError => e
             warn "[telegram] Failed to send message: #{e.message}"
+            all_ok = false
           end
         end
+        all_ok
+      end
+
+      # Send a message without MarkdownV2 (plain text fallback for retries).
+      def send_message_plain(chat_id, text, thread_id = nil)
+        max_length = @config.fetch("max_message_length", DEFAULT_MAX_LENGTH)
+        chunks = split_message(text, max_length)
+        all_ok = true
+        chunks.each do |chunk|
+          body = { "chat_id" => chat_id, "text" => chunk }
+          body["message_thread_id"] = thread_id if thread_id
+          url = URI("#{API_BASE}#{@token}/sendMessage")
+          req = Net::HTTP::Post.new(url)
+          req["Content-Type"] = "application/json"
+          req.body = body.to_json
+
+          begin
+            result = http_post(url, req)
+            unless result["ok"]
+              warn "[telegram] Plain text send error: #{result["description"]}"
+              all_ok = false
+            end
+          rescue StandardError => e
+            warn "[telegram] Failed to send plain text: #{e.message}"
+            all_ok = false
+          end
+        end
+        all_ok
       end
 
       def split_message(text, max_length)
