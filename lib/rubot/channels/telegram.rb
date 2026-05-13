@@ -437,8 +437,12 @@ module Rubot
           job_id = args[8..].strip
           result = cron_tool.execute({ "operation" => "disable", "job_id" => job_id })
           [ :skip, result ]
+        elsif args.start_with?("show ")
+          job_id = args[5..].strip
+          result = cron_tool.execute({ "operation" => "detail", "job_id" => job_id })
+          [ :skip, result ]
         else
-          [ :skip, "❌ Unknown /cron subcommand. Use:\n/cron — list jobs\n/cron delete <id>\n/cron enable <id>\n/cron disable <id>" ]
+          [ :skip, "❌ Unknown /cron subcommand. Use:\n/cron — list jobs\n/cron show <id>\n/cron delete <id>\n/cron enable <id>\n/cron disable <id>" ]
         end
       rescue StandardError => e
         [ :skip, "❌ Error: #{e.message}" ]

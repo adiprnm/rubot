@@ -43,7 +43,8 @@ module Rubot
             * "daily at 9am" → "0 9 * * *"
             * "every weekday at 6pm" → "0 18 * * 1-5"
 
-          Operations: add, list, remove, enable, disable
+          Operations: add, list, detail, remove, enable, disable
+          Tip: To view a job's details, use `/cron show <job-id>` (e.g. `/cron show abc123def456`).
         DESC
       end
 
@@ -53,7 +54,7 @@ module Rubot
           "properties" => {
             "operation" => {
               "type" => "string",
-              "enum" => [ "add", "list", "remove", "enable", "disable" ],
+              "enum" => [ "add", "list", "detail", "remove", "enable", "disable" ],
               "description" => "The cron operation to perform"
             },
             "message" => {
@@ -104,6 +105,7 @@ module Rubot
         case operation
         when "add"      then add_job(arguments)
         when "list"     then list_jobs(scheduler)
+        when "detail"   then detail_job(arguments, scheduler)
         when "remove"   then remove_job(arguments, scheduler)
         when "enable", "disable" then toggle_job(arguments, scheduler, enable: operation == "enable")
         else
@@ -173,17 +175,8 @@ module Rubot
         end
 
         <<~RESULT.strip
-          Scheduled job created successfully!
-
-          ID: #{id}
-          Mode: #{job['mode']}
-          Schedule: #{schedule_desc}
-          Next run: #{job['next_run']}
-          #{job['command'] ? "Command: #{job['command']}" : "Message: #{message}"}
-          Description: #{job['description']}
-          Deliver to: #{delivery_desc(job)}
-
-          Use operation=list to see all jobs, or operation=remove with job_id=#{id} to delete it.
+          ✅ `#{id}` | #{schedule_desc} | #{job['mode']} | #{job['command'] ? "cmd: #{job['command']}" : message}
+          Use `/cron show #{id}` to see details, or `operation=remove job_id=#{id}` to delete.
         RESULT
       end
 
@@ -191,37 +184,54 @@ module Rubot
         jobs = scheduler.list
         return "No scheduled jobs." if jobs.empty?
 
-        lines = [ "Scheduled jobs (#{jobs.size} total):", "" ]
+        lines = [ "Scheduled jobs (#{jobs.size}):" ]
         jobs.each do |job|
-          status_icon = job["enabled"] ? "✅" : "⏸️"
-          mode_icon = case job["mode"]
-          when "agent_turn" then "🧠"
-          when "command" then "⚡"
-          when "deliver" then "📨"
-          else "❓"
-          end
-
-          schedule_desc = if job["one_time"]
-            "one-time (#{job['at_seconds']}s)"
+          icon = job["enabled"] ? "✅" : "⏸️"
+          schedule = if job["one_time"]
+            "at #{job['at_seconds']}s"
           elsif job["schedule_type"] == "every"
             "every #{job['every_seconds']}s"
           else
             job["cron_expr"]
           end
-
-          last_run = job["last_run"] ? " | Last: #{job['last_run']}" : ""
-          last_status = job["last_status"] ? " (#{job['last_status']})" : ""
-          error = job["last_error"] ? " | Error: #{job['last_error']}" : ""
-
-          lines << "#{status_icon} #{mode_icon} #{job['id']}"
-          lines << "   Schedule: #{schedule_desc} | Next: #{job['next_run'] || 'N/A'}"
-          lines << (job["command"] ? "   Command: #{job['command']}" : "   Message: #{job['message']}")
-          lines << "   Description: #{job['description']}" if job["description"] && !job["description"].empty?
-          lines << "   Deliver to: #{delivery_desc(job)}" if job["target_chat_id"]
-          lines << "   Created: #{job['created_at']}#{last_run}#{last_status}#{error}"
-          lines << ""
+          msg = job["command"] || job["message"]
+          lines << "#{icon} `#{job['id']}` | #{schedule} | #{job['mode']} | #{msg}"
         end
         lines.join("\n")
+      end
+
+      def detail_job(arguments, scheduler)
+        job_id = arguments["job_id"]
+        return "ERROR: 'job_id' is required for detail operation" unless job_id
+        job = scheduler.get(job_id)
+        return "ERROR: Job '#{job_id}' not found." unless job
+
+        schedule_desc = if job["one_time"]
+          "One-time, fires in #{job['at_seconds']}s"
+        elsif job["schedule_type"] == "every"
+          "Every #{job['every_seconds']}s"
+        else
+          "Cron: #{job['cron_expr']}"
+        end
+
+        status = job["enabled"] ? "enabled" : "disabled"
+        last_info = []
+        last_info << "Last run: #{job['last_run']}" if job["last_run"]
+        last_info << "Status: #{job['last_status']}" if job["last_status"]
+        last_info << "Error: #{job['last_error']}" if job["last_error"]
+
+        <<~RESULT.strip
+          Job `#{job['id']}` (#{status})
+          Mode: #{job['mode']}
+          Schedule: #{schedule_desc}
+          Next run: #{job['next_run'] || 'N/A'}
+          #{job['command'] ? "Command: #{job['command']}" : "Message: #{job['message']}"}
+          Description: #{job['description']}
+          Runs: #{job['run_count']}
+          Deliver to: #{delivery_desc(job)}
+          Created: #{job['created_at']}
+          #{last_info.join(" | ")}
+        RESULT
       end
 
       # Describe where cron job results will be delivered.

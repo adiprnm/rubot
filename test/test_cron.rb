@@ -360,8 +360,9 @@ class TestCronTool < Minitest::Test
       "cron_expr" => "0 18 * * *",
       "description" => "Daily transaction summary"
     })
-    assert_includes result, "created successfully"
+    assert_includes result, "✅"
     assert_includes result, "0 18 * * *"
+    assert_includes result, "agent_turn"
   end
 
   def test_add_with_every_seconds
@@ -371,7 +372,7 @@ class TestCronTool < Minitest::Test
       "every_seconds" => 3600,
       "description" => "Hourly health check"
     })
-    assert_includes result, "created successfully"
+    assert_includes result, "✅"
     assert_includes result, "3600s"
   end
 
@@ -381,8 +382,8 @@ class TestCronTool < Minitest::Test
       "message" => "Standup in 10 minutes",
       "at_seconds" => 600
     })
-    assert_includes result, "created successfully"
-    assert_includes result, "One-time"
+    assert_includes result, "✅"
+    assert_includes result, "600s"
   end
 
   def test_add_command_mode
@@ -392,7 +393,7 @@ class TestCronTool < Minitest::Test
       "command" => "/usr/local/bin/backup.sh",
       "cron_expr" => "0 2 * * *"
     })
-    assert_includes result, "created successfully"
+    assert_includes result, "✅"
     assert_includes result, "command"
   end
 
@@ -421,13 +422,46 @@ class TestCronTool < Minitest::Test
 
   def test_list_with_jobs
     @tool.execute({ "operation" => "add", "message" => "Job 1", "every_seconds" => 60 })
+    @tool.execute({ "operation" => "add", "message" => "Job 2", "cron_expr" => "0 9 * * *" })
     result = @tool.execute({ "operation" => "list" })
+    assert_includes result, "2)"
     assert_includes result, "Job 1"
+    assert_includes result, "Job 2"
+    assert_includes result, "every 60s"
+    assert_includes result, "0 9 * * *"
+    # Compact: one line per job, no multi-line entries
+    assert_equal 3, result.lines.size # header + 2 jobs
+    # Job IDs are wrapped in backticks
+    assert_match(/`\w{12}`/, result)
+  end
+
+  def test_detail_job
+    create_result = @tool.execute({ "operation" => "add", "message" => "Detail test", "cron_expr" => "0 9 * * *", "description" => "Test detail" })
+    job_id = create_result.match(/✅ `([^`]+)`/)[1]
+
+    result = @tool.execute({ "operation" => "detail", "job_id" => job_id })
+    assert_includes result, "`#{job_id}`"
+    assert_includes result, "Detail test"
+    assert_includes result, "0 9 * * *"
+    assert_includes result, "Test detail"
+    assert_includes result, "enabled"
+  end
+
+  def test_detail_nonexistent_job
+    result = @tool.execute({ "operation" => "detail", "job_id" => "nonexistent" })
+    assert_includes result, "ERROR"
+    assert_includes result, "not found"
+  end
+
+  def test_detail_missing_job_id
+    result = @tool.execute({ "operation" => "detail" })
+    assert_includes result, "ERROR"
+    assert_includes result, "job_id"
   end
 
   def test_remove_job
     create_result = @tool.execute({ "operation" => "add", "message" => "Remove me", "every_seconds" => 60 })
-    job_id = create_result.match(/ID: (\S+)/)[1]
+    job_id = create_result.match(/✅ `([^`]+)`/)[1]
 
     result = @tool.execute({ "operation" => "remove", "job_id" => job_id })
     assert_includes result, "removed"
@@ -438,7 +472,7 @@ class TestCronTool < Minitest::Test
 
   def test_disable_and_enable_job
     create_result = @tool.execute({ "operation" => "add", "message" => "Toggle me", "every_seconds" => 60 })
-    job_id = create_result.match(/ID: (\S+)/)[1]
+    job_id = create_result.match(/✅ `([^`]+)`/)[1]
 
     result = @tool.execute({ "operation" => "disable", "job_id" => job_id })
     assert_includes result, "disabled"
@@ -470,7 +504,7 @@ class TestCronTool < Minitest::Test
       "message" => "Context test",
       "every_seconds" => 60
     })
-    job_id = result.match(/ID: (\S+)/)[1]
+    job_id = result.match(/✅ `([^`]+)`/)[1]
     job = @tool.scheduler.get(job_id)
     assert_equal 111, job["target_chat_id"]
     assert_equal 222, job["target_thread_id"]
@@ -484,7 +518,7 @@ class TestCronTool < Minitest::Test
       "every_seconds" => 60,
       "target_chat_id" => 333
     })
-    job_id = result.match(/ID: (\S+)/)[1]
+    job_id = result.match(/✅ `([^`]+)`/)[1]
     job = @tool.scheduler.get(job_id)
     assert_equal 333, job["target_chat_id"]
     assert_equal 222, job["target_thread_id"]
@@ -511,7 +545,7 @@ class TestCronTool < Minitest::Test
       "message" => "No context",
       "every_seconds" => 60
     })
-    job_id = result.match(/ID: (\S+)/)[1]
+    job_id = result.match(/✅ `([^`]+)`/)[1]
     job = @tool.scheduler.get(job_id)
     assert_nil job["target_chat_id"]
     assert_nil job["target_thread_id"]
@@ -525,7 +559,7 @@ class TestCronTool < Minitest::Test
       "target_chat_id" => 555,
       "target_thread_id" => 666
     })
-    assert_includes result, "created successfully"
-    assert_includes result, "chat 555, topic 666"
+    assert_includes result, "✅"
+    assert_includes result, "0 9 * * *"
   end
 end
