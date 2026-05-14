@@ -4,6 +4,7 @@ require "net/http"
 require "uri"
 require "json"
 require "thread"
+require "securerandom"
 
 require_relative "../telegram_markdown"
 
@@ -53,6 +54,9 @@ module Rubot
         @request_semaphore = Mutex.new
         @request_slots = max_concurrent
         @request_cv = ConditionVariable.new
+        # Confirmation tracking — keyed by confirmation_id
+        @pending_confirmations = {}  # id => { cv:, result:, chat_id:, thread_id: }
+        @confirm_mutex = Mutex.new
       end
 
       def start
@@ -564,6 +568,13 @@ module Rubot
       # --------------- Update Processing ---------------
 
       def process_update(update)
+        # Handle callback queries (inline button clicks — e.g., action confirmations)
+        callback_query = update["callback_query"]
+        if callback_query
+          handle_callback_query(callback_query)
+          return
+        end
+
         # Handle different update types
         message = update["message"] || update["edited_message"] || update["channel_post"]
         return unless message
@@ -612,6 +623,8 @@ module Rubot
           notify_tool_finished(chat_id, thread_id, tool_name, result)
         }, on_progress: ->(iteration, tool_count) {
           notify_progress(chat_id, thread_id, iteration)
+        }, on_confirm: ->(tool_name, args) {
+          ask_confirmation(chat_id, thread_id, tool_name, args)
         })
 
         stop_typing(chat_id, thread_id) unless is_general_topic
@@ -783,6 +796,123 @@ module Rubot
         # send periodically in a real implementation, but for now we
         # just let the full response be sent at the end.
         # The typing indicator gives the user feedback that something is happening.
+      end
+
+      # --------------- Action Confirmation ---------------
+
+      CONFIRM_TIMEOUT_SECONDS = 120
+
+      # Describe a dangerous action for the confirmation prompt.
+      def describe_action(tool_name, args)
+        case tool_name
+        when "shell_exec"
+          "Shell command: `#{args["command"][0..120]}`"
+        when "file_ops"
+          "File operation: `#{args["operation"]}` on `#{args["path"]}`"
+        else
+          "#{tool_name}: #{args.inspect[0..120]}"
+        end
+      end
+
+      # Send a confirmation message with inline Yes/No buttons.
+      # Blocks until the user responds or timeout expires.
+      # Returns true if confirmed, false otherwise.
+      def ask_confirmation(chat_id, thread_id, tool_name, args)
+        confirm_id = SecureRandom.hex(8)
+        description = describe_action(tool_name, args)
+
+        # Send confirmation message with inline keyboard
+        url = URI("#{API_BASE}#{@token}/sendMessage")
+        req = Net::HTTP::Post.new(url)
+        req["Content-Type"] = "application/json"
+        body = {
+          "chat_id" => chat_id,
+          "text" => "⚠️ *Dangerous Action Detected*\n\n#{description}\n\nThis could cause data loss. Proceed?",
+          "parse_mode" => "Markdown",
+          "reply_markup" => {
+            "inline_keyboard" => [
+              [
+                { "text" => "✅ Yes", "callback_data" => "confirm:#{confirm_id}:yes" },
+                { "text" => "❌ No", "callback_data" => "confirm:#{confirm_id}:no" }
+              ]
+            ]
+          }
+        }
+        body["message_thread_id"] = thread_id if thread_id
+        req.body = body.to_json
+
+        result = http_post(url, req)
+        unless result["ok"]
+          warn "[telegram] Failed to send confirmation: #{result["description"]}"
+          # If we can't ask, default to safe: deny
+          return false
+        end
+
+        msg_id = result.dig("result", "message_id")
+
+        # Create a condition variable and wait for the response
+        cv = ConditionVariable.new
+        @confirm_mutex.synchronize do
+          @pending_confirmations[confirm_id] = { cv: cv, result: nil, msg_id: msg_id }
+        end
+
+        @confirm_mutex.synchronize do
+          cv.wait(@confirm_mutex, CONFIRM_TIMEOUT_SECONDS)
+        end
+
+        # Retrieve the result
+        confirmed = false
+        msg_id = nil
+        @confirm_mutex.synchronize do
+          entry = @pending_confirmations.delete(confirm_id)
+          confirmed = entry && entry[:result] == true
+          msg_id = entry&.dig(:msg_id)
+        end
+
+        # Delete the confirmation message regardless of outcome
+        delete_message(chat_id, msg_id, thread_id) if msg_id
+
+        confirmed
+      end
+
+      # Handle an incoming callback query (inline button click).
+      def handle_callback_query(callback_query)
+        data = callback_query["data"]
+        callback_id = callback_query["id"]
+
+        return unless data&.start_with?("confirm:")
+
+        parts = data.split(":")
+        return unless parts.size == 3
+
+        confirm_id = parts[1]
+        response = parts[2]
+
+        @confirm_mutex.synchronize do
+          entry = @pending_confirmations[confirm_id]
+          if entry
+            entry[:result] = (response == "yes")
+            entry[:cv].signal
+          end
+        end
+
+        # Acknowledge the callback query to remove the loading spinner
+        answer_callback_query(callback_id, response == "yes" ? "Proceeding..." : "Action cancelled.")
+      end
+
+      # Answer a callback query to remove the loading spinner on the button.
+      def answer_callback_query(callback_id, text = nil)
+        url = URI("#{API_BASE}#{@token}/answerCallbackQuery")
+        req = Net::HTTP::Post.new(url)
+        req["Content-Type"] = "application/json"
+        body = { "callback_query_id" => callback_id }
+        body["text"] = text if text
+        body["show_alert"] = false
+        req.body = body.to_json
+
+        result = http_post(url, req)
+        warn "[telegram] answerCallbackQuery error: #{result["description"]}" unless result["ok"]
+        result
       end
 
       # --------------- HTTP Helpers ---------------
@@ -966,8 +1096,9 @@ module Rubot
       end
 
       # Delete a message by ID.
-      def delete_message(chat_id, message_id)
+      def delete_message(chat_id, message_id, thread_id = nil)
         body = { "chat_id" => chat_id, "message_id" => message_id }
+        body["message_thread_id"] = thread_id if thread_id
         url = URI("#{API_BASE}#{@token}/deleteMessage")
         req = Net::HTTP::Post.new(url)
         req["Content-Type"] = "application/json"
