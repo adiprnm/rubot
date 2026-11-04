@@ -313,6 +313,7 @@ class TestActors < Minitest::Test
           msg[:port] << [ :ok, msg[:op] ]
         when :message
           msg[:events] << [ :chunk, "he" ]
+          msg[:events] << [ :assistant_text, "Checking first." ]
           msg[:events] << [ :tool_started, "shell_exec", { "command" => "ls" } ]
           msg[:events] << [ :progress, 1, 1 ]
           msg[:events] << [ :done, "#{msg[:text]}!" ]
@@ -325,12 +326,18 @@ class TestActors < Minitest::Test
     handle = Rubot::Actors::SessionHandle.new(ractor, "fake")
     tool_calls = []
     chunks = []
-    response = handle.process("hi", on_tool_call: ->(name, args) { tool_calls << [ name, args ] }) do |chunk|
+    narrations = []
+    response = handle.process(
+      "hi",
+      on_tool_call: ->(name, args) { tool_calls << [ name, args ] },
+      on_assistant_text: ->(text) { narrations << text }
+    ) do |chunk|
       chunks << chunk
     end
 
     assert_equal "hi!", response
     assert_equal [ "he" ], chunks
+    assert_equal [ "Checking first." ], narrations
     assert_equal [ [ "shell_exec", { "command" => "ls" } ] ], tool_calls
     assert_equal :info, handle.call(:info)
   ensure

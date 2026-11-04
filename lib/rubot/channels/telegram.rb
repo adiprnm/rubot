@@ -632,7 +632,9 @@ module Rubot
           start_typing(chat_id, thread_id) if @config.fetch("typing_indicator", true)
         end
 
-        response = process_message(text, session_id: session_id, on_tool_call: ->(tool_name, args) {
+        response = process_message(text, session_id: session_id, on_assistant_text: ->(narration) {
+          send_narration(chat_id, thread_id, narration)
+        }, on_tool_call: ->(tool_name, args) {
           notify_tool_started(chat_id, thread_id, tool_name, args)
         }, on_tool_result: ->(tool_name, result) {
           notify_tool_finished(chat_id, thread_id, tool_name, result)
@@ -951,6 +953,21 @@ module Rubot
       end
 
       # --------------- Tool Progress Notifications ---------------
+
+      # Send the model's own narration ("Let me check the structure first.") as a
+      # regular chat message. Unlike the tool status, these are never edited or
+      # deleted, so the conversation keeps a readable trace of what the bot did.
+      # Controlled by `narration` (default: on) in the channel config.
+      def send_narration(chat_id, thread_id, text)
+        return unless @config.fetch("narration", true)
+
+        text = text.to_s.strip
+        return if text.empty?
+
+        warn "[telegram] narration: #{text[0..80]}" if Rubot.debug?
+        ok = send_message(chat_id, text, thread_id)
+        send_message_plain(chat_id, text, thread_id) unless ok
+      end
 
       TOOL_EMOJIS = {
         "shell_exec"  => "💻",

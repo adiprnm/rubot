@@ -448,5 +448,39 @@ module Rubot
       @tg.release_request_slot
       assert_equal 10, @tg.instance_variable_get(:@request_slots)
     end
+
+    def test_send_narration_sends_the_model_text_as_a_chat_message
+      sent = []
+      @tg.define_singleton_method(:send_message) do |chat_id, text, thread_id = nil|
+        sent << [ chat_id, text, thread_id ]
+        true
+      end
+
+      @tg.send(:send_narration, 42, 7, "  Let me check the structure first.  ")
+
+      assert_equal [ [ 42, "Let me check the structure first.", 7 ] ], sent
+    end
+
+    def test_send_narration_ignores_blank_text
+      sent = []
+      @tg.define_singleton_method(:send_message) { |*_args| sent << :sent }
+
+      @tg.send(:send_narration, 42, nil, "   ")
+
+      assert_empty sent
+    end
+
+    def test_send_narration_can_be_disabled
+      tg = Rubot::Channels::Telegram.new(
+        agent: @agent,
+        channel_config: { "token" => "fake", "narration" => false }
+      )
+      sent = []
+      tg.define_singleton_method(:send_message) { |*_args| sent << :sent }
+
+      tg.send(:send_narration, 42, nil, "hello")
+
+      assert_empty sent
+    end
   end
 end

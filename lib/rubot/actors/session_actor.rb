@@ -68,6 +68,7 @@ module Rubot
         events << [ :control, control ]
 
         callbacks = {
+          on_assistant_text: ->(text) { events << [ :assistant_text, text ] },
           on_tool_call: ->(name, args) { events << [ :tool_started, name, args ] },
           on_tool_result: ->(name, result) { events << [ :tool_finished, name, result ] },
           on_progress: ->(iteration, tool_count) { events << [ :progress, iteration, tool_count ] },

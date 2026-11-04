@@ -106,7 +106,13 @@ module Rubot
     #   on_progress:      Called after each full tool-call iteration. Yields (iteration_count, tool_count).
     #   on_confirm:       Called before dangerous actions that could cause data loss.
     #                     Yields (tool_name, arguments). Return truthy to proceed, falsy to skip.
-    def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil, stream: true, &on_chunk)
+    #   on_assistant_text: Called with the model's own words whenever it replies
+    #                     with text *and* tool calls (progress narration, e.g.
+    #                     "Let me check the structure first."). Channels forward
+    #                     this to the user as a regular message while work continues.
+    #                     Yields (text).
+    def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil,
+                on_assistant_text: nil, stream: true, &on_chunk)
       # Fire any due cron jobs and collect their results
       cron_results = fire_due_cron_jobs
       warn "[cron] fire_due_cron_jobs returned #{cron_results.size} result(s)" if Rubot.debug?
@@ -169,6 +175,13 @@ module Rubot
 
           # Add assistant message with tool calls to session
           @session.add("assistant", response, tool_calls: tool_calls, reasoning_content: reasoning_content)
+
+          # Forward the model's narration before it runs the tools. This is the
+          # assistant text that accompanies the tool calls ("Let me check the
+          # structure first."); without this callback it would be swallowed by
+          # the `response = ""` reset at the end of the iteration.
+          narration = response.to_s.strip
+          on_assistant_text&.call(narration) unless narration.empty?
 
           # Execute each tool call
           tool_calls.each do |tc|
@@ -328,6 +341,20 @@ module Rubot
       info
     end
 
+    # Tell the model to narrate its progress between tool calls. Channels
+    # surface that text as chat messages, so the user can follow along instead
+    # of staring at a technical "running tool" status.
+    NARRATION_RULE = <<~PROMPT.strip.freeze
+      # Progress Narration
+
+      Before every tool call, write one short sentence in the same language as the
+      user's message describing what you are about to do and why, for example
+      "Let me look at the current structure first." or "Now I'll generate the image."
+      Speak in terms of the task, not the tool: never mention tool names, function
+      names, JSON arguments, or raw commands in these sentences. The user sees the
+      sentence as a chat message while you work.
+    PROMPT
+
     # Build the full system prompt from all sources
     def build_system_prompt
       @skill_registry.reload!
@@ -337,6 +364,9 @@ module Rubot
       if @agents_file.enabled? && !@agents_file.rules.empty?
         parts << "# Agent Rules\n\n#{@agents_file.rules}"
       end
+
+      # 1b. Progress narration (channels show this to the user as messages)
+      parts << NARRATION_RULE
 
       # 2. SOUL.md (personality and identity)
       if @soul.enabled?

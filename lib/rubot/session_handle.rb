@@ -33,7 +33,8 @@ module Rubot
         port&.close
       end
 
-      def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil, stream: true, &on_chunk)
+      def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil,
+                  on_assistant_text: nil, stream: true, &on_chunk)
         events = Ractor::Port.new
         control = nil
 
@@ -48,6 +49,8 @@ module Rubot
             control = event[1]
           when :chunk
             on_chunk&.call(event[1])
+          when :assistant_text
+            on_assistant_text&.call(event[1])
           when :tool_started
             on_tool_call&.call(event[1], event[2])
           when :tool_finished

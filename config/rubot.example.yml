@@ -59,6 +59,8 @@ channels:
     # allowed_chat_ids: [123456789]   # optional: restrict to specific chat IDs
     stream: false                    # streaming is not supported for Telegram yet
     typing_indicator: true           # show "typing..." while processing
+    narration: true                  # send the model's progress narration as chat messages
+    tool_notifications: true         # show/edit a status line while tools run
     max_message_length: 4096         # Telegram max message length
 
     # Webhook mode (alternative to long polling):

@@ -208,3 +208,112 @@ class TestAgentToolIterationLimit < Minitest::Test
                  Rubot::Config.new(config_path).max_tool_iterations
   end
 end
+
+class TestAgentProgressNarration < Minitest::Test
+  # Replies with narration + a tool call on the first turn, then a final answer.
+  class NarratingProvider
+    attr_reader :calls
+
+    def initialize
+      @calls = 0
+    end
+
+    def chat(_messages, tools: nil)
+      @calls += 1
+      if @calls == 1
+        {
+          "content" => "Let me check the structure first.",
+          "tool_calls" => [
+            {
+              "id" => "call_1",
+              "type" => "function",
+              "function" => { "name" => "probe", "arguments" => "{}" }
+            }
+          ]
+        }
+      else
+        { "content" => "All done." }
+      end
+    end
+
+    def chat_stream(messages, tools: nil, &_on_chunk)
+      chat(messages, tools: tools)
+    end
+  end
+
+  class ProbeTool < Rubot::Tool
+    def name
+      "probe"
+    end
+
+    def description
+      "Test tool that does nothing."
+    end
+
+    def parameters
+      { "type" => "object", "properties" => {} }
+    end
+
+    def execute(_arguments)
+      "ok"
+    end
+  end
+
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @config = isolated_config(@tmpdir, name: "narration")
+    @tools = Rubot::Tools::Registry.new
+    @tools.register(ProbeTool.new)
+    @agent = Rubot::Agent.new(
+      config: @config,
+      provider: NarratingProvider.new,
+      session_id: "narration",
+      tools: @tools
+    )
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+  end
+
+  def test_forwards_assistant_text_that_accompanies_tool_calls
+    narrations = []
+    # "go" is below MemoryExtractor::MIN_MESSAGE_LENGTH, so the provider's first
+    # call is the agent turn itself rather than a background memory extraction.
+    response = @agent.process("go", stream: false,
+                              on_assistant_text: ->(text) { narrations << text })
+
+    assert_equal [ "Let me check the structure first." ], narrations
+    assert_equal "All done.", response
+    refute_includes response, "Let me check the structure first."
+  end
+
+  def test_does_not_forward_empty_narration
+    empty_narration_provider = Class.new(NarratingProvider) do
+      def chat(_messages, tools: nil)
+        @calls += 1
+        if @calls == 1
+          { "content" => "", "tool_calls" => [ { "id" => "call_1", "type" => "function",
+                                                 "function" => { "name" => "probe", "arguments" => "{}" } } ] }
+        else
+          { "content" => "Done." }
+        end
+      end
+    end
+    agent = Rubot::Agent.new(
+      config: @config,
+      provider: empty_narration_provider.new,
+      session_id: "empty-narration",
+      tools: @tools
+    )
+
+    narrations = []
+    agent.process("go", stream: false, on_assistant_text: ->(text) { narrations << text })
+
+    assert_empty narrations
+  end
+
+  def test_system_prompt_asks_the_model_to_narrate_progress
+    assert_includes @agent.build_system_prompt, "Progress Narration"
+  end
+end

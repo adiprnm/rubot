@@ -19,6 +19,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 🔒 **Safety guard** — dangerous command filtering (PicoClaw-style sandboxing)
 - 🎯 **Skills system** — pluggable skill definitions via SKILL.md files in the workspace
 - 📡 **Multi-channel** — REPL and Telegram, with a pluggable channel architecture
+- 🔈 **Progress narration** — the model explains what it is doing between tool calls ("Let me check the structure first."), sent as normal chat messages
 - 📄 **`.env` support** — automatic environment variable loading from `.env` files
 - 🎛️ **CLI options** — single-message mode or interactive chat
 
@@ -281,8 +282,16 @@ channels:
     # Optional security: restrict who can talk to your bot
     allowed_user_ids: [123456789]   # your Telegram user ID
     typing_indicator: true          # show "typing..." while processing
+    narration: true                 # send progress narration as chat messages
+    tool_notifications: true        # show/edit a status line while tools run
     max_message_length: 4096        # Telegram's max message length
 ```
+
+While it works, the bot sends the model's own narration as normal chat messages
+("Let me check the structure first.", "Now I'll generate the image.") and keeps
+the technical detail in a separate status message that is edited in place and
+deleted once the final answer arrives. Set `narration: false` to silence the
+narration or `tool_notifications: false` to hide the status line.
 
 3. **Run** with the Telegram channel:
 

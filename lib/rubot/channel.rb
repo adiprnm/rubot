@@ -98,8 +98,11 @@ module Rubot
     # @param on_tool_result [Proc, nil] Called after each tool call
     # @param on_progress [Proc, nil] Called after each iteration
     # @param on_confirm [Proc, nil] Called before irreversible actions
+    # @param on_assistant_text [Proc, nil] Called with the model's narration text
+    #   whenever it writes a message before running more tools
     # @return [String, nil] The agent's response, or nil if processing was skipped
-    def process_message(message, session_id: nil, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil)
+    def process_message(message, session_id: nil, on_tool_call: nil, on_tool_result: nil, on_progress: nil,
+                        on_confirm: nil, on_assistant_text: nil)
       sid = (session_id || "default").to_s
       handle = session_for(sid)
 
@@ -120,7 +123,8 @@ module Rubot
         on_tool_call: on_tool_call,
         on_tool_result: on_tool_result,
         on_progress: on_progress,
-        on_confirm: on_confirm
+        on_confirm: on_confirm,
+        on_assistant_text: on_assistant_text
       ) do |chunk|
         on_stream_chunk(chunk) if respond_to?(:on_stream_chunk)
       end
