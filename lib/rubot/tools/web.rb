@@ -2,6 +2,7 @@
 
 require "net/http"
 require "ipaddr"
+require "socket"
 require "uri"
 require_relative "../tool"
 
@@ -62,36 +63,27 @@ module Rubot
         # FIX (VULN-12): Resolve IP FIRST and connect directly to the IP address
         # to prevent DNS rebinding attacks where the hostname resolves to a
         # different IP between the safety check and the actual connection.
-        resolved_ip = resolve_and_check_host(uri.host)
+        # `hostname` (not `host`) strips the brackets from IPv6 literals.
+        resolved_ip = resolve_and_check_host(uri.hostname)
         if resolved_ip.nil?
-          return "ERROR: Access blocked by safety guard: #{uri.host} could not be resolved"
+          return "ERROR: Access blocked by safety guard: #{uri.host} could not be resolved " \
+                 "or resolves to a private/reserved address"
         end
 
-        http = Net::HTTP.new(resolved_ip, uri.port)
+        # FIX (VULN-12): Keep the hostname on the request (so SNI, the Host
+        # header and certificate verification all stay correct) but pin the
+        # TCP connection to the IP we already validated.
+        http = Net::HTTP.new(uri.hostname, uri.port)
+        http.ipaddr = resolved_ip
         http.open_timeout = 10
         http.read_timeout = 15
         http.use_ssl = uri.scheme == "https"
         http.verify_mode = OpenSSL::SSL::VERIFY_PEER
 
-        # FIX (VULN-12): For HTTPS, configure SNI with the original hostname
-        # so certificate verification works when connecting by IP address
-        if http.use_ssl
-          http.ssl_context = OpenSSL::SSL::SSLContext.new.tap do |ctx|
-            ctx.verify_mode = OpenSSL::SSL::VERIFY_PEER
-            ctx.verify_hostname = true
-            ctx.servername = uri.host  # SNI uses hostname, not IP
-          end
-        end
-
         path = uri.path.empty? ? "/" : uri.path
         path += "?#{uri.query}" if uri.query
 
-        # FIX (VULN-12): Use original hostname for Host header and SNI,
-        # but we connected to the resolved IP address directly.
-        headers = {
-          "User-Agent" => "rubot/#{Rubot::VERSION}",
-          "Host" => uri.host
-        }
+        headers = { "User-Agent" => "rubot/#{Rubot::VERSION}" }
         http.set_debug_output(nil)  # prevent info leaks
 
         response = http.get(path, headers)
@@ -122,41 +114,39 @@ module Rubot
         # Block obvious localhost patterns
         return nil if host =~ /\A(localhost|localhost\.localdomain)\z/i
 
-        # Resolve all IPs for the host and check each
-        begin
-          require "resolv"
-          addresses = Resolv.getaddresses(host)
-        rescue StandardError
-          return nil # If we can't resolve, block it
+        addresses = resolve_addresses(host)
+        return nil if addresses.empty? # If we can't resolve, block it
+
+        ips = addresses.filter_map do |addr_str|
+          IPAddr.new(addr_str)
+        rescue IPAddr::InvalidAddressError
+          nil
         end
+        return nil if ips.empty?
 
         blocked_ranges = BLOCKED_IP_RANGES.map { |r| IPAddr.new(r) }
 
-        addresses.each do |addr_str|
-          begin
-            ip = IPAddr.new(addr_str)
-            blocked_ranges.each do |range|
-              return nil if range.include?(ip) # Blocked — return nil
-            end
-          rescue IPAddr::InvalidAddressError
-            next # Skip invalid addresses
-          end
-        end
+        # Conservative: if any resolved address is private/reserved, block.
+        return nil if ips.any? { |ip| blocked_ranges.any? { |range| range.include?(ip) } }
 
-        # Return the first non-blocked address for direct connection
-        # This prevents DNS rebinding — we connect to this specific IP
-        addresses.each do |addr_str|
-          begin
-            ip = IPAddr.new(addr_str)
-            unless blocked_ranges.any? { |range| range.include?(ip) }
-              return addr_str
-            end
-          rescue IPAddr::InvalidAddressError
-            next
-          end
-        end
+        # Prefer IPv4 — slim containers usually have no IPv6 route.
+        (ips.find(&:ipv4?) || ips.first).to_s
+      end
 
-        nil # All addresses blocked
+      # Resolve with Socket, not Resolv. `Resolv.getaddresses` keeps its cache in
+      # the `Resolv::DefaultResolver` constant, which raises
+      # Ractor::IsolationError inside the per-session Ractors — every web_fetch
+      # then looked like a DNS failure. `Socket.getaddrinfo` is a plain C call
+      # and is Ractor-safe.
+      #
+      # @param host [String] Hostname to resolve
+      # @return [Array<String>] Unique IP addresses, empty when resolution fails
+      def resolve_addresses(host)
+        Socket.getaddrinfo(host, nil, Socket::AF_UNSPEC, Socket::SOCK_STREAM)
+              .map { |entry| entry[3] }
+              .uniq
+      rescue SocketError, SystemCallError
+        []
       end
     end
   end

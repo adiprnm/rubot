@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
+require "minitest/mock"
 require "socket"
 require "timeout"
 
@@ -39,6 +40,111 @@ class TestTools < Minitest::Test
     @registry.clear
     assert_equal 0, @registry.count
     assert_empty @registry.names
+  end
+
+  # --- web_fetch ---
+
+  class FakeHTTPResponse
+    attr_reader :body, :code, :message
+
+    def initialize(body)
+      @body = body
+      @code = "200"
+      @message = "OK"
+    end
+  end
+
+  class FakeHTTP
+    attr_accessor :ipaddr, :use_ssl, :verify_mode, :open_timeout, :read_timeout
+    attr_reader :requests
+
+    def initialize(response)
+      @response = response
+      @requests = []
+    end
+
+    def set_debug_output(_output); end
+
+    def get(path, headers)
+      @requests << [ path, headers ]
+      @response
+    end
+  end
+
+  def test_web_fetch_rejects_non_http_schemes
+    result = Rubot::Tools::Web.new.execute({ "url" => "file:///etc/passwd" })
+    assert_includes result, "Only http and https"
+  end
+
+  def test_web_fetch_blocks_local_and_private_hosts
+    tool = Rubot::Tools::Web.new
+
+    %w[http://localhost/ http://127.0.0.1/ http://192.168.1.10/ http://[::1]/].each do |url|
+      assert_includes tool.execute({ "url" => url }), "safety guard", "#{url} should be blocked"
+    end
+  end
+
+  def test_web_fetch_blocks_private_ips_returned_by_a_public_host
+    tool = Rubot::Tools::Web.new
+
+    result = tool.stub(:resolve_addresses, [ "93.184.216.34", "10.0.0.5" ]) do
+      tool.execute({ "url" => "https://example.com/" })
+    end
+
+    assert_includes result, "safety guard"
+  end
+
+  def test_web_fetch_prefers_ipv4_when_ipv6_is_also_returned
+    tool = Rubot::Tools::Web.new
+
+    ip = tool.stub(:resolve_addresses, [ "2606:4700:10::1", "93.184.216.34" ]) do
+      tool.send(:resolve_and_check_host, "example.com")
+    end
+
+    assert_equal "93.184.216.34", ip
+  end
+
+  def test_web_fetch_resolution_is_ractor_safe
+    # Regression: Resolv.getaddresses keeps its cache in the
+    # Resolv::DefaultResolver constant and raises Ractor::IsolationError inside
+    # the per-session Ractors, which made every web_fetch look like a DNS
+    # failure. Socket.getaddrinfo has no such shared state.
+    addresses = Ractor.new do
+      Rubot::Tools::Web.new.send(:resolve_addresses, "127.0.0.1")
+    end.value
+
+    assert_equal [ "127.0.0.1" ], addresses
+  end
+
+  def test_web_fetch_pins_resolved_ip_and_enables_tls
+    fake = FakeHTTP.new(FakeHTTPResponse.new("hello from the web"))
+    tool = Rubot::Tools::Web.new
+
+    result = tool.stub(:resolve_and_check_host, "93.184.216.34") do
+      Net::HTTP.stub(:new, fake) do
+        tool.execute({ "url" => "https://example.com/page?q=1" })
+      end
+    end
+
+    assert_includes result, "HTTP 200 OK"
+    assert_includes result, "hello from the web"
+    assert_equal "93.184.216.34", fake.ipaddr
+    assert_equal true, fake.use_ssl
+    assert_equal OpenSSL::SSL::VERIFY_PEER, fake.verify_mode
+    assert_equal "/page?q=1", fake.requests.first[0]
+  end
+
+  def test_web_fetch_plain_http_does_not_enable_tls
+    fake = FakeHTTP.new(FakeHTTPResponse.new("plain"))
+    tool = Rubot::Tools::Web.new
+
+    tool.stub(:resolve_and_check_host, "93.184.216.34") do
+      Net::HTTP.stub(:new, fake) do
+        tool.execute({ "url" => "http://example.com/" })
+      end
+    end
+
+    assert_equal false, fake.use_ssl
   end
 
   # --- send_file ---

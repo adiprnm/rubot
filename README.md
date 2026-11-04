@@ -677,7 +677,8 @@ rubot/
 Build the image and initialize `~/.rubot` once:
 
 ```bash
-mkdir -p ~/.rubot/workspace/kanyaah.com ~/.rubot/workspace/adipurnm.com
+mkdir -p ~/.rubot/workspace/kanyaah ~/.rubot/workspace/by.adipurnm
+mkdir -p ~/.rubot/workspace/kanyaah.com ~/.rubot/workspace/by.adipurnm.com
 mkdir -p ~/.rubot/workspace/skills/{adipurnm-brand,kanyaah-brand,marketing-strategist,writing}
 docker compose build
 docker compose run --rm rubot init
@@ -685,14 +686,17 @@ vim ~/.rubot/config.yml   # set your API key / Telegram token
 ```
 
 With the local override, host data lives in `~/.rubot` and is mounted onto
-`/home/rubot/.rubot` in the container. The brand projects are mounted
-inside the agent workspace so the safety guard allows read/write access:
+`/home/rubot/.rubot` in the container. The brand content directories and the
+website repos are mounted inside the agent workspace so the safety guard
+allows read/write access:
 
 | Host | Container |
 |---|---|
 | `~/.rubot` | `/home/rubot/.rubot` |
+| `~/Documents/work/freelance/brand/kanyaah` | `/home/rubot/.rubot/workspace/kanyaah` |
+| `~/Documents/work/freelance/brand/by.adipurnm` | `/home/rubot/.rubot/workspace/by.adipurnm` |
 | `~/Documents/work/freelance/website/kanyaah.com` | `/home/rubot/.rubot/workspace/kanyaah.com` |
-| `~/Documents/work/freelance/website/by.adipurnm.com` | `/home/rubot/.rubot/workspace/adipurnm.com` |
+| `~/Documents/work/freelance/website/by.adipurnm.com` | `/home/rubot/.rubot/workspace/by.adipurnm.com` |
 | `~/Projects/squadron/skills/adipurnm-brand` | `/home/rubot/.rubot/workspace/skills/adipurnm-brand` |
 | `~/Projects/squadron/skills/kanyaah-brand` | `/home/rubot/.rubot/workspace/skills/kanyaah-brand` |
 | `~/Projects/squadron/skills/marketing-strategist` | `/home/rubot/.rubot/workspace/skills/marketing-strategist` |
@@ -719,9 +723,10 @@ docker compose down
 ```
 
 `docker-compose.override.yml` is git-ignored and is the local laptop
-configuration. It bind-mounts `~/.rubot`, the two brand directories, and
-the four Squadron skills, and runs as your UID/GID so sessions, `MEMORY.md`,
-cron jobs, and edited brand/skill files stay owned by you. It defaults to
+configuration. It bind-mounts `~/.rubot`, the two brand directories, the two
+website repos (so the bot reads facts like templates and prices locally
+instead of guessing), and the four Squadron skills, and runs as your UID/GID
+so sessions, `MEMORY.md`, cron jobs, and edited files stay owned by you. It defaults to
 `-C telegram`; remove its
 `command:` block (or run `docker compose run --rm rubot -C repl`) for the
 REPL.
@@ -729,7 +734,8 @@ REPL.
 A tracked template is available as `docker-compose.override.yml.example`:
 
 ```bash
-mkdir -p ~/.rubot/workspace/kanyaah.com ~/.rubot/workspace/adipurnm.com
+mkdir -p ~/.rubot/workspace/kanyaah ~/.rubot/workspace/by.adipurnm
+mkdir -p ~/.rubot/workspace/kanyaah.com ~/.rubot/workspace/by.adipurnm.com
 mkdir -p ~/.rubot/workspace/skills/{adipurnm-brand,kanyaah-brand,marketing-strategist,writing}
 cp docker-compose.override.yml.example docker-compose.override.yml
 HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose up -d
