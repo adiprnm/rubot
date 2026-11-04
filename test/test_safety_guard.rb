@@ -939,9 +939,6 @@ class TestSafetyGuard < Minitest::Test
   def test_rate_limit_enforced_in_strict_mode
     guard = Rubot::SafetyGuard.new(workspace: @workspace, restrict_to_workspace: true)
 
-    # Reset rate limiter timestamps
-    Rubot::SafetyGuard.class_variable_set(:@@exec_timestamps, [])
-
     # Execute many commands rapidly — should eventually hit the rate limit
     max_allowed = Rubot::SafetyGuard::EXEC_MAX_PER_WINDOW
     (max_allowed + 1).times do
@@ -958,9 +955,6 @@ class TestSafetyGuard < Minitest::Test
 
   def test_rate_limit_not_enforced_in_permissive_mode
     guard = Rubot::SafetyGuard.new(workspace: @workspace, restrict_to_workspace: false)
-
-    # Reset rate limiter
-    Rubot::SafetyGuard.class_variable_set(:@@exec_timestamps, [])
 
     # Should never raise in permissive mode
     60.times do

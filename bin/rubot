@@ -1,6 +1,10 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+# Rubot intentionally uses Ractors for session isolation. Ruby 4 still
+# marks the Ractor API as experimental, so silence that one warning.
+Warning[:experimental] = false if Warning.respond_to?(:[]=)
+
 # rubot - AI Assistant in Ruby
 # Usage: rubot [options] [message]
 
@@ -364,24 +368,22 @@ unless config.api_key || %w[ollama].include?(config.provider)
   exit 1
 end
 
-# Build tools
-tools = Rubot::Tools::Registry.new
-
-# Build agent
-agent = Rubot::Agent.new(
-  config: config,
-  session_id: options[:session] || "default",
-  tools: tools
-)
-
+# Build tools and agent
 if options[:message]
-  # Non-interactive mode — skip channel system
-  puts agent.process(options[:message])
+  # One-shot mode: run the turn inside a session actor so the same
+  # Ractor-isolated execution model is used everywhere.
+  pool = Rubot::Actors::SessionPool.new(config: config)
+  begin
+    puts pool.for(options[:session] || "default").process(options[:message])
+  ensure
+    pool.shutdown
+  end
 else
-  # Channel mode — start configured channels
+  # Channel mode — start configured channels. Channels own a session pool
+  # and spawn one Ractor per session.
   Rubot::Channels::Registry.start_channels(
     data: config.data,
-    agent: agent,
+    config: config,
     options: options
   )
 end

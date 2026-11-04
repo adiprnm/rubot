@@ -526,17 +526,17 @@ class TestCronTool < Minitest::Test
 
   def test_delivery_desc_with_chat_and_thread
     job = { "target_chat_id" => 100, "target_thread_id" => 200 }
-    assert_equal "chat 100, topic 200", @tool.send(:delivery_desc, job)
+    assert_equal "chat 100, topic 200", Rubot::CronCommands.delivery_desc(job)
   end
 
   def test_delivery_desc_with_chat_only
     job = { "target_chat_id" => 100 }
-    assert_equal "chat 100", @tool.send(:delivery_desc, job)
+    assert_equal "chat 100", Rubot::CronCommands.delivery_desc(job)
   end
 
   def test_delivery_desc_without_target
     job = {}
-    assert_equal "channel default", @tool.send(:delivery_desc, job)
+    assert_equal "channel default", Rubot::CronCommands.delivery_desc(job)
   end
 
   def test_delivery_context_nil_when_not_set

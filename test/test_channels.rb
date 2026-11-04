@@ -123,24 +123,11 @@ module Rubot
       assert_raises(NotImplementedError) { channel.start }
     end
 
-    def test_session_lock_returns_monitor
+    def test_session_for_returns_per_session_agent_in_legacy_mode
       channel = DummyChannel.new(agent: @agent)
-      lock = channel.session_lock("test_session")
-      assert_kind_of Monitor, lock
-    end
-
-    def test_session_lock_same_id_returns_same_mutex
-      channel = DummyChannel.new(agent: @agent)
-      lock1 = channel.session_lock("s1")
-      lock2 = channel.session_lock("s1")
-      assert_same lock1, lock2
-    end
-
-    def test_session_lock_different_ids_return_different_mutexes
-      channel = DummyChannel.new(agent: @agent)
-      lock1 = channel.session_lock("s1")
-      lock2 = channel.session_lock("s2")
-      refute_same lock1, lock2
+      session_agent = channel.session_for("s1")
+      refute_same @agent, session_agent
+      assert_equal "s1", session_agent.session.id
     end
 
     def test_reap_threads_removes_finished_threads
@@ -356,7 +343,7 @@ module Rubot
       result = @tg.before_process("/models")
       assert_kind_of Array, result
       assert_equal :skip, result[0]
-      assert_includes result[1], "Model"
+      assert_includes result[1].downcase, "model"
     end
 
     def test_skills_command_returns_skip

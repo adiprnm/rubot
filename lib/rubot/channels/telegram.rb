@@ -32,7 +32,7 @@ module Rubot
       DEFAULT_MAX_LENGTH = 4096
       DEFAULT_POLL_TIMEOUT = 60
 
-      def initialize(agent:, channel_config: {})
+      def initialize(agent: nil, pool: nil, app_config: nil, channel_config: {})
         super
         @token = @config["token"] || ENV["TELEGRAM_BOT_TOKEN"]
         @bot_username = nil
@@ -96,6 +96,7 @@ module Rubot
         stop_cron_scheduler
         # Wait for active request threads to finish
         wait_for_threads
+        shutdown_pool
       end
 
       # Wait for all spawned request threads to complete.
@@ -375,6 +376,13 @@ module Rubot
       # --------------- Cron Scheduler ---------------
 
       def start_cron_scheduler
+        # In actor mode the CronActor owns the scheduler and delivers events
+        # on the channel's cron port.
+        if actor_mode?
+          start_cron_listener { |result| cron_fire_callback(result) }
+          return
+        end
+
         cron_tool = @agent.tools.get("cron")
         return unless cron_tool
 
@@ -387,6 +395,11 @@ module Rubot
       end
 
       def stop_cron_scheduler
+        if actor_mode?
+          stop_cron_listener
+          return
+        end
+
         cron_tool = @agent.tools.get("cron")
         return unless cron_tool
         scheduler = cron_tool.scheduler
@@ -407,13 +420,10 @@ module Rubot
         when "deliver"
           send_message(chat_id, result[:result][:deliver_message], thread_id)
         when "agent_turn"
-          # Process through the LLM with a per-request agent clone to avoid
-          # cross-session interference when cron fires concurrently with user requests.
+          # Each session is serialized by its own actor, so cron turns can
+          # safely run concurrently with user requests.
           session_id = thread_id ? "tg_#{chat_id}_#{thread_id}" : "tg_#{chat_id}"
-          response = session_lock(session_id).synchronize do
-            request_agent = @agent.for_session(session_id)
-            request_agent.process_cron(result[:result][:agent_message])
-          end
+          response = session_for(session_id).process_cron(result[:result][:agent_message])
           send_message(chat_id, response, thread_id) if response && !response.empty?
         end
       rescue StandardError => e
@@ -422,7 +432,7 @@ module Rubot
 
       # Handle /cron slash command
       def handle_cron_command(args)
-        cron_tool = @agent.tools.get("cron")
+        cron_tool = request_agent.tools.get("cron")
         return [ :skip, "❌ Cron tool not available." ] unless cron_tool
 
         if args.nil? || args.empty?
@@ -599,8 +609,9 @@ module Rubot
         @last_chat_id = chat_id
         @last_thread_id = thread_id
 
-        # Set delivery context on cron tool so new jobs are tied to this chat/topic
-        cron_tool = @agent.tools.get("cron")
+        # Set delivery context on the session's cron tool so new jobs are
+        # tied to this chat/topic. Each session actor owns its own tool.
+        cron_tool = session_for(session_id).tools.get("cron")
         cron_tool.delivery_context = { chat_id: chat_id, thread_id: thread_id } if cron_tool
 
         warn "[telegram] #{username} (#{user_id})#{thread_id ? " [topic:#{thread_id}]" : ""}: #{text[0..80]}" if Rubot.debug?

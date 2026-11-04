@@ -205,6 +205,11 @@ module Rubot
     # Stop background thread
     def stop
       @running = false
+      begin
+        @thread&.wakeup
+      rescue ThreadError
+        nil
+      end
       @thread&.join(2)
       @thread = nil
       warn "[cron] Scheduler stopped"

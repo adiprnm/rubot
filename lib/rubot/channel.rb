@@ -6,35 +6,41 @@ module Rubot
   #
   # Each channel is responsible for:
   #   - Receiving messages from users
-  #   - Forwarding them to the Agent for processing
+  #   - Forwarding them to a session actor (or a legacy in-process Agent)
   #   - Sending the response back to the user
   #
   # Channels run in a lifecycle: #start → loop { receive → process → send } → #stop
+  #
+  # Two modes are supported:
+  #   * Actor mode   — pass app_config: (or pool:). Each session gets its own
+  #                    Ractor, so no mutable Agent state is shared and no
+  #                    locking is required.
+  #   * Legacy mode  — pass agent:. Used by unit tests and by callers that
+  #                    want a plain in-process Agent.
   class Channel
-    attr_reader :agent, :config, :name
+    attr_reader :agent, :config, :name, :pool
 
-    # @param agent [Rubot::Agent] The AI agent to process messages
-    # @param channel_config [Hash] Channel-specific configuration from rubot.yml
-    def initialize(agent:, channel_config: {})
+    # @param agent [Rubot::Agent, nil] legacy in-process agent
+    # @param pool [Rubot::Actors::SessionPool, nil] shared session pool
+    # @param app_config [Rubot::Config, nil] configuration used to build a pool
+    # @param channel_config [Hash] Channel-specific configuration
+    def initialize(agent: nil, pool: nil, app_config: nil, channel_config: {})
       @agent = agent
+      @pool = pool
+      @app_config = app_config
       @config = channel_config
       @name = self.class.name.split("::").last.downcase
       @running = false
-      @session_locks = {}
-      @locks_mutex = Mutex.new
+      @cron_events = nil
+      @cron_thread = nil
+      @owned_pool = false
+
+      build_pool_if_needed
     end
 
-    # Returns a per-session monitor (re-entrant mutex), creating one if needed.
-    # This serializes requests to the same session while allowing
-    # different sessions to be processed concurrently.
-    #
-    # A Monitor (rather than Mutex) is used because cron callbacks may fire
-    # from within an already-locked session context — the same thread must
-    # be able to re-enter without deadlocking.
-    def session_lock(session_id)
-      @locks_mutex.synchronize do
-        @session_locks[session_id] ||= Monitor.new
-      end
+    # Returns true when sessions are backed by Ractors.
+    def actor_mode?
+      !@pool.nil?
     end
 
     # Start the channel. Should block until the channel is stopped.
@@ -47,6 +53,8 @@ module Rubot
     # Subclasses should override this if they need cleanup.
     def stop
       @running = false
+      stop_cron_listener
+      shutdown_pool
     end
 
     # Clean up finished threads and return the list of active threads.
@@ -82,54 +90,57 @@ module Rubot
       response
     end
 
-    # Process a single message through the agent and return the response.
-    # Shared implementation used by all channels.
+    # Process a single message through the agent/session actor and return the response.
     #
     # @param message [String] The user's message
     # @param session_id [String, nil] Optional session ID to switch to
-    # @param on_tool_call [Proc, nil] Callback invoked before each tool call (yields tool_name, args)
-    # @param on_tool_result [Proc, nil] Callback invoked after each tool call (yields tool_name, result)
-    # @param on_progress [Proc, nil] Callback invoked after each iteration (yields iteration, tool_count)
-    # @param on_confirm [Proc, nil] Callback invoked before irreversible actions (yields tool_name, args; return truthy to proceed)
+    # @param on_tool_call [Proc, nil] Called before each tool call
+    # @param on_tool_result [Proc, nil] Called after each tool call
+    # @param on_progress [Proc, nil] Called after each iteration
+    # @param on_confirm [Proc, nil] Called before irreversible actions
     # @return [String, nil] The agent's response, or nil if processing was skipped
     def process_message(message, session_id: nil, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil)
-      sid = session_id || "default"
-      session_lock(sid).synchronize do
-        # Create a per-request agent clone with its own isolated session.
-        # This prevents concurrent requests from clobbering each other's
-        # session state on the shared agent instance.
-        request_agent = @agent.for_session(sid)
+      sid = (session_id || "default").to_s
+      handle = session_for(sid)
 
-        # Make the per-session agent available to before_process via thread-local
-        # so command handlers (e.g. /model, /use) operate on the correct session.
-        Thread.current[:_rubot_request_agent] = request_agent
+      # Make the per-session handle available to before_process via a thread
+      # local. Threads stay inside the channel's Ractor, so this is safe.
+      Thread.current[:_rubot_request_agent] = handle
 
-        result = before_process(message)
+      result = before_process(message)
 
-        if result.is_a?(Array) && result[0] == :skip
-          return after_process(message, result[1].to_s)
-        end
-
-        return nil if result.nil?
-
-        response = request_agent.process(result, on_tool_call: on_tool_call, on_tool_result: on_tool_result, on_progress: on_progress, on_confirm: on_confirm) do |chunk|
-          on_stream_chunk(chunk) if respond_to?(:on_stream_chunk)
-        end
-
-        after_process(message, response)
+      if result.is_a?(Array) && result[0] == :skip
+        return after_process(message, result[1].to_s)
       end
+
+      return nil if result.nil?
+
+      response = handle.process(
+        result,
+        on_tool_call: on_tool_call,
+        on_tool_result: on_tool_result,
+        on_progress: on_progress,
+        on_confirm: on_confirm
+      ) do |chunk|
+        on_stream_chunk(chunk) if respond_to?(:on_stream_chunk)
+      end
+
+      after_process(message, response)
     rescue StandardError => e
       handle_error(e, message)
     ensure
       Thread.current[:_rubot_request_agent] = nil
     end
 
-    # Returns the per-request agent clone for the current thread,
-    # or falls back to the shared @agent if called outside process_message.
-    # Subclasses should use this in before_process and callbacks to
-    # access session-specific state (model, session, etc.).
+    # Returns the per-request handle for the current thread, or the shared
+    # agent/default session handle outside process_message.
     def request_agent
-      Thread.current[:_rubot_request_agent] || @agent
+      Thread.current[:_rubot_request_agent] || (@pool ? @pool.for("default") : @agent)
+    end
+
+    # Resolve a session handle for an explicit session id.
+    def session_for(session_id)
+      @pool ? @pool.for(session_id) : @agent.for_session(session_id)
     end
 
     # Called for each streaming chunk from the agent.
@@ -167,6 +178,52 @@ module Rubot
           stop
         end
       end
+    end
+
+    # Start a thread that forwards cron fire events from the CronActor.
+    def start_cron_listener(&on_fire)
+      return unless @cron_events
+
+      @cron_thread = Thread.new do
+        loop do
+          event = @cron_events.receive
+          break if event == :shutdown
+          on_fire.call(event[1]) if event.is_a?(Array) && event[0] == :cron_fire
+        end
+      rescue Ractor::ClosedError
+        nil
+      end
+    end
+
+    def stop_cron_listener
+      return unless @cron_thread
+
+      begin
+        @cron_events << :shutdown
+      rescue Ractor::ClosedError
+        nil
+      end
+      @cron_thread.join(2)
+      @cron_thread = nil
+    end
+
+    def shutdown_pool
+      return unless @owned_pool
+
+      @pool&.shutdown
+      @owned_pool = false
+    rescue Ractor::ClosedError, Ractor::RemoteError
+      nil
+    end
+
+    private
+
+    def build_pool_if_needed
+      return unless @pool.nil? && @agent.nil? && @app_config
+
+      @cron_events = Ractor::Port.new
+      @pool = Actors::SessionPool.new(config: @app_config, delivery: @cron_events)
+      @owned_pool = true
     end
   end
 end

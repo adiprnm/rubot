@@ -18,25 +18,30 @@ module Rubot
       # If no channels are configured, starts REPL as the default.
       #
       # @param data [Hash] The full config data hash
-      # @param agent [Rubot::Agent] The agent to attach to channels
+      # @param config [Rubot::Config, nil] live config used to build session actors
+      # @param agent [Rubot::Agent, nil] legacy in-process agent
       # @param options [Hash] CLI options that may override channel selection
       # @return [Array<Rubot::Channel>] The started channel instances
-      def self.start_channels(data:, agent:, options: {})
+      def self.start_channels(data:, config: nil, agent: nil, options: {})
         channel_configs = build_channel_list(data, options)
         return channel_configs if channel_configs.empty?
 
-        channels = channel_configs.filter_map do |name, config|
+        channels = channel_configs.filter_map do |name, channel_config|
           klass = CHANNEL_MAP[name]
           raise ArgumentError, "Unknown channel: #{name}. Available: #{CHANNEL_MAP.keys.join(', ')}" unless klass
 
           # Skip disabled channels
-          if config && config["enabled"] == false
+          if channel_config && channel_config["enabled"] == false
             warn "[registry] Channel '#{name}' is disabled"
             next
           end
 
           warn "[registry] Starting channel: #{name}"
-          channel = klass.new(agent: agent, channel_config: config || {})
+          channel = klass.new(
+            agent: agent,
+            app_config: config,
+            channel_config: channel_config || {}
+          )
           channel.start
           channel
         rescue StandardError => e

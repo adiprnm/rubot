@@ -13,8 +13,6 @@ require_relative "test_helper"
 
 class TestSafetyGuardPenetration < Minitest::Test
   def setup
-    # Reset rate limiter to not interfere with other tests
-    Rubot::SafetyGuard.class_variable_set(:@@exec_timestamps, [])
     @workspace = File.expand_path("/tmp/rubot_pen_test_workspace")
     FileUtils.mkdir_p(@workspace)
     File.write(File.join(@workspace, "test.txt"), "hello")
@@ -22,7 +20,6 @@ class TestSafetyGuardPenetration < Minitest::Test
 
   def teardown
     FileUtils.remove_entry(@workspace) if File.directory?(@workspace)
-    Rubot::SafetyGuard.class_variable_set(:@@exec_timestamps, [])
   end
 
   # =========================================================================

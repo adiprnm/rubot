@@ -3,6 +3,29 @@
 require "json"
 
 module Rubot
+  # Immutable view of the settings needed to construct a provider.
+  # Providers only need these methods, so they can be built without
+  # mutating (and without sharing) the live Config object.
+  class ProviderSettings
+    attr_reader :provider, :model, :api_key, :api_base, :max_tokens, :temperature, :extra_headers
+
+    def initialize(provider:, model:, api_key:, api_base:, max_tokens:, temperature:, debug: false, extra_headers: {})
+      @provider = provider
+      @model = model
+      @api_key = api_key
+      @api_base = api_base
+      @max_tokens = max_tokens
+      @temperature = temperature
+      @debug = debug
+      @extra_headers = (extra_headers || {}).dup.freeze
+      freeze
+    end
+
+    def debug?
+      @debug
+    end
+  end
+
   # Raised when a provider returns HTTP 429 Too Many Requests.
   class RateLimitError < StandardError
     attr_reader :retry_after

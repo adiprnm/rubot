@@ -175,6 +175,11 @@ module Rubot
       @workspace = workspace ? Pathname.new(workspace).expand_path : nil
       @restrict_to_workspace = restrict_to_workspace
       @allow_read_outside = allow_read_outside
+
+      # Rate-limit state is per guard instance (and therefore per agent/ractor).
+      # Class variables cannot be accessed from non-main Ractors.
+      @exec_timestamps = []
+      @exec_mutex = Mutex.new
     end
 
     def check_path(path, operation: :read)
@@ -397,9 +402,6 @@ module Rubot
       nil
     end
 
-    @@exec_timestamps = []
-    @@exec_mutex = Mutex.new
-
     EXEC_WINDOW_SECONDS = 10
     EXEC_MAX_PER_WINDOW = 50
 
@@ -407,14 +409,19 @@ module Rubot
       return unless @restrict_to_workspace
 
       now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      @@exec_mutex.synchronize do
-        @@exec_timestamps.reject! { |t| now - t > EXEC_WINDOW_SECONDS }
-        if @@exec_timestamps.size >= EXEC_MAX_PER_WINDOW
+      @exec_mutex.synchronize do
+        @exec_timestamps.reject! { |t| now - t > EXEC_WINDOW_SECONDS }
+        if @exec_timestamps.size >= EXEC_MAX_PER_WINDOW
           raise SecurityError,
                 "Command blocked by safety guard (rate limit exceeded: #{EXEC_MAX_PER_WINDOW} commands per #{EXEC_WINDOW_SECONDS}s)"
         end
-        @@exec_timestamps << now
+        @exec_timestamps << now
       end
+    end
+
+    # Reset the per-instance rate limiter (used by tests).
+    def reset_rate_limit!
+      @exec_mutex.synchronize { @exec_timestamps.clear }
     end
 
     def path_within_workspace?(resolved)

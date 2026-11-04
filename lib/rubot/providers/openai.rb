@@ -2,12 +2,27 @@
 
 require "json"
 require "net/http"
+require "securerandom"
 require "uri"
 require_relative "../provider"
 
 module Rubot
   module Providers
     class OpenAI < Provider
+      def initialize(config)
+        super
+        @extra_headers = {}
+
+        if @config.respond_to?(:extra_headers) && @config.extra_headers.is_a?(Hash)
+          @extra_headers.merge!(@config.extra_headers)
+        end
+
+        # OpenCode Go requires a per-session routing header.
+        if api_base.include?("opencode.ai/zen/go") && !@extra_headers.key?("x-opencode-session")
+          @extra_headers["x-opencode-session"] = SecureRandom.hex(16)
+        end
+      end
+
       def chat(messages, tools: nil)
         payload = build_payload(messages, tools)
         response = make_request(payload)
@@ -53,6 +68,10 @@ module Rubot
         @config.api_base || "https://api.openai.com/v1"
       end
 
+      def apply_extra_headers(request)
+        @extra_headers.each { |name, value| request[name] = value.to_s }
+      end
+
       def make_request(payload)
         uri = URI("#{api_base}/chat/completions")
 
@@ -66,6 +85,7 @@ module Rubot
           request = Net::HTTP::Post.new(uri.request_uri)
           request["Content-Type"] = "application/json"
           request["Authorization"] = "Bearer #{@config.api_key}"
+          apply_extra_headers(request)
 
           http.request(request, JSON.generate(payload))
         end
@@ -99,6 +119,7 @@ module Rubot
           request = Net::HTTP::Post.new(uri.request_uri)
           request["Content-Type"] = "application/json"
           request["Authorization"] = "Bearer #{@config.api_key}"
+          apply_extra_headers(request)
 
           http.request(request, JSON.generate(payload)) do |response|
             unless response.code.to_i == 200

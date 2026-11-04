@@ -22,3 +22,16 @@ workspace/
 
 # Security reports
 PEN_TEST_REPORT.md
+
+# Docker local overrides & secrets
+# The tracked base files are docker-compose.yml and
+# docker-compose.override.yml.example. Your local override stays untracked.
+docker-compose.override.yml
+docker-compose.local.yml
+.env
+.env.local
+.env.*
+!.env.example
+!.env.*.example
+.rubot/
+docker-data/

@@ -139,7 +139,9 @@ module Rubot
       File.join(@workspace, "sessions", "#{@id}.json")
     end
 
-    # Persist session to disk
+    # Persist session to disk. Uses an exclusive file lock so a session
+    # file is never partially written even if another process/Ractor
+    # touches it at the same time.
     def save!
       return unless file_path
       FileUtils.mkdir_p(File.dirname(file_path))
@@ -152,7 +154,14 @@ module Rubot
       data["summary"] = @summary if @summary
       data["forced_skill"] = @forced_skill if @forced_skill
       data["model_override"] = @model_override if @model_override
-      File.write(file_path, JSON.pretty_generate(data))
+
+      File.open(file_path, File::WRONLY | File::CREAT, 0o644) do |file|
+        file.flock(File::LOCK_EX)
+        file.truncate(0)
+        file.write(JSON.pretty_generate(data))
+        file.flush
+        file.flock(File::LOCK_UN)
+      end
     end
 
     private

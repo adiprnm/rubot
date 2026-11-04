@@ -1,0 +1,27 @@
+# Copy this file to docker-compose.override.yml (git-ignored) and adjust it
+# for your machine. Docker Compose merges the override automatically.
+#
+#   mkdir -p ~/.rubot/workspace/kanyaah.com ~/.rubot/workspace/adipurnm.com
+#   mkdir -p ~/.rubot/workspace/skills/{adipurnm-brand,kanyaah-brand,marketing-strategist,writing}
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#   HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose up -d
+services:
+  rubot:
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    volumes:
+      - ~/.rubot:/home/rubot/.rubot
+
+      # Brand projects inside the agent workspace.
+      - ~/Documents/work/freelance/website/kanyaah.com:/home/rubot/.rubot/workspace/kanyaah.com
+      - ~/Documents/work/freelance/website/by.adipurnm.com:/home/rubot/.rubot/workspace/adipurnm.com
+
+      # Squadron skills (mounted individually to keep other skills visible).
+      - ~/Projects/squadron/skills/adipurnm-brand:/home/rubot/.rubot/workspace/skills/adipurnm-brand
+      - ~/Projects/squadron/skills/kanyaah-brand:/home/rubot/.rubot/workspace/skills/kanyaah-brand
+      - ~/Projects/squadron/skills/marketing-strategist:/home/rubot/.rubot/workspace/skills/marketing-strategist
+      - ~/Projects/squadron/skills/writing:/home/rubot/.rubot/workspace/skills/writing
+
+    # Run the Telegram bot continuously. Remove this block to use the
+    # image default (interactive REPL via `docker compose run --rm rubot`).
+    command: ["-C", "telegram"]
+    restart: unless-stopped

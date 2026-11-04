@@ -1,0 +1,30 @@
+name: rubot
+
+services:
+  rubot:
+    build:
+      context: .
+      args:
+        UID: ${HOST_UID:-1000}
+        GID: ${HOST_GID:-1000}
+    image: rubot:4.0.9
+    init: true
+    stdin_open: true
+    tty: true
+    environment:
+      HOME: /home/rubot
+      RUBOT_CONFIG: /home/rubot/.rubot/config.yml
+    # Optional. Create a .env in the project root (or use ~/.rubot/.env,
+    # which Rubot loads automatically) for API keys and bot tokens.
+    env_file:
+      - path: .env
+        required: false
+    # Lets containers reach services on the host, e.g. Ollama:
+    #   api_base: http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - rubot-data:/home/rubot/.rubot
+
+volumes:
+  rubot-data:

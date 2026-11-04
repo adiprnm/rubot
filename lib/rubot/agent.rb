@@ -17,17 +17,13 @@ module Rubot
   class Agent
     MAX_TOOL_ITERATIONS = 10
 
-    # Class-level mutex to serialize provider rebuilding, which temporarily
-    # mutates shared config data. Without this, concurrent sessions with
-    # different model overrides can clobber each other's config.
-    PROVIDER_BUILD_MUTEX = Mutex.new
-
     attr_reader :config, :provider, :session, :tools, :soul, :memory, :agents_file, :skill_registry, :safety_guard, :session_model
 
     def initialize(config:, provider: nil, session_id: "default", tools: nil)
       @config = config
-      @provider = provider || build_provider
       @session = Session.new(session_id, workspace: config.workspace)
+      @session_model = @session.model_override
+      @provider = provider || build_provider(@session_model)
 
       # Build safety guard from config
       @safety_guard = SafetyGuard.new(
@@ -62,15 +58,20 @@ module Rubot
       @memory_extractor = MemoryExtractor.new(provider: @provider, memory: @memory)
       @feedback_learner = Tools::FeedbackLearner.new(memory: @memory)
 
-      # Session-level model override (cleared on new session)
-      @session_model = @session.model_override
-      rebuild_provider if @session_model
-
       # Apply AGENTS.md overrides to config
       apply_agents_overrides if @agents_file.enabled?
 
       # Set workspace on cron tool so jobs persist to disk
       configure_cron_tool
+      @cron_ractor = nil
+    end
+
+    # Attach a CronActor handle. When present, cron jobs are owned by the
+    # actor and this agent no longer fires them inline.
+    def cron_ractor=(ractor)
+      @cron_ractor = ractor
+      cron_tool = @tools.get("cron")
+      cron_tool.cron_actor = ractor if cron_tool.respond_to?(:cron_actor=)
     end
 
     # Create a new Agent instance with a different session but sharing
@@ -107,7 +108,7 @@ module Rubot
     #   on_progress:      Called after each full tool-call iteration. Yields (iteration_count, tool_count).
     #   on_confirm:       Called before dangerous actions that could cause data loss.
     #                     Yields (tool_name, arguments). Return truthy to proceed, falsy to skip.
-    def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil, &on_chunk)
+    def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil, stream: true, &on_chunk)
       # Fire any due cron jobs and collect their results
       cron_results = fire_due_cron_jobs
       warn "[cron] fire_due_cron_jobs returned #{cron_results.size} result(s)" if Rubot.debug?
@@ -135,7 +136,7 @@ module Rubot
         messages = build_messages
         log_debug("Sending #{messages.size} messages to provider")
 
-        result = if block_given?
+        result = if block_given? && stream
           @provider.chat_stream(messages, tools: tool_definitions) do |chunk, tool_data|
             response += chunk if chunk
             yield chunk if chunk && block_given?
@@ -425,6 +426,7 @@ module Rubot
 
     # Fire any due cron jobs and return their results.
     def fire_due_cron_jobs
+      return [] if @cron_ractor
       cron_tool = @tools.get("cron")
       return [] unless cron_tool && cron_tool.respond_to?(:scheduler)
       scheduler = cron_tool.scheduler
@@ -468,49 +470,32 @@ module Rubot
       messages
     end
 
-    def build_provider
-      provider_name = @config.provider.downcase
+    # Build a provider from an immutable settings snapshot. No config
+    # mutation is performed, so this is safe to call from any Ractor.
+    def build_provider(model_name = nil)
+      settings = @config.provider_settings(model_name)
+      provider_name = settings.provider.downcase
 
       case provider_name
       when "openai", "openai_compatible", "azure", "deepseek", "groq", "gemini", "mistral", "perplexity"
-        Providers::OpenAI.new(@config)
+        Providers::OpenAI.new(settings)
       when "anthropic", "claude"
-        Providers::Anthropic.new(@config)
+        Providers::Anthropic.new(settings)
       when "ollama"
-        Providers::Ollama.new(@config)
+        Providers::Ollama.new(settings)
       else
         # Default to OpenAI-compatible
         warn "Unknown provider '#{provider_name}', falling back to OpenAI-compatible"
-        Providers::OpenAI.new(@config)
+        Providers::OpenAI.new(settings)
       end
     end
 
     # Rebuild the provider using the session-level model override.
-    # Temporarily patches config.data so the existing resolution
-    # logic (provider, api_key, api_base, model) picks up the
-    # overridden model entry.
     def rebuild_provider
       return if @session_model.nil?
+      return if @config.model_entry_by_name(@session_model).nil?
 
-      entry = @config.model_entry_by_name(@session_model)
-      return if entry.nil?
-
-      # Serialize provider building to prevent concurrent sessions from
-      # clobbering each other's temporary config mutations.
-      PROVIDER_BUILD_MUTEX.synchronize do
-        defaults = @config.data["agents"] ||= {}
-        defaults["defaults"] ||= {}
-        original_name = defaults["defaults"]["name"]
-        defaults["defaults"]["name"] = @session_model
-
-        @provider = build_provider
-
-        if original_name
-          defaults["defaults"]["name"] = original_name
-        else
-          defaults["defaults"].delete("name")
-        end
-      end
+      @provider = build_provider(@session_model)
     end
 
     def tool_definitions

@@ -25,12 +25,31 @@ module Rubot
       "/quit"     => "Exit rubot"
     }
 
-    def initialize(agent, stream: true)
+    def initialize(agent = nil, stream: true, pool: nil)
       @agent = agent
+      @pool = pool
+      @session_id = "default"
       @stream = stream
       @logo = "🤖"
       @readline_available = setup_readline
       load_history
+    end
+
+    # Current session handle, either a legacy in-process Agent or a
+    # Ractor-backed SessionHandle.
+    def agent
+      @pool ? @pool.for(@session_id) : @agent
+    end
+
+    # Switch the active session. In actor mode this simply points the REPL
+    # at another session handle (one actor per session).
+    def switch_session(name)
+      if @pool
+        @session_id = name.to_s
+        agent
+      else
+        @agent.switch_session(name)
+      end
     end
 
     def run
@@ -108,7 +127,7 @@ module Rubot
     end
 
     def print_banner
-      info = @agent.startup_info
+      info = agent.startup_info
       puts "╔══════════════════════════════════════════════╗"
       puts "║         🤖  Rubot AI Assistant  🤖          ║"
       puts "╠══════════════════════════════════════════════╣"
@@ -132,35 +151,35 @@ module Rubot
         end
         puts
       when "/clear"
-        @agent.clear_session
+        agent.clear_session
         puts "\n💬 Session cleared."
       when "/new"
-        @agent.clear_session
+        agent.clear_session
         puts "\n✨ Started a new session. Previous conversation cleared."
       when "/session"
         if parts[1]
-          @agent.switch_session(parts[1])
+          switch_session(parts[1])
           puts "\n📝 Session switched to: #{parts[1]}"
-          model = @agent.active_model_name
-          if @agent.session.model_override
+          model = agent.active_model_name
+          if agent.session.model_override
             puts "  Model: #{model} (session override)"
           end
         else
-          puts "\n📝 Current session: #{@agent.session.id}"
-          model = @agent.active_model_name
+          puts "\n📝 Current session: #{agent.session.id}"
+          model = agent.active_model_name
           puts "  Model: #{model}"
         end
       when "/info"
-        info = @agent.startup_info
+        info = agent.startup_info
         puts "\nAgent Info:"
         info.each { |k, v| puts "  #{k}: #{v}" }
         puts
       when "/models"
-        models = @agent.config.models
+        models = agent.config.models
         if models.empty?
           puts "\nNo models configured in config.yml."
         else
-          active = @agent.active_model_name
+          active = agent.active_model_name
           puts "\nAvailable models:"
           models.each do |m|
             marker = m["name"] == active ? " → " : "   "
@@ -169,10 +188,10 @@ module Rubot
           puts
         end
       when "/model"
-        active = @agent.active_model_name
-        entry = @agent.config.model_entry_by_name(active) || @agent.config.active_model_entry
+        active = agent.active_model_name
+        entry = agent.config.model_entry_by_name(active) || agent.config.active_model_entry
         puts "\nCurrent model: #{active} (#{entry["model"]})"
-        if @agent.session.model_override
+        if agent.session.model_override
           puts "  (session override — will be cleared on /new)"
         end
         puts
@@ -180,65 +199,65 @@ module Rubot
         model_name = parts[1]
         if model_name.nil?
           puts "\n⚠️  Usage: /use-model <model-name>"
-          models = @agent.config.models
+          models = agent.config.models
           unless models.empty?
             puts "\nAvailable models:"
             models.each { |m| puts "  - #{m['name']}" }
           end
         else
-          result = @agent.use_model(model_name)
+          result = agent.use_model(model_name)
           if result
-            entry = @agent.config.model_entry_by_name(result)
+            entry = agent.config.model_entry_by_name(result)
             puts "\n✅ Switched to model: #{result} (#{entry['model']})"
-            puts "  Provider: #{@agent.provider.name}"
+            puts "  Provider: #{agent.provider.name}"
             puts "  Model will persist for this session (cleared on /new)."
           else
             puts "\n❌ Model '#{model_name}' not found in config.yml."
             puts "\nAvailable models:"
-            @agent.config.models.each { |m| puts "  - #{m['name']}" }
+            agent.config.models.each { |m| puts "  - #{m['name']}" }
           end
         end
         puts
       when "/tools"
         puts "\nAvailable tools:"
-        @agent.tools.all.each do |tool|
+        agent.tools.all.each do |tool|
           puts "  - #{tool.name}: #{tool.description.lines.first.strip}"
         end
         puts
       when "/soul"
-        if @agent.soul.enabled?
+        if agent.soul.enabled?
           puts "\n🧬 Soul (SOUL.md):"
           puts "---"
-          puts @agent.soul
+          puts agent.soul
           puts "---"
         else
           puts "\n🧬 No soul file (SOUL.md) found in workspace."
-          puts "Create one at: #{@agent.config.workspace}/SOUL.md"
+          puts "Create one at: #{agent.config.workspace}/SOUL.md"
         end
         puts
       when "/memory"
-        if @agent.memory.enabled?
+        if agent.memory.enabled?
           puts "\n🧠 Memory (MEMORY.md):"
           puts "---"
-          puts @agent.memory.read
+          puts agent.memory.read
           puts "---"
         else
           puts "\n🧠 Memory not available (no workspace configured)."
         end
         puts
       when "/agents"
-        if @agent.agents_file.enabled?
+        if agent.agents_file.enabled?
           puts "\n📋 Agent Rules (AGENTS.md):"
           puts "---"
-          puts @agent.agents_file.raw
+          puts agent.agents_file.raw
           puts "---"
         else
           puts "\n📋 No AGENTS.md found in workspace."
-          puts "Create one at: #{@agent.config.workspace}/AGENTS.md"
+          puts "Create one at: #{agent.config.workspace}/AGENTS.md"
         end
         puts
       when "/cron"
-        cron_tool = @agent.tools.get("cron")
+        cron_tool = agent.tools.get("cron")
         if cron_tool
           result = cron_tool.execute({ "operation" => "list" })
           puts "\n#{result}"
@@ -257,19 +276,19 @@ module Rubot
         skill_name = parts[1]
         if skill_name.nil?
           puts "\n⚠️  Usage: /use <skill-name>"
-          puts "Available skills: #{@agent.skill_registry.all.keys.join(', ') || '(none)'}"
-        elsif @agent.skill_registry.get(skill_name)&.enabled?
-          @agent.session.forced_skill = skill_name
-          @agent.session.save! if @agent.session.respond_to?(:save!)
+          puts "Available skills: #{agent.skill_registry.all.keys.join(', ') || '(none)'}"
+        elsif agent.skill_registry.get(skill_name)&.enabled?
+          agent.session.forced_skill = skill_name
+          agent.session.save! if agent.session.respond_to?(:save!)
           puts "\n✅ Skill '#{skill_name}' will be used for the next message."
         else
           puts "\n❌ Skill '#{skill_name}' not found or not enabled."
-          puts "Available skills: #{@agent.skill_registry.all.keys.join(', ') || '(none)'}"
+          puts "Available skills: #{agent.skill_registry.all.keys.join(', ') || '(none)'}"
         end
       when "/unuse"
-        if @agent.session.forced_skill
-          @agent.session.forced_skill = nil
-          @agent.session.save! if @agent.session.respond_to?(:save!)
+        if agent.session.forced_skill
+          agent.session.forced_skill = nil
+          agent.session.save! if agent.session.respond_to?(:save!)
           puts "\n✅ Forced skill cleared."
         else
           puts "\nℹ️  No forced skill is set."
@@ -288,7 +307,7 @@ module Rubot
       if @stream
         print "\n#{@logo} Assistant: "
         response = ""
-        @agent.process(message, on_confirm: on_confirm) do |chunk|
+        agent.process(message, on_confirm: on_confirm, stream: @stream) do |chunk|
           print chunk
           $stdout.flush
           response += chunk
@@ -296,7 +315,7 @@ module Rubot
         puts "\n"
       else
         print "\n#{@logo} Assistant: "
-        response = @agent.process(message, on_confirm: on_confirm)
+        response = agent.process(message, on_confirm: on_confirm, stream: false)
         puts response
         puts
       end

@@ -1,12 +1,13 @@
 # 🤖 Rubot - AI Assistant in Ruby
 
-> Personal AI assistant written in pure Ruby — no dependencies required.
+> Personal AI assistant written in pure Ruby — powered by Ractors.
 
 Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https://github.com/HKUDS/nanobot) and [PicoClaw](https://github.com/sipeed/picoclaw). It connects to LLM providers (OpenAI, Anthropic, Ollama, or any OpenAI-compatible API) and executes tool calls — all using only Ruby's standard library.
 
 ## Features
 
-- 🪶 **Zero dependencies** — only Ruby standard library
+- 🪶 **Almost zero dependencies** — Ruby 4 standard library; WEBrick only for Telegram webhook mode
+- ⚡ **Ractor-powered sessions** — one actor per conversation, no shared mutable agent state
 - 🔌 **Multiple providers** — OpenAI, Anthropic, Ollama, or any OpenAI-compatible API
 - 🛠️ **Built-in tools** — shell execution, file operations, web fetching, persistent memory, cron scheduling
 - 💬 **Interactive REPL** — with streaming, command history, and tab completion
@@ -23,7 +24,15 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 
 ## Requirements
 
-- Ruby 3.0+
+- Ruby 4.0+
+- `bundle install` (only for `webrick` in webhook mode, plus test gems)
+
+The repository pins Ruby with `.ruby-version` and `mise.toml`. With [mise](https://mise.jdx.dev/):
+
+```bash
+mise install
+mise exec -- ruby -v   # 4.0.9
+```
 
 ## Installation
 
@@ -541,6 +550,38 @@ Rubot includes a PicoClaw-style safety guard that blocks dangerous commands befo
 
 The mode is configured in `AGENTS.md` frontmatter or the workspace settings.
 
+## Architecture: Ractor Sessions
+
+Rubot separates I/O from agent execution:
+
+- **Channels** (REPL, Telegram) live in the main Ractor and own all I/O,
+  signal handling, and channel-local state.
+- **Session actors** (`lib/rubot/actors/session_actor.rb`) each own one
+  `Agent`, one `Session`, and its tools. A session id maps to exactly one
+  actor, so requests to the same conversation are serialized by the
+  actor's mailbox instead of by mutexes.
+- **Cron actor** (`lib/rubot/actors/cron_actor.rb`) owns the scheduler and
+  the persisted job store, and delivers fired jobs as messages.
+- **Message passing** replaces callbacks across Ractor boundaries: tool
+  events, streaming chunks, progress, and confirmation requests are
+  sent as messages on `Ractor::Port` objects. Procs and mutexes never
+  cross a boundary.
+- **File-backed state** (`MEMORY.md`, session JSON) is written with
+  `flock` so concurrent session actors cannot corrupt it.
+
+```
+Channel (main Ractor)
+   │  { type: :message, text:, events:, control: }
+   ▼
+SessionActor(session id) ── tools ──► CronActor
+   │  [:chunk] [:tool_started] [:progress] [:confirm] [:done]
+   ▼
+Channel
+```
+
+Legacy in-process agents are still supported by passing `agent:` to a
+channel, which is what the unit tests use.
+
 ## Project Structure
 
 ```
@@ -551,6 +592,12 @@ rubot/
 │   ├── rubot.rb           # Entry point
 │   └── rubot/
 │       ├── agent.rb       # Agent loop (process messages, call tools)
+│       ├── session_handle.rb # Main-Ractor proxy for a session actor
+│       ├── actors/
+│       │   ├── session_actor.rb # One Agent/Session per Ractor
+│       │   ├── session_pool.rb  # Lazy per-session actor registry
+│       │   └── cron_actor.rb    # Ractor-owned cron scheduler
+│       ├── cron_commands.rb # Shared cron operation implementation
 │       ├── config.rb      # Configuration management
 │       ├── session.rb     # Session/history management
 │       ├── soul.rb        # SOUL.md personality loader
@@ -582,10 +629,99 @@ rubot/
 ├── config/
 │   └── rubot.example.yml # Example config
 ├── test/                  # Minitest tests
-├── Gemfile                # Only for testing deps
+├── Gemfile                # webrick + test gems
+├── Dockerfile             # Ruby 4.0.9 runtime image
+├── docker-compose.yml     # base compose service
+├── docker-compose.override.yml.example # local laptop template
+├── mise.toml              # Ruby version pin (4.0.9)
+├── .ruby-version          # Ruby version pin
 ├── Rakefile               # Test runner
 └── README.md
 ```
+
+## Docker
+
+Build the image and initialize `~/.rubot` once:
+
+```bash
+mkdir -p ~/.rubot/workspace/kanyaah.com ~/.rubot/workspace/adipurnm.com
+mkdir -p ~/.rubot/workspace/skills/{adipurnm-brand,kanyaah-brand,marketing-strategist,writing}
+docker compose build
+docker compose run --rm rubot init
+vim ~/.rubot/config.yml   # set your API key / Telegram token
+```
+
+With the local override, host data lives in `~/.rubot` and is mounted onto
+`/home/rubot/.rubot` in the container. The brand projects are mounted
+inside the agent workspace so the safety guard allows read/write access:
+
+| Host | Container |
+|---|---|
+| `~/.rubot` | `/home/rubot/.rubot` |
+| `~/Documents/work/freelance/website/kanyaah.com` | `/home/rubot/.rubot/workspace/kanyaah.com` |
+| `~/Documents/work/freelance/website/by.adipurnm.com` | `/home/rubot/.rubot/workspace/adipurnm.com` |
+| `~/Projects/squadron/skills/adipurnm-brand` | `/home/rubot/.rubot/workspace/skills/adipurnm-brand` |
+| `~/Projects/squadron/skills/kanyaah-brand` | `/home/rubot/.rubot/workspace/skills/kanyaah-brand` |
+| `~/Projects/squadron/skills/marketing-strategist` | `/home/rubot/.rubot/workspace/skills/marketing-strategist` |
+| `~/Projects/squadron/skills/writing` | `/home/rubot/.rubot/workspace/skills/writing` |
+
+Because the brand directories live under the workspace, the agent can use
+its normal `file_ops` / `shell_exec` tools on them without disabling the
+safety guard. Squadron skills are mounted one directory at a time, so any
+other skills already in `~/.rubot/workspace/skills` remain visible.
+
+Run modes:
+
+```bash
+# Interactive REPL
+docker compose run --rm rubot -C repl
+
+# One-shot message
+docker compose run --rm rubot -m "hello"
+
+# Telegram bot (background)
+docker compose up -d
+docker compose logs -f
+docker compose down
+```
+
+`docker-compose.override.yml` is git-ignored and is the local laptop
+configuration. It bind-mounts `~/.rubot`, the two brand directories, and
+the four Squadron skills, and runs as your UID/GID so sessions, `MEMORY.md`,
+cron jobs, and edited brand/skill files stay owned by you. It defaults to
+`-C telegram`; remove its
+`command:` block (or run `docker compose run --rm rubot -C repl`) for the
+REPL.
+
+A tracked template is available as `docker-compose.override.yml.example`:
+
+```bash
+mkdir -p ~/.rubot/workspace/kanyaah.com ~/.rubot/workspace/adipurnm.com
+mkdir -p ~/.rubot/workspace/skills/{adipurnm-brand,kanyaah-brand,marketing-strategist,writing}
+cp docker-compose.override.yml.example docker-compose.override.yml
+HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose up -d
+```
+
+The mount-point directories must exist and be owned by you before the
+first `docker compose up`. Otherwise Docker creates them as root.
+
+Notes:
+
+- From the laptop, edit `~/.rubot/config.yml`. Inside the container the
+  data directory is `/home/rubot/.rubot`, so workspace paths resolve to
+  `~/.rubot/workspace` (the generated default) or `/home/rubot/...`.
+- To add another brand or skill, append another bind mount under
+  `/home/rubot/.rubot/workspace/<name>` (or `/home/rubot/.rubot/workspace/skills/<name>`)
+  and create the matching host mount point first.
+- Skills are regular files on the host: edit them in
+  `~/Projects/squadron/skills` and the container sees the changes immediately.
+- For Ollama running on the host, set
+  `api_base: http://host.docker.internal:11434` (already allowed by the
+  Compose `extra_hosts` entry).
+- Telegram webhook mode additionally needs a port mapping in the override,
+  e.g. `ports: ["8443:8443"]`.
+- The image contains only `webrick` plus the standard library. Test gems
+  are excluded via `BUNDLE_WITHOUT=development:test`.
 
 ## Testing
 

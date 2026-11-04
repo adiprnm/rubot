@@ -3,6 +3,7 @@
 require "yaml"
 require "fileutils"
 require "pathname"
+require_relative "provider"
 
 module Rubot
   class Config
@@ -15,6 +16,21 @@ module Rubot
     def initialize(config_path = nil)
       @config_path = config_path || ENV["RUBOT_CONFIG"] || DEFAULT_CONFIG_FILE
       @data = load_config
+    end
+
+    # Build a Config around already-loaded data (used to hand a plain-data
+    # snapshot to a Ractor). The data is not copied here: the Ractor message
+    # boundary already deep-copies unshareable objects.
+    def self.from_data(data, config_path: nil)
+      config = allocate
+      config.instance_variable_set(:@config_path, config_path || DEFAULT_CONFIG_FILE)
+      config.instance_variable_set(:@data, data || {})
+      config
+    end
+
+    # Plain, Ractor-sendable snapshot of the underlying configuration.
+    def snapshot
+      Marshal.load(Marshal.dump(@data))
     end
 
     def agent_defaults
@@ -64,6 +80,27 @@ module Rubot
       active_model_entry["api_base"] || ENV["RUBOT_API_BASE"] || ENV["OPENAI_API_BASE"]
     end
 
+    # Build an immutable ProviderSettings snapshot for the given model
+    # (or the active model when nil). This replaces the old approach of
+    # temporarily mutating config.data during provider rebuilds.
+    def provider_settings(model_name = nil)
+      entry = model_name ? model_entry_by_name(model_name) : active_model_entry
+      entry ||= {}
+
+      model_str = entry["model"] || "openai/#{name}"
+
+      ProviderSettings.new(
+        provider: data["provider"] || model_str.split("/").first,
+        model: data["model"] || model_str.split("/").last,
+        api_key: entry["api_key"] || ENV["RUBOT_API_KEY"] || ENV["OPENAI_API_KEY"],
+        api_base: entry["api_base"] || ENV["RUBOT_API_BASE"] || ENV["OPENAI_API_BASE"],
+        max_tokens: max_tokens,
+        temperature: temperature,
+        debug: debug?,
+        extra_headers: entry["extra_headers"].is_a?(Hash) ? entry["extra_headers"] : {}
+      )
+    end
+
     def max_tokens
       agent_defaults["max_tokens"] || 4096
     end
@@ -102,6 +139,7 @@ module Rubot
     end
 
     def tool_enabled?(name)
+      return false unless tools_enabled
       tools = data["tools"] || {}
       tool = tools[name.to_s]
       return true if tool.nil?
@@ -110,12 +148,16 @@ module Rubot
 
     def tools_enabled
       tools = data["tools"]
-      return true if tools.nil? || tools.empty?
+      return true if tools.nil?
+      return false if tools == false
+      return true if tools.respond_to?(:empty?) && tools.empty?
+      return false unless tools.is_a?(Hash)
       tools.values.any? { |t| t.is_a?(Hash) && t["enabled"] != false }
     end
 
     def enabled_tools
-      tools = data["tools"] || {}
+      tools = data["tools"]
+      return [] unless tools.is_a?(Hash)
       tools.select { |_, t| t.is_a?(Hash) && t["enabled"] != false }.keys
     end
 
