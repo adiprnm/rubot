@@ -24,6 +24,22 @@ ENV LANG=C.UTF-8 \
     BUNDLE_WITHOUT=development:test \
     BUNDLE_JOBS=4
 
+# Node.js + Chromium power the Squadron "featured image" generator, which the
+# shell tool calls as `node featured/generate.mjs`. Installed here because the
+# agent cannot install packages on the fly (and PATH exports are blocked by the
+# safety guard). A couple of font packages keep Chromium text rendering sane.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        nodejs \
+        chromium \
+        ca-certificates \
+        fonts-dejavu-core \
+        fonts-liberation2; \
+    rm -rf /var/lib/apt/lists/*; \
+    node --version; \
+    chromium --version
+
 WORKDIR /app
 
 # Runtime gems only. webrick is required for Telegram webhook mode.
