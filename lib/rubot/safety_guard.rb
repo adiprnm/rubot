@@ -21,6 +21,19 @@ module Rubot
     # checking anchor-dependent dangerous patterns.
     STRIP_PREFIXES = %w[env sudo nice time nohup stdbuf ionice].freeze
 
+    # System binary directories that a literal `PATH=` assignment may contain.
+    # Anything else (a writable directory, a variable, a glob) is still treated
+    # as environment manipulation and blocked.
+    SAFE_PATH_DIRS = %w[
+      /usr/local/sbin /usr/local/bin /usr/sbin /usr/bin /sbin /bin
+    ].freeze
+
+    # Environment variables allowed in commands when the workspace is
+    # restricted. `PATH` is opaque (its entries are not workspace paths);
+    # the rest are expanded and the resulting path is checked normally.
+    SAFE_VARIABLES = %w[HOME PWD OLDPWD PATH].freeze
+    EXPANDED_VARIABLES = %w[HOME PWD OLDPWD].freeze
+
     # Dangerous command patterns that are always blocked, regardless of mode.
     #
     # NOTE: Patterns using `$` anchor are applied to individual command fragments
@@ -235,7 +248,7 @@ module Rubot
               "Command blocked by safety guard (path traversal detected)"
       end
 
-      abs_paths = extract_absolute_paths(cmd)
+      abs_paths = extract_absolute_paths(cmd) + extract_absolute_paths(expand_safe_variables(cmd))
       abs_paths.each do |raw_path|
         if sensitive_path?(raw_path)
           raise SecurityError,
@@ -262,7 +275,12 @@ module Rubot
 
       command.split(/[\s;|&<>]+/).each do |token|
         if token.include?("=")
-          _key, value = token.split("=", 2)
+          key, value = token.split("=", 2)
+          # A literal PATH assignment is an environment setting, not a path the
+          # command will touch. Non-benign values still get extracted (and
+          # blocked) below.
+          next if key == "PATH" && benign_path_value?(value)
+
           token = value
         end
 
@@ -308,7 +326,7 @@ module Rubot
       return true if cmd =~ /\bwhile\s+true\s*;\s*do.*&\s*done\b/
 
       split_commands(cmd).any? do |fragment|
-        fragment = fragment.strip
+        fragment = strip_benign_path_assignment(fragment.strip)
         next false if fragment.empty?
 
         stripped = strip_prefixes(fragment)
@@ -344,9 +362,49 @@ module Rubot
       cmd =~ BLOCK_DEVICE_PATTERNS
     end
 
+    # Remove a leading `[env] [export] PATH=<system dirs>` assignment so that a
+    # workspace command can run with an explicit PATH. Assignments that contain
+    # a variable, glob, or writable directory are left in place and therefore
+    # still blocked by DANGEROUS_PATTERNS.
+    def strip_benign_path_assignment(command)
+      cmd = command.strip
+      loop do
+        match = cmd.match(/\A(?:env\s+)?(?:export\s+)?PATH=(\S*)(?:\s+|\z)/)
+        break unless match
+        break unless benign_path_value?(match[1])
+
+        cmd = cmd[match[0].length..].to_s.strip
+      end
+      cmd
+    end
+
+    def benign_path_value?(value)
+      return false if value.empty?
+      return false if value.match?(/[$`~*?\\]/)
+
+      dirs = value.split(":")
+      !dirs.empty? && dirs.all? { |dir| SAFE_PATH_DIRS.include?(dir) }
+    end
+
+    # Only well-known variables are allowed in restricted mode; anything else
+    # (command substitution, backticks, arbitrary `$NAME`) is blocked because it
+    # can hide a path from the workspace check.
     def has_unresolved_path_variables?(command)
       return false unless @restrict_to_workspace
-      command.match?(/\$[\w{(]/) || command.match?(/`[^`]+`/)
+      return true if command.include?("`")
+      return true if command.include?("$(")
+
+      known = SAFE_VARIABLES.join("|")
+      scrubbed = command.gsub(/\$\{?(?:#{known})(?:\}|(?![A-Za-z0-9_]))/, "")
+      scrubbed.include?("$")
+    end
+
+    # Expand variables whose paths must still be checked against the workspace.
+    # `PATH` is intentionally left alone: its colon-separated entries are not
+    # paths used by the command itself.
+    def expand_safe_variables(command)
+      known = EXPANDED_VARIABLES.join("|")
+      command.gsub(/\$\{?(#{known})\}?/) { ENV.fetch(Regexp.last_match(1), "") }
     end
 
     def resolve_path(path)

@@ -599,6 +599,62 @@ class TestSafetyGuard < Minitest::Test
     assert guard.check_command("cat $HOME")
   end
 
+  # --- PATH assignments and safe variables (featured-image workflow) ---
+
+  def test_benign_path_assignment_allowed_in_strict_mode
+    guard = Rubot::SafetyGuard.new(workspace: @workspace, restrict_to_workspace: true)
+
+    assert guard.check_command("PATH=/usr/local/bin:/usr/bin:/bin ./script.sh")
+    assert guard.check_command("export PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; node x.mjs")
+    assert guard.check_command("env PATH=/usr/bin:/bin node featured/generate.mjs \"Judul\"")
+    refute guard.dangerous_command?("export PATH=/usr/local/bin:/usr/bin:/bin; node x.mjs")
+  end
+
+  def test_unsafe_path_assignment_still_blocked
+    guard = Rubot::SafetyGuard.new(workspace: @workspace, restrict_to_workspace: true)
+
+    assert guard.dangerous_command?("PATH=/tmp/evil:/usr/bin ls"), "writable dir must be blocked"
+    assert guard.dangerous_command?("PATH=/usr/bin:/tmp/evil ls"), "writable dir must be blocked"
+    assert guard.dangerous_command?("PATH=/usr/bin:$PATH ls"), "variable must be blocked"
+    assert guard.dangerous_command?("export PATH=/tmp/evil:$PATH"), "variable must be blocked"
+    assert guard.dangerous_command?("LD_PRELOAD=/tmp/evil.so ls"), "LD_* must be blocked"
+  end
+
+  def test_safe_variables_allowed_in_strict_mode
+    guard = Rubot::SafetyGuard.new(workspace: @workspace, restrict_to_workspace: true)
+
+    assert guard.check_command("echo $PATH")
+    assert guard.check_command("echo ${PATH}")
+  end
+
+  def test_pwd_expanded_and_checked_inside_workspace
+    guard = Rubot::SafetyGuard.new(workspace: Dir.pwd, restrict_to_workspace: true)
+
+    assert guard.check_command("node $PWD/script.mjs")
+  end
+
+  def test_expanded_safe_variable_checked_against_workspace
+    guard = Rubot::SafetyGuard.new(workspace: @workspace, restrict_to_workspace: true)
+
+    assert_raises(Rubot::SafetyGuard::SecurityError) do
+      guard.check_command("cat $HOME/outside-workspace.txt")
+    end
+    assert_raises(Rubot::SafetyGuard::SecurityError) do
+      guard.check_command("cat $HOME/../outside-workspace.txt")
+    end
+  end
+
+  def test_unknown_variable_still_blocked_in_strict_mode
+    guard = Rubot::SafetyGuard.new(workspace: @workspace, restrict_to_workspace: true)
+
+    assert_raises(Rubot::SafetyGuard::SecurityError) do
+      guard.check_command("echo $PATHETIC")
+    end
+    assert_raises(Rubot::SafetyGuard::SecurityError) do
+      guard.check_command("echo $1")
+    end
+  end
+
   # --- VULN-8: chmod / shutdown additional bypasses ---
 
   def test_dangerous_command_chmod_variants
