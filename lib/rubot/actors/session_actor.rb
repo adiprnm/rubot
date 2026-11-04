@@ -11,13 +11,17 @@ module Rubot
     # Owns a single Agent (and therefore a single Session) inside a Ractor.
     #
     # Requests arrive on the Ractor's default port:
-    #   - { type: :message, text:, events:, control: }  streaming turn
+    #   - { type: :message, text:, events:, stream: }   streaming turn
     #   - { type: :request, op:, port:, ... }           synchronous call
     #   - { type: :shutdown }
     #
     # Responses are messages on the port supplied by the caller. The agent's
     # callbacks are constructed *inside* this Ractor and only capture
     # shareable ports, so no Proc crosses a Ractor boundary.
+    #
+    # Confirmation replies use a port created *here* and handed to the caller
+    # as an `[:control, port]` event: Ractor::Port#receive only works from the
+    # Ractor that created the port.
     class SessionActor
       attr_reader :ractor, :session_id
 
@@ -56,7 +60,12 @@ module Rubot
 
       def self.handle_message(agent, msg)
         events = msg[:events]
-        control = msg[:control]
+
+        # Ractor::Port#receive is only allowed in the Ractor that created the
+        # port, so the confirmation channel is created here and sent to the
+        # caller (which may only send on it).
+        control = Ractor::Port.new
+        events << [ :control, control ]
 
         callbacks = {
           on_tool_call: ->(name, args) { events << [ :tool_started, name, args ] },
@@ -84,6 +93,8 @@ module Rubot
         events << [ :done, response ]
       rescue StandardError => e
         events << [ :error, e.class.name, e.message, Array(e.backtrace).first(5) ]
+      ensure
+        control&.close
       end
 
       def self.handle_request(agent, session_id, msg)

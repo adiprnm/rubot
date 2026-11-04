@@ -2,6 +2,7 @@
 
 require_relative "test_helper"
 require "socket"
+require "timeout"
 require "yaml"
 
 # Integration tests for the Ractor-backed session/cron actors.
@@ -192,6 +193,117 @@ class TestActors < Minitest::Test
 
   # Exercises the wire protocol without a real Agent: a fake actor replies
   # with the same event shapes a SessionActor produces.
+  # Regression (real actor code path): handle_message must create the
+  # confirmation port itself, otherwise control.receive raises
+  # "only allowed from the creator Ractor of this port".
+  def test_session_actor_confirmation_round_trip
+    ractor = Ractor.new do
+      agent = Class.new do
+        def process(_text, on_confirm: nil, **_callbacks)
+          approved = on_confirm.call("shell_exec", { "command" => "rm -rf build" })
+          approved ? "approved" : "rejected"
+        end
+      end.new
+
+      msg = Ractor.receive
+      Rubot::Actors::SessionActor.handle_message(agent, msg)
+    end
+
+    handle = Rubot::Actors::SessionHandle.new(ractor, "real-confirm")
+    asked = []
+
+    response = Timeout.timeout(5) do
+      handle.process("go", on_confirm: ->(name, args) {
+        asked << [ name, args ]
+        true
+      })
+    end
+
+    assert_equal "approved", response
+    assert_equal [ [ "shell_exec", { "command" => "rm -rf build" } ] ], asked
+  ensure
+    begin
+      ractor&.send({ type: :shutdown })
+    rescue StandardError
+      nil # the actor exits after serving one message
+    end
+    ractor&.join
+  end
+
+  # Regression: the confirmation port must be created by the session Ractor,
+  # because Ractor::Port#receive only works in the Ractor that created it.
+  def test_session_handle_confirm_round_trip
+    ractor = Ractor.new do
+      loop do
+        msg = Ractor.receive
+        case msg[:type]
+        when :message
+          control = Ractor::Port.new
+          msg[:events] << [ :control, control ]
+          msg[:events] << [ :confirm, "abc123", "shell_exec", { "command" => "rm -rf build" } ]
+          reply = control.receive
+          control.close
+          msg[:events] << [ :chunk, reply.inspect ]
+          msg[:events] << [ :done, "done" ]
+        when :shutdown
+          break
+        end
+      end
+    end
+
+    handle = Rubot::Actors::SessionHandle.new(ractor, "fake-confirm")
+    asked = []
+    chunks = []
+
+    response = Timeout.timeout(5) do
+      handle.process("go", on_confirm: ->(name, args) {
+        asked << [ name, args ]
+        true
+      }) { |chunk| chunks << chunk }
+    end
+
+    assert_equal "done", response
+    assert_equal [ [ "shell_exec", { "command" => "rm -rf build" } ] ], asked
+    assert_equal [ [ :confirm_result, "abc123", true ].inspect ], chunks
+  ensure
+    ractor&.send({ type: :shutdown })
+    ractor&.join
+  end
+
+  # A failing confirmation callback must fail closed, not hang the actor.
+  def test_session_handle_confirm_error_fails_closed
+    ractor = Ractor.new do
+      loop do
+        msg = Ractor.receive
+        case msg[:type]
+        when :message
+          control = Ractor::Port.new
+          msg[:events] << [ :control, control ]
+          msg[:events] << [ :confirm, "abc123", "shell_exec", { "command" => "rm -rf build" } ]
+          reply = control.receive
+          control.close
+          msg[:events] << [ :chunk, reply.inspect ]
+          msg[:events] << [ :done, "done" ]
+        when :shutdown
+          break
+        end
+      end
+    end
+
+    handle = Rubot::Actors::SessionHandle.new(ractor, "fake-confirm-error")
+    chunks = []
+
+    response = Timeout.timeout(5) do
+      handle.process("go", on_confirm: ->(_name, _args) { raise "network down" }) { |chunk| chunks << chunk }
+    end
+
+    assert_equal "done", response
+    assert_equal [ [ :confirm_result, "abc123", false ].inspect ], chunks
+  ensure
+    ractor&.send({ type: :shutdown })
+    ractor&.join
+  end
+
   def test_session_handle_translates_events
     ractor = Ractor.new do
       loop do

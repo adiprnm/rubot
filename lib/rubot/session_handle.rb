@@ -35,14 +35,17 @@ module Rubot
 
       def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil, stream: true, &on_chunk)
         events = Ractor::Port.new
-        control = Ractor::Port.new
+        control = nil
 
-        @ractor.send({ type: :message, text: message, events: events, control: control, stream: stream })
+        @ractor.send({ type: :message, text: message, events: events, stream: stream })
 
         response = +""
         loop do
           event = events.receive
           case event[0]
+          when :control
+            # Port created by the session Ractor; we may only send on it.
+            control = event[1]
           when :chunk
             on_chunk&.call(event[1])
           when :tool_started
@@ -52,8 +55,14 @@ module Rubot
           when :progress
             on_progress&.call(event[1], event[2])
           when :confirm
-            approved = on_confirm ? on_confirm.call(event[2], event[3]) : false
-            control << [ :confirm_result, event[1], approved ]
+            answered = begin
+              on_confirm ? on_confirm.call(event[2], event[3]) : false
+            rescue StandardError
+              false # fail closed; never leave the actor blocked on a reply
+            end
+            raise ActorError, "confirmation channel not established" unless control
+
+            control << [ :confirm_result, event[1], answered ]
           when :done
             response = event[1].to_s
             break
@@ -65,7 +74,6 @@ module Rubot
         response
       ensure
         events&.close
-        control&.close
       end
 
       def process_cron(text)
