@@ -19,6 +19,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 🔒 **Safety guard** — dangerous command filtering (PicoClaw-style sandboxing)
 - 🎯 **Skills system** — pluggable skill definitions via SKILL.md files in the workspace
 - 📡 **Multi-channel** — REPL and Telegram, with a pluggable channel architecture
+- 📎 **Inbound attachments** — screenshots and files sent to Telegram are saved to the workspace, with dimensions and size added to the prompt
 - 🔈 **Progress narration** — the model explains what it is doing between tool calls ("Let me check the structure first."), sent as normal chat messages
 - 📄 **`.env` support** — automatic environment variable loading from `.env` files
 - 🎛️ **CLI options** — single-message mode or interactive chat
@@ -285,6 +286,7 @@ channels:
     narration: true                 # send progress narration as chat messages
     tool_notifications: true        # show/edit a status line while tools run
     max_message_length: 4096        # Telegram's max message length
+    attachments: true               # download inbound photos and files
 ```
 
 While it works, the bot sends the model's own narration as normal chat messages
@@ -292,6 +294,27 @@ While it works, the bot sends the model's own narration as normal chat messages
 the technical detail in a separate status message that is edited in place and
 deleted once the final answer arrives. Set `narration: false` to silence the
 narration or `tool_notifications: false` to hide the status line.
+
+#### Sending images and files to the bot
+
+A photo sent to the bot arrives as `message.photo` plus an optional
+`message.caption` — Telegram never fills `message.text` for it. The channel
+handles that case: the image (or `document`) is downloaded via `getFile` into
+`<workspace>/attachments/<session>/`, and its local path, pixel dimensions, and
+size are appended to the caption before the agent sees it:
+
+```
+crop ini buat slide 2
+
+📎 User attached an image: /home/rubot/.rubot/workspace/attachments/tg_42/20261104-1006-a1b2c3.jpg (1864×1200, 412 KB)
+```
+
+The agent can then use its normal tools (`file_ops`, `shell_exec`) on that path.
+Dimensions are read from the file header, so no ImageMagick is required. Files
+are kept inside the workspace so the safety guard allows the agent to read them.
+Media the channel cannot read (stickers, voice notes, video) now gets an explicit
+reply instead of being dropped silently. Set `attachments: false` to disable the
+download path entirely.
 
 3. **Run** with the Telegram channel:
 
@@ -612,6 +635,7 @@ rubot/
 │       ├── soul.rb        # SOUL.md personality loader
 │       ├── memory.rb      # MEMORY.md persistent memory
 │       ├── agents_file.rb # AGENTS.md config & rules parser
+│       ├── image_info.rb  # Image dimensions from file headers (no deps)
 │       ├── provider.rb    # Base provider interface
 │       ├── providers/
 │       │   ├── openai.rb  # OpenAI-compatible provider

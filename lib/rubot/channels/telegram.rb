@@ -3,9 +3,11 @@
 require "net/http"
 require "uri"
 require "json"
+require "fileutils"
 require "thread"
 require "securerandom"
 
+require_relative "../image_info"
 require_relative "../telegram_markdown"
 
 module Rubot
@@ -26,11 +28,21 @@ module Rubot
     #       typing_indicator: true           # show typing indicator while processing
     #       tool_notifications: true         # send status messages for tool execution (default: true)
     #       max_message_length: 4096         # Telegram's max message length
+    #       attachments: true                # download inbound photos/documents
     #
+    # Inbound media is saved under `<workspace>/attachments/<session>/` and its
+    # local path is appended to the user's text, so the agent can read the file
+    # with its normal tools. Telegram never puts media in "text" — photos and
+    # captions arrive as `photo` + `caption` — which is why captions must be
+    # read explicitly.
     class Telegram < Channel
       API_BASE = "https://api.telegram.org/bot"
+      FILE_API_BASE = "https://api.telegram.org/file/bot"
       DEFAULT_MAX_LENGTH = 4096
       DEFAULT_POLL_TIMEOUT = 60
+      # Bot API refuses getFile above 20 MB.
+      MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+      UNSUPPORTED_MEDIA = %w[sticker voice video video_note audio animation].freeze
 
       def initialize(agent: nil, pool: nil, app_config: nil, channel_config: {})
         super
@@ -591,19 +603,35 @@ module Rubot
 
         chat_id = message["chat"]["id"]
         text = message["text"]
+        caption = message["caption"]
         thread_id = message["message_thread_id"]
 
-        # Skip if no text (e.g., photo, sticker, etc.)
-        return unless text && !text.strip.empty?
-
-        # Check allowed users/chats
+        # Check allowed users/chats before touching the network or the disk.
         return unless authorized?(chat_id, message)
 
-        user_id = message["from"]["id"]
+        user_id = message["from"] ? message["from"]["id"] : chat_id
         username = message.dig("from", "username") || "User##{user_id}"
 
         # Per-topic (or per-DM) session isolation
         session_id = thread_id ? "tg_#{chat_id}_#{thread_id}" : "tg_#{chat_id}"
+
+        attachments, unsupported_media = extract_attachments(message)
+        body = text.to_s.strip.empty? ? caption : text
+        body = body.to_s.strip
+
+        # Nothing the agent can read. Answer explicitly instead of dropping the
+        # update silently, which looks exactly like a broken bot to the user.
+        if body.empty? && attachments.empty?
+          if unsupported_media
+            warn "[telegram] Unsupported media from #{username}: #{unsupported_media}" if Rubot.debug?
+            send_message(chat_id, "⚠️ I can't read #{unsupported_media} yet. " \
+                                  "Send text, or a screenshot as a photo or file.", thread_id)
+          end
+          return
+        end
+
+        notes = attachments.map { |attachment| receive_attachment(attachment, session_id, chat_id) }
+        prompt = [ body, *notes ].reject(&:empty?).join("\n\n")
 
         # Track last active chat for cron message delivery
         @last_chat_id = chat_id
@@ -618,7 +646,7 @@ module Rubot
         send_file_tool = session_for(session_id).tools.get("send_file")
         send_file_tool.delivery_context = { chat_id: chat_id, thread_id: thread_id } if send_file_tool
 
-        warn "[telegram] #{username} (#{user_id})#{thread_id ? " [topic:#{thread_id}]" : ""}: #{text[0..80]}" if Rubot.debug?
+        warn "[telegram] #{username} (#{user_id})#{thread_id ? " [topic:#{thread_id}]" : ""}: #{prompt[0..120]}" if Rubot.debug?
 
         # Show typing indicator
         # Note: Telegram API has a known bug where typing indicators don't display
@@ -632,7 +660,7 @@ module Rubot
           start_typing(chat_id, thread_id) if @config.fetch("typing_indicator", true)
         end
 
-        response = process_message(text, session_id: session_id, on_assistant_text: ->(narration) {
+        response = process_message(prompt, session_id: session_id, on_assistant_text: ->(narration) {
           send_narration(chat_id, thread_id, narration)
         }, on_tool_call: ->(tool_name, args) {
           notify_tool_started(chat_id, thread_id, tool_name, args)
@@ -665,7 +693,7 @@ module Rubot
       # --------------- Authorization ---------------
 
       def authorized?(chat_id, message)
-        user_id = message["from"]["id"]
+        user_id = message.dig("from", "id")
 
         allowed_users = @config["allowed_user_ids"]
         if allowed_users && !allowed_users.map(&:to_i).include?(user_id)
@@ -680,6 +708,163 @@ module Rubot
         end
 
         true
+      end
+
+      # --------------- Inbound Attachments ---------------
+
+      # Telegram delivers media in its own fields, never in "text": a photo
+      # arrives as an array of pre-scaled `photo` entries, a file as `document`.
+      # Returns [attachments, unsupported].
+      def extract_attachments(message)
+        return [ [], nil ] unless @config.fetch("attachments", true)
+
+        photos = message["photo"]
+        if photos.is_a?(Array) && !photos.empty?
+          best = photos.max_by { |photo| photo["file_size"].to_i }
+          return [ [ {
+            file_id: best["file_id"],
+            kind: :image,
+            unique_id: best["file_unique_id"],
+            extension: ".jpg"
+          } ], nil ]
+        end
+
+        document = message["document"]
+        if document.is_a?(Hash) && document["file_id"]
+          mime = document["mime_type"].to_s
+          return [ [ {
+            file_id: document["file_id"],
+            kind: mime.start_with?("image/") ? :image : :file,
+            unique_id: document["file_unique_id"],
+            name: document["file_name"],
+            size: document["file_size"].to_i
+          } ], nil ]
+        end
+
+        [ [], UNSUPPORTED_MEDIA.find { |field| message[field] } ]
+      end
+
+      # Download one attachment and describe it for the agent's prompt.
+      # Never raises: a failed download becomes a note the model can act on
+      # instead of an exception that would swallow the user's caption.
+      def receive_attachment(attachment, session_id, chat_id)
+        label = attachment[:kind] == :image ? "an image" : "a file"
+
+        if (attachment[:size] || 0) > MAX_ATTACHMENT_BYTES
+          warn "[telegram] Attachment too large: #{attachment[:size]} bytes"
+          return "\u{1F4CE} User attached #{label} but it exceeds Telegram's " \
+                 "#{MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB download limit."
+        end
+
+        dest = download_attachment(attachment, session_id)
+        unless dest
+          warn "[telegram] Failed to download #{label} for chat #{chat_id}"
+          return "\u{1F4CE} User attached #{label} but it could not be downloaded."
+        end
+
+        details = [ Rubot::ImageInfo.dimensions(dest), human_size(File.size(dest)) ].compact
+        suffix = details.empty? ? "" : " (#{details.join(', ')})"
+        "\u{1F4CE} User attached #{label}: #{dest}#{suffix}"
+      end
+
+      # Resolve the Telegram file_path for a file_id and stream it to disk.
+      # Returns the local path, or nil on any failure.
+      def download_attachment(attachment, session_id)
+        file_path = telegram_file_path(attachment[:file_id])
+        return nil unless file_path
+
+        dir = File.join(attachments_root, sanitize_component(session_id))
+        FileUtils.mkdir_p(dir)
+        dest = File.join(dir, attachment_filename(attachment, file_path))
+
+        uri = URI("#{FILE_API_BASE}#{@token}/#{file_path}")
+        downloaded = false
+        Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == "https") do |http|
+          http.open_timeout = 10
+          http.read_timeout = 120
+          http.request_get(uri.request_uri) do |response|
+            unless response.code.to_i == 200
+              warn "[telegram] File download failed: #{response.code}"
+              next
+            end
+            File.open(dest, "wb") do |file|
+              response.read_body { |chunk| file.write(chunk) }
+            end
+            downloaded = true
+          end
+        end
+
+        return dest if downloaded && File.size?(dest)
+
+        # Do not leave a zero-byte file behind for the agent to trip over.
+        FileUtils.rm_f(dest)
+        nil
+      rescue StandardError => e
+        warn "[telegram] Download error: #{e.class}: #{e.message}"
+        FileUtils.rm_f(dest) if dest
+        nil
+      end
+
+      def telegram_file_path(file_id)
+        url = URI("#{API_BASE}#{@token}/getFile?#{URI.encode_www_form('file_id' => file_id)}")
+        response = http_get(url)
+        unless response["ok"]
+          warn "[telegram] getFile error: #{response['description']}"
+          return nil
+        end
+
+        response.dig("result", "file_path")
+      rescue StandardError => e
+        warn "[telegram] getFile failed: #{e.class}: #{e.message}"
+        nil
+      end
+
+      # Attachments stay inside the workspace so the safety guard lets the
+      # agent read them, and so the user finds them on the host.
+      def attachments_root
+        workspace =
+          if @app_config
+            @app_config.workspace
+          elsif @agent.respond_to?(:config) && @agent.config
+            @agent.config.workspace
+          else
+            File.join(Dir.home, ".rubot", "workspace")
+          end
+        File.join(workspace, "attachments")
+      end
+
+      def attachment_filename(attachment, file_path)
+        extension = File.extname(file_path)
+        extension = File.extname(attachment[:name].to_s) if extension.empty?
+        extension = attachment[:extension].to_s if extension.empty?
+        extension = ".jpg" if extension.empty?
+
+        unique = sanitize_component(attachment[:unique_id].to_s)
+        unique = SecureRandom.hex(6) if unique.empty?
+
+        original = attachment[:name].to_s
+        base = sanitize_component(File.basename(original, File.extname(original)))
+        base = "#{base}-#{unique}" unless base.empty?       # keeps the human name
+        base = "#{Time.now.strftime('%Y%m%d-%H%M%S')}-#{unique}" if base.empty?
+
+        "#{base}#{extension}"
+      end
+
+      # Keeps files inside the attachments directory: no slashes, no leading dots.
+      def sanitize_component(value)
+        value.to_s.gsub(/[^A-Za-z0-9_.-]/, "_").sub(/\A\.+/, "")[0, 80].to_s
+      end
+
+      def human_size(bytes)
+        return "0 B" unless bytes.to_i.positive?
+
+        if bytes >= 1024 * 1024
+          format("%.1f MB", bytes / (1024.0 * 1024.0))
+        elsif bytes >= 1024
+          format("%.0f KB", bytes / 1024.0)
+        else
+          "#{bytes} B"
+        end
       end
 
       # --------------- Sending Messages ---------------

@@ -483,4 +483,205 @@ module Rubot
       assert_empty sent
     end
   end
+
+  # Inbound media: Telegram sends photos as `photo` + `caption`, never as
+  # `text`. These tests lock in that a captioned screenshot reaches the agent.
+  class TestTelegramInboundAttachments < Minitest::Test
+    # Stubs every piece that would touch the network, and records what the
+    # agent would have been asked.
+    class StubbedTelegram < Channels::Telegram
+      attr_reader :sent, :prompts, :downloads
+
+      def initialize(downloads: [], **kwargs)
+        super(**kwargs)
+        @sent = []
+        @prompts = []
+        @downloads = downloads
+      end
+
+      private
+
+      def send_message(chat_id, text, thread_id = nil)
+        @sent << [ chat_id, text, thread_id ]
+        true
+      end
+
+      def send_message_plain(chat_id, text, thread_id = nil)
+        @sent << [ chat_id, text, thread_id ]
+        true
+      end
+
+      def process_message(message, session_id: nil, **_callbacks)
+        @prompts << [ message, session_id ]
+        "agent reply"
+      end
+
+      def send_action(*_args)
+        nil
+      end
+
+      def download_attachment(_attachment, session_id)
+        @downloads.shift || File.join(attachments_root, sanitize_component(session_id), "shot.png")
+      end
+    end
+
+    def setup
+      @tmpdir = Dir.mktmpdir
+      @config = isolated_config(@tmpdir, name: "test_inbound")
+      @agent = Rubot::Agent.new(config: @config, session_id: "test_inbound", tools: Rubot::Tools::Registry.new)
+      @image = File.join(@config.workspace, "attachments", "tg_42", "shot.png")
+      FileUtils.mkdir_p(File.dirname(@image))
+      File.binwrite(@image, png_bytes(1864, 1200))
+    end
+
+    def teardown
+      FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+    end
+
+    def png_bytes(width, height)
+      ihdr = [ width, height, 8, 2, 0, 0, 0 ].pack("N2C5")
+      "\x89PNG\r\n\x1A\n".b + [ 13 ].pack("N") + "IHDR" + ihdr + [ 0 ].pack("N")
+    end
+
+    def build_telegram(downloads: [])
+      StubbedTelegram.new(
+        agent: @agent,
+        channel_config: { "token" => "fake", "typing_indicator" => false },
+        downloads: downloads
+      )
+    end
+
+    def photo_update(caption: nil)
+      message = {
+        "chat" => { "id" => 42, "type" => "private" },
+        "from" => { "id" => 42, "username" => "tester" },
+        "photo" => [
+          { "file_id" => "small", "file_unique_id" => "u1", "file_size" => 1_000 },
+          { "file_id" => "large", "file_unique_id" => "u2", "file_size" => 90_000 }
+        ]
+      }
+      message["caption"] = caption if caption
+      { "update_id" => 1, "message" => message }
+    end
+
+    def test_photo_with_caption_reaches_the_agent
+      tg = build_telegram
+      tg.send(:process_update, photo_update(caption: "ini bagian amplop"))
+
+      assert_equal 1, tg.prompts.size
+      prompt, session_id = tg.prompts.first
+      assert_includes prompt, "ini bagian amplop"
+      assert_includes prompt, "#{@image}"
+      assert_includes prompt, "1864×1200"
+      assert_equal "tg_42", session_id
+    end
+
+    def test_photo_without_caption_is_no_longer_dropped
+      tg = build_telegram
+      tg.send(:process_update, photo_update)
+
+      assert_equal 1, tg.prompts.size
+      assert_includes tg.prompts.first[0], @image
+      refute_empty tg.sent
+    end
+
+    def test_plain_text_still_passes_through_unchanged
+      tg = build_telegram
+      update = { "update_id" => 2, "message" => {
+        "chat" => { "id" => 42 }, "from" => { "id" => 42 }, "text" => "halo"
+      } }
+      tg.send(:process_update, update)
+
+      assert_equal [ [ "halo", "tg_42" ] ], tg.prompts
+    end
+
+    def test_unsupported_media_gets_an_explicit_reply_instead_of_silence
+      tg = build_telegram
+      update = { "update_id" => 3, "message" => {
+        "chat" => { "id" => 42 }, "from" => { "id" => 42 },
+        "sticker" => { "file_id" => "s1", "emoji" => "🙂" }
+      } }
+      tg.send(:process_update, update)
+
+      assert_empty tg.prompts
+      assert_equal 1, tg.sent.size
+      assert_includes tg.sent.first[1], "sticker"
+    end
+
+    def test_failed_download_still_passes_the_caption_to_the_agent
+      tg = build_telegram
+      tg.define_singleton_method(:download_attachment) { |*_args| nil }
+
+      tg.send(:process_update, photo_update(caption: "lihat ini"))
+
+      assert_equal 1, tg.prompts.size
+      assert_includes tg.prompts.first[0], "lihat ini"
+      assert_includes tg.prompts.first[0], "could not be downloaded"
+    end
+
+    def test_unauthorized_user_never_triggers_a_download
+      tg = Channels::Telegram.new(
+        agent: @agent,
+        channel_config: { "token" => "fake", "allowed_user_ids" => [ 999 ] }
+      )
+      called = false
+      tg.define_singleton_method(:download_attachment) { |*_args| called = true and nil }
+
+      tg.send(:process_update, photo_update(caption: "hi"))
+
+      refute called
+    end
+
+    def test_attachments_live_inside_the_workspace
+      tg = build_telegram
+      root = tg.send(:attachments_root)
+      assert root.start_with?(@config.workspace), "#{root} must stay inside #{@config.workspace}"
+    end
+
+    def test_extract_attachments_picks_the_largest_photo
+      tg = build_telegram
+      attachments, unsupported = tg.send(:extract_attachments, photo_update["message"])
+
+      assert_nil unsupported
+      assert_equal 1, attachments.size
+      assert_equal "large", attachments.first[:file_id]
+      assert_equal :image, attachments.first[:kind]
+    end
+
+    def test_extract_attachments_marks_documents_by_mime_type
+      tg = build_telegram
+      attachments, = tg.send(:extract_attachments, {
+        "document" => { "file_id" => "d1", "file_unique_id" => "u", "file_name" => "a.pdf",
+                        "mime_type" => "application/pdf" }
+      })
+
+      assert_equal :file, attachments.first[:kind]
+    end
+
+    def test_attachment_filename_cannot_escape_the_directory
+      tg = build_telegram
+      name = tg.send(:attachment_filename, { name: "../../etc/passwd", unique_id: "u1" }, "photos/file_1.jpg")
+
+      refute_includes name, "/"
+      refute name.start_with?(".")
+    end
+
+    def test_attachment_filename_keeps_the_original_extension
+      tg = build_telegram
+      name = tg.send(:attachment_filename, { name: "capture.png", unique_id: "u1" }, "documents/file_1")
+
+      assert name.end_with?(".png"), name
+      assert_includes name, "capture-"
+    end
+
+    def test_attachments_can_be_disabled
+      tg = Channels::Telegram.new(
+        agent: @agent,
+        channel_config: { "token" => "fake", "attachments" => false, "typing_indicator" => false }
+      )
+      attachments, = tg.send(:extract_attachments, photo_update["message"])
+
+      assert_empty attachments
+    end
+  end
 end
