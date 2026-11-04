@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
+require "socket"
+require "timeout"
 
 class TestTools < Minitest::Test
   def setup
@@ -20,7 +22,8 @@ class TestTools < Minitest::Test
     assert_includes names, "file_ops"
     assert_includes names, "web_fetch"
     assert_includes names, "cron"
-    assert_equal 4, @registry.count
+    assert_includes names, "send_file"
+    assert_equal 5, @registry.count
   end
 
   def test_registry_get_tool
@@ -38,6 +41,138 @@ class TestTools < Minitest::Test
     assert_empty @registry.names
   end
 
+  # --- send_file ---
+
+  def start_telegram_stub(response_body: '{"ok":true,"result":{}}')
+    server = TCPServer.new("127.0.0.1", 0)
+    requests = Queue.new
+    thread = Thread.new do
+      client = server.accept
+      data = +""
+      data << client.readpartial(1024) until data.include?("\r\n\r\n")
+      head, body = data.split("\r\n\r\n", 2)
+      length = head[/Content-Length:\s*(\d+)/i, 1].to_i
+      body = body.to_s
+      body << client.read(length - body.bytesize) while body.bytesize < length
+      requests << [ head, body ]
+      client.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" \
+                   "Content-Length: #{response_body.bytesize}\r\nConnection: close\r\n\r\n#{response_body}")
+      client.close
+    end
+    [ server, thread, requests ]
+  end
+
+  def with_env(vars)
+    saved = vars.keys.to_h { |k| [ k, ENV[k] ] }
+    vars.each { |k, v| v.nil? ? ENV.delete(k) : ENV[k] = v }
+    yield
+  ensure
+    saved.each { |k, v| v.nil? ? ENV.delete(k) : ENV[k] = v }
+  end
+
+  def test_send_file_requires_delivery_context
+    tool = Rubot::Tools::SendFile.new
+    assert_includes tool.execute({ "path" => "image.png" }), "no delivery context"
+  end
+
+  def test_send_file_requires_bot_token
+    tool = Rubot::Tools::SendFile.new
+    tool.delivery_context = { chat_id: 42 }
+
+    with_env("TELEGRAM_BOT_TOKEN" => nil) do
+      assert_includes tool.execute({ "path" => "image.png" }), "TELEGRAM_BOT_TOKEN"
+    end
+  end
+
+  def test_send_file_reports_missing_file
+    tool = Rubot::Tools::SendFile.new
+    tool.delivery_context = { chat_id: 42 }
+
+    with_env("TELEGRAM_BOT_TOKEN" => "123:abc") do
+      assert_includes tool.execute({ "path" => File.join(@tmpdir, "nope.png") }), "file not found"
+    end
+  end
+
+  def test_send_file_uploads_png_as_photo
+    png = File.join(@tmpdir, "featured.png")
+    File.binwrite(png, "\x89PNG\r\n\x1a\nfake-image-bytes")
+
+    server, thread, requests = start_telegram_stub
+    port = server.addr[1]
+
+    result = with_env(
+      "RUBOT_TELEGRAM_API_BASE" => "http://127.0.0.1:#{port}",
+      "TELEGRAM_BOT_TOKEN" => "123:abc"
+    ) do
+      tool = Rubot::Tools::SendFile.new
+      tool.delivery_context = { chat_id: 42, thread_id: 7 }
+      tool.execute({ "path" => png, "caption" => "Judul post" })
+    end
+
+    assert_includes result, "as a photo"
+
+    head, body = Timeout.timeout(5) { requests.pop }
+    assert_includes head, "POST /bot123:abc/sendPhoto"
+    assert_includes body, 'name="chat_id"'
+    assert_includes body, "42"
+    assert_includes body, 'name="photo"; filename="featured.png"'
+    assert_includes body, "Content-Type: image/png"
+    assert_includes body, "Judul post"
+    assert_includes body, "message_thread_id"
+  ensure
+    server&.close
+    thread&.join(2)
+  end
+
+  def test_send_file_uploads_other_files_as_document
+    pdf = File.join(@tmpdir, "post.pdf")
+    File.binwrite(pdf, "%PDF-1.4 fake")
+
+    server, thread, requests = start_telegram_stub
+    port = server.addr[1]
+
+    result = with_env(
+      "RUBOT_TELEGRAM_API_BASE" => "http://127.0.0.1:#{port}",
+      "TELEGRAM_BOT_TOKEN" => "123:abc"
+    ) do
+      tool = Rubot::Tools::SendFile.new
+      tool.delivery_context = { chat_id: 42 }
+      tool.execute({ "path" => pdf })
+    end
+
+    assert_includes result, "as a document"
+
+    head, body = Timeout.timeout(5) { requests.pop }
+    assert_includes head, "POST /bot123:abc/sendDocument"
+    assert_includes body, 'name="document"; filename="post.pdf"'
+  ensure
+    server&.close
+    thread&.join(2)
+  end
+
+  def test_send_file_reports_telegram_rejection
+    png = File.join(@tmpdir, "featured.png")
+    File.binwrite(png, "bytes")
+
+    server, thread, requests = start_telegram_stub(response_body: '{"ok":false,"description":"Bad Request: chat not found"}')
+    port = server.addr[1]
+
+    result = with_env(
+      "RUBOT_TELEGRAM_API_BASE" => "http://127.0.0.1:#{port}",
+      "TELEGRAM_BOT_TOKEN" => "123:abc"
+    ) do
+      tool = Rubot::Tools::SendFile.new
+      tool.delivery_context = { chat_id: 42 }
+      tool.execute({ "path" => png })
+    end
+
+    assert_includes result, "chat not found"
+  ensure
+    server&.close
+    thread&.join(2)
+    requests.close if requests
+  end
+
   def test_registry_register_custom_tool
     custom = Class.new(Rubot::Tool) do
       def name; "custom_tool"; end
@@ -46,13 +181,13 @@ class TestTools < Minitest::Test
     end.new
 
     @registry.register(custom)
-    assert_equal 5, @registry.count
+    assert_equal 6, @registry.count
     assert_equal "done: {}", @registry.execute("custom_tool", {})
   end
 
   def test_registry_provider_definitions
     defs = @registry.to_provider_definitions("openai")
-    assert_equal 4, defs.size
+    assert_equal 5, defs.size
     assert defs.all? { |d| d["type"] == "function" }
     assert defs.all? { |d| d["function"]["name"] }
     assert defs.all? { |d| d["function"]["description"] }

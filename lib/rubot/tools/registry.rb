@@ -57,6 +57,7 @@ module Rubot
         register FileTool.new(safety_guard: @safety_guard)
         register Web.new
         register Cron.new
+        register SendFile.new(safety_guard: @safety_guard)
       end
     end
   end

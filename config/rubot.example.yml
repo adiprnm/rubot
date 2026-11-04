@@ -35,6 +35,8 @@ tools:
     enabled: true          # Search and fetch web content
   cron:
     enabled: true          # Schedule recurring and one-time jobs
+  send_file:
+    enabled: true          # Send generated files/images back to the chat
   # memory is always enabled when workspace exists
 
 # Channels — how users interact with Rubot.

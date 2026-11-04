@@ -614,6 +614,10 @@ module Rubot
         cron_tool = session_for(session_id).tools.get("cron")
         cron_tool.delivery_context = { chat_id: chat_id, thread_id: thread_id } if cron_tool
 
+        # Let the agent send files back to this chat (e.g. generated images).
+        send_file_tool = session_for(session_id).tools.get("send_file")
+        send_file_tool.delivery_context = { chat_id: chat_id, thread_id: thread_id } if send_file_tool
+
         warn "[telegram] #{username} (#{user_id})#{thread_id ? " [topic:#{thread_id}]" : ""}: #{text[0..80]}" if Rubot.debug?
 
         # Show typing indicator
