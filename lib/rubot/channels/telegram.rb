@@ -1143,6 +1143,12 @@ module Rubot
       # regular chat message. Unlike the tool status, these are never edited or
       # deleted, so the conversation keeps a readable trace of what the bot did.
       # Controlled by `narration` (default: on) in the channel config.
+      #
+      # The tool status message is a live "running tool" line, so it is dropped
+      # before the narration goes out: the newest words from the model must land
+      # at the bottom of the chat, and the next tool call opens a fresh status
+      # message underneath them. Otherwise the previous "Running tool" card stays
+      # above the narration that describes what happened after it.
       def send_narration(chat_id, thread_id, text)
         return unless @config.fetch("narration", true)
 
@@ -1150,6 +1156,7 @@ module Rubot
         return if text.empty?
 
         warn "[telegram] narration: #{text[0..80]}" if Rubot.debug?
+        clear_status_message(chat_id, thread_id, reset_count: false)
         ok = send_message(chat_id, text, thread_id)
         send_message_plain(chat_id, text, thread_id) unless ok
       end
@@ -1246,12 +1253,18 @@ module Rubot
         "#{chat_id}:#{thread_id}"
       end
 
-      # Delete the status message for a specific chat/thread (called before sending the final response).
-      def clear_status_message(chat_id, thread_id)
+      # Delete the status message for a specific chat/thread. Called before the
+      # final response, and before each narration so the assistant text always
+      # ends up below the live tool status instead of above it.
+      #
+      # `reset_count: false` keeps the running tool step count for the request,
+      # which is what a narration needs: the conversation restarts the status
+      # message, not the numbering of the steps already taken.
+      def clear_status_message(chat_id, thread_id, reset_count: true)
         key = status_key(chat_id, thread_id)
         @status_mutex.synchronize do
           info = @status_messages.delete(key)
-          @tool_counts.delete(key)
+          @tool_counts.delete(key) if reset_count
           return unless info
           delete_message(info[:chat_id], info[:message_id]) if info[:chat_id] && info[:message_id]
         end

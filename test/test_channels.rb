@@ -482,6 +482,62 @@ module Rubot
 
       assert_empty sent
     end
+
+    # The status card is a live "running tool" line. A narration must land below
+    # it, so the card is deleted before the words are sent — never left sitting
+    # above the assistant text that describes what happened after it.
+    def test_send_narration_deletes_the_stale_tool_status_first
+      events = []
+      seed_status_message(42, 7, "sent-1")
+
+      @tg.define_singleton_method(:delete_message) do |chat_id, message_id|
+        events << [ :delete, chat_id, message_id ]
+        true
+      end
+      @tg.define_singleton_method(:send_message) do |chat_id, text, thread_id = nil|
+        events << [ :send, chat_id, text, thread_id ]
+        true
+      end
+
+      @tg.send(:send_narration, 42, 7, "Perintah tadi kena guard, gue pecah jadi yang aman.")
+
+      assert_equal [
+        [ :delete, 42, "sent-1" ],
+        [ :send, 42, "Perintah tadi kena guard, gue pecah jadi yang aman.", 7 ]
+      ], events
+    end
+
+    def test_narration_keeps_the_tool_step_count_so_the_next_card_continues
+      seed_status_message(42, 7, "sent-1")
+      status_key = @tg.send(:status_key, 42, 7)
+      @tg.instance_variable_get(:@tool_counts)[status_key] = 3
+      @tg.define_singleton_method(:delete_message) { |*_args| true }
+      @tg.define_singleton_method(:send_message) { |*_args| true }
+
+      @tg.send(:send_narration, 42, 7, "Checking the next file.")
+
+      assert_equal 3, @tg.instance_variable_get(:@tool_counts)[status_key]
+    end
+
+    def test_clear_status_message_resets_the_step_count_for_the_next_request
+      seed_status_message(42, 7, "sent-1")
+      status_key = @tg.send(:status_key, 42, 7)
+      @tg.instance_variable_get(:@tool_counts)[status_key] = 3
+      @tg.define_singleton_method(:delete_message) { |*_args| true }
+
+      @tg.send(:clear_status_message, 42, 7)
+
+      assert_nil @tg.instance_variable_get(:@tool_counts)[status_key]
+    end
+
+    # Register a status message the way update_or_send_status would, without
+    # touching the Telegram API.
+    def seed_status_message(chat_id, thread_id, message_id)
+      key = @tg.send(:status_key, chat_id, thread_id)
+      @tg.instance_variable_get(:@status_messages)[key] = {
+        chat_id: chat_id, thread_id: thread_id, message_id: message_id
+      }
+    end
   end
 
   # Inbound media: Telegram sends photos as `photo` + `caption`, never as
