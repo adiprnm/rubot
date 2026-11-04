@@ -16,7 +16,8 @@ module Rubot
     end
 
     def setup
-      @config = Rubot::Config.new
+      @tmpdir = Dir.mktmpdir
+      @config = isolated_config(@tmpdir, name: "test_channel")
       @tools = Rubot::Tools::Registry.new
       @agent = Rubot::Agent.new(
         config: @config,
@@ -26,7 +27,7 @@ module Rubot
     end
 
     def teardown
-      FileUtils.rm_rf(File.join(@config.workspace, "sessions"))
+      FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
     end
 
     def test_channel_requires_name
@@ -237,15 +238,17 @@ module Rubot
           "telegram" => { "enabled" => false }
         }
       }
-      config = Rubot::Config.new
-      tools = Rubot::Tools::Registry.new
-      agent = Rubot::Agent.new(
-        config: config,
-        session_id: "test_disabled",
-        tools: tools
-      )
-      assert_raises(RuntimeError) do
-        Channels::Registry.start_channels(data: data, agent: agent)
+      Dir.mktmpdir do |dir|
+        config = isolated_config(dir, name: "test_disabled")
+        tools = Rubot::Tools::Registry.new
+        agent = Rubot::Agent.new(
+          config: config,
+          session_id: "test_disabled",
+          tools: tools
+        )
+        assert_raises(RuntimeError) do
+          Channels::Registry.start_channels(data: data, agent: agent)
+        end
       end
     end
   end
@@ -253,7 +256,7 @@ module Rubot
   class TestTelegramChannel < Minitest::Test
     def setup
       @tmpdir = Dir.mktmpdir
-      @config = Rubot::Config.new
+      @config = isolated_config(@tmpdir, name: "test_telegram")
       @tools = Rubot::Tools::Registry.new
       @agent = Rubot::Agent.new(
         config: @config,
@@ -267,7 +270,7 @@ module Rubot
     end
 
     def teardown
-      FileUtils.rm_rf(File.join(@config.workspace, "sessions"))
+      FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
     end
 
     def test_start_returns_skip_response

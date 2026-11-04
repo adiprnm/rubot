@@ -118,18 +118,12 @@ module Rubot
     end
 
     def test_load_returns_nil_when_auto_detect_finds_nothing
-      # Auto-detect with no .env in cwd or ~/.rubot
+      # Auto-detect with no .env in cwd or ~/.rubot, using a throwaway HOME so
+      # the real ~/.rubot is never read or modified.
       Dir.mktmpdir do |dir|
         Dir.chdir(dir) do
-          # Make sure ~/.rubot has no .env
-          rubot_dir = File.join(File.expand_path("~"), ".rubot")
-          backup = Dir.glob(File.join(rubot_dir, ".env*")).map { |f| [ f, File.read(f) ] }
-          begin
-            backup.each { |f, _| File.delete(f) }
-            result = EnvLoader.load
-            assert_nil result
-          ensure
-            backup.each { |f, c| File.write(f, c) }
+          with_home(dir) do
+            assert_nil EnvLoader.load
           end
         end
       end
@@ -145,16 +139,28 @@ module Rubot
     end
 
     def test_load_auto_detects_env_in_rubot_dir
-      rubot_dir = File.join(File.expand_path("~"), ".rubot")
-      FileUtils.mkdir_p(rubot_dir)
-      env_path = File.join(rubot_dir, ".env")
-      begin
-        File.write(env_path, "RUBOT_AUTO=yes\n")
-        EnvLoader.load
-        assert_equal "yes", ENV["RUBOT_AUTO"]
-      ensure
-        File.delete(env_path) if File.exist?(env_path)
+      # Throwaway HOME: never write to (or delete) the user's real ~/.rubot/.env.
+      Dir.mktmpdir do |home|
+        # chdir too: a .env in the current directory would win over ~/.rubot.
+        Dir.chdir(home) do
+          with_home(home) do
+            rubot_dir = File.join(home, ".rubot")
+            FileUtils.mkdir_p(rubot_dir)
+            File.write(File.join(rubot_dir, ".env"), "RUBOT_AUTO=yes\n")
+            EnvLoader.load
+            assert_equal "yes", ENV["RUBOT_AUTO"]
+          end
+        end
       end
+    end
+
+    # Point HOME at a throwaway directory for the duration of the block.
+    def with_home(dir)
+      previous = ENV["HOME"]
+      ENV["HOME"] = dir
+      yield
+    ensure
+      ENV["HOME"] = previous
     end
 
     def test_parse_string_content

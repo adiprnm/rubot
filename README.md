@@ -730,6 +730,11 @@ bundle install
 bundle exec rake test
 ```
 
+The suite runs with `HOME` pointed at a throwaway directory (see
+`test/test_helper.rb`) and every test workspace is a temp dir, so running tests
+never reads or writes your real `~/.rubot` — use `isolated_config(dir)` instead
+of plain `Config.new` in new tests.
+
 ## License
 
 MIT
