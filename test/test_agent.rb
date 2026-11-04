@@ -116,3 +116,95 @@ class TestAgentSessionSwitching < Minitest::Test
     assert_equal expected, session.file_path
   end
 end
+
+class TestAgentToolIterationLimit < Minitest::Test
+  # Always asks for another tool call, so the agent can only stop via the limit.
+  class EndlessToolCallProvider
+    attr_reader :calls
+
+    def initialize
+      @calls = 0
+    end
+
+    def chat(_messages, tools: nil)
+      @calls += 1
+      {
+        "content" => "",
+        "tool_calls" => [
+          {
+            "id" => "call_#{@calls}",
+            "type" => "function",
+            "function" => {
+              "name" => "file",
+              "arguments" => JSON.generate({ "operation" => "list", "path" => "." })
+            }
+          }
+        ]
+      }
+    end
+
+    def chat_stream(messages, tools: nil)
+      chat(messages, tools: tools)
+    end
+  end
+
+  def build_agent(max_tool_iterations:)
+    @tmpdir = Dir.mktmpdir
+    workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(workspace)
+    config_path = File.join(@tmpdir, "config.yml")
+
+    File.write(config_path, {
+      "agents" => { "defaults" => {
+        "workspace" => workspace,
+        "max_tool_iterations" => max_tool_iterations
+      } },
+      "models" => [ { "name" => "test", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ]
+    }.to_yaml)
+
+    Rubot::Agent.new(
+      config: Rubot::Config.new(config_path),
+      provider: EndlessToolCallProvider.new,
+      session_id: "limit-#{max_tool_iterations}"
+    )
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if @tmpdir && File.directory?(@tmpdir)
+  end
+
+  def test_uses_configured_limit_instead_of_hardcoded_ten
+    agent = build_agent(max_tool_iterations: 3)
+
+    assert_equal 3, agent.config.max_tool_iterations
+
+    response = agent.process("loop forever", stream: false)
+
+    assert_equal 3, agent.provider.calls, "expected exactly 3 LLM round-trips"
+    assert_includes response, "tool-iteration limit (3)"
+  end
+
+  def test_default_limit_is_fifty_when_unset
+    @tmpdir = Dir.mktmpdir
+    workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(workspace)
+    config_path = File.join(@tmpdir, "config.yml")
+    File.write(config_path, {
+      "agents" => { "defaults" => { "workspace" => workspace } },
+      "models" => [ { "name" => "test", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ]
+    }.to_yaml)
+
+    assert_equal 50, Rubot::Config.new(config_path).max_tool_iterations
+  end
+
+  def test_zero_or_negative_limit_falls_back_to_default
+    @tmpdir = Dir.mktmpdir
+    config_path = File.join(@tmpdir, "config.yml")
+    File.write(config_path, {
+      "agents" => { "defaults" => { "max_tool_iterations" => 0 } }
+    }.to_yaml)
+
+    assert_equal Rubot::Config::DEFAULT_MAX_TOOL_ITERATIONS,
+                 Rubot::Config.new(config_path).max_tool_iterations
+  end
+end

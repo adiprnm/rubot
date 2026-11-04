@@ -15,8 +15,6 @@ require_relative "tools/feedback_learner"
 
 module Rubot
   class Agent
-    MAX_TOOL_ITERATIONS = 10
-
     attr_reader :config, :provider, :session, :tools, :soul, :memory, :agents_file, :skill_registry, :safety_guard, :session_model
 
     def initialize(config:, provider: nil, session_id: "default", tools: nil)
@@ -126,9 +124,14 @@ module Rubot
       tool_calls = nil
       reasoning_content = nil
       iterations = 0
+      limit = max_tool_iterations
+      limit_hit = false
 
       loop do
-        break if iterations >= MAX_TOOL_ITERATIONS
+        if iterations >= limit
+          limit_hit = true
+          break
+        end
 
         # Adaptive: summarize old messages if approaching limit
         run_summarization
@@ -258,6 +261,13 @@ module Rubot
       if combined.empty? && iterations > 0
         fallback = build_fallback_response(iterations)
         combined = fallback if fallback && !fallback.empty?
+      end
+
+      # Say so when the run was cut short, instead of stopping silently.
+      if limit_hit
+        notice = "⚠️ Reached the tool-iteration limit (#{limit}) before finishing. " \
+                 "Reply \"continue\" to resume, or raise `max_tool_iterations` in config.yml."
+        combined = combined.empty? ? notice : "#{combined}\n\n#{notice}"
       end
 
       warn "[cron] Combined response (#{parts.size} parts): #{combined[0..200]}" if Rubot.debug?
@@ -543,6 +553,12 @@ module Rubot
       warn "[debug] #{msg}" if @config.debug?
     end
 
+    # Maximum number of tool-call rounds per message. Comes from
+    # `agents.defaults.max_tool_iterations` (config.yml or AGENTS.md frontmatter).
+    def max_tool_iterations
+      @config.max_tool_iterations
+    end
+
     # Build a fallback response when the LLM produced only tool calls
     # with no text content, so the user never gets a silent drop.
     def build_fallback_response(iterations)
@@ -595,9 +611,10 @@ module Rubot
       tool_calls = nil
       reasoning_content = nil
       iterations = 0
+      limit = max_tool_iterations
 
       loop do
-        break if iterations >= MAX_TOOL_ITERATIONS
+        break if iterations >= limit
 
         result = @provider.chat(local_messages, tools: tool_definitions)
 

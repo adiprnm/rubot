@@ -10,6 +10,7 @@ module Rubot
     DEFAULT_CONFIG_DIR  = File.expand_path("~/.rubot")
     DEFAULT_CONFIG_FILE = File.join(DEFAULT_CONFIG_DIR, "config.yml")
     DEFAULT_WORKSPACE   = File.join(DEFAULT_CONFIG_DIR, "workspace")
+    DEFAULT_MAX_TOOL_ITERATIONS = 50
 
     attr_reader :config_path, :data
 
@@ -131,7 +132,8 @@ module Rubot
     end
 
     def max_tool_iterations
-      agent_defaults["max_tool_iterations"] || 50
+      limit = agent_defaults["max_tool_iterations"].to_i
+      limit.positive? ? limit : DEFAULT_MAX_TOOL_ITERATIONS
     end
 
     def history_limit
