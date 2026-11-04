@@ -2,6 +2,7 @@
 # for your machine. Docker Compose merges the override automatically.
 #
 #   mkdir -p ~/.rubot/workspace/kanyaah ~/.rubot/workspace/by.adipurnm
+#   mkdir -p ~/.rubot/workspace/{kanyaah.com,by.adipurnm.com}
 #   mkdir -p ~/.rubot/workspace/skills/{adipurnm-brand,kanyaah-brand,marketing-strategist,writing}
 #   cp docker-compose.override.yml.example docker-compose.override.yml
 #   HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose up -d
@@ -15,6 +16,12 @@ services:
       #   mkdir -p ~/.rubot/workspace/kanyaah ~/.rubot/workspace/by.adipurnm
       - ~/Documents/work/freelance/brand/kanyaah:/home/rubot/.rubot/workspace/kanyaah
       - ~/Documents/work/freelance/brand/by.adipurnm:/home/rubot/.rubot/workspace/by.adipurnm
+
+      # Website repos (Jekyll sites) so the bot can read local facts
+      # (templates, prices, features).
+      #   mkdir -p ~/.rubot/workspace/{kanyaah.com,by.adipurnm.com}
+      - ~/Documents/work/freelance/website/kanyaah.com:/home/rubot/.rubot/workspace/kanyaah.com
+      - ~/Documents/work/freelance/website/by.adipurnm.com:/home/rubot/.rubot/workspace/by.adipurnm.com
 
       # Squadron skills (mounted individually to keep other skills visible).
       - ~/Projects/squadron/skills/adipurnm-brand:/home/rubot/.rubot/workspace/skills/adipurnm-brand

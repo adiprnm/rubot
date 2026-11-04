@@ -13,6 +13,8 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 💬 **Interactive REPL** — with streaming, command history, and tab completion
 - 📝 **Session management** — persistent conversation history
 - 🧬 **SOUL.md** — personality and identity file for persistent character
+- 🎛️ **Model presets** — named model configurations with a primary default, switchable per session and manageable from Telegram
+- 🎭 **Per-topic personas** — each Telegram forum topic can have its own model preset and system prompt, set up with an inline-button wizard
 - 📋 **AGENTS.md** — YAML frontmatter config + markdown behavior rules
 - 🧠 **MEMORY.md** — persistent memory the bot can read and update across sessions
 - ⏰ **Cron scheduling** — schedule reminders, recurring tasks, and timed alerts
@@ -182,10 +184,20 @@ agents:
   defaults:
     workspace: ~/.rubot/workspace
     name: gpt-4o-mini
+    model_preset: primary        # preset used by new sessions
     max_tokens: 4096
     temperature: 0.7
     system_prompt: "You are Rubot, a helpful AI assistant."
     max_tool_iterations: 50
+
+model_presets:
+  primary:
+    model: opencode-go          # config model entry, or a provider model id
+    max_tokens: 4096
+    temperature: 0.7
+  fast:
+    model: deepseek-v4.1-flash
+    temperature: 0.2
 
 models:
   - name: gpt-4o-mini
@@ -219,6 +231,71 @@ Each entry in `model_list` defines a model with its provider and credentials:
 | `model` | `<provider>/<model-id>` (e.g. `openai/gpt-4o-mini`, `ollama/llama3`) |
 | `api_key` | API key (optional for Ollama) |
 | `api_base` | API base URL |
+
+When the provider exposes a `GET /models` endpoint (OpenAI-compatible APIs,
+including OpenCode Go), `/preset models` lists the provider's own catalog
+instead of only the entries in `config.yml`. The catalog is cached at
+`<workspace>/model_catalog.json`; a preset that references a catalog model id
+reuses the active config entry's `api_base` and `api_key`.
+
+### Model Presets
+
+A model preset names a complete model configuration. Sessions start with the
+primary preset and switch per session with `/model <preset>`.
+
+```yaml
+agents:
+  defaults:
+    model_preset: primary
+
+model_presets:
+  primary:
+    model: opencode-go            # a `models` entry name...
+    max_tokens: 4096
+    temperature: 0.7
+  deep:
+    model: deepseek-v4-pro        # ...or a provider catalog model id
+    max_tokens: 8192
+    temperature: 0.1
+    reasoning_effort: high
+  local:
+    model: llama3
+    provider: ollama
+    api_base: http://localhost:11434
+    temperature: 0.2
+```
+
+| Field | Description |
+|-------|-------------|
+| `model` | Config `models` entry name or provider model id |
+| `provider`, `api_base`, `api_key` | Optional overrides; inherited from the model entry / active entry |
+| `max_tokens`, `temperature` | Generation settings for this preset |
+| `reasoning_effort` | Optional provider reasoning hint |
+| `context_window_tokens` | Optional context window metadata |
+
+- `default` is always available as the implicit preset built from the direct
+  `models` / `agents.defaults` fields. `/model default` follows it.
+- The primary preset is `agents.defaults.model_preset`; if it is unset or
+  invalid, the implicit `default` becomes primary. A preset named `primary` may
+  be defined explicitly and selected as the default.
+- New sessions use the primary preset. `/new` clears the conversation and any
+  per-session switch, returning to the primary preset.
+- `/model <preset>` switches the current session only and persists across
+  restarts. It does not change `config.yml`.
+
+Telegram commands:
+
+| Command | Description |
+|---------|-------------|
+| `/model` | Show the current preset and available presets |
+| `/model <preset>` | Switch the current session preset |
+| `/models` | List presets |
+| `/preset` | List presets |
+| `/preset show <name>` | Show one preset |
+| `/preset set <name> <model> [temperature=0.2] [max_tokens=4096]` | Create or update a preset in `config.yml` |
+| `/preset default <name>` | Choose the preset for new sessions (`default` clears it) |
+| `/preset delete <name>` | Remove a preset |
+| `/preset models [filter]` | List the provider's supported models |
 
 ### Providers
 
@@ -315,6 +392,72 @@ are kept inside the workspace so the safety guard allows the agent to read them.
 Media the channel cannot read (stickers, voice notes, video) now gets an explicit
 reply instead of being dropped silently. Set `attachments: false` to disable the
 download path entirely.
+
+#### Per-topic personas (forum topics)
+
+Every Telegram forum topic gets its own session, and now it can also get its
+own **persona**: a model plus a system prompt that applies only to that topic.
+The bot must be an admin in the group (or have privacy mode disabled) to see
+the `forum_topic_created` service message that starts the wizard.
+
+When a new topic is created the bot sends a three-step wizard:
+
+```
+🧬 Setup persona untuk topic ini
+
+Langkah 1/3 — Pilih model preset:
+  • primary ★ (default) — deepseek-v4.1-flash
+  • fast — deepseek-v4-pro
+[ primary ★ ] [ fast ]
+[ Pakai default ]
+
+Langkah 2/3 — Kirim system prompt (balas dengan teks):
+[ Lewati / pakai default ]
+
+Langkah 3/3 — Preview:
+  Model : primary (`deepseek-v4.1-flash`)
+  Prompt: Kamu adalah asisten trading. Jawab singkat, fokus data.
+[ ✅ Simpan ] [ ✏️ Ulangi ] [ ❌ Batal ]
+```
+
+The system prompt is typed as a normal chat message while the wizard is on
+step 2. It is intercepted and never reaches the agent. The wizard expires after
+15 minutes, and the topic falls back to the default persona if you leave it.
+
+Commands:
+
+| Command | Description |
+|---------|-------------|
+| `/persona` | Open the setup wizard (or replace the current persona) |
+| `/persona show` | Show the active persona for this topic |
+| `/persona reset` | Remove the persona and return to the default model/prompt |
+| `/cancel` | Leave the wizard without saving |
+
+Personas are stored in `<workspace>/personas.json`, keyed by
+`"<chat_id>:<thread_id>"`, so they survive restarts and can be edited by hand:
+
+```json
+{
+  "-1001234567890:42": {
+    "name": "trading",
+    "preset": "primary",
+    "system_prompt": "Kamu adalah asisten trading. Jawab singkat, fokus data.",
+    "created_at": "2026-02-11T10:00:00Z"
+  }
+}
+```
+
+Notes:
+
+- The persona picker lists the configured model presets and always includes the
+  primary preset. It no longer asks for a raw model id.
+- The General topic (`thread_id == nil`) always uses the global/default persona.
+- A persona preset that no longer exists falls back to the primary preset with
+  a warning instead of breaking the topic.
+- Memory (`MEMORY.md`) and skills are still shared by all topics. Only the
+  preset and system prompt are per-topic.
+- `/new` clears the conversation and any per-session preset switch, but keeps the
+  topic persona.
 
 3. **Run** with the Telegram channel:
 
@@ -470,6 +613,20 @@ The bot uses the memory tool to `read`, `write`, `append`, and
 ## Context
 - Currently working on tool registry
 ```
+
+### `personas.json` — Per-topic Personas
+
+Telegram forum topics can override the model and system prompt via
+`<workspace>/personas.json`. The file is managed by the `/persona` wizard but is
+plain JSON, so it can also be edited by hand. See the Telegram section above for
+the format and the fallback rules.
+
+### `model_catalog.json` — Provider Model Cache
+
+The provider's `/models` response (for example every model available through
+OpenCode Go) is cached here so the picker works even when the provider is
+temporarily unreachable. It is safe to delete; the next `/models` or `/persona`
+command refreshes it.
 
 ## Tools
 
@@ -633,6 +790,9 @@ rubot/
 │       ├── config.rb      # Configuration management
 │       ├── session.rb     # Session/history management
 │       ├── soul.rb        # SOUL.md personality loader
+│       ├── persona.rb     # Per-topic persona value object
+│       ├── persona_store.rb # personas.json load/save/lookup
+│       ├── model_catalog.rb # Provider /models catalog + cache
 │       ├── memory.rb      # MEMORY.md persistent memory
 │       ├── agents_file.rb # AGENTS.md config & rules parser
 │       ├── image_info.rb  # Image dimensions from file headers (no deps)
