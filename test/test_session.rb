@@ -13,6 +13,53 @@ class TestSession < Minitest::Test
     FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
   end
 
+  def test_add_scrubs_invalid_utf8
+    session = Rubot::Session.new("utf8", workspace: @workspace)
+    binary = "\x89PNG\r\n\x1a\n\x00\xff".b
+
+    session.add("tool", binary)
+
+    stored = session.messages.last["content"]
+    assert stored.valid_encoding?, "content must be valid UTF-8"
+    assert_equal Encoding::UTF_8, stored.encoding
+
+    raw = File.read(File.join(@workspace, "sessions", "utf8.json"))
+    assert raw.valid_encoding?, "session file must be valid UTF-8"
+    parsed = JSON.parse(raw)
+    assert_equal 1, parsed["messages"].size
+  end
+
+  def test_add_scrubs_invalid_utf8_in_tool_calls
+    session = Rubot::Session.new("utf8-tools", workspace: @workspace)
+    bad = "arg\xff".b
+    tool_calls = [ { "id" => "call_1", "type" => "function",
+                     "function" => { "name" => "shell_exec", "arguments" => bad } } ]
+
+    session.add("assistant", "running", tool_calls: tool_calls)
+
+    raw = File.read(File.join(@workspace, "sessions", "utf8-tools.json"))
+    assert raw.valid_encoding?
+    JSON.parse(raw) # must not raise
+  end
+
+  def test_load_ignores_empty_session_file
+    dir = File.join(@workspace, "sessions")
+    FileUtils.mkdir_p(dir)
+    File.write(File.join(dir, "empty.json"), "")
+
+    session = Rubot::Session.new("empty", workspace: @workspace)
+    assert_equal 0, session.message_count
+  end
+
+  def test_load_ignores_corrupt_session_file
+    dir = File.join(@workspace, "sessions")
+    FileUtils.mkdir_p(dir)
+    File.write(File.join(dir, "corrupt.json"), "{\"messages\": [")
+
+    session = Rubot::Session.new("corrupt", workspace: @workspace)
+    assert_equal 0, session.message_count
+  end
+
   def test_creates_session_without_workspace
     session = Rubot::Session.new("test-1", workspace: nil)
     assert_equal "test-1", session.id

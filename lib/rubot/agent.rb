@@ -195,6 +195,10 @@ module Rubot
               tool_result = "ERROR: #{e.class}: #{e.message}"
             end
 
+            # Tool output can be binary (e.g. reading a PNG); keep the transcript
+            # and the chat message valid UTF-8.
+            tool_result = Session.normalize_utf8(tool_result.to_s)
+
             # Fire post-execution callback
             on_tool_result&.call(tool_name, tool_result)
 
@@ -622,6 +626,10 @@ module Rubot
             rescue StandardError => e
               tool_result = "ERROR: #{e.class}: #{e.message}"
             end
+
+            # Tool output can be binary (e.g. reading a PNG); keep the transcript
+            # and the chat message valid UTF-8.
+            tool_result = Session.normalize_utf8(tool_result.to_s)
 
             tool_call_id = tc.is_a?(Hash) ? (tc["id"] || tool_name) : tool_name
             local_messages << { "role" => "tool", "content" => tool_result, "tool_call_id" => tool_call_id }

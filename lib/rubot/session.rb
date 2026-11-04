@@ -27,23 +27,44 @@ module Rubot
 
     # Append additional text to the existing summary
     def append_summary(text)
+      clean = self.class.normalize_utf8(text.to_s)
       if @summary.nil? || @summary.strip.empty?
-        @summary = text
+        @summary = clean
       else
-        @summary += "\n" + text
+        @summary += "\n" + clean
       end
       save!
     end
 
+    # Tool output (binary files, PNG bytes, latin-1 from a CLI) can be invalid
+    # UTF-8. Such strings break JSON generation for the session file and for the
+    # provider request, so everything that enters the transcript is forced to
+    # valid UTF-8 here. Invalid bytes are replaced with U+FFFD.
+    def self.normalize_utf8(value)
+      case value
+      when String
+        str = value.dup.force_encoding(Encoding::UTF_8)
+        str.valid_encoding? ? str : str.scrub
+      when Array
+        value.map { |item| normalize_utf8(item) }
+      when Hash
+        value.each_with_object({}) do |(key, val), acc|
+          acc[normalize_utf8(key)] = normalize_utf8(val)
+        end
+      else
+        value
+      end
+    end
+
     def add(role, content, tool_calls: nil, tool_call_id: nil, reasoning_content: nil)
       msg = {
-        "role" => role,
-        "content" => content,
+        "role" => self.class.normalize_utf8(role),
+        "content" => self.class.normalize_utf8(content),
         "timestamp" => Time.now.iso8601
       }
-      msg["tool_calls"] = tool_calls if tool_calls
-      msg["tool_call_id"] = tool_call_id if tool_call_id
-      msg["reasoning_content"] = reasoning_content if reasoning_content
+      msg["tool_calls"] = self.class.normalize_utf8(tool_calls) if tool_calls
+      msg["tool_call_id"] = self.class.normalize_utf8(tool_call_id) if tool_call_id
+      msg["reasoning_content"] = self.class.normalize_utf8(reasoning_content) if reasoning_content
       @messages << msg
       trim! if @workspace
       save!
@@ -155,10 +176,14 @@ module Rubot
       data["forced_skill"] = @forced_skill if @forced_skill
       data["model_override"] = @model_override if @model_override
 
+      # Generate before opening the file: JSON.pretty_generate can raise (e.g.
+      # invalid UTF-8), and truncating first would leave an empty session file.
+      payload = JSON.pretty_generate(self.class.normalize_utf8(data))
+
       File.open(file_path, File::WRONLY | File::CREAT, 0o644) do |file|
         file.flock(File::LOCK_EX)
         file.truncate(0)
-        file.write(JSON.pretty_generate(data))
+        file.write(payload)
         file.flush
         file.flock(File::LOCK_UN)
       end
@@ -201,11 +226,19 @@ module Rubot
 
     def load!
       return unless file_path && File.exist?(file_path)
-      data = JSON.parse(File.read(file_path))
-      @messages = data["messages"] || []
+
+      raw = File.read(file_path)
+      return if raw.strip.empty?
+
+      data = JSON.parse(raw)
+      @messages = self.class.normalize_utf8(data["messages"] || [])
       @summary = data["summary"] if data["summary"]
       @forced_skill = data["forced_skill"] if data["forced_skill"]
       @model_override = data["model_override"] if data["model_override"]
+    rescue JSON::ParserError => e
+      # A truncated/corrupt session must not take the bot down: start fresh.
+      warn "[session] ignoring unreadable session #{file_path}: #{e.message}"
+      @messages = []
     end
 
     def trim!
