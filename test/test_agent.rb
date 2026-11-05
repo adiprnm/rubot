@@ -347,6 +347,13 @@ class TestAgentProgressNarration < Minitest::Test
   def test_system_prompt_asks_the_model_to_narrate_progress
     assert_includes @agent.build_system_prompt, "Progress Narration"
   end
+
+  def test_system_prompt_asks_for_ruby_scripts_instead_of_python
+    prompt = @agent.build_system_prompt
+    assert_includes prompt, "Scripting Language"
+    assert_includes prompt, "Write every script, helper, and one-off snippet in Ruby"
+    assert_includes prompt, "Do not write new Python"
+  end
 end
 
 class TestAgentPersona < Minitest::Test

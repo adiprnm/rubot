@@ -3,9 +3,9 @@
 module Rubot
   # Reads image dimensions straight from file headers.
   #
-  # The bot runs in a container without ImageMagick, `file`, or Python, so
-  # `identify`-style probing is not available. Only the first few hundred bytes
-  # of the file are read, which is enough for every format Telegram sends.
+  # Cheaper than shelling out to `magick identify` for every file Telegram
+  # sends. Only the first few hundred bytes of the file are read, which is
+  # enough for every format Telegram sends.
   #
   # Returns nil for anything that is not a recognised image, so callers can
   # print the size without a dimension and keep going.

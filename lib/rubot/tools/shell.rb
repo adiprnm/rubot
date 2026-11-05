@@ -24,6 +24,8 @@ module Rubot
           Execute a shell command and return its output.
           Use this for running system commands, scripts, git operations, etc.
           The command will be executed in the current working directory.
+          Write any new helper script in Ruby and run it with `ruby`; do not
+          introduce Python for new work.
           Output is limited to #{MAX_OUTPUT} characters.
         DESC
         if @safety_guard&.restrict_to_workspace

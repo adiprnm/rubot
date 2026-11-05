@@ -616,6 +616,23 @@ module Rubot
     # Tell the model to narrate its progress between tool calls. Channels
     # surface that text as chat messages, so the user can follow along instead
     # of staring at a technical "running tool" status.
+    # One language for everything the bot writes. Kept here (not in the
+    # configurable prompt) so a per-topic persona cannot drop it.
+    SCRIPTING_RULE = <<~PROMPT.strip.freeze
+      # Scripting Language
+
+      Write every script, helper, and one-off snippet in Ruby. Use
+      `ruby -e '...'` for a single expression, or write a `.rb` file and run
+      `ruby path/to/script.rb` for anything longer.
+
+      Do not write new Python to get a task done, and do not install Python
+      packages. Node is only for the existing JS pipelines in the mounted
+      skills, not for new helper scripts.
+
+      Python that already exists in a repository or skill (`tools/*.py`,
+      `build.sh` wrappers) is the exception: run it as-is, do not port it.
+    PROMPT
+
     NARRATION_RULE = <<~PROMPT.strip.freeze
       # Progress Narration
 
@@ -637,7 +654,10 @@ module Rubot
         parts << "# Agent Rules\n\n#{@agents_file.rules}"
       end
 
-      # 1b. Progress narration (channels show this to the user as messages)
+      # 1b. Scripting language (Ruby for anything the bot writes itself)
+      parts << SCRIPTING_RULE
+
+      # 1c. Progress narration (channels show this to the user as messages)
       parts << NARRATION_RULE
 
       # 2. SOUL.md (personality and identity)

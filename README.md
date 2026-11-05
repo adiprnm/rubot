@@ -781,6 +781,12 @@ Rubot comes with 5 built-in tools:
 Execute shell commands. The LLM can run commands and see their output.
 Dangerous commands like `rm -rf /` are blocked.
 
+New scripts and one-off snippets are written in Ruby (`ruby -e '...'` or a
+`.rb` file). A built-in `Scripting Language` rule in the system prompt says so,
+and it sits outside the configurable prompt so a per-topic persona cannot drop
+it. Python that already exists in a repo or skill (`tools/*.py`) is still run
+as-is; only *new* code has to be Ruby.
+
 ### `file_ops`
 File operations: read, write, append, list directories, get file info.
 
@@ -1064,12 +1070,45 @@ Notes:
   Compose `extra_hosts` entry).
 - Telegram webhook mode additionally needs a port mapping in the override,
   e.g. `ports: ["8443:8443"]`.
-- The image ships `node`, `chromium`, `magick` (ImageMagick 7) and `ffmpeg`
-  on top of Ruby. The brand/carousel skills need them: Chromium screenshots
-  the HTML at 2×, `magick -resize` downsamples to the final size (e.g.
-  `magick cover@2x.png -resize 1080x1920 -strip cover.png`), and `ffmpeg`
-  encodes reels. They are installed at build time because the agent cannot
-  install packages on the fly and the safety guard blocks `PATH` exports.
+- The image ships `node`, `chromium` (headless shell), `magick` (ImageMagick 7)
+  and a static `ffmpeg` on top of Ruby. The brand/carousel skills need them:
+  Chromium screenshots the HTML at 2×, `magick -resize` downsamples to the
+  final size (e.g. `magick cover@2x.png -resize 1080x1920 -strip cover.png`),
+  and `ffmpeg` encodes reels. They are installed at build time because the
+  agent cannot install packages on the fly and the safety guard blocks `PATH`
+  exports.
+- Four size decisions worth knowing before you change the image:
+  - `chromium-headless-shell` (not `chromium`) provides a `chromium` and
+    `chromium-browser` symlink. Every render path here is headless — carousel
+    `render.sh` drives the binary CLI and the `instagram-feed`/`featured`
+    scripts drive it through `puppeteer-core` with `headless: "new"`. That
+    drops the GTK/Adwaita/X11 toolkit, ~290 MB off the image.
+  - `ffmpeg` is the static build (pinned by version and sha256 in the
+    Dockerfile, downloaded with Ruby because the image has no `curl`/`wget`).
+    It replaces the Debian `ffmpeg` package and its ~450 MiB of libav*/x265/aom
+    dependencies while behaving the same (`libx264`, `aac`, `ffprobe`).
+  - The GPU stack is purged after `apt-get install`: `mesa-libgallium` (41 MiB),
+    `libllvm19` (124 MiB) and `libz3-4` (27 MiB), plus the Vulkan validation
+    layer (23 MiB). Every render passes `--disable-gpu`, so none of it is ever
+    loaded; renders were compared byte for byte before and after (`sha256sum`
+    identical, CLI and puppeteer). Side effect: `libgbm1` has an unmet
+    dependency, so **do not run `apt-get -f install` or `apt-get autoremove`**
+    in this image — it would remove `libgbm1` and then chromium. Add packages by
+    rebuilding.
+  - Anything deleted must be deleted **in the same `RUN`** as the install that
+    created it. A `dpkg --purge` in its own `RUN` only hides the files from the
+    final filesystem view; the bytes stay in the earlier layer and the image
+    does not shrink.
+- No `npm`/`npx` in the image. `node_modules` comes from the mounted repos
+  (`kanyaah.com/tools/featured-image/node_modules`), installed on the host. The
+  packages there are pure JS, so a host-installed tree works with the
+  container's Node. If a dependency changes, run `npm install` on the host.
+  The Kanyaah `instagram-feed` scripts borrow `puppeteer-core` from that folder
+  and hardcode four `..` levels, which only holds in the host layout — inside
+  the container set `KANYAAH_SITE=/home/rubot/.rubot/workspace/kanyaah.com`.
+  The official Node tarball was measured as an alternative to the Debian
+  `nodejs` package and is *not* smaller (single 100 MB binary vs 53 MiB
+  `libnode` + 36 MiB `libicu`), so the distro package stays.
 - Gems in the image are `webrick` plus the standard library. Test gems
   are excluded via `BUNDLE_WITHOUT=development:test`.
 
