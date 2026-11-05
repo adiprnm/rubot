@@ -1084,9 +1084,14 @@ Notes:
     scripts drive it through `puppeteer-core` with `headless: "new"`. That
     drops the GTK/Adwaita/X11 toolkit, ~290 MB off the image.
   - `ffmpeg` is the static build (pinned by version and sha256 in the
-    Dockerfile, downloaded with Ruby because the image has no `curl`/`wget`).
-    It replaces the Debian `ffmpeg` package and its ~450 MiB of libav*/x265/aom
-    dependencies while behaving the same (`libx264`, `aac`, `ffprobe`).
+    Dockerfile). It replaces the Debian `ffmpeg` package and its ~450 MiB of
+    libav*/x265/aom dependencies while behaving the same (`libx264`, `aac`,
+    `ffprobe`).
+  - `curl`, `jq` and `ripgrep` are installed (~19 MiB total): repo tooling
+    shells out to `curl` (Kanyaah's `featured-image/generate.sh` polls a local
+    preview server with it) and the agent reaches for `jq`/`rg` constantly.
+    Not included: `python3`, `rsvg-convert` and `git` — see the workspace notes
+    below if a pipeline needs them.
   - The GPU stack is purged after `apt-get install`: `mesa-libgallium` (41 MiB),
     `libllvm19` (124 MiB) and `libz3-4` (27 MiB), plus the Vulkan validation
     layer (23 MiB). Every render passes `--disable-gpu`, so none of it is ever

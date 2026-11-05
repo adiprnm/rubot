@@ -54,6 +54,9 @@ RUN set -eux; \
         nodejs \
         chromium-headless-shell \
         imagemagick \
+        curl \
+        jq \
+        ripgrep \
         ca-certificates \
         xz-utils \
         fonts-dejavu-core \
@@ -68,6 +71,9 @@ RUN set -eux; \
     node --version; \
     chromium --version; \
     magick -version | head -1; \
+    curl --version | head -1; \
+    jq --version; \
+    rg --version | head -1; \
     chromium --headless --disable-gpu --no-sandbox --dump-dom about:blank >/dev/null
 
 # Every render here is a headless screenshot with `--disable-gpu`, so the GPU
@@ -87,15 +93,14 @@ RUN set -eux; \
 # ffmpeg encodes the carousel-video reels. The static build replaces the
 # Debian `ffmpeg` package: identical binaries to use, but no ~450 MiB of
 # libav*/x265/aom/svt-av1 library packages, and no glibc or soname coupling to
-# the base image. Downloaded with Ruby (no curl/wget in the image) and pinned by
-# version + sha256 so a rebuild is reproducible.
+# the base image. Pinned by version + sha256 so a rebuild is reproducible.
 ARG FFMPEG_VERSION=7.0.2
 ARG FFMPEG_SHA256=abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67
 
 RUN set -eux; \
     tmp="$(mktemp -d)"; \
-    ruby -rnet/http -ruri -e 'url=URI(ARGV[0]);dest=ARGV[1];Net::HTTP.start(url.host,url.port,use_ssl:url.scheme=="https"){|http|http.request(Net::HTTP::Get.new(url)){|res|raise "download failed: #{res.code} #{res.message}" unless res.is_a?(Net::HTTPSuccess);File.open(dest,"wb"){|f|res.read_body{|c|f.write(c)}}}}' \
-        "https://johnvansickle.com/ffmpeg/releases/ffmpeg-${FFMPEG_VERSION}-amd64-static.tar.xz" "$tmp/ffmpeg.tar.xz"; \
+    curl -fsSL -o "$tmp/ffmpeg.tar.xz" \
+        "https://johnvansickle.com/ffmpeg/releases/ffmpeg-${FFMPEG_VERSION}-amd64-static.tar.xz"; \
     echo "${FFMPEG_SHA256}  $tmp/ffmpeg.tar.xz" | sha256sum -c -; \
     tar -xJf "$tmp/ffmpeg.tar.xz" -C "$tmp" --strip-components=1; \
     install -m 0755 "$tmp/ffmpeg" /usr/local/bin/ffmpeg; \
