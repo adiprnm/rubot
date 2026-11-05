@@ -146,6 +146,8 @@ module Rubot
         reasoning_content = ""
         tool_calls_accum = {}
         usage = nil
+        finish_reason = nil
+        saw_done = false
 
         with_retry(retryable: -> { accumulated.empty? }) do
           http = Net::HTTP.new(uri.host, uri.port)
@@ -177,11 +179,15 @@ module Rubot
                 next unless line.start_with?("data: ")
 
                 data_str = line[6..]
-                next if data_str == "[DONE]"
+                if data_str == "[DONE]"
+                  saw_done = true
+                  next
+                end
 
                 begin
                   data = JSON.parse(data_str)
                   usage = data["usage"] if data["usage"].is_a?(Hash)
+                  finish_reason = data.dig("choices", 0, "finish_reason") || finish_reason
                   delta = data.dig("choices", 0, "delta")
                   next unless delta
 
@@ -218,42 +224,51 @@ module Rubot
             end
           end
 
+          # A provider that closes the connection mid-frame leaves the last
+          # event in the buffer with no trailing newline. Parse it instead of
+          # dropping it, so the tail of the answer is not lost.
+          unless buffer.strip.empty?
+            line = buffer.strip
+            if line.start_with?("data: ") && line[6..] != "[DONE]"
+              begin
+                data = JSON.parse(line[6..])
+                finish_reason = data.dig("choices", 0, "finish_reason") || finish_reason
+                tail = data.dig("choices", 0, "delta", "content")
+                if tail
+                  accumulated += tail
+                  yield tail, nil if on_chunk
+                end
+              rescue JSON::ParserError
+                # skip malformed trailing frame
+              end
+            end
+            buffer = ""
+          end
+
           tool_calls = tool_calls_accum.empty? ? nil : tool_calls_accum.values
           track_usage(usage)
 
-          # Return as Hash for consistency with non-streaming extract_content
-          result = { "content" => accumulated }
-          result["tool_calls"] = tool_calls if tool_calls
-          result["reasoning_content"] = reasoning_content if !reasoning_content.empty?
-          result["usage"] = usage if usage
-          result
+          extra = { "usage" => usage }.compact
+          # A stream that never sent `data: [DONE]` was cut, not finished: the
+          # text we hold is a prefix of the answer, whatever finish_reason says.
+          extra["stream_incomplete"] = true unless saw_done
+
+          result_hash(accumulated, finish_reason: finish_reason,
+                                  tool_calls: tool_calls,
+                                  reasoning_content: reasoning_content,
+                                  extra: extra)
         end
       end
 
       def extract_content(response)
         choice = response.dig("choices", 0)
-        return "" unless choice
+        return result_hash("") unless choice
 
-        message = choice["message"]
-        content = message["content"] || ""
-        reasoning_content = message["reasoning_content"]
-
-        # Handle tool calls
-        if message["tool_calls"]
-          result = {
-            "content" => content,
-            "tool_calls" => message["tool_calls"]
-          }
-          result["reasoning_content"] = reasoning_content if reasoning_content
-          return result
-        end
-
-        # Return reasoning_content alongside content for non-tool responses
-        if reasoning_content
-          { "content" => content, "reasoning_content" => reasoning_content }
-        else
-          content
-        end
+        message = choice["message"] || {}
+        result_hash(message["content"] || "",
+                    finish_reason: choice["finish_reason"],
+                    tool_calls: message["tool_calls"],
+                    reasoning_content: message["reasoning_content"])
       end
     end
   end

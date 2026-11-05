@@ -20,6 +20,39 @@ require_relative "tools/feedback_learner"
 
 module Rubot
   class Agent
+    # How many times one turn may ask the model to carry on after the provider
+    # cut its answer off at the output budget. Two is enough for a long reply
+    # split across three requests; more usually means the budget itself is set
+    # too low for the model.
+    MAX_CONTINUATIONS = 2
+
+    # Sent after a truncated answer. It has to be explicit about *not*
+    # restarting: a model asked to "continue" will otherwise begin again at
+    # the first sentence.
+    CONTINUE_PROMPT = <<~PROMPT.strip
+      Your previous message was cut off mid-sentence because it reached the
+      output limit. Continue exactly where it stopped, starting with the
+      remaining words of the interrupted sentence. Do not repeat anything you
+      already wrote, do not start over, and do not add a preamble.
+    PROMPT
+
+    # Sent when the model finished a tool round without saying anything at all,
+    # which leaves the user with silence and no images or files.
+    ANSWER_NOW_PROMPT = <<~PROMPT.strip
+      You ran the tools above but produced no answer. Using their results,
+      reply to the user now, in the user's language. If they asked for files or
+      images, send them with the send_file tool before you finish.
+    PROMPT
+
+    # Sent when a reply came back with no visible text at all — on a reasoning
+    # model the whole output budget can go to the hidden reasoning, leaving an
+    # empty `content`. Nothing was sent to the user, so it is asked again.
+    EMPTY_ANSWER_PROMPT = <<~PROMPT.strip
+      Your previous reply contained no text the user could read (the output
+      budget was spent before any of it was written). Answer the user's last
+      message now, directly and as briefly as the question allows.
+    PROMPT
+
     attr_reader :config, :provider, :session, :tools, :soul, :memory, :agents_file, :skill_registry, :safety_guard, :session_model, :persona, :active_preset_name
 
     def initialize(config:, provider: nil, session_id: "default", tools: nil, persona: nil)
@@ -141,6 +174,15 @@ module Rubot
       limit = max_tool_iterations
       limit_hit = false
 
+      # The turn's answer, assembled across continuations. `response` only ever
+      # holds the newest fragment; this holds all of them.
+      answer = +""
+      tool_rounds = 0
+      continuations = 0
+      reasked = false
+      truncated = false
+      finish_reason = nil
+
       loop do
         if iterations >= limit
           limit_hit = true
@@ -170,14 +212,28 @@ module Rubot
           response = result["content"] || ""
           tool_calls = result["tool_calls"]
           reasoning_content = result["reasoning_content"]
+          finish_reason = result["finish_reason"]
+          truncated = result["truncated"] == true
+          # Some gateways close the stream without a terminator. The text is a
+          # prefix of the answer even if they never said why.
+          truncated ||= result["stream_incomplete"] == true && !response.to_s.empty?
         elsif result.is_a?(Array)
           # Legacy streaming format: [content, tool_calls]
           response, tool_calls = result
           reasoning_content = nil
+          finish_reason = nil
+          truncated = false
         else
           response = result.to_s
           tool_calls = nil
           reasoning_content = nil
+          finish_reason = nil
+          truncated = false
+        end
+
+        if truncated
+          warn "[agent] answer truncated (finish_reason=#{finish_reason.inspect}); " \
+               "#{continuations}/#{MAX_CONTINUATIONS} continuations used"
         end
 
         # Handle tool calls
@@ -196,11 +252,23 @@ module Rubot
 
           # Execute each tool call
           tool_calls.each do |tc|
-            tool_name, arguments = parse_tool_call(tc)
+            tool_name, arguments, arguments_ok = parse_tool_call(tc)
             log_debug("Executing tool: #{tool_name}")
 
             # Use the tool call ID for tracking
             tool_call_id = tc.is_a?(Hash) ? (tc["id"] || tool_name) : tool_name
+
+            # A truncated answer can end in the middle of the arguments. Running
+            # the tool with the snippet that survived would act on a half-read
+            # path or command, so the model is told to re-issue it instead.
+            if truncated && !arguments_ok
+              tool_error = "ERROR: this tool call was cut off before its arguments " \
+                           "finished (the answer hit the output limit). Re-issue it " \
+                           "with complete arguments."
+              on_tool_result&.call(tool_name, tool_error)
+              @session.add("tool", tool_error, tool_call_id: tool_call_id)
+              next
+            end
 
             # Check for dangerous action that could cause data loss
             tool = @tools.get(tool_name)
@@ -239,17 +307,43 @@ module Rubot
           response = ""
           tool_calls = nil
           iterations += 1
+          tool_rounds += 1
 
           # Fire progress callback after each iteration
           on_progress&.call(iterations, tool_calls ? tool_calls.size : 0)
+        elsif response.to_s.strip.empty? && !reasked
+          # Nothing the user can read came back. With tools in play that means
+          # the model stopped without reporting; with none it means the output
+          # budget went to hidden reasoning. Either way, ask once for the
+          # answer instead of substituting a summary of tool output.
+          reasked = true
+          warn "[agent] empty answer after #{iterations} round(s); asking again"
+          @session.add("user", iterations.positive? ? ANSWER_NOW_PROMPT : EMPTY_ANSWER_PROMPT)
+          iterations += 1
+        elsif truncated && !response.to_s.strip.empty? && continuations < MAX_CONTINUATIONS
+          # The answer is a fragment. Keep it, ask for the rest, and rejoin.
+          answer << response
+          @session.add("assistant", response, reasoning_content: reasoning_content)
+          @session.add("user", CONTINUE_PROMPT)
+          continuations += 1
+          iterations += 1
+          finish_reason = nil
         else
           # No tool calls, we're done
+          answer << response
           break
         end
       end
 
       # Add final assistant response to session (only if not already added via tool-call branch)
-      @session.add("assistant", response, reasoning_content: reasoning_content) unless response.empty?
+      @session.add("assistant", response, reasoning_content: reasoning_content) unless response.to_s.empty?
+
+      # Ran out of continuations: say so rather than ending mid-sentence with
+      # no explanation.
+      if truncated && !answer.to_s.strip.empty?
+        answer << "\n\n[the model's answer was cut off at the output limit — " \
+                  "reply \"continue\" to get the rest]"
+      end
 
       # Prepend cron results to the user's response
       # Skip inline processing if a callback is registered (Telegram handles it)
@@ -275,15 +369,15 @@ module Rubot
           end
         end
       end
-      parts << response if response && !response.empty?
+      parts << answer if answer && !answer.empty?
 
       combined = parts.join("\n\n---\n\n")
 
       # Guard: if the LLM produced only tool calls with no text content
       # (e.g. read_file → grep → etc.), return the cron/tool summary or
       # a fallback so the user never gets a silent drop.
-      if combined.empty? && iterations > 0
-        fallback = build_fallback_response(iterations)
+      if combined.empty?
+        fallback = build_fallback_response(iterations, tool_rounds: tool_rounds)
         combined = fallback if fallback && !fallback.empty?
       end
 
@@ -841,6 +935,10 @@ module Rubot
       tools
     end
 
+    # Returns [name, arguments, parsed_ok]. `parsed_ok` is false when the
+    # arguments were not valid JSON — which is what a tool call cut off at the
+    # output limit looks like — so the caller can refuse to run it on a
+    # half-read argument instead of silently executing with an empty hash.
     def parse_tool_call(tc)
       if tc.is_a?(Hash)
         fn = tc["function"]
@@ -853,9 +951,9 @@ module Rubot
       end
 
       arguments = args_str.is_a?(String) ? JSON.parse(args_str) : args_str
-      [ name, arguments ]
+      [ name, arguments, true ]
     rescue JSON::ParserError
-      [ name, {} ]
+      [ name, {}, false ]
     end
 
     # Persist the provider's usage for this request. Streaming providers may
@@ -910,25 +1008,36 @@ module Rubot
       @config.max_tool_iterations
     end
 
-    # Build a fallback response when the LLM produced only tool calls
-    # with no text content, so the user never gets a silent drop.
-    def build_fallback_response(iterations)
-      return nil if iterations == 0
-
-      # Summarize what the agent did
-      tool_names = []
-      @session.safe_history(limit: @config.history_limit).each do |msg|
-        next unless msg["role"] == "tool"
-        result = msg["content"].to_s.strip
-        tool_names << (result.empty? ? "(empty)" : result[0..120])
+    # Build a response when the turn ends with no answer of its own — the
+    # model produced only tool calls and nothing to say about them. This is a
+    # last resort after the re-ask, so it stays short and honest: dumping the
+    # raw tool output here used to send the user things like
+    # "I completed 3 step(s) of tool calls. Results: 1. [Exit code: 0]".
+    def build_fallback_response(iterations, tool_rounds: 0)
+      if tool_rounds.zero?
+        return "⚠️ The model returned an empty reply and nothing was sent. " \
+               "Reply \"continue\" to retry."
       end
 
-      if tool_names.any?
-        "I completed #{iterations} step(s) of tool calls. Results:\n\n" +
-          tool_names.map.with_index(1) { |r, i| "#{i}. #{r}" }.join("\n")
-      else
-        "I completed #{iterations} step(s) of processing but have no text result to share."
+      last = last_tool_name
+      summary = last ? "#{tool_rounds} tool call(s), last one #{last}" : "#{tool_rounds} tool call(s)"
+      "⚠️ The model finished #{summary} without writing an answer, so there is " \
+        "nothing to show for this turn. Reply \"continue\" to retry."
+    end
+
+    # Name of the most recent tool the session ran, for the fallback above.
+    def last_tool_name
+      history = @session.safe_history(limit: @config.history_limit)
+      history.reverse_each do |msg|
+        next unless msg["role"] == "assistant" && msg["tool_calls"]
+        call = msg["tool_calls"].last
+        return nil unless call
+
+        return call.is_a?(Hash) ? call.dig("function", "name") : call.function.name
       end
+      nil
+    rescue StandardError
+      nil
     end
 
     # Resolve the forced skill for the current session, return {name, content} or nil.
@@ -989,7 +1098,7 @@ module Rubot
           local_messages << assistant_msg
 
           tool_calls.each do |tc|
-            tool_name, arguments = parse_tool_call(tc)
+            tool_name, arguments, = parse_tool_call(tc)
             begin
               tool_result = @tools.execute(tool_name, arguments)
             rescue StandardError => e

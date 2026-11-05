@@ -88,6 +88,8 @@ module Rubot
         accumulated = ""
         tool_calls = nil
         usage = nil
+        done_reason = nil
+        saw_done = false
 
         with_retry(retryable: -> { accumulated.empty? }) do
           http = Net::HTTP.new(uri.host, uri.port)
@@ -131,6 +133,8 @@ module Rubot
 
                   if data["done"] == true
                     usage = ollama_usage(data)
+                    done_reason = data["done_reason"]
+                    saw_done = true
                     break
                   end
                 rescue JSON::ParserError
@@ -141,7 +145,13 @@ module Rubot
           end
 
           track_usage(usage)
-          [ accumulated, tool_calls ]
+
+          extra = {}
+          extra["stream_incomplete"] = true unless saw_done
+
+          result_hash(accumulated, finish_reason: done_reason,
+                                  tool_calls: tool_calls,
+                                  extra: extra)
         end
       end
 
@@ -159,9 +169,10 @@ module Rubot
         message = response["message"] || {}
         content = message["content"] || ""
 
-        if message["tool_calls"]
-          # Convert Ollama tool_calls to OpenAI format
-          tool_calls = message["tool_calls"].map do |tc|
+        # Ollama reports the same signal as OpenAI under `done_reason`;
+        # it is "length" when the output budget ran out.
+        tool_calls = if message["tool_calls"]
+          message["tool_calls"].map do |tc|
             {
               "id" => tc["function"]["name"],
               "type" => "function",
@@ -171,10 +182,9 @@ module Rubot
               }
             }
           end
-          return { "content" => content, "tool_calls" => tool_calls }
         end
 
-        content
+        result_hash(content, finish_reason: response["done_reason"] || response["stop_reason"], tool_calls: tool_calls)
       end
     end
   end

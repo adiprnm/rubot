@@ -144,6 +144,8 @@ module Rubot
         current_tool_id = ""
         current_tool_input = ""
         usage = nil
+        stop_reason = nil
+        saw_stop = false
 
         with_retry(retryable: -> { accumulated.empty? }) do
           http = Net::HTTP.new(uri.host, uri.port)
@@ -186,6 +188,9 @@ module Rubot
                   when "message_delta"
                     delta_usage = data["usage"]
                     usage = (usage || {}).merge(delta_usage) if delta_usage.is_a?(Hash)
+                    stop_reason = data.dig("delta", "stop_reason") || stop_reason
+                  when "message_stop"
+                    saw_stop = true
                   when "content_block_start"
                     block = data["content_block"]
                     if block && block["type"] == "tool_use"
@@ -228,7 +233,14 @@ module Rubot
 
           tool_calls = tool_calls_accum.empty? ? nil : tool_calls_accum.values
           track_usage(usage)
-          [ accumulated, tool_calls ]
+
+          extra = { "usage" => usage }.compact
+          # Without `message_stop` the connection died mid-answer.
+          extra["stream_incomplete"] = true unless saw_stop
+
+          result_hash(accumulated, finish_reason: anthropic_finish_reason(stop_reason),
+                                  tool_calls: tool_calls,
+                                  extra: extra)
         end
       end
 
@@ -253,8 +265,15 @@ module Rubot
           end
         end
 
-        return { "content" => text_parts.join, "tool_calls" => tool_calls } unless tool_calls.empty?
-        text_parts.join
+        result_hash(text_parts.join,
+                    finish_reason: anthropic_finish_reason(response["stop_reason"]),
+                    tool_calls: tool_calls)
+      end
+
+      # Anthropic says `max_tokens` where OpenAI says `length`; normalize so the
+      # agent has one value to test.
+      def anthropic_finish_reason(stop_reason)
+        stop_reason == "max_tokens" ? "length" : stop_reason
       end
     end
   end

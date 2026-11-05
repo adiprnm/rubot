@@ -117,7 +117,28 @@ module Rubot
       self.class.name.split("::").last.downcase
     end
 
+    # Finish reasons that mean the provider ran out of output budget, so the
+    # text it returned is a fragment rather than a finished reply. Reasoning
+    # models spend part of `max_tokens` on hidden reasoning, which is why this
+    # happens well below the visible-text limit.
+    TRUNCATION_REASONS = %w[length max_tokens max_output_tokens].freeze
+
+    def truncation_reason?(reason)
+      TRUNCATION_REASONS.include?(reason.to_s)
+    end
+
     protected
+
+    # Build the normalized result hash every provider returns. `truncated`
+    # travels with the content so the agent can finish the answer instead of
+    # sending the fragment as if it were complete.
+    def result_hash(content, finish_reason: nil, tool_calls: nil, reasoning_content: nil, extra: {})
+      result = { "content" => content.to_s, "finish_reason" => finish_reason }
+      result["tool_calls"] = tool_calls if tool_calls && !tool_calls.empty?
+      result["reasoning_content"] = reasoning_content if reasoning_content && !reasoning_content.to_s.empty?
+      result["truncated"] = true if truncation_reason?(finish_reason)
+      result.merge(extra)
+    end
 
     # Remember the raw usage hash returned by the provider. The Agent
     # normalizes it into a Rubot::Usage.
