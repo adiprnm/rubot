@@ -98,6 +98,23 @@ class TestActors < Minitest::Test
     end
   end
 
+  def test_flush_learning_is_available_through_the_actor
+    api_base = start_sse_server
+    config = write_config(api_base: api_base)
+    pool = Rubot::Actors::SessionPool.new(config: config)
+
+    begin
+      handle = pool.for("learning-test")
+      handle.process("hello there friend")
+
+      # One message is below the default batch size, so this is a no-op that
+      # must still complete without raising across the Ractor boundary.
+      assert_nil handle.flush_learning
+    ensure
+      pool.shutdown
+    end
+  end
+
   def test_sessions_are_isolated_from_each_other
     api_base = start_sse_server
     config = write_config(api_base: api_base)

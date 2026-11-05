@@ -1139,3 +1139,58 @@ module Rubot
     end
   end
 end
+
+class TestChannelLearningHook < Minitest::Test
+  # Minimal handle that records the order of delivery and learning.
+  class RecordingHandle
+    attr_reader :events
+
+    def initialize(events)
+      @events = events
+    end
+
+    def process(_message, **_callbacks)
+      @events << :answered
+      "answer"
+    end
+
+    def flush_learning
+      @events << :learned
+    end
+  end
+
+  class HookChannel < Rubot::Channel
+    def initialize(handle, events)
+      @handle = handle
+      @events = events
+      super()
+    end
+
+    def name
+      "hook"
+    end
+
+    def after_process(_message, response)
+      @events << :delivered
+      response
+    end
+
+    def session_for(_session_id)
+      @handle
+    end
+
+    def start; end
+    def stop; end
+  end
+
+  def test_learning_runs_after_the_answer_is_delivered
+    events = []
+    handle = RecordingHandle.new(events)
+    channel = HookChannel.new(handle, events)
+
+    response = channel.process_message("hello there")
+
+    assert_equal "answer", response
+    assert_equal [ :answered, :delivered, :learned ], events
+  end
+end

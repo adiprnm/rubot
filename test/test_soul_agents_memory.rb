@@ -293,3 +293,109 @@ class TestMemoryProtectionViaShell < Minitest::Test
     refute_includes result, "rejected"
   end
 end
+
+class TestMemoryConsolidation < Minitest::Test
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @memory = Rubot::Memory.new(workspace: @tmpdir)
+  end
+
+  def teardown
+    FileUtils.rm_rf(@tmpdir)
+  end
+
+  def section_items(name)
+    @memory.read.split("## #{name}").last.split(/^## /).first.to_s
+           .lines.count { |l| l.strip.start_with?("- ") }
+  end
+
+  def test_merges_near_duplicate_entries
+    @memory.append("Preferences", "User communicates in casual Bahasa Indonesia")
+    @memory.append("Preferences", "User communicates in casual Indonesian slang")
+
+    result = @memory.consolidate!
+
+    refute_nil result
+    assert_equal 1, section_items("Preferences")
+  end
+
+  def test_keeps_the_more_informative_wording
+    @memory.append("Context", "User is a content creator")
+    @memory.append("Context", "User is a content creator and needs a regular supply of ideas")
+
+    @memory.consolidate!
+
+    content = @memory.read
+    assert_includes content, "needs a regular supply of ideas"
+  end
+
+  def test_keeps_distinct_entries
+    @memory.append("Facts", "User lives in Jakarta")
+    @memory.append("Facts", "User writes Ruby")
+    @memory.append("Facts", "User ships on Fridays")
+
+    @memory.consolidate!
+
+    assert_equal 3, section_items("Facts")
+  end
+
+  def test_caps_a_section_and_archives_the_overflow
+    (Rubot::Memory::SECTION_LIMITS["Facts"] + 5).times do |i|
+      @memory.append("Facts", "Distinct fact number #{i}")
+    end
+
+    result = @memory.consolidate!
+    refute_nil result
+    assert_equal Rubot::Memory::SECTION_LIMITS["Facts"], section_items("Facts")
+    assert_includes @memory.read, "Distinct fact number 29"
+    refute_includes @memory.read, "Distinct fact number 0"
+
+    archive = File.join(@tmpdir, Rubot::Memory::ARCHIVE_FILE)
+    assert File.exist?(archive), "dropped entries should be archived"
+    assert_includes File.read(archive), "Distinct fact number 0"
+  end
+
+  def test_append_with_max_items_drops_the_oldest_entry
+    12.times { |i| @memory.append("Learned Corrections", "Correction #{i}", max_items: 3) }
+
+    assert_equal 3, section_items("Learned Corrections")
+    assert_includes @memory.read, "Correction 11"
+    refute_includes @memory.read, "Correction 0"
+  end
+
+  def test_drops_retry_only_corrections
+    @memory.append("Learned Corrections", "User asked: 'coba lagi dong' → Bot response was wrong/inadequate. User feedback: 'coba lagi dong'")
+    @memory.append("Learned Corrections", "User asked: 'pakai Ruby' → Bot response was wrong/inadequate. User feedback: 'bukan python, pakai Ruby'")
+
+    @memory.consolidate!
+
+    content = @memory.read
+    refute_includes content, "coba lagi dong"
+    assert_includes content, "bukan python, pakai Ruby"
+
+    archive = File.join(@tmpdir, Rubot::Memory::ARCHIVE_FILE)
+    assert_includes File.read(archive), "coba lagi dong"
+  end
+
+  def test_keeps_corrections_that_mention_a_retry_and_a_rule
+    line = "User asked: 'render ulang' → Bot response was wrong/inadequate. User feedback: 'coba lagi tapi pakai magick'"
+    @memory.append("Learned Corrections", line)
+
+    @memory.consolidate!
+
+    assert_includes @memory.read, "pakai magick"
+  end
+
+  def test_is_idempotent
+    @memory.append("Facts", "User lives in Jakarta")
+    @memory.append("Facts", "User lives in Jakarta")
+
+    assert @memory.consolidate!
+    assert_nil @memory.consolidate!, "a second run should change nothing"
+  end
+
+  def test_does_nothing_without_a_workspace
+    memory = Rubot::Memory.new(workspace: nil)
+    assert_nil memory.consolidate!
+  end
+end

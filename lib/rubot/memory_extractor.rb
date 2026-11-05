@@ -63,19 +63,25 @@ module Rubot
       Be conservative — only extract when confident it's valuable.
     PROMPT
 
-    attr_reader :provider, :memory
+    attr_reader :provider, :memory, :last_usage
 
     def initialize(provider:, memory:)
       @provider = provider
       @memory = memory
+      @last_usage = nil
     end
 
-    # Extract memory from a user message. Returns the items that were
+    # Extract memory from one user message or a batch of them (an Array is
+    # joined into a single request, which is what keeps extraction from
+    # costing one provider call per message). Returns the items that were
     # actually stored (after deduplication), or empty array if nothing.
-    def extract(message)
-      return [] if skip_message?(message)
+    def extract(input)
+      @last_usage = nil
+      messages = Array(input).map { |m| m.to_s.strip }.reject(&:empty?)
+      messages = messages.reject { |m| skip_message?(m) }
+      return [] if messages.empty?
 
-      items = call_extractor(message)
+      items = call_extractor(messages)
       return [] if items.values.all?(&:empty?)
 
       stored = []
@@ -102,14 +108,15 @@ module Rubot
       TRIVIAL_PATTERNS.any? { |p| msg =~ p }
     end
 
-    # Call the LLM to extract facts from the message
-    def call_extractor(message)
+    # Call the LLM to extract facts from the message(s)
+    def call_extractor(batch)
       messages = [
         { "role" => "system", "content" => EXTRACTION_SYSTEM_PROMPT },
-        { "role" => "user", "content" => "Extract memory from this message:\n\n#{message}" }
+        { "role" => "user", "content" => extraction_request(batch) }
       ]
 
       result = @provider.chat(messages, tools: nil)
+      @last_usage = @provider.last_usage if @provider.respond_to?(:last_usage)
 
       # Parse the response as JSON
       content = if result.is_a?(Hash)
@@ -131,6 +138,14 @@ module Rubot
     rescue JSON::ParserError, StandardError => e
       warn "[memory_extractor] Extraction failed: #{e.class}: #{e.message}" if Rubot.debug?
       { "facts" => [], "preferences" => [], "context" => [] }
+    end
+
+    def extraction_request(batch)
+      list = Array(batch)
+      return "Extract memory from this message:\n\n#{list.first}" if list.size == 1
+
+      joined = list.each_with_index.map { |message, i| "#{i + 1}. #{message}" }.join("\n\n")
+      "Extract memory from these user messages (oldest first):\n\n#{joined}"
     end
 
     # Extract a JSON object from a potentially noisy response

@@ -17,6 +17,9 @@ module Rubot
     # Without it, compacting a very long transcript could overflow the
     # summarizer's own context window.
     MAX_SUMMARY_INPUT_CHARS = 24_000
+    # User messages waiting to be extracted into MEMORY.md. Bounded so a long
+    # stretch between extractions cannot grow the session file without limit.
+    MAX_MEMORY_BACKLOG = 20
 
     attr_reader :id, :messages, :workspace, :usage, :last_usage
     attr_accessor :summary, :forced_skill, :model_override, :model_preset
@@ -31,6 +34,7 @@ module Rubot
       @model_preset = nil
       @usage = Usage.zero
       @last_usage = Usage.zero
+      @memory_backlog = []
       load!
     end
 
@@ -44,6 +48,44 @@ module Rubot
       @usage = @usage.merge(delta)
       save!
       delta
+    end
+
+    # Same as #record_usage, but for requests that are not the user-facing turn
+    # (memory extraction, summarization). It adds to the totals without
+    # replacing `last_usage`, which is what `/usage` uses to estimate how full
+    # the next request's context will be.
+    def record_auxiliary_usage(raw, provider: nil)
+      delta = Usage.from(raw, provider: provider)
+      return nil if delta.nil?
+
+      @usage = @usage.merge(delta)
+      save!
+      delta
+    end
+
+    # User messages queued for the next memory extraction. Kept on the session
+    # so the queue survives a restart and is shared by every agent instance
+    # working on this session.
+    def memory_backlog
+      @memory_backlog ||= []
+    end
+
+    def push_memory_backlog(message)
+      text = self.class.normalize_utf8(message.to_s).strip
+      return false if text.empty?
+
+      memory_backlog << text
+      memory_backlog.shift while memory_backlog.size > MAX_MEMORY_BACKLOG
+      save!
+      true
+    end
+
+    # Remove and return everything queued so far.
+    def take_memory_backlog
+      items = memory_backlog.dup
+      @memory_backlog = []
+      save!
+      items
     end
 
     # Returns true if summarization has already been applied to this session
@@ -152,6 +194,7 @@ module Rubot
       @model_preset = nil
       @usage = Usage.zero
       @last_usage = Usage.zero
+      @memory_backlog = []
       save!
     end
 
@@ -249,6 +292,7 @@ module Rubot
       data["model_preset"] = @model_preset if @model_preset
       data["usage"] = @usage.to_h
       data["last_usage"] = @last_usage.to_h
+      data["memory_backlog"] = @memory_backlog if @memory_backlog && !@memory_backlog.empty?
 
       # Generate before opening the file: JSON.pretty_generate can raise (e.g.
       # invalid UTF-8), and truncating first would leave an empty session file.
@@ -357,6 +401,7 @@ module Rubot
       @model_preset = data["model_preset"] if data["model_preset"]
       @usage = Usage.from_h(data["usage"])
       @last_usage = Usage.from_h(data["last_usage"])
+      @memory_backlog = Array(data["memory_backlog"]).map(&:to_s)
     rescue JSON::ParserError => e
       # A truncated/corrupt session must not take the bot down: start fresh.
       warn "[session] ignoring unreadable session #{file_path}: #{e.message}"

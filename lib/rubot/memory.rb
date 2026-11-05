@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "fileutils"
+require "set"
 require "time"
 
 module Rubot
@@ -23,6 +24,45 @@ module Rubot
   #   - Last discussion: tool registry refactoring
   class Memory
     attr_reader :file_path, :content
+
+    # Every line of MEMORY.md is paid for on every request, so each section is
+    # capped. Entries pushed past the cap are moved to MEMORY_ARCHIVE.md, which
+    # is never injected into a prompt.
+    SECTION_LIMITS = {
+      "Facts" => 25,
+      "Preferences" => 15,
+      "Context" => 10,
+      "Learned Corrections" => 10
+    }.freeze
+
+    ARCHIVE_FILE = "MEMORY_ARCHIVE.md"
+
+    # Words that carry no meaning when comparing two bullets. Indonesian
+    # function words are included because memory mixes both languages.
+    COMPARE_STOPWORDS = %w[
+      a an the user users is are was were be been being to of in on for and or
+      with that this it its as at by from has have had does do not no
+      yang dan di ke dari untuk dengan ini itu adalah tidak
+      bahasa
+    ].to_set.freeze
+
+    # Words that mean the same thing for deduplication purposes.
+    TOKEN_ALIASES = {
+      "indonesian" => "indonesia",
+      "prefers" => "prefer",
+      "preference" => "prefer",
+      "preferences" => "prefer",
+      "likes" => "prefer"
+    }.freeze
+
+    # Two bullets are considered the same when their meaningful words overlap
+    # this much, or when one's words are entirely contained in the other
+    # ("User is a content creator" vs the same sentence with more detail).
+    SIMILARITY_THRESHOLD = 0.8
+
+    # Words that turn a "correction" into a retry request ("coba lagi med").
+    # Such entries teach the model nothing and used to fill the log.
+    RETRY_WORDS = %w[coba try lagi again dong med met please tolong gw gue ya deh].to_set.freeze
 
     DEFAULT_MEMORY = <<~MEMORY.freeze
       # Memory
@@ -68,8 +108,12 @@ module Rubot
       end
     end
 
-    # Append a line to a section (e.g., "## Facts")
-    def append(section, line)
+    # Append a line to a section (e.g., "## Facts").
+    #
+    # `max_items` caps the section: the oldest entries beyond it are dropped
+    # (and archived when a workspace is available). Callers that write a
+    # bounded log — the feedback learner, for example — should set it.
+    def append(section, line, max_items: nil)
       with_file_lock do |file|
         @content ||= load_content
         return unless @content
@@ -97,7 +141,9 @@ module Rubot
           @content += "\n## #{section}\n- #{line}\n"
         end
 
+        dropped = max_items ? trim_section(@content, section, max_items) : []
         write_locked(file, @content)
+        archive_lines(dropped) unless dropped.empty?
       end
     end
 
@@ -127,6 +173,29 @@ module Rubot
         end
 
         write_locked(file, @content)
+      end
+    end
+
+    # Merge near-duplicate entries, cap every section, and move whatever falls
+    # off the end into MEMORY_ARCHIVE.md. This is what keeps the per-request
+    # memory cost from growing forever: the extractor is additive, so without
+    # it every rephrased fact would be paid for on every single request.
+    #
+    # Returns { removed:, size: } or nil when nothing changed.
+    def consolidate!(limits: SECTION_LIMITS)
+      return nil unless @file_path
+
+      with_file_lock do |file|
+        @content ||= load_content
+        return nil unless @content
+
+        new_content, dropped = consolidate_content(@content, limits)
+        return nil if new_content == @content
+
+        @content = new_content
+        write_locked(file, @content)
+        archive_lines(dropped) unless dropped.empty?
+        { removed: dropped.size, size: @content.bytesize }
       end
     end
 
@@ -175,6 +244,161 @@ module Rubot
       end
     rescue Errno::ENOENT, Errno::EACCES
       nil
+    end
+
+    # Drop the oldest bullets of a section until it holds at most `limit`.
+    # Returns the dropped lines so the caller can archive them.
+    def trim_section(content, section, limit)
+      lines = content.lines
+      header = "## #{section}"
+      header_index = lines.index { |l| l.strip == header }
+      return [] unless header_index
+
+      next_section = lines[(header_index + 1)..].index { |l| l.start_with?("##") }
+      end_index = next_section ? (header_index + 1 + next_section) : lines.length
+      bullet_indexes = (header_index + 1...end_index).select { |i| lines[i].start_with?("- ") }
+
+      overflow = bullet_indexes.size - limit.to_i
+      return [] unless overflow.positive?
+
+      dropped_indexes = bullet_indexes.first(overflow)
+      dropped = dropped_indexes.map { |i| lines[i].sub(/\A- /, "").strip }
+      dropped_indexes.reverse_each { |i| lines.delete_at(i) }
+      content.replace(lines.join)
+      dropped
+    end
+
+    # Rewrite content with duplicates merged and sections capped.
+    def consolidate_content(content, limits)
+      lines = content.lines
+      output = []
+      dropped = []
+      index = 0
+
+      # Preamble (title and description) is kept verbatim.
+      while index < lines.length && !lines[index].start_with?("## ")
+        output << lines[index]
+        index += 1
+      end
+
+      while index < lines.length
+        header = lines[index]
+        section = header.sub(/\A##\s+/, "").strip
+        index += 1
+
+        body = []
+        while index < lines.length && !lines[index].start_with?("## ")
+          body << lines[index]
+          index += 1
+        end
+
+        bullets = body.select { |l| l.start_with?("- ") }.map { |l| l.sub(/\A- /, "").rstrip }
+        others = body.reject { |l| l.start_with?("- ") || l.strip.empty? }
+
+        # Clean up retry-only corrections written before the learner stopped
+        # storing them. Anything with real content is kept.
+        if section == "Learned Corrections"
+          junk, bullets = bullets.partition { |b| junk_correction?(b) }
+          dropped.concat(junk.map { |b| [ section, b ] })
+        end
+
+        kept, overflow = dedupe_bullets(bullets, limits[section])
+
+        output << header
+        others.each { |l| output << l }
+        kept.each { |b| output << "- #{b}\n" }
+        output << "\n"
+        dropped.concat(overflow.map { |b| [ section, b ] })
+      end
+
+      # Collapse the blank line left before the end of the file.
+      output.pop while output.size > 1 && output[-1].strip.empty? && output[-2].to_s.strip.empty?
+
+      [ output.join, dropped ]
+    end
+
+    # Merge bullets that say the same thing, then keep the newest `limit`.
+    # Returns [kept_bullets, dropped_bullets].
+    def dedupe_bullets(bullets, limit)
+      kept = []
+      kept_tokens = []
+
+      bullets.each do |bullet|
+        tokens = compare_tokens(bullet)
+        existing = kept_tokens.index { |other| similar?(tokens, other) }
+
+        if existing
+          # Keep the more informative wording, at the original position.
+          if bullet.length > kept[existing].length
+            kept[existing] = bullet
+            kept_tokens[existing] = tokens
+          end
+        else
+          kept << bullet
+          kept_tokens << tokens
+        end
+      end
+
+      dropped = []
+      if limit && kept.size > limit
+        dropped = kept.shift(kept.size - limit)
+      end
+
+      [ kept, dropped ]
+    end
+
+    # True when a stored correction only asked for a retry.
+    def junk_correction?(line)
+      feedback = line[/User feedback:\s*'(.*)'\s*\z/m, 1]
+      return false unless feedback
+
+      words = feedback.downcase.gsub(/[^a-z\s]/, " ").split
+      return false if words.empty?
+
+      words.all? { |w| RETRY_WORDS.include?(w) }
+    end
+
+    def compare_tokens(text)
+      text.to_s.downcase
+          .gsub(/[^a-z0-9\s]/, " ")
+          .split
+          .reject { |t| (t.length < 2 && !t.match?(/\d/)) || COMPARE_STOPWORDS.include?(t) }
+          .map { |t| TOKEN_ALIASES.fetch(t, t) }
+          .uniq
+    end
+
+    def similar?(a, b)
+      return false if a.empty? || b.empty?
+
+      shared = (a & b).size
+      return false if shared < 2
+
+      return true if (a - b).empty? || (b - a).empty?
+
+      shared.to_f / (a | b).size >= SIMILARITY_THRESHOLD
+    end
+
+    # Append removed entries to MEMORY_ARCHIVE.md. That file is deliberately
+    # not read into any prompt; it only exists so consolidation never loses
+    # information outright.
+    def archive_lines(entries)
+      return if entries.nil? || entries.empty? || !@file_path
+
+      path = File.join(File.dirname(@file_path), ARCHIVE_FILE)
+      FileUtils.mkdir_p(File.dirname(path))
+      stamp = Time.now.strftime("%Y-%m-%d")
+
+      File.open(path, File::WRONLY | File::CREAT | File::APPEND, 0o644) do |file|
+        file.flock(File::LOCK_EX)
+        file.write("# Memory Archive\n\n") if file.size.zero?
+        entries.each do |section, line|
+          file.write("- #{stamp} (#{section}) #{line.strip}\n")
+        end
+        file.flush
+        file.flock(File::LOCK_UN)
+      end
+    rescue StandardError => e
+      warn "[memory] Failed to archive entries: #{e.class}: #{e.message}" if Rubot.debug?
     end
 
     def save!

@@ -14,6 +14,10 @@ module Rubot
     DEFAULT_AUTO_COMPACT = true
     DEFAULT_COMPACT_THRESHOLD_PERCENT = 80.0
     DEFAULT_COMPACT_KEEP_RECENT = 6
+    # Memory extraction used to run on every user message, one extra provider
+    # request per turn. Batching it over a few turns keeps the same coverage
+    # for a fraction of the cost (0 disables extraction).
+    DEFAULT_MEMORY_EXTRACT_EVERY = 3
 
     attr_reader :config_path, :data
 
@@ -422,6 +426,38 @@ module Rubot
             agent_defaults["compact_keep_recent_messages"]
       value = raw.to_i
       value.positive? ? value : DEFAULT_COMPACT_KEEP_RECENT
+    end
+
+    # --- Memory ----------------------------------------------------------
+    #
+    #   agents:
+    #     defaults:
+    #       memory:
+    #         extract_every: 3   # user messages per extraction request (0 = off)
+    #         consolidate: true  # merge duplicates and cap section size
+    #
+    # Flat aliases (`memory_extract_every`, `memory_consolidate`) are accepted.
+    def memory
+      raw = agent_defaults["memory"]
+      raw.is_a?(Hash) ? raw : {}
+    end
+
+    # How many user messages to collect before asking the model to extract
+    # memory. 0 disables automatic extraction entirely.
+    def memory_extract_every
+      raw = memory["extract_every"] || agent_defaults["memory_extract_every"]
+      return DEFAULT_MEMORY_EXTRACT_EVERY if raw.nil?
+
+      value = raw.to_i
+      value.negative? ? 0 : value
+    end
+
+    def memory_consolidate?
+      raw = memory.key?("consolidate") ? memory["consolidate"] : agent_defaults["memory_consolidate"]
+      return true if raw.nil?
+
+      raw = raw.to_s.downcase if raw.is_a?(String)
+      ![ false, 0, "0", "false", "no", "off" ].include?(raw)
     end
 
     def tool_enabled?(name)

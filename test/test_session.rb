@@ -386,3 +386,60 @@ class TestSessionSummarization < Minitest::Test
     end
   end
 end
+
+class TestSessionMemoryBacklog < Minitest::Test
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @session = Rubot::Session.new("backlog", workspace: @tmpdir)
+  end
+
+  def teardown
+    FileUtils.rm_rf(@tmpdir)
+  end
+
+  def test_queues_and_takes_messages
+    assert @session.push_memory_backlog("first message")
+    assert @session.push_memory_backlog("second message")
+
+    assert_equal [ "first message", "second message" ], @session.take_memory_backlog
+    assert_empty @session.memory_backlog
+  end
+
+  def test_ignores_blank_messages
+    refute @session.push_memory_backlog("   ")
+    assert_empty @session.memory_backlog
+  end
+
+  def test_caps_the_queue
+    (Rubot::Session::MAX_MEMORY_BACKLOG + 3).times { |i| @session.push_memory_backlog("message #{i}") }
+
+    queue = @session.memory_backlog
+    assert_equal Rubot::Session::MAX_MEMORY_BACKLOG, queue.size
+    assert_includes queue.last, "message #{Rubot::Session::MAX_MEMORY_BACKLOG + 2}"
+  end
+
+  def test_survives_a_restart
+    @session.push_memory_backlog("queued across restart")
+
+    reloaded = Rubot::Session.new("backlog", workspace: @tmpdir)
+    assert_equal [ "queued across restart" ], reloaded.memory_backlog
+  end
+
+  def test_clearing_the_session_clears_the_queue
+    @session.push_memory_backlog("queued")
+    @session.clear!
+
+    assert_empty @session.memory_backlog
+  end
+
+  def test_auxiliary_usage_adds_to_totals_without_changing_last_usage
+    @session.record_usage({ "prompt_tokens" => 100, "completion_tokens" => 10 })
+    last = @session.last_usage
+
+    @session.record_auxiliary_usage({ "prompt_tokens" => 50, "completion_tokens" => 5 })
+
+    assert_equal 150, @session.usage.prompt_tokens
+    assert_equal 2, @session.usage.requests
+    assert_equal last.prompt_tokens, @session.last_usage.prompt_tokens
+  end
+end

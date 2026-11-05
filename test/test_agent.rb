@@ -791,3 +791,131 @@ class TestAgentCompaction < Minitest::Test
     refute agent.session.summarized?
   end
 end
+
+class TestAgentAdaptiveLearning < Minitest::Test
+  class CountingProvider
+    attr_reader :calls, :requests
+
+    def initialize
+      @calls = 0
+      @requests = []
+    end
+
+    def name
+      "openai"
+    end
+
+    def last_usage
+      { "prompt_tokens" => 10, "completion_tokens" => 5 }
+    end
+
+    def chat(messages, tools: nil)
+      @calls += 1
+      @requests << messages
+      if messages.first.to_h["content"].to_s.include?("memory extraction assistant")
+        { "content" => '{"facts": [], "preferences": [], "context": []}', "finish_reason" => "stop" }
+      else
+        { "content" => "answered", "finish_reason" => "stop" }
+      end
+    end
+
+    def chat_stream(messages, tools: nil)
+      chat(messages, tools: tools)
+    end
+  end
+
+  def setup
+    @tmpdir = Dir.mktmpdir
+    workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(workspace)
+    config_path = File.join(@tmpdir, "config.yml")
+    File.write(config_path, {
+      "agents" => { "defaults" => {
+        "workspace" => workspace,
+        "memory" => { "extract_every" => 2 }
+      } },
+      "models" => [ { "name" => "test", "model" => "openai/test-model", "api_key" => "sk-test" } ]
+    }.to_yaml)
+
+    @provider = CountingProvider.new
+    @agent = Rubot::Agent.new(
+      config: Rubot::Config.new(config_path),
+      provider: @provider,
+      session_id: "adaptive"
+    )
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+  end
+
+  def test_answering_queues_memory_without_an_extra_request
+    @agent.process("first message here", stream: false)
+
+    assert_equal 1, @agent.session.memory_backlog.size
+    assert_equal 1, @provider.calls, "answering must not trigger extraction"
+  end
+
+  def test_flush_learning_batches_extraction
+    @agent.process("first message here", stream: false)
+    @agent.flush_learning
+    assert_equal 1, @provider.calls, "one message is below the batch size"
+    assert_equal 1, @agent.session.memory_backlog.size
+
+    @agent.process("second message here", stream: false)
+    @agent.flush_learning
+
+    assert_equal 3, @provider.calls, "two answers plus one batched extraction"
+    assert_empty @agent.session.memory_backlog
+  end
+
+  def test_extraction_usage_is_counted_in_the_session_totals
+    @agent.process("first message here", stream: false)
+    @agent.flush_learning
+    before = @agent.session.usage.requests
+
+    @agent.process("second message here", stream: false)
+    @agent.flush_learning
+
+    assert_equal before + 2, @agent.session.usage.requests
+  end
+
+  def test_flush_learning_ignores_internal_prompts
+    @agent.session.add("user", Rubot::Agent::CONTINUE_PROMPT)
+
+    @agent.flush_learning
+
+    assert_empty @agent.session.memory_backlog
+    assert_equal 0, @provider.calls
+  end
+
+  def test_learned_corrections_are_not_injected_twice
+    @agent.memory.append("Learned Corrections", "Do not use em dashes in captions")
+    prompt = @agent.build_system_prompt
+
+    assert_equal 1, prompt.scan("Do not use em dashes in captions").size
+  end
+
+  def test_a_failing_extraction_does_not_lose_the_answer
+    failing = Class.new(CountingProvider) do
+      def chat(messages, tools: nil)
+        if messages.first.to_h["content"].to_s.include?("memory extraction assistant")
+          raise "extractor exploded"
+        end
+        super
+      end
+    end
+    agent = Rubot::Agent.new(
+      config: @agent.config,
+      provider: failing.new,
+      session_id: "adaptive-failure"
+    )
+
+    answer = agent.process("first message here", stream: false)
+    assert_equal "answered", answer
+
+    agent.flush_learning
+    agent.process("second message here", stream: false)
+    agent.flush_learning # must not raise even though the extractor blows up
+  end
+end

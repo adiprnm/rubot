@@ -197,6 +197,9 @@ agents:
       auto: true
       threshold_percent: 80
       keep_recent_messages: 6
+    memory:
+      extract_every: 3       # batch memory extraction (0 disables it)
+      consolidate: true      # dedupe and cap MEMORY.md sections
 
 model_presets:
   primary:
@@ -669,8 +672,10 @@ the built-in `memory` tool. Organized into sections:
 - **Preferences** — Your communication style and preferences
 - **Context** — Current project/task context
 
-The bot uses the memory tool to `read`, `write`, `append`, and
-`update_section`. This lets it remember information across sessions.
+The bot uses the memory tool to `read`, `append`, and `update_section`. This
+lets it remember information across sessions. (A full `write` replaces the
+whole file and is deliberately not exposed, so the bot can never erase its
+memory.)
 
 ```markdown
 # Memory
@@ -684,6 +689,28 @@ The bot uses the memory tool to `read`, `write`, `append`, and
 
 ## Context
 - Currently working on tool registry
+```
+
+Every line of `MEMORY.md` is sent with every request, so Rubot keeps it
+bounded instead of letting it grow forever:
+
+- **Batched extraction** — the bot extracts facts from user messages in
+  batches (`memory.extract_every`, default 3) instead of spending one extra
+  provider request per message, and it does so after the answer has been sent.
+- **Consolidation** — after each extraction the file is deduplicated
+  ("User communicates in casual Indonesian" and its paraphrases collapse into
+  one line) and each section is capped: Facts 25, Preferences 15, Context 10,
+  Learned Corrections 10 entries.
+- **Archive** — entries that fall past a cap are appended to
+  `MEMORY_ARCHIVE.md` next to the memory file. That file is never injected into
+  a prompt, so nothing is lost but nothing is paid for either.
+
+```yaml
+agents:
+  defaults:
+    memory:
+      extract_every: 3    # user messages per extraction request; 0 disables it
+      consolidate: true   # merge duplicates and enforce the section caps
 ```
 
 ### `personas.json` — Per-topic Personas

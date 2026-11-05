@@ -338,6 +338,9 @@ module Rubot
         puts response
         puts
       end
+
+      # Learning runs once the answer is on screen, never before it.
+      agent.flush_learning
     rescue StandardError => e
       puts "\n❌ Error: #{e.message}\n"
     end

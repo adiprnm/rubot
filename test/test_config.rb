@@ -426,3 +426,54 @@ class TestConfigCompaction < Minitest::Test
     assert_in_delta 80.0, config.compact_threshold_percent
   end
 end
+
+class TestConfigMemory < Minitest::Test
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @config_path = File.join(@tmpdir, "config.yml")
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+  end
+
+  def write_config(defaults)
+    File.write(@config_path, { "agents" => { "defaults" => defaults } }.to_yaml)
+    Rubot::Config.new(@config_path)
+  end
+
+  def test_extraction_is_batched_by_default
+    config = Rubot::Config.new("/nonexistent/config.yml")
+
+    assert_equal Rubot::Config::DEFAULT_MEMORY_EXTRACT_EVERY, config.memory_extract_every
+    assert config.memory_consolidate?
+  end
+
+  def test_nested_memory_settings
+    config = write_config(
+      "memory" => { "extract_every" => 5, "consolidate" => false }
+    )
+
+    assert_equal 5, config.memory_extract_every
+    refute config.memory_consolidate?
+  end
+
+  def test_flat_aliases
+    config = write_config("memory_extract_every" => 1, "memory_consolidate" => "off")
+
+    assert_equal 1, config.memory_extract_every
+    refute config.memory_consolidate?
+  end
+
+  def test_zero_disables_extraction
+    config = write_config("memory" => { "extract_every" => 0 })
+
+    assert_equal 0, config.memory_extract_every
+  end
+
+  def test_negative_values_are_treated_as_disabled
+    config = write_config("memory" => { "extract_every" => -2 })
+
+    assert_equal 0, config.memory_extract_every
+  end
+end

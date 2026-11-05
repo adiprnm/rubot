@@ -160,3 +160,79 @@ class TestMemoryExtractor < Minitest::Test
     end
   end
 end
+
+class TestMemoryExtractorBatching < Minitest::Test
+  class BatchProvider
+    attr_accessor :response
+    attr_reader :calls, :requests
+
+    def initialize
+      @calls = 0
+      @requests = []
+      @response = '{"facts": [], "preferences": [], "context": []}'
+    end
+
+    def chat(messages, tools: nil)
+      @calls += 1
+      @requests << messages
+      @response
+    end
+
+    def last_usage
+      { "prompt_tokens" => 100, "completion_tokens" => 20 }
+    end
+  end
+
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(@workspace)
+    @memory = Rubot::Memory.new(workspace: @workspace)
+    @provider = BatchProvider.new
+  end
+
+  def teardown
+    FileUtils.rm_rf(@tmpdir)
+  end
+
+  def test_extracts_from_a_batch_in_one_request
+    @provider.response = '{"facts": ["User uses Ruby"], "preferences": [], "context": []}'
+    extractor = Rubot::MemoryExtractor.new(provider: @provider, memory: @memory)
+
+    result = extractor.extract([
+      "I have been writing Ruby for years.",
+      "Try again with the slides please."
+    ])
+
+    assert_equal 1, @provider.calls
+    assert_equal 1, result.size
+  end
+
+  def test_skips_trivial_messages_inside_a_batch
+    @provider.response = '{"facts": ["User uses Ruby"], "preferences": [], "context": []}'
+    extractor = Rubot::MemoryExtractor.new(provider: @provider, memory: @memory)
+
+    extractor.extract([ "ok", "sip", "I have been writing Ruby for years.", "My team ships on Fridays." ])
+
+    prompt = @provider.requests.last.last["content"]
+    refute_includes prompt, "ok"
+    assert_includes prompt, "1. I have been writing Ruby for years."
+    assert_includes prompt, "2. My team ships on Fridays."
+  end
+
+  def test_returns_empty_without_calling_the_provider_when_the_whole_batch_is_trivial
+    extractor = Rubot::MemoryExtractor.new(provider: @provider, memory: @memory)
+
+    assert_empty extractor.extract([ "ok", "thanks" ])
+    assert_equal 0, @provider.calls
+  end
+
+  def test_records_the_usage_of_the_extraction_request
+    @provider.response = '{"facts": [], "preferences": [], "context": []}'
+    extractor = Rubot::MemoryExtractor.new(provider: @provider, memory: @memory)
+
+    extractor.extract("I have been writing Ruby for years.")
+
+    refute_nil extractor.last_usage
+  end
+end

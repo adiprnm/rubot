@@ -83,6 +83,12 @@ module Rubot
         call(:process_cron, text: text)
       end
 
+      # Run post-answer learning (memory extraction, feedback) in the actor
+      # that owns the session.
+      def flush_learning
+        call(:flush_learning)
+      end
+
       def startup_info
         call(:info)
       end

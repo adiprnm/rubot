@@ -131,7 +131,18 @@ module Rubot
         on_stream_chunk(chunk) if respond_to?(:on_stream_chunk)
       end
 
-      after_process(message, response)
+      result = after_process(message, response)
+
+      # The answer has been delivered, so background learning can no longer
+      # delay it. A failure here must not turn a delivered answer into an
+      # error message, hence the separate rescue.
+      begin
+        handle.flush_learning if handle.respond_to?(:flush_learning)
+      rescue StandardError => e
+        warn "[learning] #{e.class}: #{e.message}" if Rubot.debug?
+      end
+
+      result
     rescue StandardError => e
       handle_error(e, message)
     ensure

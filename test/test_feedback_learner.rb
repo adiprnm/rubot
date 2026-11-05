@@ -52,11 +52,13 @@ class TestFeedbackLearner < Minitest::Test
     assert @learner.send(:correction?, "Don't say that")
   end
 
-  def test_detects_try_again_pattern
-    assert @learner.send(:correction?, "Try again")
-    assert @learner.send(:correction?, "Try something else")
-    assert @learner.send(:correction?, "Different approach please")
-    assert @learner.send(:correction?, "Another way to do this")
+  # "Try again" is a retry, not a rule to learn: storing it filled the log
+  # with entries that gave the model nothing to follow.
+  def test_retry_requests_are_not_corrections
+    refute @learner.send(:correction?, "Try again")
+    refute @learner.send(:correction?, "Try something else")
+    refute @learner.send(:correction?, "Different approach please")
+    refute @learner.send(:correction?, "Another way to do this")
   end
 
   def test_detects_you_forgot_pattern
@@ -106,17 +108,14 @@ class TestFeedbackLearner < Minitest::Test
   def test_detects_jangan_pattern
     assert @learner.send(:correction?, "Jangan begitu")
     assert @learner.send(:correction?, "jangan lakukan itu")
-    assert @learner.send(:correction?, "stop")
-    assert @learner.send(:correction?, "berhenti")
-    assert @learner.send(:correction?, "cukup")
   end
 
-  def test_detects_coba_lagi_pattern
-    assert @learner.send(:correction?, "Coba lagi")
-    assert @learner.send(:correction?, "coba lain")
-    assert @learner.send(:correction?, "cara lain")
-    assert @learner.send(:correction?, "ganti cara")
-    assert @learner.send(:correction?, "pakai cara lain")
+  def test_coba_lagi_is_a_retry_not_a_correction
+    refute @learner.send(:correction?, "Coba lagi")
+    refute @learner.send(:correction?, "coba lain")
+    refute @learner.send(:correction?, "cara lain")
+    refute @learner.send(:correction?, "ganti cara")
+    refute @learner.send(:correction?, "pakai cara lain")
   end
 
   def test_detects_udah_saya_bilang_pattern
@@ -175,6 +174,37 @@ class TestFeedbackLearner < Minitest::Test
     turns = []
     result = @learner.process("No that's wrong", turns)
     refute result
+  end
+
+  def test_does_not_store_the_same_correction_twice
+    turns = [
+      { "role" => "user", "content" => "What language do I use?" },
+      { "role" => "assistant", "content" => "You use Python." }
+    ]
+
+    assert @learner.process("No, I use Ruby, not Python", turns)
+    refute @learner.process("No, I use Ruby, not Python", turns)
+
+    content = @memory.read
+    assert_equal 1, content.scan("I use Ruby, not Python").size
+  end
+
+  def test_caps_the_number_of_stored_corrections
+    turns = [
+      { "role" => "user", "content" => "Which language?" },
+      { "role" => "assistant", "content" => "Python." }
+    ]
+
+    (Rubot::Tools::FeedbackLearner::MAX_CORRECTIONS + 5).times do |i|
+      @learner.process("No, use language number #{i} instead", turns)
+    end
+
+    section = @memory.read.split("## Learned Corrections").last
+    assert_equal Rubot::Tools::FeedbackLearner::MAX_CORRECTIONS,
+                 section.lines.count { |l| l.strip.start_with?("- ") }
+    # The newest correction survives; the oldest was archived.
+    assert_includes section, "language number #{Rubot::Tools::FeedbackLearner::MAX_CORRECTIONS + 4}"
+    refute_includes section, "language number 0"
   end
 
   def test_does_not_store_non_correction

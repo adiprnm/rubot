@@ -16,19 +16,15 @@ module Rubot
         /\A\s*(i meant|i said|as i said|as i mentioned|like i said|like i mentioned)/i,
         /\A\s*(actually|no actually|wait no|hold on|wait,? no)/i,
         /\A\s*(do(n't| not) (do that|say that|use that|use|run|execute))/i,
-        /\A\s*(stop|don't|please stop|enough)/i,
         /\A\s*(that'?s not what|that'?s not right|that'?s not correct|that'?s not helpful)/i,
-        /\A\s*(try again|try something else|different approach|another way)/i,
         /\A\s*(you (forgot|missed|overlooked|ignored))/i,
         /\A\s*(I told you|I already said|I already told you)/i,
-        /\A\s*(bad|terrible|awful|useless|worst)/i,
         # Bahasa Indonesia
         /\A\s*(bukan|bukan begitu|bukan itu|bukan itu maksud|bukan seperti itu|bukan yang itu)/i,
         /\A\s*(salah|salah itu|jawabannya salah|itu salah|kurang tepat|tidak tepat)/i,
         /\A\s*(maksud saya|maksud gue|yang saya maksud|bukan itu yang saya maksud)/i,
         /\A\s*(sebenarnya|tapi sebenarnya|tapi sebenarnya bukan|seharusnya)/i,
-        /\A\s*(jangan|jangan begitu|jangan lakukan|stop|berhenti|cukup)/i,
-        /\A\s*(coba lagi|coba lain|cara lain|ganti cara|pakai cara lain)/i,
+        /\A\s*(jangan|jangan begitu|jangan lakukan)/i,
         /\A\s*(udah saya bilang|sudah saya bilang|udah saya katakan|sudah saya katakan|udah saya kasih tahu|sudah saya kasih tahu)/i,
         /\A\s*(kamu lupa|kamu salah|kau lupa|kau salah|lo salah|elo salah)/i,
         /\A\s*(tidak|nggak|enggak|gak|gk)[,!.\s]+(bukan|salah|tepat|benar|begitu|itu)/i,
@@ -36,6 +32,10 @@ module Rubot
 
       # Messages that are too short to be meaningful corrections
       MIN_CORRECTION_LENGTH = 3
+
+      # The log is injected into every prompt, so it is kept short. Older
+      # corrections are dropped (and archived) once this many exist.
+      MAX_CORRECTIONS = 10
 
       attr_reader :memory
 
@@ -126,11 +126,30 @@ module Rubot
         user_correction = user_correction[0..200] + "..." if user_correction.length > 200
 
         correction_line = "User asked: '#{original_request}' → Bot response was wrong/inadequate. User feedback: '#{user_correction}'"
-        @memory.append("Learned Corrections", correction_line)
+        return false if duplicate_correction?(user_correction)
+
+        @memory.append("Learned Corrections", correction_line, max_items: MAX_CORRECTIONS)
         true
       rescue StandardError => e
         warn "[feedback_learner] Failed to store correction: #{e.class}: #{e.message}" if Rubot.debug?
         false
+      end
+
+      # A correction the user already gave teaches nothing new.
+      def duplicate_correction?(user_correction)
+        content = @memory.read
+        return false if content.nil? || content.empty?
+
+        needle = normalize_for_comparison(user_correction)
+        return false if needle.empty?
+
+        extract_corrections_section(content).to_s.lines.any? do |line|
+          normalize_for_comparison(line).include?(needle)
+        end
+      end
+
+      def normalize_for_comparison(text)
+        text.to_s.downcase.gsub(/[^a-z0-9\s]/, " ").gsub(/\s+/, " ").strip
       end
 
       # Extract the "Learned Corrections" section from memory content

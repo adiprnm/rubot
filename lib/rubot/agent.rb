@@ -160,12 +160,9 @@ module Rubot
 
       # Add user message to session
       @session.add("user", message)
-
-      # Adaptive: extract memory from user message (auto-remember facts)
-      run_memory_extraction(message)
-
-      # Adaptive: learn from feedback (detect corrections)
-      run_feedback_learning(message)
+      # Queue it for extraction; the provider call happens in #flush_learning,
+      # after the channel has delivered the answer.
+      @session.push_memory_backlog(message) if @memory_extractor && @memory.enabled?
 
       response = ""
       tool_calls = nil
@@ -535,7 +532,7 @@ module Rubot
       info[:persona] = (@persona.name || "yes") if @persona
       info[:safety] = @safety_guard.restrict_to_workspace ? "restricted" : "permissive"
       info[:skills] = @skill_registry.count if @skill_registry.any?
-      info[:adaptive] = "memory+summary+feedback"
+      info[:adaptive] = "memory+batched-extraction+summary+feedback"
       info
     end
 
@@ -645,9 +642,9 @@ module Rubot
         parts << "# Memory\n\n#{@memory}"
       end
 
-      # 3b. Learned Corrections (from feedback learner)
-      correction_prompt = @feedback_learner.to_system_prompt
-      parts << correction_prompt unless correction_prompt.empty?
+      # 3b. Learned Corrections already live in MEMORY.md above, so they are
+      # not injected a second time here — that duplicated ~200 tokens per
+      # request for no extra information.
 
       # 3c. Conversation Summary (from session summarization)
       if @session&.summary_text
@@ -675,6 +672,18 @@ module Rubot
       parts << config_prompt unless config_prompt.empty?
 
       parts.join("\n\n---\n\n")
+    end
+
+    # Learn from the turn that just finished. Channels call this *after* they
+    # have delivered the answer, so extraction never delays a reply.
+    #
+    # A failure here must never cost the user their answer, so everything is
+    # rescued and reported through the debug log only.
+    def flush_learning
+      run_feedback_learning
+      run_memory_extraction
+    rescue StandardError => e
+      warn "[adaptive] learning failed: #{e.class}: #{e.message}"
     end
 
     private
@@ -1156,12 +1165,33 @@ module Rubot
 
     # --- Adaptive feature helpers ---
 
-    # Run memory extraction on the user message (always on)
-    def run_memory_extraction(message)
+    # Run extraction once enough user messages have piled up.
+    #
+    # Extraction used to be one provider request per user message, issued
+    # before the answer. Batching it over `memory.extract_every` messages
+    # (default 3) keeps most of the coverage for a third of the requests.
+    def run_memory_extraction
       return unless @memory_extractor
       return unless @memory.enabled?
 
-      extracted = @memory_extractor.extract(message)
+      every = @config.memory_extract_every.to_i
+      return unless every.positive?
+      return if @session.memory_backlog.size < every
+
+      batch = @session.take_memory_backlog
+      extracted = @memory_extractor.extract(batch)
+
+      # Extraction is a real provider request; count it in the session totals
+      # without overwriting `last_usage`, which `/usage` uses for context size.
+      if @memory_extractor.last_usage
+        @session.record_auxiliary_usage(@memory_extractor.last_usage, provider: @provider.name)
+      end
+
+      if @config.memory_consolidate?
+        result = @memory.consolidate!
+        warn "[memory] consolidated: removed #{result[:removed]}" if result && Rubot.debug?
+      end
+
       return if extracted.empty?
 
       if Rubot.debug?
@@ -1172,14 +1202,31 @@ module Rubot
     end
 
     # Run feedback learning — detect if user is correcting the bot (always on)
-    def run_feedback_learning(message)
+    def run_feedback_learning
       return unless @feedback_learner
       return unless @memory.enabled?
 
-      # Get previous turns (excluding the current user message)
-      previous_turns = @session.conversation_history
+      message = last_user_message
+      return if message.nil?
 
-      @feedback_learner.process(message, previous_turns)
+      # The current turn is already in the transcript, so the correction is
+      # matched against the answer the user is reacting to.
+      @feedback_learner.process(message, @session.conversation_history)
+    end
+
+    # The last thing the user actually wrote, ignoring the prompts rubot sends
+    # itself (continuation and re-ask instructions).
+    def last_user_message
+      @session.messages.reverse_each do |msg|
+        next unless msg["role"] == "user"
+
+        content = msg["content"].to_s.strip
+        next if content.empty?
+        next if [ CONTINUE_PROMPT, ANSWER_NOW_PROMPT, EMPTY_ANSWER_PROMPT ].include?(content)
+
+        return content
+      end
+      nil
     end
 
     # Run automatic compaction when the transcript approaches the configured
