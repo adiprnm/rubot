@@ -139,12 +139,23 @@ module Rubot
       msg
     end
 
-    def conversation_history
-      history = @messages.map do |msg|
+    def conversation_history(reasoning_tail: nil)
+      # `reasoning_tail` limits reasoning_content to the newest N messages.
+      # Providers bill every byte of the prompt, and the thinking of a turn
+      # that has already finished is never needed again: only the reasoning
+      # produced inside the turn still being executed has to survive (a tool
+      # loop continues from it). nil keeps the old behaviour (send everything).
+      reasoning_from = if reasoning_tail.nil?
+        0
+      else
+        [ @messages.size - reasoning_tail.to_i, 0 ].max
+      end
+
+      history = @messages.each_with_index.map do |msg, index|
         entry = { "role" => msg["role"], "content" => msg["content"] }
         entry["tool_calls"] = msg["tool_calls"] if msg["tool_calls"]
         entry["tool_call_id"] = msg["tool_call_id"] if msg["tool_call_id"]
-        entry["reasoning_content"] = msg["reasoning_content"] if msg["reasoning_content"]
+        entry["reasoning_content"] = msg["reasoning_content"] if msg["reasoning_content"] && index >= reasoning_from
         entry
       end
       remove_orphaned_tool_messages(history)
@@ -152,20 +163,38 @@ module Rubot
 
     # Returns conversation history with an optional limit, ensuring no orphaned
     # tool_call_id references (tool results whose parent tool_call was trimmed).
-    def safe_history(limit: nil)
-      history = conversation_history
-      return history if limit.nil?
-      return history if history.size <= limit
+    #
+    # `max_tokens` additionally drops the oldest messages until the remaining
+    # block fits that approximate budget (0/nil disables it).
+    def safe_history(limit: nil, max_tokens: nil, reasoning_tail: nil)
+      history = conversation_history(reasoning_tail: reasoning_tail)
 
-      trim_index = history.size - limit
+      if limit && history.size > limit
+        trim_index = history.size - limit
 
-      # If the first kept message is a tool result, its parent assistant was
-      # trimmed out. Skip all consecutive tool results to avoid orphaned IDs.
-      while trim_index < history.size && history[trim_index]["role"] == "tool"
-        trim_index += 1
+        # If the first kept message is a tool result, its parent assistant was
+        # trimmed out. Skip all consecutive tool results to avoid orphaned IDs.
+        while trim_index < history.size && history[trim_index]["role"] == "tool"
+          trim_index += 1
+        end
+
+        history = history[trim_index..]
       end
 
-      history[trim_index..]
+      budget = max_tokens.to_i
+      if budget.positive?
+        trim_index = 0
+        tokens = history.sum { |msg| self.class.message_tokens(msg) }
+        while tokens > budget && trim_index < history.size
+          tokens -= self.class.message_tokens(history[trim_index])
+          trim_index += 1
+        end
+        # Same orphan rule as the count limit above.
+        trim_index += 1 while trim_index < history.size && history[trim_index]["role"] == "tool"
+        history = history[trim_index..] if trim_index.positive?
+      end
+
+      history
     end
 
     def message_count
@@ -178,12 +207,20 @@ module Rubot
     # heuristic plus a small per-message overhead.
     def estimated_tokens(extra_chars: 0)
       total = (extra_chars.to_i + summary_text.to_s.bytesize) / 4.0
-      @messages.each do |msg|
-        total += 4
-        total += msg["content"].to_s.bytesize / 4.0
-        total += JSON.generate(msg["tool_calls"]).bytesize / 4.0 if msg["tool_calls"]
-      end
+      @messages.each { |msg| total += self.class.message_tokens(msg) }
       total.ceil
+    end
+
+    # Approximate token cost of one message as it will be sent. Includes the
+    # reasoning block, which used to be omitted: on a tool-heavy turn it is the
+    # largest part of the prompt, so leaving it out made compaction believe the
+    # transcript was ~40% smaller than the provider's bill.
+    def self.message_tokens(msg)
+      tokens = 4.0
+      tokens += msg["content"].to_s.bytesize / 4.0
+      tokens += msg["reasoning_content"].to_s.bytesize / 4.0
+      tokens += JSON.generate(msg["tool_calls"]).bytesize / 4.0 if msg["tool_calls"]
+      tokens
     end
 
     def clear!

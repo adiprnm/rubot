@@ -443,3 +443,74 @@ class TestSessionMemoryBacklog < Minitest::Test
     assert_equal last.prompt_tokens, @session.last_usage.prompt_tokens
   end
 end
+
+class TestSessionHistoryWindowing < Minitest::Test
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(@workspace)
+    @session = Rubot::Session.new("window", workspace: @workspace)
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+  end
+
+  def test_reasoning_is_only_sent_for_the_requested_tail
+    @session.add("assistant", "old answer", reasoning_content: "old thinking")
+    @session.add("user", "question")
+    @session.add("assistant", "new answer", reasoning_content: "fresh thinking")
+
+    history = @session.conversation_history(reasoning_tail: 1)
+
+    assert_nil history[0]["reasoning_content"]
+    assert_equal "fresh thinking", history[2]["reasoning_content"]
+  end
+
+  def test_reasoning_tail_zero_drops_all_reasoning
+    @session.add("assistant", "answer", reasoning_content: "thinking")
+
+    history = @session.conversation_history(reasoning_tail: 0)
+
+    assert_nil history[0]["reasoning_content"]
+  end
+
+  def test_conversation_history_keeps_reasoning_by_default
+    @session.add("assistant", "answer", reasoning_content: "thinking")
+
+    assert_equal "thinking", @session.conversation_history[0]["reasoning_content"]
+  end
+
+  def test_estimated_tokens_counts_reasoning_content
+    @session.add("assistant", "answer")
+    without = @session.estimated_tokens
+
+    @session.add("assistant", "answer", reasoning_content: "x" * 4_000)
+
+    assert_operator @session.estimated_tokens, :>=, without + 1_000
+  end
+
+  def test_safe_history_respects_the_token_budget
+    @session.add("user", "a" * 400)
+    @session.add("assistant", "b" * 400)
+    @session.add("assistant", "c" * 400)
+
+    history = @session.safe_history(max_tokens: 150)
+
+    assert_equal 1, history.size
+    assert_equal "c" * 400, history.first["content"]
+  end
+
+  def test_token_budget_does_not_leave_an_orphaned_tool_result
+    @session.add("assistant", "working", tool_calls: [
+      { "id" => "call-1", "type" => "function", "function" => { "name" => "test" } }
+    ])
+
+    @session.add("tool", "x" * 400, tool_call_id: "call-1")
+    @session.add("assistant", "done")
+
+    history = @session.safe_history(max_tokens: 10)
+
+    assert_equal [ "assistant" ], history.map { |m| m["role"] }.uniq
+  end
+end

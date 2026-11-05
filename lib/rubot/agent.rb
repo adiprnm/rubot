@@ -28,6 +28,13 @@ module Rubot
     # too low for the model.
     MAX_CONTINUATIONS = 2
 
+    # Tool results kept verbatim in the request. Everything older is shortened:
+    # a tool-heavy turn re-sends its entire stdout on every round, and the
+    # model rarely needs the full log of a command it already acted on.
+    # The session file still keeps the complete output; only the request is
+    # trimmed, so nothing is lost for a later turn that needs to re-read it.
+    TRUNCATED_TOOL_RESULT_NOTICE = "\n... [older tool output truncated; re-run the command if you still need it]"
+
     # Sent after a truncated answer. It has to be explicit about *not*
     # restarting: a model asked to "continue" will otherwise begin again at
     # the first sentence.
@@ -180,6 +187,10 @@ module Rubot
       @cancellation.start!
       Thread.current[:rubot_cancellation] = @cancellation
       stopped = false
+
+      # Reasoning from earlier turns is dropped from the request; only what is
+      # produced inside this turn is kept, because a tool loop needs it.
+      @turn_start_index = @session.messages.size
 
       # Add user message to session
       @session.add("user", message)
@@ -956,9 +967,14 @@ module Rubot
       # Add system prompt (composed from all sources)
       messages << { "role" => "system", "content" => build_system_prompt }
 
-      # Add conversation history (limited)
-      history_limit = @config.history_limit
-      recent_messages = @session.safe_history(limit: history_limit)
+      # Add conversation history (limited by messages and, optionally, tokens).
+      # `reasoning_tail` keeps reasoning only for the turn being executed.
+      recent_messages = @session.safe_history(
+        limit: @config.history_limit,
+        max_tokens: @config.history_max_tokens,
+        reasoning_tail: current_turn_message_count
+      )
+      trim_old_tool_results!(recent_messages)
 
       recent_messages.each do |msg|
         formatted = { "role" => msg["role"], "content" => msg["content"] }
@@ -982,6 +998,32 @@ module Rubot
       end
 
       messages
+    end
+
+    # Number of messages that belong to the turn currently running. Used to
+    # decide which reasoning blocks are still worth sending.
+    def current_turn_message_count
+      return 0 if @turn_start_index.nil?
+
+      [ @session.messages.size - @turn_start_index, 0 ].max
+    end
+
+    # Shorten all but the newest `tool_result_keep` tool outputs in place.
+    def trim_old_tool_results!(messages)
+      keep = @config.tool_result_keep
+      max_chars = @config.tool_result_max_chars
+      return if max_chars.zero?
+
+      indexes = messages.each_index.select { |i| messages[i]["role"] == "tool" }
+      older = keep.positive? ? indexes[0...-keep].to_a : indexes
+      older.each do |i|
+        content = messages[i]["content"].to_s
+        next if content.length <= max_chars
+
+        messages[i] = messages[i].merge(
+          "content" => content[0...max_chars] + TRUNCATED_TOOL_RESULT_NOTICE
+        )
+      end
     end
 
     # Build a provider from an immutable settings snapshot. No config
@@ -1178,6 +1220,7 @@ module Rubot
     def process_cron(message)
       # Build local messages from session history ONLY (up to the last assistant response)
       # Do NOT include the current user message — this is a separate conversation turn
+      @turn_start_index = @session.messages.size
       local_messages = build_cron_messages
       local_messages << { "role" => "user", "content" => "⏰ Scheduled task fired:\n#{message}" }
 
@@ -1249,12 +1292,17 @@ module Rubot
       messages << { "role" => "system", "content" => build_system_prompt }
 
       history_limit = @config.history_limit
-      all_history = @session.safe_history(limit: history_limit)
+      all_history = @session.safe_history(
+        limit: history_limit,
+        max_tokens: @config.history_max_tokens,
+        reasoning_tail: 0
+      )
 
       # If the last message is a user message (the current one being processed),
       # exclude it so cron processing has clean context
       history = all_history.dup
       history.pop if history.last && history.last["role"] == "user"
+      trim_old_tool_results!(history)
 
       recent = history
       recent.each do |msg|
@@ -1346,6 +1394,8 @@ module Rubot
       return unless window.to_i.positive?
 
       threshold = window * (@config.compact_threshold_percent / 100.0)
+      cap = @config.compact_threshold_tokens
+      threshold = [ threshold, cap ].min if cap.positive?
       used = estimated_context_tokens
       return if used < threshold
 

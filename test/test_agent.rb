@@ -1107,3 +1107,76 @@ class TestAgentCancellation < Minitest::Test
     assert_includes response, "Stopped by user"
   end
 end
+
+class TestAgentHistoryTrimming < Minitest::Test
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @config_path = File.join(@tmpdir, "config.yml")
+    @workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(@workspace)
+    File.write(@config_path, {
+      "agents" => { "defaults" => {
+        "workspace" => @workspace,
+        "history" => { "tool_result_keep" => 1, "tool_result_max_chars" => 50 }
+      } },
+      "models" => [
+        { "name" => "gpt-4o-mini", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" }
+      ],
+      "provider" => "openai"
+    }.to_yaml)
+    @agent = Rubot::Agent.new(
+      config: Rubot::Config.new(@config_path),
+      session_id: "history-trim",
+      tools: Rubot::Tools::Registry.new
+    )
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+  end
+
+  def test_past_reasoning_is_not_sent_but_the_current_turn_keeps_it
+    @agent.session.add("assistant", "old answer", reasoning_content: "old thinking")
+    @agent.instance_variable_set(:@turn_start_index, @agent.session.messages.size)
+    @agent.session.add("user", "new question")
+    @agent.session.add("assistant", "working", reasoning_content: "fresh thinking")
+
+    messages = @agent.send(:build_messages)
+    assistants = messages.select { |m| m["role"] == "assistant" }
+
+    assert_nil assistants[0]["reasoning_content"]
+    assert_equal "fresh thinking", assistants[1]["reasoning_content"]
+  end
+
+  def test_old_tool_results_are_truncated_but_the_newest_is_kept
+    @agent.session.add("assistant", "round 1", tool_calls: [
+      { "id" => "call-1", "type" => "function", "function" => { "name" => "shell_exec" } }
+    ])
+    @agent.session.add("tool", "1" * 200, tool_call_id: "call-1")
+    @agent.session.add("assistant", "round 2", tool_calls: [
+      { "id" => "call-2", "type" => "function", "function" => { "name" => "shell_exec" } }
+    ])
+    @agent.session.add("tool", "2" * 200, tool_call_id: "call-2")
+
+    messages = @agent.send(:build_messages)
+    tools = messages.select { |m| m["role"] == "tool" }
+
+    assert_equal "1" * 50 + Rubot::Agent::TRUNCATED_TOOL_RESULT_NOTICE, tools[0]["content"]
+    assert_equal "2" * 200, tools[1]["content"]
+  end
+
+  def test_stored_tool_output_is_not_modified
+    @agent.session.add("assistant", "round 1", tool_calls: [
+      { "id" => "call-1", "type" => "function", "function" => { "name" => "shell_exec" } }
+    ])
+    @agent.session.add("tool", "1" * 200, tool_call_id: "call-1")
+    @agent.session.add("assistant", "round 2", tool_calls: [
+      { "id" => "call-2", "type" => "function", "function" => { "name" => "shell_exec" } }
+    ])
+    @agent.session.add("tool", "2" * 200, tool_call_id: "call-2")
+
+    @agent.send(:build_messages)
+
+    assert_equal "1" * 200, @agent.session.messages[1]["content"]
+  end
+end

@@ -20,6 +20,8 @@ module Rubot
     DEFAULT_AUTO_COMPACT = true
     DEFAULT_COMPACT_THRESHOLD_PERCENT = 80.0
     DEFAULT_COMPACT_KEEP_RECENT = 6
+    DEFAULT_TOOL_RESULT_KEEP = 3
+    DEFAULT_TOOL_RESULT_MAX_CHARS = 2_000
     # Memory extraction used to run on every user message, one extra provider
     # request per turn. Batching it over a few turns keeps the same coverage
     # for a fraction of the cost (0 disables extraction).
@@ -384,8 +386,52 @@ module Rubot
     # Deprecated alias for callers that still use the old name.
     alias max_tool_iterations max_rounds
 
+    # --- History window --------------------------------------------------
+    #
+    #   agents:
+    #     defaults:
+    #       history:
+    #         limit: 50        # messages sent to the provider (0 = max_rounds)
+    #         max_tokens: 24000 # optional token budget for that history
+    #         tool_result_keep: 3       # newest tool outputs kept in full
+    #         tool_result_max_chars: 2000 # older tool outputs are cut to this
+    #
+    # Flat aliases (`history_limit`, `history_max_tokens`, ...) are accepted.
+    def history
+      raw = agent_defaults["history"]
+      raw.is_a?(Hash) ? raw : {}
+    end
+
     def history_limit
-      max_rounds
+      raw = history["limit"] || agent_defaults["history_limit"]
+      value = raw.to_i
+      value.positive? ? value : max_rounds
+    end
+
+    # Approximate token budget for the history block. 0 disables the cap, so
+    # the message-count limit is the only bound (the old behaviour).
+    def history_max_tokens
+      raw = history["max_tokens"] || agent_defaults["history_max_tokens"]
+      value = raw.to_i
+      value.positive? ? value : 0
+    end
+
+    # How many of the newest tool results are sent verbatim. Older results are
+    # shortened to `tool_result_max_chars`; 0 means "shorten every tool result".
+    def tool_result_keep
+      raw = history["tool_result_keep"] || agent_defaults["tool_result_keep"]
+      return DEFAULT_TOOL_RESULT_KEEP if raw.nil?
+
+      value = raw.to_i
+      value.negative? ? 0 : value
+    end
+
+    def tool_result_max_chars
+      raw = history["tool_result_max_chars"] || agent_defaults["tool_result_max_chars"]
+      return DEFAULT_TOOL_RESULT_MAX_CHARS if raw.nil?
+
+      value = raw.to_i
+      value.negative? ? 0 : value
     end
 
     # --- Context compaction ----------------------------------------------
@@ -439,6 +485,15 @@ module Rubot
             agent_defaults["compact_keep_recent_messages"]
       value = raw.to_i
       value.positive? ? value : DEFAULT_COMPACT_KEEP_RECENT
+    end
+
+    # Absolute token ceiling for compaction, independent of the model's
+    # window. A 1M-token model at `threshold_percent: 50` otherwise never
+    # compacts, because the threshold lands at 500k. 0 disables the cap.
+    def compact_threshold_tokens
+      raw = compaction["threshold_tokens"] || agent_defaults["compact_threshold_tokens"]
+      value = raw.to_i
+      value.positive? ? value : 0
     end
 
     # --- Memory ----------------------------------------------------------

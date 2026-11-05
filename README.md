@@ -25,6 +25,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 🔈 **Progress narration** — the model explains what it is doing between tool calls ("Let me check the structure first."), sent as normal chat messages
 - ⏹️ **`/stop`** — stops the running turn and kills the shell command it started
 - 🗜️ **Context compaction** — `/compact` summarizes older turns, and auto-compaction kicks in at a configurable share of the context window
+- 🪶 **Lean requests** — past reasoning is never re-sent, old tool output is shortened, and an optional token budget bounds the history block
 - 🎨 **Telegram HTML rendering** — model Markdown becomes Telegram HTML: nested bold/italic, `<blockquote expandable>`, spoilers, syntax-highlighted code, aligned monospace tables, and long replies split without breaking entities
 - 📄 **`.env` support** — automatic environment variable loading from `.env` files
 - 🎛️ **CLI options** — single-message mode or interactive chat
@@ -377,8 +378,45 @@ agents:
 A value of `100` disables auto-compaction by making the threshold unreachable
 (there is no room left to summarize); set `auto: false` to disable it
 outright. The context size is estimated from the transcript with a
-bytes-per-token heuristic, and very long transcripts are summarized in chunks
-so the summarizer request itself stays within the window.
+bytes-per-token heuristic (reasoning blocks included), and very long
+transcripts are summarized in chunks so the summarizer request itself stays
+within the window.
+
+On a model with a very large window the percentage threshold can be
+unreachable in practice (50% of 1M tokens is 500k). `threshold_tokens` adds an
+absolute ceiling; the lower of the two triggers compaction:
+
+```yaml
+agents:
+  defaults:
+    compaction:
+      threshold_tokens: 60000  # 0 = disabled (default)
+```
+
+#### Request size
+
+Besides compaction, every provider request is trimmed so a tool-heavy turn
+does not re-send its entire transcript on each round:
+
+- **Past reasoning is dropped.** Only the reasoning produced inside the turn
+  currently running is sent (a tool loop continues from it). Reasoning from
+  earlier turns is never needed again and can be the largest part of a
+  tool-heavy prompt.
+- **Old tool output is shortened.** The newest `tool_result_keep` results are
+  sent verbatim; older ones are cut to `tool_result_max_chars`. The session
+  file keeps the full output, so `/compact` and later turns still have it.
+- **Optional history budget.** `history.max_tokens` drops the oldest messages
+  until the block fits the budget.
+
+```yaml
+agents:
+  defaults:
+    history:
+      limit: 50                    # default: max_rounds
+      max_tokens: 24000            # 0 = only the message limit applies
+      tool_result_keep: 3          # newest tool outputs kept in full
+      tool_result_max_chars: 2000  # older ones are cut to this
+```
 
 Telegram commands:
 

@@ -22,6 +22,17 @@ agents:
       auto: true
       threshold_percent: 80   # 0.8 is also accepted
       keep_recent_messages: 6
+      # Optional absolute ceiling, in estimated tokens. Useful with a large
+      # context window (e.g. 1M tokens), where 80% is unreachable in practice.
+      # 0 disables it; the lower of this and threshold_percent wins.
+      threshold_tokens: 0
+    # What is sent to the provider from the transcript. Reasoning from past
+    # turns is never re-sent; only the turn being executed keeps it.
+    history:
+      limit: 50               # messages per request (default: max_rounds)
+      max_tokens: 0           # optional token budget for that history
+      tool_result_keep: 3     # newest tool outputs sent in full
+      tool_result_max_chars: 2000  # older tool outputs are cut to this
     # Safety guard — restrict agent access to the workspace directory.
     # When true, file operations and command execution are confined to `workspace`.
     # Set to false to disable sandboxing (not recommended).
