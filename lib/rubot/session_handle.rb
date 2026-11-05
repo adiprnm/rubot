@@ -12,14 +12,28 @@ module Rubot
     class SessionHandle
       attr_reader :session_id
 
-      def initialize(ractor, session_id)
+      def initialize(ractor, session_id, stop_port = nil)
         @ractor = ractor
         @session_id = session_id.to_s
+        @stop_port = stop_port
         @views = {}
       end
 
       def actor?
         true
+      end
+
+      # Stop the turn running in this session. This must not be a normal
+      # request: the actor is busy running the turn, so the request would only
+      # be read after it finished. The signal goes straight to the watcher
+      # thread that lives inside the session Ractor.
+      def cancel!
+        return false unless @stop_port
+
+        @stop_port << :stop
+        true
+      rescue Ractor::ClosedError
+        false
       end
 
       # Synchronous request/reply to the session Ractor.

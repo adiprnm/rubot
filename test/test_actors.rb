@@ -38,7 +38,9 @@ class TestActors < Minitest::Test
   end
 
   # Minimal SSE server that answers every POST with two content chunks.
-  def start_sse_server
+  # A delay keeps the request in flight, which is what a /stop interrupts.
+  def start_sse_server(delay: 0)
+    @sse_delay = delay
     @server = TCPServer.new("127.0.0.1", 0)
     @port = @server.addr[1]
 
@@ -63,6 +65,8 @@ class TestActors < Minitest::Test
     length = header[/Content-Length:\s*(\d+)/i, 1].to_i
     body ||= +""
     body << client.read(length - body.bytesize) if body.bytesize < length
+
+    sleep @sse_delay if @sse_delay&.positive?
 
     sse = +""
     sse << "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n"
@@ -128,6 +132,29 @@ class TestActors < Minitest::Test
       assert_equal 2, a.session.message_count
       assert_equal 0, b.session.message_count
       assert_equal %w[session-a session-b], pool.session_ids.sort
+    ensure
+      pool.shutdown
+    end
+  end
+
+  def test_stop_cancels_a_running_turn
+    api_base = start_sse_server(delay: 1)
+    config = write_config(api_base: api_base)
+    pool = Rubot::Actors::SessionPool.new(config: config)
+
+    begin
+      handle = pool.for("stop-test")
+      response = nil
+      runner = Thread.new { response = handle.process("hi") }
+
+      sleep 0.2
+      # A fresh handle for the same session must be able to signal the busy
+      # actor; a normal request would queue behind the turn it stops.
+      assert pool.for("stop-test").cancel!, "the stop signal must reach the session actor"
+
+      assert runner.join(10), "the turn must end after /stop"
+      assert_equal Rubot::Agent::STOP_NOTICE, response
+      assert_equal 1, handle.session.message_count, "only the user message was kept"
     ensure
       pool.shutdown
     end

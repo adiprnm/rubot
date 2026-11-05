@@ -60,7 +60,7 @@ module Rubot
         # Safety guard checks
         check_command_safety(cmd)
 
-        stdout, stderr, status = Open3.capture3(cmd)
+        stdout, stderr, status = run_command(cmd)
         output = ""
         output += stdout if stdout && !stdout.empty?
         output += "\nSTDERR: #{stderr}" if stderr && !stderr.empty?
@@ -112,6 +112,26 @@ module Rubot
       end
 
       private
+
+      # Run the command in its own process group so /stop can kill it and
+      # anything it started, not just the shell wrapper. The cancellation
+      # token is set per turn by the agent.
+      def run_command(cmd)
+        cancellation = Thread.current[:rubot_cancellation]
+
+        Open3.popen3(cmd, pgroup: true) do |stdin, stdout, stderr, wait_thr|
+          stdin.close
+          cancellation&.track(wait_thr.pid)
+          begin
+            out_reader = Thread.new { stdout.read }
+            err_reader = Thread.new { stderr.read }
+            status = wait_thr.value
+            [ out_reader.value, err_reader.value, status ]
+          ensure
+            cancellation&.untrack(wait_thr.pid)
+          end
+        end
+      end
 
       def check_command_safety(cmd)
         # Always check for dangerous patterns

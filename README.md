@@ -23,6 +23,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 📡 **Multi-channel** — REPL and Telegram, with a pluggable channel architecture
 - 📎 **Inbound attachments** — screenshots and files sent to Telegram are saved to the workspace, with dimensions and size added to the prompt
 - 🔈 **Progress narration** — the model explains what it is doing between tool calls ("Let me check the structure first."), sent as normal chat messages
+- ⏹️ **`/stop`** — stops the running turn and kills the shell command it started
 - 🗜️ **Context compaction** — `/compact` summarizes older turns, and auto-compaction kicks in at a configurable share of the context window
 - 📄 **`.env` support** — automatic environment variable loading from `.env` files
 - 🎛️ **CLI options** — single-message mode or interactive chat
@@ -141,6 +142,7 @@ $ rubot
 | `/help` | Show available commands |
 | `/clear` | Clear conversation history |
 | `/new` | Clear chat and start a new session |
+| `/stop` | Stop the task that is running (Ctrl+C during a turn does the same) |
 | `/compact` | Summarize older messages to free context |
 | `/session [name]` | Show or switch session |
 | `/info` | Show agent info (includes soul/memory status) |
@@ -392,6 +394,7 @@ Telegram commands:
 | `/preset models [filter]` | List the provider's supported models |
 | `/context` | Show context usage, cache hit rate, and estimated cost |
 | `/usage` | Show OpenCode Go subscription usage |
+| `/stop` | Stop the running task and any command it started |
 | `/compact` | Summarize older messages to free context |
 
 ### Providers

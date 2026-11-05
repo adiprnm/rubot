@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "json"
+require_relative "cancellation"
 require_relative "config"
 require_relative "model_info"
 require_relative "model_catalog"
@@ -54,10 +55,23 @@ module Rubot
       message now, directly and as briefly as the question allows.
     PROMPT
 
+    # Recorded for tool calls that were never run because the user stopped the
+    # turn. The provider requires exactly one result per tool call, so the
+    # skipped calls still get an answer in the transcript.
+    CANCELLED_TOOL_RESULT = "ERROR: cancelled by user (/stop); this tool was not executed."
+
+    # Appended to the answer when a turn is stopped early.
+    STOP_NOTICE = "⏹️ Stopped by user."
+
     attr_reader :config, :provider, :session, :tools, :soul, :memory, :agents_file, :skill_registry, :safety_guard, :session_model, :persona, :active_preset_name
+
+    # Cancellation token for the turn currently running on this agent. The
+    # session actor swaps in the token its watcher thread listens on.
+    attr_accessor :cancellation
 
     def initialize(config:, provider: nil, session_id: "default", tools: nil, persona: nil)
       @config = config
+      @cancellation = Cancellation.new
       @persona = Persona.from(persona)
       @session = Session.new(session_id, workspace: config.workspace)
       apply_initial_preset!
@@ -159,6 +173,11 @@ module Rubot
       cron_results = fire_due_cron_jobs
       warn "[cron] fire_due_cron_jobs returned #{cron_results.size} result(s)" if Rubot.debug?
 
+      # This turn can now be stopped with /stop (or Ctrl+C in the REPL).
+      @cancellation.start!
+      Thread.current[:rubot_cancellation] = @cancellation
+      stopped = false
+
       # Add user message to session
       @session.add("user", message)
       # Queue it for extraction; the provider call happens in #flush_learning,
@@ -184,6 +203,13 @@ module Rubot
       loop do
         if rounds >= limit
           limit_hit = true
+          break
+        end
+
+        # Stop before starting another round (another provider call or more
+        # tool executions) once the user has asked us to.
+        if @cancellation.cancelled?
+          stopped = true
           break
         end
 
@@ -234,6 +260,13 @@ module Rubot
                "#{continuations}/#{MAX_CONTINUATIONS} continuations used"
         end
 
+        # The user may have stopped the turn while the provider was thinking.
+        # The late answer is discarded so the channel reports the stop instead.
+        if @cancellation.cancelled?
+          stopped = true
+          break
+        end
+
         # Handle tool calls
         if tool_calls && !tool_calls.empty?
           log_debug("Got #{tool_calls.size} tool call(s)")
@@ -269,6 +302,13 @@ module Rubot
             end
 
             # Check for dangerous action that could cause data loss
+            if @cancellation.cancelled?
+              stopped = true
+              on_tool_result&.call(tool_name, CANCELLED_TOOL_RESULT)
+              @session.add("tool", CANCELLED_TOOL_RESULT, tool_call_id: tool_call_id)
+              next
+            end
+
             tool = @tools.get(tool_name)
             if tool && tool.respond_to?(:dangerous_action?) && tool.dangerous_action?(arguments)
               log_debug("Dangerous action detected: #{tool_name} with args: #{arguments.inspect}")
@@ -311,6 +351,8 @@ module Rubot
           # Fire progress callback after each round. The tool count is captured
           # before `tool_calls` is cleared so consumers get the real number.
           on_progress&.call(rounds, tool_count)
+
+          break if stopped
         elsif response.to_s.strip.empty? && !reasked
           # Nothing the user can read came back. With tools in play that means
           # the model stopped without reporting; with none it means the output
@@ -336,7 +378,7 @@ module Rubot
       end
 
       # Add final assistant response to session (only if not already added via tool-call branch)
-      @session.add("assistant", response, reasoning_content: reasoning_content) unless response.to_s.empty?
+      @session.add("assistant", response, reasoning_content: reasoning_content) if !stopped && !response.to_s.empty?
 
       # Ran out of continuations: say so rather than ending mid-sentence with
       # no explanation.
@@ -369,6 +411,12 @@ module Rubot
           end
         end
       end
+
+      if stopped
+        answer << "\n\n" unless answer.empty?
+        answer << STOP_NOTICE
+      end
+
       parts << answer if answer && !answer.empty?
 
       combined = parts.join("\n\n---\n\n")
@@ -390,6 +438,19 @@ module Rubot
 
       warn "[cron] Combined response (#{parts.size} parts): #{combined[0..200]}" if Rubot.debug?
       combined
+    ensure
+      @cancellation.finish!
+      Thread.current[:rubot_cancellation] = nil
+    end
+
+    # Ask the running turn to stop before its next provider call or tool
+    # execution. Safe to call from another thread; idle agents ignore it.
+    def cancel!
+      @cancellation.cancel!
+    end
+
+    def cancelled?
+      @cancellation.cancelled?
     end
 
     def clear_session

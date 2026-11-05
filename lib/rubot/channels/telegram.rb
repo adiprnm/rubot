@@ -598,11 +598,17 @@ module Rubot
         when "/new"
           request_agent.clear_session
           [ :skip, "✨ Started a new session. Previous conversation has been cleared." ]
+        when "/stop"
+          if cancel_session(request_session_id)
+            [ :skip, "⏹️ Stopped the running task." ]
+          else
+            [ :skip, "ℹ️ Nothing is running." ]
+          end
         when "/compact"
           handle_compact_command
         when "/help"
           bot_name = @config.fetch("bot_name", "Rubot")
-          [ :skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help.\n\nBuilt-in commands:\n/start - Start the bot\n/new - Clear chat and start a new session\n/compact - Summarize older messages to free context\n/help - Show this help message\n/info - Show agent info\n/model - Show current model preset\n/model <preset> - Switch preset for this session\n/models - List model presets\n/preset - Manage model presets\n/preset set <name> <model> - Create/update a preset\n/preset default <name> - Preset for new sessions\n/preset models - List models supported by the provider\n/use_model <preset> - Alias for /model <preset>\n/persona - Setup persona for this forum topic\n/persona show - Show this topic's persona\n/persona reset - Remove this topic's persona\n/cancel - Cancel the persona setup\n/skills - List available skills\n/memory - Show persistent memory\n/soul - Show bot personality\n/agents - Show agent rules\n/cron - List scheduled cron jobs\n/context - Context usage, cache hit rate, and estimated cost\n/usage - OpenCode Go subscription usage\n/cron delete <id> - Delete a cron job\n/use <skill> - Force a skill for the next message\n/unuse - Clear the forced skill" ]
+          [ :skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help.\n\nBuilt-in commands:\n/start - Start the bot\n/new - Clear chat and start a new session\n/stop - Stop the task that is running\n/compact - Summarize older messages to free context\n/help - Show this help message\n/info - Show agent info\n/model - Show current model preset\n/model <preset> - Switch preset for this session\n/models - List model presets\n/preset - Manage model presets\n/preset set <name> <model> - Create/update a preset\n/preset default <name> - Preset for new sessions\n/preset models - List models supported by the provider\n/use_model <preset> - Alias for /model <preset>\n/persona - Setup persona for this forum topic\n/persona show - Show this topic's persona\n/persona reset - Remove this topic's persona\n/cancel - Cancel the persona setup\n/skills - List available skills\n/memory - Show persistent memory\n/soul - Show bot personality\n/agents - Show agent rules\n/cron - List scheduled cron jobs\n/context - Context usage, cache hit rate, and estimated cost\n/usage - OpenCode Go subscription usage\n/cron delete <id> - Delete a cron job\n/use <skill> - Force a skill for the next message\n/unuse - Clear the forced skill" ]
         when "/info"
           handle_info_command
         when "/context"
@@ -648,6 +654,7 @@ module Rubot
         commands = [
           { "command" => "start", "description" => "Start the bot" },
           { "command" => "new", "description" => "Clear chat and start a new session" },
+          { "command" => "stop", "description" => "Stop the task that is running" },
           { "command" => "compact", "description" => "Summarize older messages to free context" },
           { "command" => "help", "description" => "Show help message" },
           { "command" => "info", "description" => "Show agent info" },
@@ -668,18 +675,28 @@ module Rubot
         ]
 
         url = URI("#{API_BASE}#{@token}/setMyCommands")
-        body = { "commands" => commands }.to_json
-        req = Net::HTTP::Post.new(url)
-        req["Content-Type"] = "application/json"
-        req.body = body
+
+        # BotCommandScopeDefault alone is not enough: some clients only show a
+        # bot's slash menu in a group when the commands are registered for a
+        # group scope, not inherited from the default.
+        scopes = [
+          { "type" => "default" },
+          { "type" => "all_private_chats" },
+          { "type" => "all_group_chats" }
+        ]
 
         begin
-          result = http_post(url, req)
-          if result["ok"]
-            warn "[telegram] Registered #{commands.size} bot commands." if Rubot.debug?
-          else
-            warn "[telegram] Failed to register commands: #{result["description"]}"
+          scopes.each do |scope|
+            req = Net::HTTP::Post.new(url)
+            req["Content-Type"] = "application/json"
+            req.body = { "commands" => commands, "scope" => scope }.to_json
+
+            result = http_post(url, req)
+            unless result["ok"]
+              warn "[telegram] Failed to register commands for #{scope['type']}: #{result['description']}"
+            end
           end
+          warn "[telegram] Registered #{commands.size} bot commands for #{scopes.size} scopes." if Rubot.debug?
         rescue StandardError => e
           warn "[telegram] Error registering commands: #{e.message}"
         end
@@ -925,6 +942,9 @@ module Rubot
           when "/cancel"
             handle_cancel_command(chat_id, thread_id)
             return
+          when "/stop"
+            handle_stop_command(chat_id, thread_id)
+            return
           when "/persona"
             handle_persona_command(chat_id, thread_id, command[:args])
             return
@@ -1166,6 +1186,8 @@ module Rubot
           { name: "/persona", args: Regexp.last_match(1)&.strip }
         when %r{\A/cancel(?:\s+.*)?\z}i
           { name: "/cancel", args: nil }
+        when %r{\A/stop(?:\s+.*)?\z}i
+          { name: "/stop", args: nil }
         end
       end
 
@@ -1223,6 +1245,24 @@ module Rubot
         else
           send_message(chat_id, "ℹ️ Tidak ada setup persona yang sedang berjalan.", thread_id)
         end
+      end
+
+      # /stop — stop the turn running in this chat/topic. The signal reaches
+      # the session actor immediately (it does not queue behind the turn) and
+      # kills any shell command the agent started.
+      def handle_stop_command(chat_id, thread_id)
+        session_id = topic_session_id(chat_id, thread_id)
+        stopped = cancel_session(session_id)
+        cancel_pending_confirmations(chat_id, thread_id)
+
+        if stopped
+          send_message(chat_id, "⏹️ Menghentikan tugas yang sedang berjalan…", thread_id)
+        else
+          send_message(chat_id, "ℹ️ Tidak ada tugas yang sedang berjalan.", thread_id)
+        end
+      rescue StandardError => e
+        warn "[telegram] stop failed: #{e.class}: #{e.message}"
+        send_message(chat_id, "❌ Gagal menghentikan tugas: #{e.message}", thread_id)
       end
 
       # A topic that has no persona and no session file has never been used, so
@@ -1985,7 +2025,9 @@ module Rubot
         # Create a condition variable and wait for the response
         cv = ConditionVariable.new
         @confirm_mutex.synchronize do
-          @pending_confirmations[confirm_id] = { cv: cv, result: nil, msg_id: msg_id }
+          @pending_confirmations[confirm_id] = {
+            cv: cv, result: nil, msg_id: msg_id, chat_id: chat_id, thread_id: thread_id
+          }
         end
 
         @confirm_mutex.synchronize do
@@ -2005,6 +2047,20 @@ module Rubot
         delete_message(chat_id, msg_id, thread_id) if msg_id
 
         confirmed
+      end
+
+      # Release a confirmation prompt waiting for a button press. Without this
+      # a stopped turn would stay blocked until the 120 s timeout expires.
+      def cancel_pending_confirmations(chat_id, thread_id)
+        @confirm_mutex.synchronize do
+          @pending_confirmations.each_value do |entry|
+            next unless entry[:chat_id] == chat_id && entry[:thread_id] == thread_id
+            next unless entry[:result].nil?
+
+            entry[:result] = false
+            entry[:cv].signal
+          end
+        end
       end
 
       # Handle an incoming callback query (inline button click).

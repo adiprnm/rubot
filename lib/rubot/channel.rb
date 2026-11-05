@@ -36,6 +36,8 @@ module Rubot
       @cron_events = nil
       @cron_thread = nil
       @owned_pool = false
+      @running_handles = {}
+      @running_mutex = Mutex.new
 
       build_pool_if_needed
     end
@@ -111,6 +113,8 @@ module Rubot
       # Make the per-session handle available to before_process via a thread
       # local. Threads stay inside the channel's Ractor, so this is safe.
       Thread.current[:_rubot_request_agent] = handle
+      Thread.current[:_rubot_request_session_id] = sid
+      track_running_session(sid, handle)
 
       result = before_process(message)
 
@@ -147,6 +151,30 @@ module Rubot
       handle_error(e, message)
     ensure
       Thread.current[:_rubot_request_agent] = nil
+      Thread.current[:_rubot_request_session_id] = nil
+      untrack_running_session(sid, handle)
+    end
+
+    # Session id of the message being handled on this thread (if any).
+    def request_session_id
+      Thread.current[:_rubot_request_session_id] || "default"
+    end
+
+    # Stop the turn currently running in a session. Returns false when
+    # nothing was running. Works for both actor-backed sessions and a plain
+    # in-process agent.
+    def cancel_session(session_id)
+      sid = (session_id || "default").to_s
+      handle = @running_mutex.synchronize { @running_handles[sid] }
+      return false unless handle
+      return false unless handle.respond_to?(:cancel!)
+
+      handle.cancel!
+    end
+
+    def session_running?(session_id)
+      sid = (session_id || "default").to_s
+      !@running_mutex.synchronize { @running_handles[sid] }.nil?
     end
 
     # Returns the per-request handle for the current thread, or the shared
@@ -248,6 +276,17 @@ module Rubot
     end
 
     private
+
+    def track_running_session(session_id, handle)
+      @running_mutex.synchronize { @running_handles[session_id.to_s] = handle }
+    end
+
+    def untrack_running_session(session_id, handle)
+      @running_mutex.synchronize do
+        sid = session_id.to_s
+        @running_handles.delete(sid) if @running_handles[sid].equal?(handle)
+      end
+    end
 
     def build_pool_if_needed
       return unless @pool.nil? && @agent.nil? && @app_config

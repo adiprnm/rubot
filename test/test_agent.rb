@@ -136,7 +136,7 @@ class TestAgentRoundLimit < Minitest::Test
             "type" => "function",
             "function" => {
               "name" => "file",
-              "arguments" => JSON.generate({ "operation" => "list", "path" => "." })
+              "arguments" => JSON.generate({ "operation" => "list", "path" => @path })
             }
           }
         ]
@@ -955,5 +955,155 @@ class TestAgentAdaptiveLearning < Minitest::Test
     agent.flush_learning
     agent.process("second message here", stream: false)
     agent.flush_learning # must not raise even though the extractor blows up
+  end
+end
+
+# /stop — the user can stop a turn while the agent is running tools.
+class TestAgentCancellation < Minitest::Test
+  class TwoToolCallsProvider
+    attr_reader :calls
+
+    def initialize(path)
+      @path = path
+      @calls = 0
+    end
+
+    def name
+      "openai"
+    end
+
+    def chat(_messages, tools: nil)
+      @calls += 1
+      return { "content" => "done" } if @calls > 1
+
+      {
+        "content" => "Checking.",
+        "tool_calls" => [
+          tool_call("call_1", "list"),
+          tool_call("call_2", "list")
+        ]
+      }
+    end
+    alias chat_stream chat
+
+    private
+
+    def tool_call(id, _suffix)
+      {
+        "id" => id,
+        "type" => "function",
+        "function" => {
+          "name" => "file_ops",
+          "arguments" => JSON.generate({ "operation" => "list", "path" => @path })
+        }
+      }
+    end
+  end
+
+  class SlowShellProvider
+    attr_reader :calls
+
+    def initialize
+      @calls = 0
+    end
+
+    def name
+      "openai"
+    end
+
+    def chat(_messages, tools: nil)
+      @calls += 1
+      return { "content" => "all done" } if @calls > 1
+
+      {
+        "content" => "Running it.",
+        "tool_calls" => [
+          {
+            "id" => "call_sleep",
+            "type" => "function",
+            "function" => {
+              "name" => "shell_exec",
+              "arguments" => JSON.generate({ "command" => "sleep 30" })
+            }
+          }
+        ]
+      }
+    end
+    alias chat_stream chat
+  end
+
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(@workspace)
+    @config_path = File.join(@tmpdir, "config.yml")
+    File.write(@config_path, {
+      "agents" => { "defaults" => { "workspace" => @workspace } },
+      "models" => [ { "name" => "test", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ]
+    }.to_yaml)
+    @config = Rubot::Config.new(@config_path)
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if @tmpdir && File.directory?(@tmpdir)
+  end
+
+  def build_agent(provider)
+    Rubot::Agent.new(config: @config, provider: provider, session_id: "cancel")
+  end
+
+  def test_cancel_skips_the_remaining_tool_calls
+    agent = build_agent(TwoToolCallsProvider.new(@workspace))
+    seen = []
+
+    response = agent.process("do two things", stream: false,
+      on_tool_call: ->(name, _args) {
+        seen << name
+        agent.cancel!
+      },
+      on_tool_result: ->(_name, result) { seen << result })
+
+    assert_equal 1, agent.provider.calls, "no further provider round after /stop"
+    assert_equal 1, seen.count("file_ops"), "only the first tool runs"
+    assert_includes seen, Rubot::Agent::CANCELLED_TOOL_RESULT
+    assert_includes response, "Stopped by user"
+
+    tool_results = agent.session.messages.select { |m| m["role"] == "tool" }.map { |m| m["content"] }
+    assert_equal 2, tool_results.size
+    assert_equal Rubot::Agent::CANCELLED_TOOL_RESULT, tool_results.last
+  end
+
+  def test_cancelling_an_idle_agent_does_nothing
+    agent = build_agent(TwoToolCallsProvider.new(@workspace))
+
+    refute agent.cancel!, "no turn is running"
+    refute agent.cancelled?
+
+    agent.process("hello", stream: false)
+    assert_equal "done", agent.process("hello again", stream: false)
+  end
+
+  def test_stop_kills_the_running_shell_command
+    agent = build_agent(SlowShellProvider.new)
+    started = Queue.new
+    response = nil
+
+    runner = Thread.new do
+      response = agent.process("sleep", stream: false,
+        on_tool_call: ->(_name, _args) { started << true })
+    end
+
+    started.pop
+    sleep 0.2
+
+    before = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    assert agent.cancel!, "the turn is running, so the stop request must register"
+    finished = runner.join(10)
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - before
+
+    assert finished, "the turn must end once the command is killed"
+    assert_operator elapsed, :<, 8, "the command must be killed, not waited out"
+    assert_equal 1, agent.provider.calls
+    assert_includes response, "Stopped by user"
   end
 end

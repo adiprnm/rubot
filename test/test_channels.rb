@@ -353,6 +353,81 @@ module Rubot
       assert_includes result[1], "/new"
     end
 
+    def test_help_mentions_stop_command
+      result = @tg.before_process("/help")
+      assert_kind_of Array, result
+      assert_includes result[1], "/stop"
+    end
+
+    def test_bot_commands_are_registered_for_group_chats
+      scopes = []
+      commands = []
+      @tg.define_singleton_method(:http_post) do |_url, req|
+        body = JSON.parse(req.body)
+        scopes << body["scope"]["type"]
+        commands << body["commands"].map { |c| c["command"] }
+        { "ok" => true }
+      end
+
+      @tg.send(:register_bot_commands)
+
+      assert_includes scopes, "default"
+      assert_includes scopes, "all_private_chats"
+      assert_includes scopes, "all_group_chats", "groups need their own scope in some clients"
+      assert_includes commands.first, "stop"
+    end
+
+    def test_stop_without_a_running_task_reports_nothing_to_stop
+      sent = []
+      @tg.define_singleton_method(:send_message) { |_chat, text, _thread| sent << text }
+
+      @tg.send(:handle_stop_command, 42, nil)
+
+      assert_includes sent.last, "Tidak ada tugas"
+    end
+
+    def test_stop_cancels_the_running_turn
+      sent = []
+      @tg.define_singleton_method(:send_message) { |_chat, text, _thread| sent << text }
+
+      handle = Class.new do
+        attr_reader :cancelled
+        def cancel!
+          @cancelled = true
+        end
+      end.new
+      @tg.send(:track_running_session, "tg_42", handle)
+
+      @tg.send(:handle_stop_command, 42, nil)
+
+      assert handle.cancelled
+      assert_includes sent.last, "Menghentikan"
+    end
+
+    def test_stop_releases_a_waiting_confirmation
+      pending = @tg.instance_variable_get(:@pending_confirmations)
+      mutex = @tg.instance_variable_get(:@confirm_mutex)
+      cv = ConditionVariable.new
+      pending["abc"] = { cv: cv, result: nil, msg_id: 1, chat_id: 42, thread_id: nil }
+
+      woken = false
+      waiter = Thread.new do
+        mutex.synchronize do
+          cv.wait(mutex, 5)
+          woken = true
+        end
+      end
+      sleep 0.1
+
+      @tg.send(:cancel_pending_confirmations, 42, nil)
+
+      assert waiter.join(2), "the confirmation wait must be woken"
+      assert woken
+      assert_equal false, pending["abc"][:result]
+    ensure
+      pending&.delete("abc")
+    end
+
     def test_info_command_returns_skip
       result = @tg.before_process("/info")
       assert_kind_of Array, result
@@ -1334,5 +1409,71 @@ class TestChannelLearningHook < Minitest::Test
 
     assert_equal "answer", response
     assert_equal [ :answered, :delivered, :learned ], events
+  end
+end
+
+# /stop routing: the channel must be able to reach the turn that is running.
+class TestChannelCancellation < Minitest::Test
+  class StoppableHandle
+    attr_reader :started, :cancelled
+
+    def initialize
+      @started = Queue.new
+      @done = Queue.new
+      @cancelled = false
+    end
+
+    def process(_message, **_callbacks)
+      @started << true
+      @done.pop
+      "stopped"
+    end
+
+    def cancel!
+      @cancelled = true
+      @done << true
+      true
+    end
+
+    def flush_learning
+      nil
+    end
+  end
+
+  class CancelChannel < Rubot::Channel
+    def initialize(handle)
+      @handle = handle
+      super()
+    end
+
+    def session_for(_session_id)
+      @handle
+    end
+
+    def start; end
+    def stop; end
+  end
+
+  def test_cancel_session_reaches_the_running_turn
+    handle = StoppableHandle.new
+    channel = CancelChannel.new(handle)
+    response = nil
+
+    runner = Thread.new { response = channel.process_message("do something long") }
+    handle.started.pop
+
+    assert channel.session_running?("default")
+    assert channel.cancel_session("default")
+    assert runner.join(5)
+
+    assert_equal "stopped", response
+    assert handle.cancelled
+    refute channel.session_running?("default")
+  end
+
+  def test_cancel_session_without_a_running_turn_returns_false
+    channel = CancelChannel.new(StoppableHandle.new)
+
+    refute channel.cancel_session("default")
   end
 end

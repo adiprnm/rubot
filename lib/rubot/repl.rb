@@ -10,6 +10,7 @@ module Rubot
     COMMANDS = {
       "/help"     => "Show this help message",
       "/new"      => "Clear conversation and start a new session",
+      "/stop"     => "Stop the task that is running",
       "/compact"  => "Summarize older messages to free context",
       "/clear"    => "Clear conversation history",
       "/session"  => "Show current session ID",
@@ -162,6 +163,9 @@ module Rubot
       when "/new"
         agent.clear_session
         puts "\n✨ Started a new session. Previous conversation cleared."
+      when "/stop"
+        agent.cancel!
+        puts "\n⏹️ Stop requested. (Ctrl+C during a turn stops it immediately.)"
       when "/compact"
         result = agent.compact_session
         if result
@@ -346,6 +350,10 @@ module Rubot
 
       # Learning runs once the answer is on screen, never before it.
       agent.flush_learning
+    rescue Interrupt
+      # Ctrl+C while the agent works stops this turn instead of exiting.
+      agent.cancel!
+      puts "\n⏹️ Cancelled. (Ctrl+C at the prompt or /quit exits.)\n"
     rescue StandardError => e
       puts "\n❌ Error: #{e.message}\n"
     end

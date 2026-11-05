@@ -49,7 +49,7 @@ module Rubot
           )
         end
 
-        SessionHandle.new(ractor.ractor, sid)
+        SessionHandle.new(ractor.ractor, sid, ractor.stop_port)
       end
 
       def session_ids
