@@ -31,7 +31,10 @@ module Rubot
     # Sent after a truncated answer. It has to be explicit about *not*
     # restarting: a model asked to "continue" will otherwise begin again at
     # the first sentence.
-    CONTINUE_PROMPT = <<~PROMPT.strip
+    # Frozen because it is read inside session Ractors: a non-shareable
+    # constant raises Ractor::IsolationError there, which used to kill
+    # post-answer learning (memory extraction and feedback) on every turn.
+    CONTINUE_PROMPT = <<~PROMPT.strip.freeze
       Your previous message was cut off mid-sentence because it reached the
       output limit. Continue exactly where it stopped, starting with the
       remaining words of the interrupted sentence. Do not repeat anything you
@@ -40,7 +43,7 @@ module Rubot
 
     # Sent when the model finished a tool round without saying anything at all,
     # which leaves the user with silence and no images or files.
-    ANSWER_NOW_PROMPT = <<~PROMPT.strip
+    ANSWER_NOW_PROMPT = <<~PROMPT.strip.freeze
       You ran the tools above but produced no answer. Using their results,
       reply to the user now, in the user's language. If they asked for files or
       images, send them with the send_file tool before you finish.
@@ -49,7 +52,7 @@ module Rubot
     # Sent when a reply came back with no visible text at all — on a reasoning
     # model the whole output budget can go to the hidden reasoning, leaving an
     # empty `content`. Nothing was sent to the user, so it is asked again.
-    EMPTY_ANSWER_PROMPT = <<~PROMPT.strip
+    EMPTY_ANSWER_PROMPT = <<~PROMPT.strip.freeze
       Your previous reply contained no text the user could read (the output
       budget was spent before any of it was written). Answer the user's last
       message now, directly and as briefly as the question allows.

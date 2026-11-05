@@ -14,6 +14,8 @@ class TestActors < Minitest::Test
     @config_path = File.join(@tmpdir, "config.yml")
     @server = nil
     @server_thread = nil
+    @requests = 0
+    @requests_mutex = Mutex.new
   end
 
   def teardown
@@ -41,6 +43,7 @@ class TestActors < Minitest::Test
   # A delay keeps the request in flight, which is what a /stop interrupts.
   def start_sse_server(delay: 0)
     @sse_delay = delay
+    @requests = 0
     @server = TCPServer.new("127.0.0.1", 0)
     @port = @server.addr[1]
 
@@ -65,6 +68,8 @@ class TestActors < Minitest::Test
     length = header[/Content-Length:\s*(\d+)/i, 1].to_i
     body ||= +""
     body << client.read(length - body.bytesize) if body.bytesize < length
+
+    @requests_mutex.synchronize { @requests += 1 }
 
     sleep @sse_delay if @sse_delay&.positive?
 
@@ -102,6 +107,39 @@ class TestActors < Minitest::Test
     end
   end
 
+  def request_count
+    @requests_mutex.synchronize { @requests }
+  end
+
+  # Regression: last_user_message reads Agent::CONTINUE_PROMPT and friends from
+  # inside the session Ractor. When those strings are not frozen, every
+  # post-answer learning pass dies with Ractor::IsolationError, and because
+  # flush_learning rescues it the bot looks healthy while extraction silently
+  # never runs. The backlog is the observable difference.
+  def test_flush_learning_runs_extraction_inside_the_actor
+    api_base = start_sse_server
+    config = write_config(api_base: api_base)
+    pool = Rubot::Actors::SessionPool.new(config: config)
+
+    begin
+      handle = pool.for("learning-ractor")
+      handle.process("I live in Jakarta and work on Ruby")
+      handle.process("I prefer short answers please")
+      handle.process("My project is called rubot")
+
+      assert_equal 3, request_count
+
+      # Default batch size is 3, so this flush must reach the provider once.
+      handle.flush_learning
+
+      assert_equal 4, request_count, "the batched extraction request must be sent"
+      session = JSON.parse(File.read(File.join(@workspace, "sessions", "learning-ractor.json")))
+      assert_empty Array(session["memory_backlog"]), "the batch must be consumed by extraction"
+    ensure
+      pool.shutdown
+    end
+  end
+
   def test_flush_learning_is_available_through_the_actor
     api_base = start_sse_server
     config = write_config(api_base: api_base)
@@ -111,9 +149,10 @@ class TestActors < Minitest::Test
       handle = pool.for("learning-test")
       handle.process("hello there friend")
 
-      # One message is below the default batch size, so this is a no-op that
-      # must still complete without raising across the Ractor boundary.
+      # One message is below the default batch size, so extraction is a no-op
+      # that must still complete without raising across the Ractor boundary.
       assert_nil handle.flush_learning
+      assert_equal 1, request_count, "a flush below the batch size must not call the provider"
     ensure
       pool.shutdown
     end
