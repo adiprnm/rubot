@@ -12,7 +12,7 @@ module Rubot
   #   model: gpt-4o-mini
   #   max_tokens: 4096
   #   temperature: 0.7
-  #   max_tool_iterations: 50
+  #   max_rounds: 50
   #   tools:
   #     exec: true
   #     file_ops: true
@@ -58,10 +58,14 @@ module Rubot
       @frontmatter["temperature"]
     end
 
-    # Max tool iterations from frontmatter
-    def max_tool_iterations
-      @frontmatter["max_tool_iterations"]
+    # Max agent rounds from frontmatter. `max_tool_iterations` is the old
+    # name, still accepted.
+    def max_rounds
+      @frontmatter["max_rounds"] || @frontmatter["max_tool_iterations"]
     end
+
+    # Deprecated alias for callers that still use the old name.
+    alias max_tool_iterations max_rounds
 
     # Tools config from frontmatter (hash of tool_name => enabled)
     def tools_config

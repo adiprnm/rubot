@@ -52,7 +52,7 @@ module Rubot
 
     # Same as #record_usage, but for requests that are not the user-facing turn
     # (memory extraction, summarization). It adds to the totals without
-    # replacing `last_usage`, which is what `/usage` uses to estimate how full
+    # replacing `last_usage`, which is what `/context` uses to estimate how full
     # the next request's context will be.
     def record_auxiliary_usage(raw, provider: nil)
       delta = Usage.from(raw, provider: provider)

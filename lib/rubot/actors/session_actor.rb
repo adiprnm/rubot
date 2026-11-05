@@ -72,7 +72,7 @@ module Rubot
           on_assistant_text: ->(text) { events << [ :assistant_text, text ] },
           on_tool_call: ->(name, args) { events << [ :tool_started, name, args ] },
           on_tool_result: ->(name, result) { events << [ :tool_finished, name, result ] },
-          on_progress: ->(iteration, tool_count) { events << [ :progress, iteration, tool_count ] },
+          on_progress: ->(round, tool_count) { events << [ :progress, round, tool_count ] },
           on_confirm: lambda do |name, args|
             id = SecureRandom.hex(6)
             events << [ :confirm, id, name, args ]
@@ -103,6 +103,7 @@ module Rubot
         value = case msg[:op]
         when :info                 then agent.startup_info
         when :usage_report         then agent.usage_report
+        when :opencode_usage       then agent.opencode_usage
         when :models               then agent.config.models
         when :model_entry          then agent.config.model_entry_by_name(msg[:name])
         when :active_model_entry   then agent.config.active_model_entry

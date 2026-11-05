@@ -11,7 +11,9 @@ agents:
     max_tokens: 4096
     temperature: 0.7
     system_prompt: "You are Rubot, a helpful AI assistant running in the terminal.\nBe concise and helpful."
-    max_tool_iterations: 50
+    # Maximum agent rounds per user message. One round can run several
+    # tools; re-asks and continuations also count. Default 50.
+    max_rounds: 50
     # Context compaction. When the conversation reaches `threshold_percent` of
     # the model's context window, older turns are summarized into the running
     # summary and the most recent `keep_recent_messages` are kept verbatim.
@@ -135,7 +137,7 @@ channels:
 #
 # AGENTS.md — Agent configuration with YAML frontmatter + behavior rules.
 #   Frontmatter can override: name, model, max_tokens, temperature,
-#   max_tool_iterations, and tool enable/disable settings.
+#   max_rounds, and tool enable/disable settings.
 #   The body contains behavior rules injected into the system prompt.
 #
 # MEMORY.md — Persistent memory managed by the bot itself.

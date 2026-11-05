@@ -152,7 +152,7 @@ module Rubot
     end
   end
 
-  # Shared plain-text renderer for the /usage command.
+  # Shared plain-text renderer for the /context command.
   module UsageReport
     module_function
 

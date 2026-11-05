@@ -215,7 +215,7 @@ class TestAgentTruncationHandling < Minitest::Test
     end
   end
 
-  def build_agent(script, max_tool_iterations: 10)
+  def build_agent(script, max_rounds: 10)
     @tmpdir = Dir.mktmpdir
     workspace = File.join(@tmpdir, "workspace")
     FileUtils.mkdir_p(workspace)
@@ -224,7 +224,7 @@ class TestAgentTruncationHandling < Minitest::Test
     File.write(config_path, {
       "agents" => { "defaults" => {
         "workspace" => workspace,
-        "max_tool_iterations" => max_tool_iterations
+        "max_rounds" => max_rounds
       } },
       "models" => [ { "name" => "test", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ]
     }.to_yaml)
@@ -398,7 +398,7 @@ class TestAgentEmptyAnswerRecovery < Minitest::Test
     config_path = File.join(@tmpdir, "config.yml")
 
     File.write(config_path, {
-      "agents" => { "defaults" => { "workspace" => workspace, "max_tool_iterations" => 10 } },
+      "agents" => { "defaults" => { "workspace" => workspace, "max_rounds" => 10 } },
       "models" => [ { "name" => "test", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ]
     }.to_yaml)
 

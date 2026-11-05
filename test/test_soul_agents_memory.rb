@@ -63,6 +63,7 @@ class TestAgentsFile < Minitest::Test
       model: gpt-4
       max_tokens: 2048
       temperature: 0.5
+      max_rounds: 12
       tools:
         exec: false
       ---
@@ -78,9 +79,24 @@ class TestAgentsFile < Minitest::Test
     assert_equal "gpt-4", af.model
     assert_equal 2048, af.max_tokens
     assert_equal 0.5, af.temperature
+    assert_equal 12, af.max_rounds
     assert_equal({ "exec" => false }, af.tools_config)
     assert_includes af.rules, "Be nice"
     assert_includes af.rules, "Be fast"
+  end
+
+  def test_old_max_tool_iterations_frontmatter_is_still_accepted
+    File.write(File.join(@tmpdir, "AGENTS.md"), <<~MD)
+      ---
+      max_tool_iterations: 9
+      ---
+
+      # Rules
+    MD
+
+    af = Rubot::AgentsFile.new(workspace: @tmpdir)
+    assert_equal 9, af.max_rounds
+    assert_equal 9, af.max_tool_iterations
   end
 
   def test_body_only_without_frontmatter

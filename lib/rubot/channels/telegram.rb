@@ -13,6 +13,7 @@ require_relative "../persona"
 require_relative "../persona_store"
 require_relative "../telegram_markdown"
 require_relative "../usage"
+require_relative "../opencode_usage"
 
 module Rubot
   module Channels
@@ -48,6 +49,10 @@ module Rubot
       MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
       UNSUPPORTED_MEDIA = %w[sticker voice video video_note audio animation].freeze
       PERSONA_WIZARD_TTL = 15 * 60
+      # A quoted message is prepended to the prompt, so it competes with the
+      # user's own text and the model's output budget. Telegram caps messages at
+      # 4096 chars; anything longer is cut with a marker the model can see.
+      MAX_REPLY_QUOTE_CHARS = 4096
 
 
       def initialize(agent: nil, pool: nil, app_config: nil, channel_config: {})
@@ -216,7 +221,7 @@ module Rubot
         [ :skip, "ℹ️ Agent Info\n\n" + lines.join("\n") ]
       end
 
-      def handle_usage_command
+      def handle_context_command
         report = request_agent.usage_report
 
         context = if report[:context_window]
@@ -232,7 +237,7 @@ module Rubot
           format("%.1f%%", report[:cache_hit_rate].to_f * 100)
         end
 
-        lines = [ "📊 **Usage Sesi**" ]
+        lines = [ "📊 **Konteks Sesi**" ]
         lines << "Model: `#{report[:model]}` (#{report[:provider]})"
         lines << "Konteks: #{context}"
         lines << "Pesan: #{report[:messages]} | Request: #{report[:requests]}"
@@ -252,6 +257,10 @@ module Rubot
         end
 
         [ :skip, lines.join("\n") ]
+      end
+
+      def handle_usage_command
+        [ :skip, OpencodeUsageReport.render(request_agent.opencode_usage) ]
       end
 
       def handle_models_command
@@ -593,10 +602,12 @@ module Rubot
           handle_compact_command
         when "/help"
           bot_name = @config.fetch("bot_name", "Rubot")
-          [ :skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help.\n\nBuilt-in commands:\n/start - Start the bot\n/new - Clear chat and start a new session\n/compact - Summarize older messages to free context\n/help - Show this help message\n/info - Show agent info\n/model - Show current model preset\n/model <preset> - Switch preset for this session\n/models - List model presets\n/preset - Manage model presets\n/preset set <name> <model> - Create/update a preset\n/preset default <name> - Preset for new sessions\n/preset models - List models supported by the provider\n/use_model <preset> - Alias for /model <preset>\n/persona - Setup persona for this forum topic\n/persona show - Show this topic's persona\n/persona reset - Remove this topic's persona\n/cancel - Cancel the persona setup\n/skills - List available skills\n/memory - Show persistent memory\n/soul - Show bot personality\n/agents - Show agent rules\n/cron - List scheduled cron jobs\n/usage - Context usage, cache hit rate, and estimated cost\n/cron delete <id> - Delete a cron job\n/use <skill> - Force a skill for the next message\n/unuse - Clear the forced skill" ]
+          [ :skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help.\n\nBuilt-in commands:\n/start - Start the bot\n/new - Clear chat and start a new session\n/compact - Summarize older messages to free context\n/help - Show this help message\n/info - Show agent info\n/model - Show current model preset\n/model <preset> - Switch preset for this session\n/models - List model presets\n/preset - Manage model presets\n/preset set <name> <model> - Create/update a preset\n/preset default <name> - Preset for new sessions\n/preset models - List models supported by the provider\n/use_model <preset> - Alias for /model <preset>\n/persona - Setup persona for this forum topic\n/persona show - Show this topic's persona\n/persona reset - Remove this topic's persona\n/cancel - Cancel the persona setup\n/skills - List available skills\n/memory - Show persistent memory\n/soul - Show bot personality\n/agents - Show agent rules\n/cron - List scheduled cron jobs\n/context - Context usage, cache hit rate, and estimated cost\n/usage - OpenCode Go subscription usage\n/cron delete <id> - Delete a cron job\n/use <skill> - Force a skill for the next message\n/unuse - Clear the forced skill" ]
         when "/info"
           handle_info_command
-        when "/usage", "/context"
+        when "/context"
+          handle_context_command
+        when "/usage"
           handle_usage_command
         when "/models"
           handle_models_command
@@ -953,7 +964,8 @@ module Rubot
         end
 
         notes = attachments.map { |attachment| receive_attachment(attachment, session_id, chat_id) }
-        prompt = [ body, *notes ].reject(&:empty?).join("\n\n")
+        reply_note = reply_context(message, session_id, chat_id)
+        prompt = [ body, reply_note, *notes ].compact.reject(&:empty?).join("\n\n")
 
         # Track last active chat for cron message delivery
         @last_chat_id = chat_id
@@ -988,8 +1000,8 @@ module Rubot
           notify_tool_started(chat_id, thread_id, tool_name, args)
         }, on_tool_result: ->(tool_name, result) {
           notify_tool_finished(chat_id, thread_id, tool_name, result)
-        }, on_progress: ->(iteration, tool_count) {
-          notify_progress(chat_id, thread_id, iteration)
+        }, on_progress: ->(round, tool_count) {
+          notify_progress(chat_id, thread_id, round)
         }, on_confirm: ->(tool_name, args) {
           ask_confirmation(chat_id, thread_id, tool_name, args)
         })
@@ -1581,6 +1593,61 @@ module Rubot
         true
       end
 
+      # --------------- Inbound Reply Context ---------------
+
+      # Telegram puts the quoted message in `reply_to_message` and the exact
+      # passage the user highlighted in `quote`. Neither is part of the text, so
+      # a reply has to be carried into the prompt explicitly: the transcript
+      # only helps when the quoted message belongs to this same session, which
+      # is not the case for replies that cross topics, follow /new, or point at
+      # a message the bot never received.
+      #
+      # Returns nil when there is nothing readable to quote.
+      def reply_context(message, session_id, chat_id)
+        reply = message["reply_to_message"]
+        quote = message["quote"]
+        return nil unless reply.is_a?(Hash) || quote.is_a?(Hash)
+
+        quoted = quoted_text(quote) || quoted_text(reply)
+        attachments = reply.is_a?(Hash) ? extract_attachments(reply).first : []
+        notes = attachments.map { |attachment| receive_attachment(attachment, session_id, chat_id) }
+        return nil if quoted.nil? && notes.empty?
+
+        lines = [ reply_author_label(reply) ]
+        lines << quoted.lines.map { |line| "> #{line.chomp}" }.join("\n") if quoted
+        lines.concat(notes)
+        lines.join("\n")
+      end
+
+      # The message text, or the caption when the quoted message is media.
+      # Truncated so one long quote cannot crowd out the actual question.
+      def quoted_text(message)
+        return nil unless message.is_a?(Hash)
+
+        text = (message["text"] || message["caption"]).to_s.strip
+        return nil if text.empty?
+        return text if text.length <= MAX_REPLY_QUOTE_CHARS
+
+        "#{text[0, MAX_REPLY_QUOTE_CHARS]}… (truncated)"
+      end
+
+      # Tells the model whose message it is looking at. Replies to the bot's own
+      # messages are common ("lanjutkan", "yang tadi maksudnya apa") and read
+      # differently from a reply to another member.
+      def reply_author_label(reply)
+        from = reply.is_a?(Hash) ? reply["from"] : nil
+        return "↩️ The user replied to an earlier message:" unless from.is_a?(Hash)
+
+        username = from["username"].to_s
+        if from["is_bot"] && !@bot_username.nil? && username.downcase == @bot_username
+          return "↩️ The user replied to your earlier message:"
+        end
+
+        name = username.empty? ? from["first_name"].to_s.strip : "@#{username}"
+        name = "someone" if name.empty?
+        "↩️ The user replied to this earlier message from #{name}:"
+      end
+
       # --------------- Inbound Attachments ---------------
 
       # Telegram delivers media in its own fields, never in "text": a photo
@@ -2088,12 +2155,12 @@ module Rubot
         warn "[telegram] Tool #{tool_name} finished" if Rubot.debug?
       end
 
-      # Called after each tool-call iteration loop. Shows progress for multi-step operations.
-      def notify_progress(chat_id, thread_id, iteration)
-        return unless iteration >= 2  # Only notify after 2+ iterations
+      # Called after each agent round. Shows progress for multi-step operations.
+      def notify_progress(chat_id, thread_id, round)
+        return unless round >= 2  # Only notify after 2+ rounds
 
         emoji = "🔄"
-        text = "#{emoji} **Still working** (iteration #{iteration})\n"
+        text = "#{emoji} **Still working** (round #{round})\n"
         text += "_Running tool calls to complete your request_"
 
         update_or_send_status(chat_id, thread_id, text)

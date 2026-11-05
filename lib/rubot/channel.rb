@@ -98,7 +98,7 @@ module Rubot
     # @param session_id [String, nil] Optional session ID to switch to
     # @param on_tool_call [Proc, nil] Called before each tool call
     # @param on_tool_result [Proc, nil] Called after each tool call
-    # @param on_progress [Proc, nil] Called after each iteration
+    # @param on_progress [Proc, nil] Called after each agent round
     # @param on_confirm [Proc, nil] Called before irreversible actions
     # @param on_assistant_text [Proc, nil] Called with the model's narration text
     #   whenever it writes a message before running more tools

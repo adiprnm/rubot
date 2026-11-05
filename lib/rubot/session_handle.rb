@@ -97,6 +97,10 @@ module Rubot
         call(:usage_report)
       end
 
+      def opencode_usage
+        call(:opencode_usage)
+      end
+
       def active_model_name
         call(:active_model_name)
       end

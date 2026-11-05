@@ -15,7 +15,7 @@ module Rubot
   #   2. this catalog (fresh API response or the cached file)
   #   3. the bundled ModelInfo defaults
   #
-  # The cache keeps /usage fast and keeps working when the network is down.
+  # The cache keeps /context fast and keeps working when the network is down.
   # Delete the file to force a refresh.
   class PricingCatalog
     SOURCE_URL = "https://models.dev/api.json"

@@ -117,7 +117,7 @@ class TestAgentSessionSwitching < Minitest::Test
   end
 end
 
-class TestAgentToolIterationLimit < Minitest::Test
+class TestAgentRoundLimit < Minitest::Test
   # Always asks for another tool call, so the agent can only stop via the limit.
   class EndlessToolCallProvider
     attr_reader :calls
@@ -148,7 +148,7 @@ class TestAgentToolIterationLimit < Minitest::Test
     end
   end
 
-  def build_agent(max_tool_iterations:)
+  def build_agent(max_rounds:)
     @tmpdir = Dir.mktmpdir
     workspace = File.join(@tmpdir, "workspace")
     FileUtils.mkdir_p(workspace)
@@ -157,7 +157,7 @@ class TestAgentToolIterationLimit < Minitest::Test
     File.write(config_path, {
       "agents" => { "defaults" => {
         "workspace" => workspace,
-        "max_tool_iterations" => max_tool_iterations
+        "max_rounds" => max_rounds
       } },
       "models" => [ { "name" => "test", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ]
     }.to_yaml)
@@ -165,7 +165,7 @@ class TestAgentToolIterationLimit < Minitest::Test
     Rubot::Agent.new(
       config: Rubot::Config.new(config_path),
       provider: EndlessToolCallProvider.new,
-      session_id: "limit-#{max_tool_iterations}"
+      session_id: "limit-#{max_rounds}"
     )
   end
 
@@ -174,14 +174,14 @@ class TestAgentToolIterationLimit < Minitest::Test
   end
 
   def test_uses_configured_limit_instead_of_hardcoded_ten
-    agent = build_agent(max_tool_iterations: 3)
+    agent = build_agent(max_rounds: 3)
 
-    assert_equal 3, agent.config.max_tool_iterations
+    assert_equal 3, agent.config.max_rounds
 
     response = agent.process("loop forever", stream: false)
 
     assert_equal 3, agent.provider.calls, "expected exactly 3 LLM round-trips"
-    assert_includes response, "tool-iteration limit (3)"
+    assert_includes response, "round limit (3)"
   end
 
   def test_default_limit_is_fifty_when_unset
@@ -194,18 +194,49 @@ class TestAgentToolIterationLimit < Minitest::Test
       "models" => [ { "name" => "test", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ]
     }.to_yaml)
 
-    assert_equal 50, Rubot::Config.new(config_path).max_tool_iterations
+    assert_equal 50, Rubot::Config.new(config_path).max_rounds
   end
 
   def test_zero_or_negative_limit_falls_back_to_default
     @tmpdir = Dir.mktmpdir
     config_path = File.join(@tmpdir, "config.yml")
     File.write(config_path, {
-      "agents" => { "defaults" => { "max_tool_iterations" => 0 } }
+      "agents" => { "defaults" => { "max_rounds" => 0 } }
     }.to_yaml)
 
-    assert_equal Rubot::Config::DEFAULT_MAX_TOOL_ITERATIONS,
-                 Rubot::Config.new(config_path).max_tool_iterations
+    assert_equal Rubot::Config::DEFAULT_MAX_ROUNDS,
+                 Rubot::Config.new(config_path).max_rounds
+  end
+
+  def test_old_max_tool_iterations_key_is_still_accepted
+    @tmpdir = Dir.mktmpdir
+    config_path = File.join(@tmpdir, "config.yml")
+    File.write(config_path, {
+      "agents" => { "defaults" => { "max_tool_iterations" => 7 } }
+    }.to_yaml)
+
+    assert_equal 7, Rubot::Config.new(config_path).max_rounds
+  end
+
+  def test_max_rounds_wins_over_the_old_key
+    @tmpdir = Dir.mktmpdir
+    config_path = File.join(@tmpdir, "config.yml")
+    File.write(config_path, {
+      "agents" => { "defaults" => { "max_rounds" => 5, "max_tool_iterations" => 9 } }
+    }.to_yaml)
+
+    assert_equal 5, Rubot::Config.new(config_path).max_rounds
+  end
+
+  def test_progress_callback_receives_the_tool_count
+    agent = build_agent(max_rounds: 3)
+    events = []
+
+    agent.process("loop forever", stream: false, on_progress: ->(round, tool_count) {
+      events << [ round, tool_count ]
+    })
+
+    assert_equal [ [ 1, 1 ], [ 2, 1 ], [ 3, 1 ] ], events
   end
 end
 

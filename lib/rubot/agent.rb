@@ -4,6 +4,7 @@ require "json"
 require_relative "config"
 require_relative "model_info"
 require_relative "model_catalog"
+require_relative "opencode_usage"
 require_relative "persona"
 require_relative "pricing_catalog"
 require_relative "session"
@@ -144,7 +145,7 @@ module Rubot
     # Callbacks (optional):
     #   on_tool_call:     Called before each tool executes. Yields (tool_name, arguments).
     #   on_tool_result:   Called after each tool executes. Yields (tool_name, result).
-    #   on_progress:      Called after each full tool-call iteration. Yields (iteration_count, tool_count).
+    #   on_progress:      Called after each full round. Yields (round_count, tool_count).
     #   on_confirm:       Called before dangerous actions that could cause data loss.
     #                     Yields (tool_name, arguments). Return truthy to proceed, falsy to skip.
     #   on_assistant_text: Called with the model's own words whenever it replies
@@ -167,8 +168,8 @@ module Rubot
       response = ""
       tool_calls = nil
       reasoning_content = nil
-      iterations = 0
-      limit = max_tool_iterations
+      rounds = 0
+      limit = max_rounds
       limit_hit = false
 
       # The turn's answer, assembled across continuations. `response` only ever
@@ -181,7 +182,7 @@ module Rubot
       finish_reason = nil
 
       loop do
-        if iterations >= limit
+        if rounds >= limit
           limit_hit = true
           break
         end
@@ -243,7 +244,7 @@ module Rubot
           # Forward the model's narration before it runs the tools. This is the
           # assistant text that accompanies the tool calls ("Let me check the
           # structure first."); without this callback it would be swallowed by
-          # the `response = ""` reset at the end of the iteration.
+          # the `response = ""` reset at the end of the round.
           narration = response.to_s.strip
           on_assistant_text&.call(narration) unless narration.empty?
 
@@ -301,29 +302,31 @@ module Rubot
           end
 
           # Continue the loop to get the next response
+          tool_count = tool_calls.size
           response = ""
           tool_calls = nil
-          iterations += 1
+          rounds += 1
           tool_rounds += 1
 
-          # Fire progress callback after each iteration
-          on_progress&.call(iterations, tool_calls ? tool_calls.size : 0)
+          # Fire progress callback after each round. The tool count is captured
+          # before `tool_calls` is cleared so consumers get the real number.
+          on_progress&.call(rounds, tool_count)
         elsif response.to_s.strip.empty? && !reasked
           # Nothing the user can read came back. With tools in play that means
           # the model stopped without reporting; with none it means the output
           # budget went to hidden reasoning. Either way, ask once for the
           # answer instead of substituting a summary of tool output.
           reasked = true
-          warn "[agent] empty answer after #{iterations} round(s); asking again"
-          @session.add("user", iterations.positive? ? ANSWER_NOW_PROMPT : EMPTY_ANSWER_PROMPT)
-          iterations += 1
+          warn "[agent] empty answer after #{rounds} round(s); asking again"
+          @session.add("user", rounds.positive? ? ANSWER_NOW_PROMPT : EMPTY_ANSWER_PROMPT)
+          rounds += 1
         elsif truncated && !response.to_s.strip.empty? && continuations < MAX_CONTINUATIONS
           # The answer is a fragment. Keep it, ask for the rest, and rejoin.
           answer << response
           @session.add("assistant", response, reasoning_content: reasoning_content)
           @session.add("user", CONTINUE_PROMPT)
           continuations += 1
-          iterations += 1
+          rounds += 1
           finish_reason = nil
         else
           # No tool calls, we're done
@@ -374,14 +377,14 @@ module Rubot
       # (e.g. read_file → grep → etc.), return the cron/tool summary or
       # a fallback so the user never gets a silent drop.
       if combined.empty?
-        fallback = build_fallback_response(iterations, tool_rounds: tool_rounds)
+        fallback = build_fallback_response(rounds, tool_rounds: tool_rounds)
         combined = fallback if fallback && !fallback.empty?
       end
 
       # Say so when the run was cut short, instead of stopping silently.
       if limit_hit
-        notice = "⚠️ Reached the tool-iteration limit (#{limit}) before finishing. " \
-                 "Reply \"continue\" to resume, or raise `max_tool_iterations` in config.yml."
+        notice = "⚠️ Reached the round limit (#{limit}) before finishing. " \
+                 "Reply \"continue\" to resume, or raise `max_rounds` in config.yml."
         combined = combined.empty? ? notice : "#{combined}\n\n#{notice}"
       end
 
@@ -599,6 +602,17 @@ module Rubot
       }
     end
 
+    # OpenCode Go subscription allowance for the active provider. Returns plain
+    # data (see OpencodeUsage) so it can cross a Ractor boundary.
+    def opencode_usage
+      settings = if @active_preset
+        @config.provider_settings_for_preset(@active_preset)
+      else
+        @config.provider_settings(@session_model)
+      end
+      OpencodeUsage.fetch(api_base: settings.api_base, api_key: settings.api_key)
+    end
+
     # Tell the model to narrate its progress between tool calls. Channels
     # surface that text as chat messages, so the user can follow along instead
     # of staring at a technical "running tool" status.
@@ -807,9 +821,9 @@ module Rubot
         @config.data.dig("agents", "defaults")["temperature"] = ag.temperature
       end
 
-      if ag.max_tool_iterations
+      if ag.max_rounds
         @config.data.dig("agents", "defaults") || @config.data["agents"] = { "defaults" => {} }
-        @config.data.dig("agents", "defaults")["max_tool_iterations"] = ag.max_tool_iterations
+        @config.data.dig("agents", "defaults")["max_rounds"] = ag.max_rounds
       end
 
       # Apply tool overrides from AGENTS.md
@@ -1011,18 +1025,23 @@ module Rubot
       warn "[debug] #{msg}" if @config.debug?
     end
 
-    # Maximum number of tool-call rounds per message. Comes from
-    # `agents.defaults.max_tool_iterations` (config.yml or AGENTS.md frontmatter).
-    def max_tool_iterations
-      @config.max_tool_iterations
+    # Maximum number of agent rounds per message. Comes from
+    # `agents.defaults.max_rounds` (config.yml or AGENTS.md frontmatter).
+    # A round is one loop trip, including re-asks and continuations, not one
+    # tool call.
+    def max_rounds
+      @config.max_rounds
     end
+
+    # Deprecated alias for callers that still use the old name.
+    alias max_tool_iterations max_rounds
 
     # Build a response when the turn ends with no answer of its own — the
     # model produced only tool calls and nothing to say about them. This is a
     # last resort after the re-ask, so it stays short and honest: dumping the
     # raw tool output here used to send the user things like
     # "I completed 3 step(s) of tool calls. Results: 1. [Exit code: 0]".
-    def build_fallback_response(iterations, tool_rounds: 0)
+    def build_fallback_response(rounds, tool_rounds: 0)
       if tool_rounds.zero?
         return "⚠️ The model returned an empty reply and nothing was sent. " \
                "Reply \"continue\" to retry."
@@ -1030,8 +1049,10 @@ module Rubot
 
       last = last_tool_name
       summary = last ? "#{tool_rounds} tool call(s), last one #{last}" : "#{tool_rounds} tool call(s)"
-      "⚠️ The model finished #{summary} without writing an answer, so there is " \
-        "nothing to show for this turn. Reply \"continue\" to retry."
+      round_word = rounds == 1 ? "round" : "rounds"
+      "⚠️ The model stopped after #{rounds} #{round_word} and #{summary} without " \
+        "writing an answer, so there is nothing to show for this turn. " \
+        "Reply \"continue\" to retry."
     end
 
     # Name of the most recent tool the session ran, for the fallback above.
@@ -1079,11 +1100,11 @@ module Rubot
       response = ""
       tool_calls = nil
       reasoning_content = nil
-      iterations = 0
-      limit = max_tool_iterations
+      rounds = 0
+      limit = max_rounds
 
       loop do
-        break if iterations >= limit
+        break if rounds >= limit
 
         result = @provider.chat(local_messages, tools: tool_definitions)
         record_usage(result)
@@ -1124,7 +1145,7 @@ module Rubot
 
           response = ""
           tool_calls = nil
-          iterations += 1
+          rounds += 1
         else
           break
         end
@@ -1182,7 +1203,7 @@ module Rubot
       extracted = @memory_extractor.extract(batch)
 
       # Extraction is a real provider request; count it in the session totals
-      # without overwriting `last_usage`, which `/usage` uses for context size.
+      # without overwriting `last_usage`, which `/context` uses for context size.
       if @memory_extractor.last_usage
         @session.record_auxiliary_usage(@memory_extractor.last_usage, provider: @provider.name)
       end
@@ -1232,7 +1253,7 @@ module Rubot
     # Run automatic compaction when the transcript approaches the configured
     # share of the model's context window. The estimate is recomputed from the
     # transcript each time, so a compaction immediately lowers it and the next
-    # iteration does not compact again.
+    # round does not compact again.
     def run_auto_compaction
       return unless @config.auto_compact?
       return if @session.message_count <= @config.compact_keep_recent_messages

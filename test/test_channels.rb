@@ -558,47 +558,47 @@ module Rubot
     end
   end
 
+  # Stubs every piece that would touch the network, and records what the
+  # agent would have been asked. Shared by the inbound media and reply tests.
+  class StubbedTelegram < Channels::Telegram
+    attr_reader :sent, :prompts, :downloads
+
+    def initialize(downloads: [], **kwargs)
+      super(**kwargs)
+      @sent = []
+      @prompts = []
+      @downloads = downloads
+    end
+
+    private
+
+    def send_message(chat_id, text, thread_id = nil)
+      @sent << [ chat_id, text, thread_id ]
+      true
+    end
+
+    def send_message_plain(chat_id, text, thread_id = nil)
+      @sent << [ chat_id, text, thread_id ]
+      true
+    end
+
+    def process_message(message, session_id: nil, **_callbacks)
+      @prompts << [ message, session_id ]
+      "agent reply"
+    end
+
+    def send_action(*_args)
+      nil
+    end
+
+    def download_attachment(_attachment, session_id)
+      @downloads.shift || File.join(attachments_root, sanitize_component(session_id), "shot.png")
+    end
+  end
+
   # Inbound media: Telegram sends photos as `photo` + `caption`, never as
   # `text`. These tests lock in that a captioned screenshot reaches the agent.
   class TestTelegramInboundAttachments < Minitest::Test
-    # Stubs every piece that would touch the network, and records what the
-    # agent would have been asked.
-    class StubbedTelegram < Channels::Telegram
-      attr_reader :sent, :prompts, :downloads
-
-      def initialize(downloads: [], **kwargs)
-        super(**kwargs)
-        @sent = []
-        @prompts = []
-        @downloads = downloads
-      end
-
-      private
-
-      def send_message(chat_id, text, thread_id = nil)
-        @sent << [ chat_id, text, thread_id ]
-        true
-      end
-
-      def send_message_plain(chat_id, text, thread_id = nil)
-        @sent << [ chat_id, text, thread_id ]
-        true
-      end
-
-      def process_message(message, session_id: nil, **_callbacks)
-        @prompts << [ message, session_id ]
-        "agent reply"
-      end
-
-      def send_action(*_args)
-        nil
-      end
-
-      def download_attachment(_attachment, session_id)
-        @downloads.shift || File.join(attachments_root, sanitize_component(session_id), "shot.png")
-      end
-    end
-
     def setup
       @tmpdir = Dir.mktmpdir
       @config = isolated_config(@tmpdir, name: "test_inbound")
@@ -756,6 +756,148 @@ module Rubot
       attachments, = tg.send(:extract_attachments, photo_update["message"])
 
       assert_empty attachments
+    end
+  end
+
+  # A reply carries the quoted message in `reply_to_message` (or the highlighted
+  # excerpt in `quote`), never in `text`. Without this the agent only sees the
+  # new message and loses what the user was pointing at.
+  class TestTelegramReplyContext < Minitest::Test
+    def setup
+      @tmpdir = Dir.mktmpdir
+      @config = isolated_config(@tmpdir, name: "test_reply")
+      @agent = Rubot::Agent.new(config: @config, session_id: "test_reply", tools: Rubot::Tools::Registry.new)
+    end
+
+    def teardown
+      FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+    end
+
+    def build_telegram(downloads: [])
+      StubbedTelegram.new(
+        agent: @agent,
+        channel_config: { "token" => "fake", "typing_indicator" => false },
+        downloads: downloads
+      )
+    end
+
+    def reply_update(quoted: "harga naik 12% bulan ini", body: "ini artinya apa?",
+                     author: { "id" => 7, "username" => "alice" }, thread_id: nil, extra: {})
+      reply = { "message_id" => 99, "from" => author }
+      reply["text"] = quoted if quoted
+      message = {
+        "chat" => { "id" => 42 },
+        "from" => { "id" => 42, "username" => "tester" },
+        "reply_to_message" => reply
+      }
+      message["text"] = body if body
+      message["message_thread_id"] = thread_id if thread_id
+      message.merge!(extra)
+      { "update_id" => 10, "message" => message }
+    end
+
+    def test_the_quoted_message_reaches_the_agent
+      tg = build_telegram
+      tg.send(:process_update, reply_update)
+
+      assert_equal 1, tg.prompts.size
+      prompt = tg.prompts.first[0]
+      assert_includes prompt, "harga naik 12% bulan ini"
+      assert_includes prompt, "ini artinya apa?"
+      assert_includes prompt, "@alice"
+    end
+
+    def test_the_users_own_text_stays_first
+      tg = build_telegram
+      tg.send(:process_update, reply_update)
+
+      prompt = tg.prompts.first[0]
+      assert prompt.start_with?("ini artinya apa?"), prompt
+    end
+
+    def test_the_highlighted_excerpt_wins_over_the_whole_message
+      tg = build_telegram
+      update = reply_update(extra: { "quote" => { "text" => "harga naik 12%" } })
+      update["message"]["reply_to_message"]["text"] = "harga naik 12% bulan ini, sisanya stabil"
+
+      tg.send(:process_update, update)
+
+      prompt = tg.prompts.first[0]
+      assert_includes prompt, "harga naik 12%"
+      refute_includes prompt, "sisanya stabil"
+    end
+
+    def test_a_reply_to_the_bot_is_labelled_as_the_assistant
+      tg = build_telegram
+      tg.instance_variable_set(:@bot_username, "mybot")
+      update = reply_update(quoted: "Berikut ringkasannya.",
+                            author: { "id" => 1, "username" => "MyBot", "is_bot" => true })
+
+      tg.send(:process_update, update)
+
+      assert_includes tg.prompts.first[0], "your earlier message"
+    end
+
+    def test_a_reply_to_a_member_without_a_username_uses_their_name
+      tg = build_telegram
+      update = reply_update(author: { "id" => 7, "first_name" => "Budi" })
+
+      tg.send(:process_update, update)
+
+      assert_includes tg.prompts.first[0], "Budi"
+    end
+
+    def test_the_quote_survives_a_reply_that_crosses_topics
+      tg = build_telegram
+      tg.send(:process_update, reply_update(thread_id: 7))
+
+      prompt, session_id = tg.prompts.first
+      assert_equal "tg_42_7", session_id
+      assert_includes prompt, "harga naik 12% bulan ini"
+    end
+
+    def test_a_media_reply_target_is_downloaded_and_described
+      shot = File.join(@config.workspace, "attachments", "tg_42", "target.png")
+      FileUtils.mkdir_p(File.dirname(shot))
+      File.binwrite(shot, "\x89PNG\r\n\x1A\n".b)
+
+      tg = build_telegram(downloads: [ shot ])
+      update = reply_update(quoted: nil, extra: {})
+      update["message"]["reply_to_message"]["photo"] = [
+        { "file_id" => "p1", "file_unique_id" => "u9", "file_size" => 90_000 }
+      ]
+
+      tg.send(:process_update, update)
+
+      prompt = tg.prompts.first[0]
+      assert_includes prompt, shot
+      assert_includes prompt, "ini artinya apa?"
+    end
+
+    def test_a_reply_to_an_unreadable_service_message_adds_nothing
+      tg = build_telegram
+      update = reply_update(quoted: nil, body: "halo")
+      update["message"]["reply_to_message"] = { "message_id" => 99, "forum_topic_created" => { "name" => "x" } }
+
+      tg.send(:process_update, update)
+
+      assert_equal [ [ "halo", "tg_42" ] ], tg.prompts
+    end
+
+    def test_a_long_quote_is_truncated
+      tg = build_telegram
+      tg.send(:process_update, reply_update(quoted: "x" * 10_000))
+
+      prompt = tg.prompts.first[0]
+      assert_includes prompt, "(truncated)"
+      assert_operator prompt.length, :<, 10_000
+    end
+
+    def test_reply_context_can_be_skipped_when_the_update_has_no_reply
+      tg = build_telegram
+      tg.send(:reply_context, { "text" => "halo" }, "tg_42", 42)
+
+      assert_nil tg.send(:reply_context, { "text" => "halo" }, "tg_42", 42)
     end
   end
 

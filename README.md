@@ -144,8 +144,8 @@ $ rubot
 | `/compact` | Summarize older messages to free context |
 | `/session [name]` | Show or switch session |
 | `/info` | Show agent info (includes soul/memory status) |
-| `/usage` | Show context usage, cache hit rate, and estimated cost |
-| `/context` | Alias for `/usage` |
+| `/context` | Show context usage, cache hit rate, and estimated cost |
+| `/usage` | Show OpenCode Go subscription usage |
 | `/tools` | List available tools |
 | `/soul` | Show the bot's soul (SOUL.md) |
 | `/memory` | Show persistent memory (MEMORY.md) |
@@ -192,7 +192,7 @@ agents:
     max_tokens: 4096
     temperature: 0.7
     system_prompt: "You are Rubot, a helpful AI assistant."
-    max_tool_iterations: 50
+    max_rounds: 50
     compaction:
       auto: true
       threshold_percent: 80
@@ -231,6 +231,18 @@ tools:
   web_fetch:
     enabled: true
 ```
+
+### Agent rounds
+
+`agents.defaults.max_rounds` caps how many loop rounds one user message may
+use (default 50). A round is one trip through the agent loop: running the tools
+the model asked for, re-asking after an empty reply, or asking for the rest of a
+cut-off answer. One round can run several tools, so this is not a tool-call
+limit. When the limit is reached the turn stops with a notice and the user can
+reply "continue".
+
+`max_tool_iterations` is the old name for this setting and is still accepted;
+new configs should use `max_rounds`.
 
 ### Model List
 
@@ -282,7 +294,7 @@ model_presets:
 | `provider`, `api_base`, `api_key` | Optional overrides; inherited from the model entry / active entry |
 | `max_tokens`, `temperature` | Generation settings for this preset |
 | `reasoning_effort` | Optional provider reasoning hint |
-| `context_window_tokens` | Context window size for `/usage` (falls back to a built-in table) |
+| `context_window_tokens` | Context window size for `/context` (falls back to a built-in table) |
 | `pricing` | Token prices for the cost estimate (see below) |
 
 - `default` is always available as the implicit preset built from the direct
@@ -297,11 +309,20 @@ model_presets:
 
 #### Usage and cost estimates
 
-`/usage` (alias `/context`) reports, for the current session:
+`/context` reports, for the current session:
 
 - context used vs. the model's context window,
 - cumulative input/output tokens and cache hit rate,
 - an estimated cost in USD.
+
+#### OpenCode Go usage
+
+`/usage` shows the OpenCode Go subscription allowance for the active model:
+the rolling, weekly, and monthly limits, how much of each is used, and when
+they reset. It is fetched from `<api_base origin>/zen/go/v1/usage` with the
+configured API key, so it only works while the active provider points at
+OpenCode (`https://opencode.ai/zen/go/v1`). Accounts without a Go allowance
+show that no usage is available.
 
 Pricing and context windows are fetched automatically from
 [models.dev](https://models.dev/api.json) and cached in
@@ -369,7 +390,8 @@ Telegram commands:
 | `/preset default <name>` | Choose the preset for new sessions (`default` clears it) |
 | `/preset delete <name>` | Remove a preset |
 | `/preset models [filter]` | List the provider's supported models |
-| `/usage` | Show context usage, cache hit rate, and estimated cost |
+| `/context` | Show context usage, cache hit rate, and estimated cost |
+| `/usage` | Show OpenCode Go subscription usage |
 | `/compact` | Summarize older messages to free context |
 
 ### Providers
@@ -467,6 +489,30 @@ are kept inside the workspace so the safety guard allows the agent to read them.
 Media the channel cannot read (stickers, voice notes, video) now gets an explicit
 reply instead of being dropped silently. Set `attachments: false` to disable the
 download path entirely.
+
+#### Replying to a message
+
+Telegram puts a quoted message in `message.reply_to_message` and the exact
+excerpt the user highlighted in `message.quote` — never in `message.text`. The
+channel now carries both into the prompt, so the model knows what the user is
+pointing at even when the quoted message is not in the session transcript
+(a reply that crosses forum topics, one that follows `/new`, or one aimed at
+someone else's message):
+
+```
+ini artinya apa?
+
+↩️ The user replied to this earlier message from @alice:
+> harga naik 12% bulan ini
+```
+
+When the user quotes a passage, only that excerpt is included. Replies to the
+bot's own messages are labelled as such (“your earlier message”), which keeps
+follow-ups like “lanjutkan” or “yang tadi maksudnya apa” unambiguous. If the
+quoted message is a photo or file, it is downloaded and described exactly like
+an attachment in the current message; a quoted message with nothing readable
+(service messages, stickers) adds nothing. Quotes longer than Telegram's 4096
+character message limit are truncated with a visible `(truncated)` marker.
 
 #### Per-topic personas (forum topics)
 
@@ -637,7 +683,7 @@ You prefer small, composable solutions over complex architectures.
 
 A Markdown file with **YAML frontmatter** for machine-readable settings
 and a body of behavior rules. Frontmatter can override:
-`name`, `model`, `max_tokens`, `temperature`, `max_tool_iterations`, and
+`name`, `model`, `max_tokens`, `temperature`, `max_rounds`, and
 individual tool enable/disable settings.
 
 ```yaml
@@ -646,7 +692,7 @@ name: Rubot
 model: gpt-4o-mini
 max_tokens: 4096
 temperature: 0.7
-max_tool_iterations: 50
+max_rounds: 50
 tools:
   exec: true
   file_ops: true

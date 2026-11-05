@@ -10,7 +10,13 @@ module Rubot
     DEFAULT_CONFIG_DIR  = File.expand_path("~/.rubot")
     DEFAULT_CONFIG_FILE = File.join(DEFAULT_CONFIG_DIR, "config.yml")
     DEFAULT_WORKSPACE   = File.join(DEFAULT_CONFIG_DIR, "workspace")
-    DEFAULT_MAX_TOOL_ITERATIONS = 50
+    # Maximum number of agent rounds per user message. A round is one trip
+    # through the agent loop: running the tools the model asked for, re-asking
+    # after an empty reply, or asking for the rest of a cut-off answer. It is
+    # not a tool-call count: one round can run several tools.
+    DEFAULT_MAX_ROUNDS = 50
+    # Old constant name, kept so existing callers keep working.
+    DEFAULT_MAX_TOOL_ITERATIONS = DEFAULT_MAX_ROUNDS
     DEFAULT_AUTO_COMPACT = true
     DEFAULT_COMPACT_THRESHOLD_PERCENT = 80.0
     DEFAULT_COMPACT_KEEP_RECENT = 6
@@ -366,13 +372,20 @@ module Rubot
       !!val
     end
 
-    def max_tool_iterations
-      limit = agent_defaults["max_tool_iterations"].to_i
-      limit.positive? ? limit : DEFAULT_MAX_TOOL_ITERATIONS
+    def max_rounds
+      limit = agent_defaults["max_rounds"]
+      # `max_tool_iterations` is the old name; still accepted so existing
+      # config files keep working.
+      limit = agent_defaults["max_tool_iterations"] if limit.nil?
+      limit = limit.to_i
+      limit.positive? ? limit : DEFAULT_MAX_ROUNDS
     end
 
+    # Deprecated alias for callers that still use the old name.
+    alias max_tool_iterations max_rounds
+
     def history_limit
-      max_tool_iterations
+      max_rounds
     end
 
     # --- Context compaction ----------------------------------------------

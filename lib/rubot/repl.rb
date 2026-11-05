@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "usage"
+require_relative "opencode_usage"
 
 module Rubot
   class REPL
@@ -14,8 +15,8 @@ module Rubot
       "/session"  => "Show current session ID",
       "/session NAME" => "Switch to a new session",
       "/info"     => "Show agent info (provider, model, tools)",
-      "/usage"    => "Show context usage, cache hit rate, and estimated cost",
-      "/context"  => "Alias for /usage",
+      "/context"  => "Show context usage, cache hit rate, and estimated cost",
+      "/usage"    => "Show OpenCode Go subscription usage",
       "/models"   => "List available models from config",
       "/model"    => "Show current active model",
       "/use-model NAME" => "Switch to a model for this session",
@@ -189,9 +190,13 @@ module Rubot
         puts "\nAgent Info:"
         info.each { |k, v| puts "  #{k}: #{v}" }
         puts
-      when "/usage", "/context"
+      when "/context"
         puts
         puts Rubot::UsageReport.render(agent.usage_report)
+        puts
+      when "/usage"
+        puts
+        puts Rubot::OpencodeUsageReport.render(agent.opencode_usage)
         puts
       when "/models"
         models = agent.config.models
