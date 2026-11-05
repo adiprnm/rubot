@@ -119,6 +119,17 @@ module Rubot
       assert_includes result, "error"
     end
 
+    def test_channel_handle_error_mentions_timeout
+      channel = DummyChannel.new(agent: @agent)
+
+      direct = channel.handle_error(Net::ReadTimeout.new("stalled"))
+      assert_includes direct, "did not respond in time"
+      refute_includes direct, "Sorry"
+
+      wrapped = channel.handle_error(StandardError.new("Net::ReadTimeout: stalled\nbacktrace"))
+      assert_includes wrapped, "did not respond in time"
+    end
+
     def test_abstract_channel_raises
       channel = Channel.new(agent: @agent)
       assert_raises(NotImplementedError) { channel.start }

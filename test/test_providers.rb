@@ -231,6 +231,8 @@ class TestProviders < Minitest::Test
       @call_count += 1
       resp = @responses.shift
       raise Rubot::RateLimitError.new if resp == :rate_limit
+      raise Net::ReadTimeout, "stalled" if resp == :read_timeout
+
       resp
     end
   end
@@ -267,6 +269,52 @@ class TestProviders < Minitest::Test
     end
 
     assert_raises(StandardError) { provider.send(:with_retry) { provider.chat([]) } }
+  end
+
+  def test_with_retry_succeeds_after_read_timeout
+    config = make_retry_config
+    provider = RetryTestProvider.new(config, [:read_timeout, "success"])
+
+    result = provider.stub(:sleep, nil) do
+      provider.send(:with_retry) { provider.chat([]) }
+    end
+    assert_equal "success", result
+    assert_equal 2, provider.call_count
+  end
+
+  def test_with_retry_raises_after_max_network_retries
+    config = make_retry_config
+    provider = RetryTestProvider.new(config, [:read_timeout, :read_timeout, :read_timeout])
+
+    assert_raises(Net::ReadTimeout) do
+      provider.stub(:sleep, nil) do
+        provider.send(:with_retry, max_network_retries: 2) { provider.chat([]) }
+      end
+    end
+    assert_equal 3, provider.call_count # initial + 2 retries
+  end
+
+  def test_with_retry_skips_retry_when_retryable_returns_false
+    config = make_retry_config
+    provider = RetryTestProvider.new(config, [:read_timeout, "success"])
+
+    assert_raises(Net::ReadTimeout) do
+      provider.stub(:sleep, nil) do
+        provider.send(:with_retry, retryable: -> { false }) { provider.chat([]) }
+      end
+    end
+    assert_equal 1, provider.call_count
+  end
+
+  def test_with_retry_passes_through_non_transient_errors
+    config = make_retry_config
+    provider = RetryTestProvider.new(config, [])
+
+    def provider.chat(_messages, tools: nil)
+      raise ArgumentError, "boom"
+    end
+
+    assert_raises(ArgumentError) { provider.send(:with_retry) { provider.chat([]) } }
   end
 
   def test_with_retry_succeeds_immediately_without_rate_limit

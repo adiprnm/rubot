@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "json"
+require "net/http"
 
 module Rubot
   # Immutable view of the settings needed to construct a provider.
@@ -39,6 +40,22 @@ module Rubot
   # Base class for all LLM providers.
   # Subclasses must implement #chat(messages, tools: nil)
   class Provider
+    # Network failures that usually clear up on a retry. A read timeout often
+    # just means the provider stalled while generating, and a fresh request
+    # normally succeeds.
+    TRANSIENT_ERRORS = [
+      Net::ReadTimeout,
+      Net::OpenTimeout,
+      Net::WriteTimeout,
+      Errno::ECONNRESET,
+      Errno::ECONNREFUSED,
+      Errno::EPIPE,
+      Errno::EHOSTUNREACH,
+      Errno::ENETUNREACH,
+      SocketError,
+      EOFError
+    ].freeze
+
     attr_reader :config, :last_usage
 
     # Build the provider implementation for an immutable ProviderSettings.
@@ -110,16 +127,34 @@ module Rubot
     end
 
     # Wrap a block that performs an HTTP request. Retries on 429 with
-    # exponential backoff (respects Retry-After header if present).
-    def with_retry(max_retries: 3)
+    # exponential backoff (respects Retry-After header if present), and on
+    # transient network errors (timeouts, connection resets, ...).
+    #
+    # retryable - optional callable; when it returns false the error is
+    #             re-raised instead of retried. Streaming providers use this
+    #             to avoid replaying a response that was already delivered.
+    def with_retry(max_retries: 3, max_network_retries: 2, retryable: nil)
       attempts = 0
+      network_attempts = 0
       begin
         yield
       rescue RateLimitError => e
         attempts += 1
         raise if attempts > max_retries
+        raise if retryable && !retryable.call
+
         wait_time = e.retry_after || exponential_backoff(attempts)
         log_debug("Rate limited (429). Retrying in #{wait_time}s (attempt #{attempts}/#{max_retries})")
+        sleep wait_time
+        retry
+      rescue *TRANSIENT_ERRORS => e
+        network_attempts += 1
+        raise if network_attempts > max_network_retries
+        raise if retryable && !retryable.call
+
+        wait_time = exponential_backoff(network_attempts)
+        log_debug("#{e.class}: #{e.message}. Retrying in #{wait_time}s " \
+                  "(attempt #{network_attempts}/#{max_network_retries})")
         sleep wait_time
         retry
       end

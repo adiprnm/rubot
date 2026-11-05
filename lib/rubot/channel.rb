@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "net/http"
+
 module Rubot
   # Base class for all communication channels.
   # Subclass this to implement channels for Telegram, Discord, Slack, web, etc.
@@ -162,10 +164,24 @@ module Rubot
     # @param message [String] The original message that caused the error
     # @return [String] A user-friendly error message
     def handle_error(error, message = nil)
-      msg = "❌ Sorry, an error occurred: #{error.message}"
+      msg = if timeout_error?(error)
+        "⏱️ The model provider did not respond in time. Please try again."
+      else
+        "❌ Sorry, an error occurred: #{error.message}"
+      end
+
       warn "[#{@name}] Error processing message: #{error.class}: #{error.message}"
       warn error.backtrace.first(5).join("\n") if Rubot.debug?
       msg
+    end
+
+    # Timeouts surface as Net::*Timeout in-process, but as an ActorError
+    # ("Net::ReadTimeout: ...") when the session runs in a Ractor. Match both.
+    def timeout_error?(error)
+      return true if error.is_a?(Net::ReadTimeout) || error.is_a?(Net::OpenTimeout) ||
+                     error.is_a?(Net::WriteTimeout)
+
+      error.message.to_s.match?(/\b(?:Net::(?:Read|Open|Write)Timeout|Errno::ETIMEDOUT)\b/)
     end
 
     # Whether the channel is currently running.
