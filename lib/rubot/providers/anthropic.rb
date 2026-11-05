@@ -11,6 +11,7 @@ module Rubot
       API_VERSION = "2023-06-01"
 
       def chat(messages, tools: nil)
+        reset_last_usage!
         # Extract system prompt from messages
         system_msg = messages.find { |m| m["role"] == "system" }
         system_prompt = system_msg ? system_msg["content"] : nil
@@ -18,10 +19,12 @@ module Rubot
 
         payload = build_payload(non_system, tools, system_prompt)
         response = make_request(payload)
+        track_usage(response["usage"])
         extract_content(response)
       end
 
       def chat_stream(messages, tools: nil, &on_chunk)
+        reset_last_usage!
         system_msg = messages.find { |m| m["role"] == "system" }
         system_prompt = system_msg ? system_msg["content"] : nil
         non_system = messages.reject { |m| m["role"] == "system" }
@@ -140,6 +143,7 @@ module Rubot
         current_tool_name = ""
         current_tool_id = ""
         current_tool_input = ""
+        usage = nil
 
         with_retry do
           http = Net::HTTP.new(uri.host, uri.port)
@@ -176,6 +180,12 @@ module Rubot
                   type = data["type"]
 
                   case type
+                  when "message_start"
+                    start_usage = data.dig("message", "usage")
+                    usage = start_usage.dup if start_usage.is_a?(Hash)
+                  when "message_delta"
+                    delta_usage = data["usage"]
+                    usage = (usage || {}).merge(delta_usage) if delta_usage.is_a?(Hash)
                   when "content_block_start"
                     block = data["content_block"]
                     if block && block["type"] == "tool_use"
@@ -217,6 +227,7 @@ module Rubot
           end
 
           tool_calls = tool_calls_accum.empty? ? nil : tool_calls_accum.values
+          track_usage(usage)
           [ accumulated, tool_calls ]
         end
       end

@@ -8,7 +8,11 @@ require "thread"
 require "securerandom"
 
 require_relative "../image_info"
+require_relative "../model_catalog"
+require_relative "../persona"
+require_relative "../persona_store"
 require_relative "../telegram_markdown"
+require_relative "../usage"
 
 module Rubot
   module Channels
@@ -43,6 +47,8 @@ module Rubot
       # Bot API refuses getFile above 20 MB.
       MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
       UNSUPPORTED_MEDIA = %w[sticker voice video video_note audio animation].freeze
+      PERSONA_WIZARD_TTL = 15 * 60
+
 
       def initialize(agent: nil, pool: nil, app_config: nil, channel_config: {})
         super
@@ -69,6 +75,11 @@ module Rubot
         # Confirmation tracking — keyed by confirmation_id
         @pending_confirmations = {}  # id => { cv:, result:, chat_id:, thread_id: }
         @confirm_mutex = Mutex.new
+        # Per-topic persona wizard state, guarded by its own mutex.
+        @persona_wizards = {} # "chat:thread" => wizard Hash
+        @persona_mutex = Mutex.new
+        @persona_store = nil
+        @model_catalog = nil
       end
 
       def start
@@ -205,52 +216,317 @@ module Rubot
         [ :skip, "ℹ️ Agent Info\n\n" + lines.join("\n") ]
       end
 
-      def handle_models_command
-        ra = request_agent
-        models = ra.config.models
-        active = ra.active_model_name
+      def handle_usage_command
+        report = request_agent.usage_report
 
-        if models.empty?
-          [ :skip, "🧠 No models configured in config.yml." ]
+        context = if report[:context_window]
+          "#{UsageReport.tokens(report[:context_used])} / #{UsageReport.tokens(report[:context_window])} token " \
+            "(#{format('%.1f', report[:context_percent])}%)"
         else
-          lines = models.map do |m|
-            marker = m["name"] == active ? "→ " : "  "
-            "#{marker}**#{m["name"]}** (`#{m["model"]}`)"
-          end
-          [ :skip, "🧠 **Available Models**\n\n" + lines.join("\n") ]
+          "#{UsageReport.tokens(report[:context_used])} token (window tidak diketahui)"
         end
+
+        hit = if report[:prompt_tokens].to_i.zero?
+          "n/a"
+        else
+          format("%.1f%%", report[:cache_hit_rate].to_f * 100)
+        end
+
+        lines = [ "📊 **Usage Sesi**" ]
+        lines << "Model: `#{report[:model]}` (#{report[:provider]})"
+        lines << "Konteks: #{context}"
+        lines << "Pesan: #{report[:messages]} | Request: #{report[:requests]}"
+        lines << "Token: #{UsageReport.tokens(report[:prompt_tokens])} in / " \
+                 "#{UsageReport.tokens(report[:completion_tokens])} out"
+        lines << "Cache: #{UsageReport.tokens(report[:cached_tokens])} cached (hit rate #{hit})"
+
+        cost = report[:cost]
+        if cost
+          source = report[:price_source] ? " [#{report[:price_source]}]" : ""
+          lines << "Estimasi biaya: `$#{UsageReport.money(cost['total'])}` " \
+                   "(input $#{UsageReport.money(cost['input'])}, " \
+                   "cached $#{UsageReport.money(cost['cached_input'])}, " \
+                   "output $#{UsageReport.money(cost['output'])})#{source}"
+        else
+          lines << "Estimasi biaya: belum tersedia — set `pricing` di preset config.yml"
+        end
+
+        [ :skip, lines.join("\n") ]
       end
 
-      def handle_model_command
-        ra = request_agent
-        active = ra.active_model_name
-        entry = ra.config.model_entry_by_name(active) || ra.config.active_model_entry
-        text = "🧠 **Current Model**\n\n**#{active}** (`#{entry['model']}`)\nProvider: `#{ra.provider.name}`"
-        text += "\n_Session override — cleared on /new_" if ra.session.model_override
-        [ :skip, text ]
+      def handle_models_command
+        handle_preset_list_command
+      end
+
+      def handle_compact_command
+        result = request_agent.compact_session
+        unless result
+          return [ :skip, "ℹ️ Tidak ada yang perlu di-compact (percakapan masih pendek atau ringkasan gagal dibuat)." ]
+        end
+
+        lines = [ "🗜️ **Compact selesai**" ]
+        lines << "Pesan diringkas: #{result[:summarized_messages]}"
+        lines << "Pesan dipertahankan: #{result[:kept_messages]}"
+        lines << "Perkiraan konteks: #{result[:context_before]} → #{result[:context_after]} token"
+        [ :skip, lines.join("\n") ]
+      end
+
+      def handle_model_command(args = nil)
+        args = args.to_s.strip
+        return handle_preset_list_command if args.empty?
+
+        switch_session_preset(args)
       end
 
       def handle_use_model_command(model_name)
-        ra = request_agent
-        if model_name.nil? || model_name.empty?
-          models = ra.config.models
-          if models.empty?
-            [ :skip, "⚠️ Usage: `/use_model <model_name>`\n\nNo models configured." ]
-          else
-            list = models.map { |m| "• **#{m['name']}**" }.join("\n")
-            [ :skip, "⚠️ Usage: `/use_model <model_name>`\n\nAvailable models:\n#{list}" ]
-          end
+        # Backwards-compatible alias for /model <preset>.
+        handle_model_command(model_name)
+      end
+
+      def handle_preset_command(args)
+        args = args.to_s.strip
+        return handle_preset_list_command if args.empty? || args.casecmp?("list")
+
+        command, rest = args.split(/\s+/, 2)
+        case command.to_s.downcase
+        when "list"
+          handle_preset_list_command
+        when "show"
+          handle_preset_show(rest)
+        when "set"
+          handle_preset_set(rest)
+        when "default", "primary"
+          handle_preset_default(rest)
+        when "delete", "remove"
+          handle_preset_delete(rest)
+        when "models"
+          handle_preset_models(rest)
         else
-          result = ra.use_model(model_name)
-          if result
-            entry = ra.config.model_entry_by_name(result)
-            [ :skip, "✅ Switched to model: **#{result}** (`#{entry['model']}`)\nProvider: `#{ra.provider.name}`\n_Persists for this session (cleared on /new)_" ]
+          [ :skip, preset_usage_text ]
+        end
+      end
+
+      def handle_preset_list_command
+        ra = request_agent
+        active = ra.active_model_preset
+        active_name = active && active["name"]
+        choices = preset_choices
+
+        if choices.empty?
+          return [ :skip, "🧠 Belum ada model preset.\n\nBuat dengan:\n`/preset set fast deepseek-v4-pro temperature=0.2`" ]
+        end
+
+        lines = choices.map do |choice|
+          preset = choice["preset"]
+          marker = choice["name"].to_s.casecmp?(active_name.to_s) ? "→ " : "  "
+          label = choice["name"]
+          label += " ★" if choice["primary"]
+          "#{marker}**#{label}** (`#{preset['model']}`)"
+        end
+
+        text = "🧠 **Model Presets**\n\n" + lines.join("\n")
+        text += "\n\nGanti untuk sesi ini: `/model <preset>`"
+        text += "\nKelola: `/preset set|default|delete|models`"
+        [ :skip, text ]
+      end
+
+      def switch_session_preset(name)
+        config = persona_config
+        preset = config && config.model_preset(name)
+        unless preset
+          list = preset_choices.map { |choice| "• **#{choice['name']}**" }.join("\n")
+          return [ :skip, "❌ Model preset `#{name}` tidak ada.\n\n*Preset tersedia:*\n#{list}" ]
+        end
+
+        applied = request_agent.use_model_preset(name, preset: preset)
+        unless applied
+          return [ :skip, "❌ Gagal mengganti preset ke `#{name}`." ]
+        end
+
+        [ :skip, "✅ Sesi ini sekarang memakai preset **#{name}** — model `#{applied['model']}`.\n_Persist sampai /new._" ]
+      rescue StandardError => e
+        [ :skip, "❌ Error: #{e.message}" ]
+      end
+
+      def handle_preset_show(name)
+        name = name.to_s.strip
+        return [ :skip, preset_usage_text ] if name.empty?
+
+        config = persona_config
+        preset = config && config.model_preset(name)
+        return [ :skip, "❌ Preset `#{name}` tidak ada." ] unless preset
+
+        [ :skip, preset_detail_text(name, preset) ]
+      end
+
+      def handle_preset_set(rest)
+        parts = rest.to_s.split(/\s+/)
+        name = parts.shift
+        if name.to_s.empty?
+          return [ :skip, "⚠️ Penggunaan: `/preset set <nama> [model] [temperature=0.2] [max_tokens=4096]`\n\nLihat model yang tersedia dengan `/preset models`." ]
+        end
+
+        config = persona_config
+        return [ :skip, "❌ Config tidak tersedia." ] unless config
+
+        model = nil
+        attributes = {}
+        parts.each do |token|
+          key, value = token.split("=", 2)
+          if value.nil?
+            model ||= token
           else
-            models = ra.config.models
-            list = models.map { |m| "• **#{m['name']}**" }.join("\n")
-            [ :skip, "❌ Model `#{model_name}` not found in config.yml.\n\n*Available models:*\n#{list}" ]
+            attributes[key.to_s.downcase] = value
           end
         end
+        model ||= attributes.delete("model")
+        provided_model = model
+
+        if model.nil?
+          existing = config.model_preset(name)
+          return [ :skip, "⚠️ Preset `#{name}` belum punya model. Sertakan model id: `/preset set #{name} <model>`." ] unless existing
+
+          model = existing["model"]
+        end
+
+        known = persona_models.any? do |choice|
+          choice["name"] == model || choice["model"] == model || model_id_from_entry(choice) == model
+        end
+        known ||= !config.model_entry_by_name(model).nil?
+        if !known && !persona_models.empty?
+          return [ :skip, "❌ Model `#{model}` tidak ada di katalog provider atau config.yml.\n\nCek `/preset models`." ]
+        end
+
+        attributes["model"] = provided_model if provided_model
+
+        preset = config.set_model_preset(name, attributes)
+        config.save
+        refresh_configuration!
+
+        # If this preset is active in the current session, apply the new
+        # settings immediately instead of waiting for a restart.
+        ra = request_agent
+        active = ra.active_model_preset
+        applied_now = active && active["name"].to_s.casecmp?(preset["name"]).to_s
+        ra.use_model_preset(preset["name"], preset: preset) if applied_now
+
+        text = "✅ Preset **#{preset['name']}** disimpan.\n\n" + preset_detail_text(preset["name"], preset)
+        text += "\n\n_Sesi ini memakai preset tersebut; perubahannya langsung diterapkan._" if applied_now
+        [ :skip, text ]
+      rescue ArgumentError => e
+        [ :skip, "❌ #{e.message}" ]
+      rescue StandardError => e
+        [ :skip, "❌ Gagal menyimpan preset: #{e.message}" ]
+      end
+
+      def handle_preset_default(name)
+        name = name.to_s.strip
+        config = persona_config
+        return [ :skip, "❌ Config tidak tersedia." ] unless config
+
+        if name.empty?
+          primary = config.primary_model_preset_name
+          preset = config.model_preset(primary)
+          return [ :skip, "🧠 Belum ada preset default bernama. Sesi baru memakai preset **#{primary}** (`#{preset['model']}`).\n\nAtur dengan `/preset default <nama>` atau `/preset default default` untuk kembali ke model config." ]
+        end
+
+        applied = config.set_default_model_preset(name)
+        config.save
+        refresh_configuration!
+
+        if applied
+          preset = config.model_preset(applied)
+          [ :skip, "✅ Preset default untuk **sesi baru**: **#{applied}** (`#{preset['model']}`).\n\nSesi yang sedang berjalan tidak diubah; gunakan `/model #{applied}`." ]
+        else
+          preset = config.model_preset("default")
+          [ :skip, "✅ Default kembali ke model config: `#{preset['model']}`.\n\nSesi baru akan memakai preset ini." ]
+        end
+      rescue ArgumentError => e
+        [ :skip, "❌ #{e.message}" ]
+      rescue StandardError => e
+        [ :skip, "❌ Gagal menyimpan default preset: #{e.message}" ]
+      end
+
+      def handle_preset_delete(name)
+        name = name.to_s.strip
+        return [ :skip, preset_usage_text ] if name.empty?
+
+        config = persona_config
+        return [ :skip, "❌ Config tidak tersedia." ] unless config
+
+        removed = config.delete_model_preset(name)
+        unless removed
+          return [ :skip, "❌ Preset `#{name}` tidak ada." ]
+        end
+
+        config.save
+        refresh_configuration!
+
+        ra = request_agent
+        active = ra.active_model_preset
+        if active && active["name"].to_s.casecmp?(name).to_s
+          fallback = config.default_model_preset
+          ra.use_model_preset(fallback["name"], preset: fallback)
+        end
+
+        [ :skip, "🗑️ Preset **#{name}** dihapus.\n\nSesi baru memakai preset **#{config.primary_model_preset_name}**." ]
+      rescue StandardError => e
+        [ :skip, "❌ Gagal menghapus preset: #{e.message}" ]
+      end
+
+      def handle_preset_models(filter)
+        models = persona_models
+        filter = filter.to_s.strip.downcase
+        unless filter.empty?
+          models = models.select do |model|
+            [ model["name"], model["model"], model["label"] ].compact.any? { |value| value.to_s.downcase.include?(filter) }
+          end
+        end
+
+        if models.empty?
+          return [ :skip, "🧠 Tidak ada model yang cocok. Katalog provider mungkin belum tersedia; model dari config tetap bisa dipakai." ]
+        end
+
+        max = 60
+        lines = models.first(max).map do |model|
+          label = model["label"] || model["name"]
+          "• `#{model['name']}` — #{label}"
+        end
+        text = "🧠 **Model tersedia (#{models.size})**\n\n" + lines.join("\n")
+        text += "\n\nBuat preset: `/preset set <nama> <id>`" 
+        text += "\n… dan #{models.size - max} lainnya" if models.size > max
+        [ :skip, text ]
+      end
+
+      def preset_detail_text(name, preset)
+        public_preset = persona_config&.public_model_preset(preset) || preset
+        lines = [ "🧠 **Preset: #{name}**" ]
+        lines << "Model: `#{public_preset['model']}`"
+        lines << "Provider: `#{public_preset['provider']}`"
+        lines << "Max tokens: `#{public_preset['max_tokens']}`" if public_preset["max_tokens"]
+        lines << "Temperature: `#{public_preset['temperature']}`" if public_preset["temperature"]
+        lines << "Reasoning effort: `#{public_preset['reasoning_effort']}`" if public_preset["reasoning_effort"]
+        lines << "Primary/default: ya" if name.to_s.casecmp?(persona_config&.primary_model_preset_name.to_s)
+        lines.join("\n")
+      end
+
+      def preset_usage_text
+        "🧠 **Penggunaan /preset**\n\n" \
+          "/preset — list preset\n" \
+          "/preset show <nama> — detail\n" \
+          "/preset set <nama> <model> [temperature=0.2] [max_tokens=4096] [provider=openai] [api_base=...] [reasoning_effort=high]\n" \
+          "/preset default <nama|default> — preset untuk sesi baru\n" \
+          "/preset delete <nama>\n" \
+          "/preset models [filter] — model yang didukung provider\n\n" \
+          "Ganti preset sesi ini: /model <nama>"
+      end
+
+      def refresh_configuration!
+        @persona_store = nil
+        config = persona_config
+        return unless config
+
+        @pool.refresh_config(config) if @pool.respond_to?(:refresh_config)
       end
 
       def handle_skills_command
@@ -313,17 +589,25 @@ module Rubot
         when "/new"
           request_agent.clear_session
           [ :skip, "✨ Started a new session. Previous conversation has been cleared." ]
+        when "/compact"
+          handle_compact_command
         when "/help"
           bot_name = @config.fetch("bot_name", "Rubot")
-          [ :skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help.\n\nBuilt-in commands:\n/start - Start the bot\n/new - Clear chat and start a new session\n/help - Show this help message\n/info - Show agent info\n/models - List available models\n/model - Show current model\n/use_model <name> - Switch model for this session\n/skills - List available skills\n/memory - Show persistent memory\n/soul - Show bot personality\n/agents - Show agent rules\n/cron - List scheduled cron jobs\n/cron delete <id> - Delete a cron job\n/use <skill> - Force a skill for the next message\n/unuse - Clear the forced skill" ]
+          [ :skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help.\n\nBuilt-in commands:\n/start - Start the bot\n/new - Clear chat and start a new session\n/compact - Summarize older messages to free context\n/help - Show this help message\n/info - Show agent info\n/model - Show current model preset\n/model <preset> - Switch preset for this session\n/models - List model presets\n/preset - Manage model presets\n/preset set <name> <model> - Create/update a preset\n/preset default <name> - Preset for new sessions\n/preset models - List models supported by the provider\n/use_model <preset> - Alias for /model <preset>\n/persona - Setup persona for this forum topic\n/persona show - Show this topic's persona\n/persona reset - Remove this topic's persona\n/cancel - Cancel the persona setup\n/skills - List available skills\n/memory - Show persistent memory\n/soul - Show bot personality\n/agents - Show agent rules\n/cron - List scheduled cron jobs\n/usage - Context usage, cache hit rate, and estimated cost\n/cron delete <id> - Delete a cron job\n/use <skill> - Force a skill for the next message\n/unuse - Clear the forced skill" ]
         when "/info"
           handle_info_command
+        when "/usage", "/context"
+          handle_usage_command
         when "/models"
           handle_models_command
         when "/model"
           handle_model_command
+        when /^\/model(\s+(.*))?$/
+          handle_model_command($2&.strip)
         when /^\/use_model(\s+(.*))?$/
           handle_use_model_command($2&.strip)
+        when /^\/preset(\s+(.*))?$/
+          handle_preset_command($2&.strip)
         when "/skills"
           handle_skills_command
         when "/memory"
@@ -353,11 +637,16 @@ module Rubot
         commands = [
           { "command" => "start", "description" => "Start the bot" },
           { "command" => "new", "description" => "Clear chat and start a new session" },
+          { "command" => "compact", "description" => "Summarize older messages to free context" },
           { "command" => "help", "description" => "Show help message" },
           { "command" => "info", "description" => "Show agent info" },
-          { "command" => "models", "description" => "List available models" },
-          { "command" => "model", "description" => "Show current model" },
-          { "command" => "use_model", "description" => "Switch model for this session" },
+          { "command" => "usage", "description" => "Context usage, cache hit rate, and cost" },
+          { "command" => "models", "description" => "List model presets" },
+          { "command" => "model", "description" => "Show or switch the model preset" },
+          { "command" => "preset", "description" => "Manage model presets" },
+          { "command" => "use_model", "description" => "Alias for /model <preset>" },
+          { "command" => "persona", "description" => "Setup persona for this forum topic" },
+          { "command" => "cancel", "description" => "Cancel the persona setup" },
           { "command" => "skills", "description" => "List available skills" },
           { "command" => "memory", "description" => "Show persistent memory" },
           { "command" => "soul", "description" => "Show bot personality" },
@@ -609,11 +898,44 @@ module Rubot
         # Check allowed users/chats before touching the network or the disk.
         return unless authorized?(chat_id, message)
 
+        # A newly created forum topic gets its own persona wizard. Telegram
+        # sends this service message before any user text, so it has to be
+        # handled before the "nothing to read" guard below.
+        if message["forum_topic_created"]
+          start_persona_wizard(chat_id, thread_id, only_if_new: true)
+          return
+        end
+
+        # Persona commands need the chat/topic context, which is only known
+        # here (before_process receives just the text).
+        if text && !text.strip.empty?
+          command = persona_command(text)
+          case command&.fetch(:name)
+          when "/cancel"
+            handle_cancel_command(chat_id, thread_id)
+            return
+          when "/persona"
+            handle_persona_command(chat_id, thread_id, command[:args])
+            return
+          end
+
+          # While the wizard waits for a system prompt, the next plain text
+          # belongs to the wizard, not to the agent.
+          if intercept_persona_prompt(chat_id, thread_id, text)
+            return
+          end
+        end
+
+        # Fallback for bots that cannot see forum_topic_created (privacy mode
+        # on, or not an admin): the first message in a brand-new topic opens
+        # the wizard. The message itself is still processed below.
+        maybe_start_persona_wizard_for_new_topic(chat_id, thread_id)
+
         user_id = message["from"] ? message["from"]["id"] : chat_id
         username = message.dig("from", "username") || "User##{user_id}"
 
         # Per-topic (or per-DM) session isolation
-        session_id = thread_id ? "tg_#{chat_id}_#{thread_id}" : "tg_#{chat_id}"
+        session_id = topic_session_id(chat_id, thread_id)
 
         attachments, unsupported_media = extract_attachments(message)
         body = text.to_s.strip.empty? ? caption : text
@@ -688,6 +1010,555 @@ module Rubot
           warn "[telegram] ⚠️ Empty response — agent produced no text output"
           send_message(chat_id, "⚠️ I completed processing but have no text result to share.", thread_id)
         end
+      end
+
+      # In legacy (in-process agent) mode, rebuild the per-session agent with
+      # the persona stored for that topic. In actor mode the SessionPool reads
+      # the persona when it spawns the actor.
+      def session_for(session_id)
+        return super if actor_mode? || @agent.nil?
+
+        persona = persona_store.get_by_session(session_id)
+        @agent.for_session(session_id, persona: persona&.to_h)
+      end
+
+      # --------------- Per-topic Persona ---------------
+
+      def persona_store
+        @persona_store ||= begin
+          config = persona_config
+          PersonaStore.new(
+            workspace: persona_workspace,
+            available_models: persona_models.map { |model| model["name"] },
+            available_presets: config ? config.model_preset_names : [ "default" ]
+          )
+        end
+      end
+
+      def persona_workspace
+        return @app_config.workspace if @app_config
+        return @pool.workspace if @pool.respond_to?(:workspace) && @pool.workspace
+        return @agent.config.workspace if @agent.respond_to?(:config) && @agent.config
+
+        File.join(Dir.home, ".rubot", "workspace")
+      end
+
+      def persona_config
+        @app_config || (@agent.respond_to?(:config) ? @agent.config : nil)
+      end
+
+      def model_catalog
+        return @model_catalog if @model_catalog
+
+        config = persona_config
+        return nil unless config
+
+        @model_catalog = ModelCatalog.new(config: config)
+      end
+
+      # Config model entries (the fallback when the provider cannot list models).
+      def config_model_entries
+        config = persona_config
+        models = if config
+          config.models
+        elsif @pool.respond_to?(:models)
+          @pool.models
+        else
+          []
+        end
+        models.is_a?(Array) ? models.select { |model| model.is_a?(Hash) && model["name"] } : []
+      end
+
+      # The provider's /models catalog plus any config entries that are not
+      # represented there. Each choice:
+      #   "name"  => value stored on the persona (config name or provider id)
+      #   "model" => provider model id (or "openai/..." for config entries)
+      #   "label" => human-friendly name for the button
+      def persona_models
+        config_entries = config_model_entries
+        catalog = model_catalog&.entries || []
+
+        if catalog.empty?
+          return config_entries.map do |entry|
+            { "name" => entry["name"], "model" => entry["model"], "label" => entry["name"] }
+          end
+        end
+
+        catalog_ids = catalog.to_h { |model| [ model["id"], true ] }
+        choices = catalog.map do |model|
+          { "name" => model["id"], "model" => model["id"], "label" => model["name"] }
+        end
+
+        config_entries.each do |entry|
+          next if catalog_ids[model_id_from_entry(entry)]
+
+          choices << { "name" => entry["name"], "model" => entry["model"], "label" => entry["name"] }
+        end
+
+        choices
+      end
+
+      def model_id_from_entry(entry)
+        model = entry["model"].to_s
+        model.include?("/") ? model.split("/").last : model
+      end
+
+      # Model presets, with the configured primary/default marked.
+      def preset_choices
+        config = persona_config
+        return [] unless config
+
+        primary = config.primary_model_preset_name
+        names = config.model_preset_names
+        # Do not list a separate implicit `default` when a named preset is
+        # already the primary; they would resolve to the same model.
+        names = names.reject { |name| name.casecmp?("default") } unless primary.casecmp?("default")
+
+        names.filter_map do |name|
+          preset = config.model_preset(name)
+          next unless preset
+
+          { "name" => name, "preset" => preset, "primary" => name.casecmp?(primary) }
+        end
+      end
+
+      def preset_choice(name)
+        wanted = name.to_s
+        preset_choices.find { |choice| choice["name"].casecmp?(wanted) }
+      end
+
+      def persona_preset_label(name)
+        return "(default)" if name.nil? || name.to_s.empty?
+
+        config = persona_config
+        preset = config&.model_preset(name)
+        return name.to_s unless preset
+
+        label = name.to_s
+        label += " (primary)" if name.casecmp?(config.primary_model_preset_name)
+        "#{label} (`#{preset['model']}`)"
+      end
+
+      def topic_session_id(chat_id, thread_id)
+        thread_id ? "tg_#{chat_id}_#{thread_id}" : "tg_#{chat_id}"
+      end
+
+      def persona_topic_key(chat_id, thread_id)
+        "#{chat_id}:#{thread_id}"
+      end
+
+      # Parse /persona and /cancel, tolerating the @BotName suffix groups add.
+      def persona_command(text)
+        normalized = text.strip.sub(/\A(\/[A-Za-z0-9_]+)@\S+/, '\\1')
+
+        case normalized
+        when %r{\A/persona(?:\s+(.*))?\z}i
+          { name: "/persona", args: Regexp.last_match(1)&.strip }
+        when %r{\A/cancel(?:\s+.*)?\z}i
+          { name: "/cancel", args: nil }
+        end
+      end
+
+      def handle_persona_command(chat_id, thread_id, args)
+        case args.to_s.strip.downcase
+        when ""
+          start_persona_wizard(chat_id, thread_id)
+        when "show"
+          show_persona(chat_id, thread_id)
+        when "reset"
+          reset_persona(chat_id, thread_id)
+        else
+          send_message(
+            chat_id,
+            "🧬 Penggunaan:\n/persona — buka setup persona\n/persona show — lihat persona topic ini\n/persona reset — hapus persona topic ini",
+            thread_id
+          )
+        end
+      end
+
+      def show_persona(chat_id, thread_id)
+        if thread_id.nil?
+          send_message(chat_id, "🧬 Topic General memakai persona default (config global).", thread_id)
+          return
+        end
+
+        persona = persona_store.get(chat_id, thread_id)
+        unless persona
+          send_message(chat_id, "🧬 Belum ada persona untuk topic ini. Ketik /persona untuk membuatnya.", thread_id)
+          return
+        end
+
+        send_message(chat_id, persona_summary(persona), thread_id)
+      end
+
+      def reset_persona(chat_id, thread_id)
+        if thread_id.nil?
+          send_message(chat_id, "🧬 Topic General memakai persona default (config global).", thread_id)
+          return
+        end
+
+        removed = persona_store.delete(persona_topic_key(chat_id, thread_id))
+        session_for(topic_session_id(chat_id, thread_id)).set_persona(nil)
+
+        text = removed ? "✅ Persona topic ini dihapus. Model kembali ke default." : "ℹ️ Topic ini memang belum punya persona."
+        send_message(chat_id, text, thread_id)
+      rescue StandardError => e
+        warn "[persona] reset failed: #{e.class}: #{e.message}"
+        send_message(chat_id, "❌ Gagal menghapus persona: #{e.message}", thread_id)
+      end
+
+      def handle_cancel_command(chat_id, thread_id)
+        if cancel_persona_wizard(chat_id, thread_id)
+          send_message(chat_id, "❌ Setup persona dibatalkan.", thread_id)
+        else
+          send_message(chat_id, "ℹ️ Tidak ada setup persona yang sedang berjalan.", thread_id)
+        end
+      end
+
+      # A topic that has no persona and no session file has never been used, so
+      # this is the first message in it. Used when forum_topic_created is not
+      # delivered to the bot.
+      def maybe_start_persona_wizard_for_new_topic(chat_id, thread_id)
+        return unless thread_id
+        return if persona_store.get(chat_id, thread_id)
+        return if wizard_for_topic(chat_id, thread_id)
+        return if topic_session_exists?(chat_id, thread_id)
+
+        start_persona_wizard(chat_id, thread_id, only_if_new: true)
+      end
+
+      def topic_session_exists?(chat_id, thread_id)
+        path = File.join(persona_workspace, "sessions", "#{topic_session_id(chat_id, thread_id)}.json")
+        File.exist?(path)
+      end
+
+      # Open the wizard. `only_if_new` keeps repeated forum_topic_created
+      # service messages (or a topic that already has a persona) from
+      # reopening it.
+      def start_persona_wizard(chat_id, thread_id, only_if_new: false)
+        if thread_id.nil?
+          unless only_if_new
+            send_message(chat_id, "🧬 Persona hanya tersedia di forum topic. Topic General memakai persona default.", thread_id)
+          end
+          return nil
+        end
+
+        return nil if only_if_new && persona_store.get(chat_id, thread_id)
+
+        prune_persona_wizards!
+
+        wizard = {
+          id: SecureRandom.hex(4),
+          chat_id: chat_id,
+          thread_id: thread_id,
+          session_id: topic_session_id(chat_id, thread_id),
+          step: :preset,
+          preset: nil,
+          prompt: nil,
+          presets: nil,
+          message_id: nil,
+          updated_at: Time.now
+        }
+
+        key = persona_topic_key(chat_id, thread_id)
+        previous = @persona_mutex.synchronize do
+          old = @persona_wizards.delete(key)
+          @persona_wizards[key] = wizard
+          old
+        end
+        delete_wizard_message(previous)
+
+        send_persona_model_step(wizard)
+        wizard
+      end
+
+      # Consume the reply to step 2 (the system prompt). Returns true when the
+      # text was handled by the wizard and must not reach the agent.
+      def intercept_persona_prompt(chat_id, thread_id, text)
+        wizard = wizard_for_topic(chat_id, thread_id)
+        return false unless wizard
+        return false unless wizard[:step] == :prompt
+        return false if text.strip.start_with?("/")
+
+        @persona_mutex.synchronize do
+          wizard[:prompt] = text.strip
+          wizard[:step] = :preview
+          wizard[:updated_at] = Time.now
+        end
+
+        delete_wizard_message(wizard)
+        send_persona_preview_step(wizard)
+        true
+      end
+
+      def send_persona_model_step(wizard)
+        presets = preset_choices
+        @persona_mutex.synchronize { wizard[:presets] = presets }
+
+        text = "🧬 Setup persona untuk topic ini\n\nLangkah 1/3 — Pilih model preset:"
+        if presets.any?
+          text += "\n\n" + presets.map do |choice|
+            label = choice["name"]
+            label += " (primary)" if choice["primary"] && !choice["name"].casecmp?("primary")
+            label += " ★" if choice["primary"] && choice["name"].casecmp?("primary")
+            "• #{label} — #{choice['preset']['model']}"
+          end.join("\n")
+        else
+          text += "\n\nBelum ada preset. Pakai default dulu, atau buat preset dengan /preset set <nama> <model>."
+        end
+
+        keyboard = presets.each_with_index.each_slice(2).map do |slice|
+          slice.map do |choice, index|
+            label = choice["name"]
+            label += " ★" if choice["primary"]
+            {
+              "text" => truncate(label.to_s, 28),
+              "callback_data" => "persona:#{wizard[:id]}:preset:#{index}"
+            }
+          end
+        end
+        keyboard << [ { "text" => "Pakai default", "callback_data" => "persona:#{wizard[:id]}:preset:default" } ]
+        keyboard << [ { "text" => "❌ Batal", "callback_data" => "persona:#{wizard[:id]}:cancel" } ]
+
+        store_wizard_message(wizard, send_keyboard_message(wizard[:chat_id], text, wizard[:thread_id], keyboard))
+      end
+
+      def send_persona_prompt_step(wizard)
+        text = "🧬 Setup persona untuk topic ini\n\n" \
+               "Langkah 2/3 — Kirim system prompt (balas dengan teks):\n\n" \
+               "Ketik system prompt untuk persona ini, atau tekan tombol di bawah untuk memakai prompt default."
+        keyboard = [
+          [ { "text" => "Lewati / pakai default", "callback_data" => "persona:#{wizard[:id]}:prompt_default" } ],
+          [ { "text" => "❌ Batal", "callback_data" => "persona:#{wizard[:id]}:cancel" } ]
+        ]
+
+        store_wizard_message(wizard, send_keyboard_message(wizard[:chat_id], text, wizard[:thread_id], keyboard))
+      end
+
+      def send_persona_preview_step(wizard)
+        model = persona_preset_label(wizard[:preset])
+        prompt = wizard[:prompt].to_s.strip
+        prompt = "(default)" if prompt.empty?
+        prompt = "#{prompt[0, 700]}…" if prompt.length > 700
+
+        text = "🧬 Setup persona untuk topic ini\n\nLangkah 3/3 — Preview:\n\n" \
+               "Model : #{model}\n" \
+               "Prompt: #{prompt}"
+        keyboard = [
+          [
+            { "text" => "✅ Simpan", "callback_data" => "persona:#{wizard[:id]}:save" },
+            { "text" => "✏️ Ulangi", "callback_data" => "persona:#{wizard[:id]}:back" }
+          ],
+          [ { "text" => "❌ Batal", "callback_data" => "persona:#{wizard[:id]}:cancel" } ]
+        ]
+
+        store_wizard_message(wizard, send_keyboard_message(wizard[:chat_id], text, wizard[:thread_id], keyboard))
+      end
+
+      def store_wizard_message(wizard, message_id)
+        @persona_mutex.synchronize do
+          wizard[:message_id] = message_id
+          wizard[:updated_at] = Time.now
+        end
+      end
+
+      def delete_wizard_message(wizard)
+        return unless wizard
+
+        message_id = @persona_mutex.synchronize do
+          id = wizard[:message_id]
+          wizard[:message_id] = nil
+          id
+        end
+        delete_message(wizard[:chat_id], message_id, wizard[:thread_id]) if message_id
+      end
+
+      def wizard_for_topic(chat_id, thread_id)
+        return nil if thread_id.nil?
+
+        key = persona_topic_key(chat_id, thread_id)
+        prune_persona_wizards!
+
+        @persona_mutex.synchronize { @persona_wizards[key] }
+      end
+
+      def wizard_for_id(id)
+        prune_persona_wizards!
+
+        @persona_mutex.synchronize do
+          @persona_wizards.values.find { |wizard| wizard[:id] == id }
+        end
+      end
+
+      def prune_persona_wizards!
+        now = Time.now
+
+        @persona_mutex.synchronize do
+          @persona_wizards.delete_if do |_key, wizard|
+            now - wizard[:updated_at] > PERSONA_WIZARD_TTL
+          end
+        end
+      end
+
+      def remove_persona_wizard(wizard)
+        key = persona_topic_key(wizard[:chat_id], wizard[:thread_id])
+
+        @persona_mutex.synchronize do
+          @persona_wizards.delete(key) if @persona_wizards[key].equal?(wizard)
+        end
+      end
+
+      def cancel_persona_wizard(chat_id, thread_id)
+        return false if thread_id.nil?
+
+        key = persona_topic_key(chat_id, thread_id)
+        wizard = @persona_mutex.synchronize { @persona_wizards.delete(key) }
+        return false unless wizard
+
+        delete_wizard_message(wizard)
+        true
+      end
+
+      def handle_persona_callback(callback_query)
+        data = callback_query["data"].to_s
+        parts = data.split(":")
+        unless parts.size >= 3
+          answer_callback_query(callback_query["id"])
+          return
+        end
+
+        wizard = wizard_for_id(parts[1])
+        action = parts[2]
+        argument = parts[3]
+
+        unless wizard
+          answer_callback_query(callback_query["id"], "Wizard sudah kedaluwarsa. Ketik /persona untuk memulai lagi.")
+          return
+        end
+
+        @persona_mutex.synchronize { wizard[:updated_at] = Time.now }
+
+        case action
+        when "preset", "model"
+          apply_persona_preset_choice(callback_query, wizard, argument)
+        when "prompt_default"
+          @persona_mutex.synchronize do
+            wizard[:prompt] = nil
+            wizard[:step] = :preview
+          end
+          delete_wizard_message(wizard)
+          send_persona_preview_step(wizard)
+          answer_callback_query(callback_query["id"])
+        when "back"
+          @persona_mutex.synchronize do
+            wizard[:step] = :preset
+            wizard[:prompt] = nil
+          end
+          delete_wizard_message(wizard)
+          send_persona_model_step(wizard)
+          answer_callback_query(callback_query["id"])
+        when "save"
+          save_persona_wizard(wizard)
+          answer_callback_query(callback_query["id"], "Persona disimpan.")
+        when "cancel"
+          cancel_persona_wizard(wizard[:chat_id], wizard[:thread_id])
+          answer_callback_query(callback_query["id"], "Setup dibatalkan.")
+        else
+          answer_callback_query(callback_query["id"])
+        end
+      end
+
+      def apply_persona_preset_choice(callback_query, wizard, argument)
+        preset_name = "default"
+        unless argument == "default"
+          index = argument.to_i
+          presets = wizard[:presets] || preset_choices
+          choice = presets[index]
+          unless choice
+            answer_callback_query(callback_query["id"], "Preset tidak dikenal. Ketik /persona untuk mengulang.")
+            return
+          end
+          preset_name = choice["name"].to_s
+        end
+
+        @persona_mutex.synchronize do
+          wizard[:preset] = preset_name
+          wizard[:step] = :prompt
+        end
+        delete_wizard_message(wizard)
+        send_persona_prompt_step(wizard)
+        answer_callback_query(callback_query["id"], "Model preset dipilih.")
+      end
+
+      def save_persona_wizard(wizard)
+        persona = Persona.new(
+          name: "topic-#{wizard[:thread_id]}",
+          preset: wizard[:preset],
+          system_prompt: wizard[:prompt]
+        )
+        key = persona_topic_key(wizard[:chat_id], wizard[:thread_id])
+        stored = persona_store.set(key, persona)
+
+        begin
+          session_for(wizard[:session_id]).set_persona(stored.to_h)
+        rescue StandardError => e
+          warn "[persona] failed to apply persona to #{wizard[:session_id]}: #{e.class}: #{e.message}"
+        end
+
+        delete_wizard_message(wizard)
+        remove_persona_wizard(wizard)
+        send_message(wizard[:chat_id], persona_saved_text(stored), wizard[:thread_id])
+      end
+
+      def persona_saved_text(persona)
+        model = persona_preset_label(persona.preset || persona.model)
+        prompt = persona.system_prompt.to_s.strip
+        prompt = "(default)" if prompt.empty?
+        prompt = "#{prompt[0, 500]}…" if prompt.length > 500
+
+        "✅ Persona disimpan untuk topic ini.\n\n" \
+          "Model  : #{model}\n" \
+          "Prompt : #{prompt}\n\n" \
+          "Persona hanya berlaku di topic ini. Ketik /persona show untuk melihatnya."
+      end
+
+      def persona_summary(persona)
+        model = persona_preset_label(persona.preset || persona.model)
+        prompt = persona.system_prompt.to_s.strip
+        prompt = "(default)" if prompt.empty?
+        prompt = "#{prompt[0, 700]}…" if prompt.length > 700
+
+        "🧬 Persona topic ini\n\n" \
+          "Nama   : #{persona.name || '-'}\n" \
+          "Model  : #{model}\n" \
+          "Prompt : #{prompt}\n" \
+          "Dibuat : #{persona.created_at || '-'}"
+      end
+
+      # Send a plain-text message with an inline keyboard and return its id.
+      def send_keyboard_message(chat_id, text, thread_id, keyboard)
+        body = {
+          "chat_id" => chat_id,
+          "text" => text,
+          "reply_markup" => { "inline_keyboard" => keyboard }
+        }
+        body["message_thread_id"] = thread_id if thread_id
+
+        url = URI("#{API_BASE}#{@token}/sendMessage")
+        req = Net::HTTP::Post.new(url)
+        req["Content-Type"] = "application/json"
+        req.body = body.to_json
+
+        result = http_post(url, req)
+        unless result["ok"]
+          warn "[persona] Failed to send wizard: #{result['description']}"
+          return nil
+        end
+
+        result.dig("result", "message_id")
+      rescue StandardError => e
+        warn "[persona] Failed to send wizard: #{e.class}: #{e.message}"
+        nil
       end
 
       # --------------- Authorization ---------------
@@ -1081,6 +1952,11 @@ module Rubot
       def handle_callback_query(callback_query)
         data = callback_query["data"]
         callback_id = callback_query["id"]
+
+        if data&.start_with?("persona:")
+          handle_persona_callback(callback_query)
+          return
+        end
 
         return unless data&.start_with?("confirm:")
 

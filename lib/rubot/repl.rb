@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "usage"
+
 module Rubot
   class REPL
     HISTORY_FILE = File.expand_path("~/.rubot/history")
@@ -7,10 +9,13 @@ module Rubot
     COMMANDS = {
       "/help"     => "Show this help message",
       "/new"      => "Clear conversation and start a new session",
+      "/compact"  => "Summarize older messages to free context",
       "/clear"    => "Clear conversation history",
       "/session"  => "Show current session ID",
       "/session NAME" => "Switch to a new session",
       "/info"     => "Show agent info (provider, model, tools)",
+      "/usage"    => "Show context usage, cache hit rate, and estimated cost",
+      "/context"  => "Alias for /usage",
       "/models"   => "List available models from config",
       "/model"    => "Show current active model",
       "/use-model NAME" => "Switch to a model for this session",
@@ -156,6 +161,16 @@ module Rubot
       when "/new"
         agent.clear_session
         puts "\n✨ Started a new session. Previous conversation cleared."
+      when "/compact"
+        result = agent.compact_session
+        if result
+          puts "\n🗜️  Compaction complete."
+          puts "   Summarized: #{result[:summarized_messages]} messages"
+          puts "   Kept:       #{result[:kept_messages]} messages"
+          puts "   Context:    ~#{result[:context_before]} → ~#{result[:context_after]} tokens (estimated)"
+        else
+          puts "\nℹ️  Nothing to compact yet (the conversation is short or summarization failed)."
+        end
       when "/session"
         if parts[1]
           switch_session(parts[1])
@@ -173,6 +188,10 @@ module Rubot
         info = agent.startup_info
         puts "\nAgent Info:"
         info.each { |k, v| puts "  #{k}: #{v}" }
+        puts
+      when "/usage", "/context"
+        puts
+        puts Rubot::UsageReport.render(agent.usage_report)
         puts
       when "/models"
         models = agent.config.models

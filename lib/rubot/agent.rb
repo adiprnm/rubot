@@ -2,7 +2,12 @@
 
 require "json"
 require_relative "config"
+require_relative "model_info"
+require_relative "model_catalog"
+require_relative "persona"
+require_relative "pricing_catalog"
 require_relative "session"
+require_relative "usage"
 require_relative "provider"
 require_relative "tools/registry"
 require_relative "safety_guard"
@@ -15,13 +20,14 @@ require_relative "tools/feedback_learner"
 
 module Rubot
   class Agent
-    attr_reader :config, :provider, :session, :tools, :soul, :memory, :agents_file, :skill_registry, :safety_guard, :session_model
+    attr_reader :config, :provider, :session, :tools, :soul, :memory, :agents_file, :skill_registry, :safety_guard, :session_model, :persona, :active_preset_name
 
-    def initialize(config:, provider: nil, session_id: "default", tools: nil)
+    def initialize(config:, provider: nil, session_id: "default", tools: nil, persona: nil)
       @config = config
+      @persona = Persona.from(persona)
       @session = Session.new(session_id, workspace: config.workspace)
-      @session_model = @session.model_override
-      @provider = provider || build_provider(@session_model)
+      apply_initial_preset!
+      @provider = provider || build_provider(preset: @active_preset)
 
       # Build safety guard from config
       @safety_guard = SafetyGuard.new(
@@ -77,13 +83,15 @@ module Rubot
     # This enables concurrent request processing without cross-session
     # interference — each request gets an isolated session on its
     # own agent instance.
-    def for_session(session_id)
+    def for_session(session_id, persona: :inherit)
+      selected_persona = persona == :inherit ? @persona : persona
       # Let Agent.new handle session loading and provider building correctly.
       # Do NOT override @provider — it was already set up for this session.
       copy = Agent.new(
         config: @config,
         session_id: session_id,
-        tools: @tools
+        tools: @tools,
+        persona: selected_persona
       )
       # Share stateless/shared resources only (skip @provider, which
       # Agent#new already built correctly for the target session)
@@ -139,8 +147,9 @@ module Rubot
           break
         end
 
-        # Adaptive: summarize old messages if approaching limit
-        run_summarization
+        # Adaptive: compact the transcript when it crosses the configured
+        # share of the model's context window.
+        run_auto_compaction
 
         messages = build_messages
         log_debug("Sending #{messages.size} messages to provider")
@@ -153,6 +162,8 @@ module Rubot
         else
           @provider.chat(messages, tools: tool_definitions)
         end
+
+        record_usage(result)
 
         # Parse result — both streaming and non-streaming now return Hash
         if result.is_a?(Hash)
@@ -289,22 +300,54 @@ module Rubot
 
     def clear_session
       @session.clear!
-      @session_model = nil
-      @provider = build_provider
+      # /new clears history and manual overrides. The topic's persona (and the
+      # configured default preset) still apply to the new session.
+      apply_initial_preset!
     end
 
-    # Switch to a different model for the current session.
-    # The selected model persists within the active session but
-    # is cleared when the user starts a new session.
+    # Switch the current session to a named model preset. The choice is saved
+    # on the session and survives actor/process restarts. A full preset hash
+    # may be supplied when the caller's config snapshot is newer than ours.
+    def use_model_preset(name, preset: nil)
+      source = preset || @config.model_preset(name)
+      return nil unless source.is_a?(Hash)
+
+      apply_preset_source(source, name: name, session_name: name)
+    end
+
+    def active_model_preset
+      return nil unless @active_preset
+
+      @config.public_model_preset(@active_preset)
+    end
+
+    def model_presets
+      @config.model_preset_names.filter_map do |name|
+        preset = @config.model_preset(name)
+        next unless preset
+
+        @config.public_model_preset(preset)
+      end
+    end
+
+    # Switch to a different model for the current session (legacy entry-based
+    # API). Prefer #use_model_preset.
     def use_model(model_name)
       model_name = model_name.to_s.strip
-      entry = @config.model_entry_by_name(model_name)
-      return nil if entry.nil?
+      return nil if model_name.empty?
 
-      @session_model = model_name
+      entry = @config.model_entry_by_name(model_name)
+      dynamic = entry.nil? && provider_model_id?(model_name)
+      return nil if entry.nil? && !dynamic
+
+      settings = @config.provider_settings(model_name)
+      @active_preset = legacy_model_preset(model_name)
+      @session_model = settings.model
       @session.model_override = model_name
+      @session.model_preset = nil
+      @active_preset_name = "default"
       @session.save!
-      rebuild_provider
+      @provider = Provider.build(settings)
       @session_model
     end
 
@@ -313,13 +356,72 @@ module Rubot
       @session_model || @config.name
     end
 
+    # Public, plain-data representation of the persona (safe to cross a
+    # Ractor boundary).
+    def persona_info
+      @persona&.to_h
+    end
+
+    # Apply a persona to this agent. Accepts a Persona, a Hash, or nil to
+    # remove the persona. Optionally accepts preset:/model:/prompt: keywords.
+    # Returns the new persona as a Hash (or nil).
+    def apply_persona(persona = nil, preset: nil, model: nil, prompt: nil)
+      if persona.nil? && (!preset.nil? || !model.nil? || !prompt.nil?)
+        persona = Persona.new(preset: preset, model: model, system_prompt: prompt)
+      end
+
+      persona = Persona.from(persona)
+
+      if persona.nil?
+        @persona = nil
+        @session.model_override = nil
+        @session.model_preset = nil
+        apply_initial_preset!
+        @session.save!
+        return nil
+      end
+
+      @persona = persona
+      @session.model_override = nil
+
+      if persona.preset
+        source = @config.model_preset(persona.preset)
+        if source
+          apply_preset_source(source, name: persona.preset, session_name: persona.preset)
+        else
+          @session.model_preset = nil
+          apply_initial_preset!
+        end
+      elsif persona.model
+        # Backwards compatibility for personas saved with a raw model.
+        @session.model_preset = nil
+        model_name = persona_model_name
+        if model_name
+          @active_preset = legacy_model_preset(model_name)
+          @active_preset_name = "default"
+          @session_model = @active_preset["model"]
+          @provider = build_provider(model_name)
+        else
+          apply_initial_preset!
+        end
+      else
+        @session.model_preset = nil
+        apply_initial_preset!
+      end
+
+      @session.save!
+      persona_info
+    end
+
+    alias set_persona apply_persona
+
     # Switch to a different session (e.g. per-topic in Telegram).
-    # Applies the new session's model override if one was previously saved.
+    # Applies the saved preset for that session, falling back to the topic's
+    # persona or the configured default preset.
     def switch_session(session_id)
       return @session if @session.id == session_id
       @session = Session.new(session_id, workspace: @config.workspace)
-      @session_model = @session.model_override
-      rebuild_provider if @session_model
+      apply_initial_preset!
       @session
     end
 
@@ -332,13 +434,78 @@ module Rubot
         messages: @session.message_count
       }
       info[:model_override] = true if model != @config.name
+      info[:model_preset] = @active_preset_name if @active_preset_name && @active_preset_name != "default"
       info[:soul] = "yes" if @soul.enabled?
       info[:memory] = "yes" if @memory.enabled?
       info[:agents] = "yes" if @agents_file.enabled?
+      info[:persona] = (@persona.name || "yes") if @persona
       info[:safety] = @safety_guard.restrict_to_workspace ? "restricted" : "permissive"
       info[:skills] = @skill_registry.count if @skill_registry.any?
       info[:adaptive] = "memory+summary+feedback"
       info
+    end
+
+    # Force a compaction of the current session transcript, regardless of the
+    # automatic threshold. Used by /compact. Returns plain data so it can
+    # cross a Ractor boundary, or nil when there is nothing to compact.
+    def compact_session
+      @session.compact!(
+        provider: @provider,
+        keep_recent: @config.compact_keep_recent_messages,
+        system_prompt: build_system_prompt
+      )
+    end
+
+    # Approximate size of the next request: transcript + system prompt.
+    def estimated_context_tokens
+      @session.estimated_tokens(extra_chars: build_system_prompt.bytesize)
+    end
+
+    # Context window of the active model, or nil when it cannot be resolved.
+    def context_window_tokens
+      preset = @active_preset || {}
+      entry = @config.active_model_entry || {}
+      model_id = preset["model"] || @session_model || @config.model
+      provider_name = preset["provider"] || @provider.name
+      resolve_context_window(model_id, provider_name, preset, entry)
+    end
+
+    # Token accounting and cost estimate for the current session.
+    # Returns plain data (symbol keys, numbers, strings) so it can cross a
+    # Ractor boundary from a SessionActor.
+    def usage_report
+      preset = @active_preset || {}
+      entry = @config.active_model_entry || {}
+      model_id = preset["model"] || @session_model || @config.model
+      provider_name = preset["provider"] || @provider.name
+
+      window = resolve_context_window(model_id, provider_name, preset, entry)
+      rates, price_source = resolve_rates(model_id, provider_name, preset, entry)
+
+      usage = @session.usage
+      last = @session.last_usage
+      # After a completed turn the transcript has grown by the assistant reply,
+      # so the next request's prompt is roughly prompt + completion tokens.
+      context_used = last.prompt_tokens + last.completion_tokens
+
+      {
+        model: active_model_name,
+        model_id: model_id,
+        provider: provider_name,
+        context_used: context_used,
+        context_window: window,
+        context_percent: window.to_i.positive? ? context_used.to_f / window * 100 : nil,
+        messages: @session.message_count,
+        requests: usage.requests,
+        prompt_tokens: usage.prompt_tokens,
+        completion_tokens: usage.completion_tokens,
+        cached_tokens: usage.cached_tokens,
+        cache_creation_tokens: usage.cache_creation_tokens,
+        cache_hit_rate: usage.cache_hit_rate,
+        total_tokens: usage.total_tokens,
+        cost: Usage.cost(usage, rates),
+        price_source: price_source
+      }
     end
 
     # Tell the model to narrate its progress between tool calls. Channels
@@ -373,6 +540,12 @@ module Rubot
         parts << "# Soul\n\n#{@soul}"
       end
 
+      # 2b. Persona (per Telegram forum topic)
+      persona_prompt = @persona&.system_prompt.to_s.strip
+      unless persona_prompt.empty?
+        parts << "# Persona\n\n#{persona_prompt}"
+      end
+
       # 3. MEMORY.md (persistent context)
       if @memory.enabled?
         parts << "# Memory\n\n#{@memory}"
@@ -403,14 +576,110 @@ module Rubot
       model_provider = model_entry["model"] || @config.model
       parts << "# Current Model\n\nYou are currently running as model: **#{model_name}** (#{model_provider}).\nWhen asked about which model you are, respond with: #{model_name}."
 
-      # 5. Default/config system prompt
-      config_prompt = @config.system_prompt
+      # 5. Default/config system prompt. A persona prompt replaces it.
+      config_prompt = persona_prompt.empty? ? @config.system_prompt : ""
       parts << config_prompt unless config_prompt.empty?
 
       parts.join("\n\n---\n\n")
     end
 
     private
+
+    # Resolution order for the preset a session starts with:
+    #   1. preset saved on the session (/model <preset>)
+    #   2. topic persona preset
+    #   3. legacy persona model
+    #   4. configured default/primary preset (or the implicit `default`)
+    def resolve_initial_preset
+      if @session.model_preset
+        preset = @config.model_preset(@session.model_preset)
+        return preset if preset
+      end
+
+      if @session.model_override
+        name = @session.model_override.to_s
+        if @config.model_entry_by_name(name) || provider_model_id?(name)
+          return legacy_model_preset(name)
+        end
+      end
+
+      if @persona&.preset
+        preset = @config.model_preset(@persona.preset)
+        return preset if preset
+      end
+
+      if @persona&.model
+        model_name = persona_model_name
+        if model_name
+          settings = @config.provider_settings(model_name)
+          return {
+            "name" => "default",
+            "model" => settings.model,
+            "provider" => settings.provider,
+            "api_key" => settings.api_key,
+            "api_base" => settings.api_base,
+            "max_tokens" => settings.max_tokens,
+            "temperature" => settings.temperature,
+            "extra_headers" => settings.extra_headers,
+            "implicit" => true
+          }
+        end
+      end
+
+      @config.default_model_preset
+    end
+
+    def legacy_model_preset(model_name)
+      settings = @config.provider_settings(model_name)
+      entry = @config.model_entry_by_name(model_name) || @config.active_model_entry || {}
+      {
+        "name" => "default",
+        "model" => settings.model,
+        "provider" => settings.provider,
+        "api_key" => settings.api_key,
+        "api_base" => settings.api_base,
+        "max_tokens" => settings.max_tokens,
+        "temperature" => settings.temperature,
+        "context_window_tokens" => entry["context_window_tokens"] || entry["contextWindowTokens"],
+        "pricing" => entry["pricing"],
+        "extra_headers" => settings.extra_headers,
+        "implicit" => true
+      }
+    end
+
+    def apply_initial_preset!
+      @active_preset = resolve_initial_preset || @config.default_model_preset
+      @active_preset_name = @active_preset["name"]
+      @session_model = @active_preset["model"]
+      @provider = build_provider(preset: @active_preset)
+    end
+
+    def apply_preset_source(source, name: nil, session_name: nil)
+      settings = @config.provider_settings_for_preset(source)
+      preset_name = (source["name"] || source[:name] || name || "default").to_s
+
+      @active_preset = {
+        "name" => preset_name,
+        "model" => settings.model,
+        "provider" => settings.provider,
+        "api_key" => settings.api_key,
+        "api_base" => settings.api_base,
+        "max_tokens" => settings.max_tokens,
+        "temperature" => settings.temperature,
+        "extra_headers" => settings.extra_headers,
+        "reasoning_effort" => source["reasoning_effort"] || source[:reasoning_effort],
+        "context_window_tokens" => source["context_window_tokens"] || source[:context_window_tokens],
+        "pricing" => source["pricing"] || source[:pricing],
+        "implicit" => source["implicit"] || source[:implicit] || false
+      }
+      @active_preset_name = preset_name
+      @session_model = settings.model
+      @session.model_preset = session_name || preset_name
+      @session.model_override = nil
+      @session.save!
+      @provider = Provider.build(settings)
+      active_model_preset
+    end
 
     def apply_agents_overrides
       ag = @agents_file
@@ -516,30 +785,40 @@ module Rubot
 
     # Build a provider from an immutable settings snapshot. No config
     # mutation is performed, so this is safe to call from any Ractor.
-    def build_provider(model_name = nil)
-      settings = @config.provider_settings(model_name)
-      provider_name = settings.provider.downcase
-
-      case provider_name
-      when "openai", "openai_compatible", "azure", "deepseek", "groq", "gemini", "mistral", "perplexity"
-        Providers::OpenAI.new(settings)
-      when "anthropic", "claude"
-        Providers::Anthropic.new(settings)
-      when "ollama"
-        Providers::Ollama.new(settings)
+    def build_provider(model_name = nil, preset: nil)
+      settings = if preset
+        @config.provider_settings_for_preset(preset)
       else
-        # Default to OpenAI-compatible
-        warn "Unknown provider '#{provider_name}', falling back to OpenAI-compatible"
-        Providers::OpenAI.new(settings)
+        @config.provider_settings(model_name)
       end
+      Provider.build(settings)
     end
 
     # Rebuild the provider using the session-level model override.
     def rebuild_provider
       return if @session_model.nil?
-      return if @config.model_entry_by_name(@session_model).nil?
+      return if @config.model_entry_by_name(@session_model).nil? && !provider_model_id?(@session_model)
 
       @provider = build_provider(@session_model)
+    end
+
+    # A model from the provider's /models catalog rather than config.yml.
+    def provider_model_id?(name)
+      ModelCatalog.cached_model_ids(@config.workspace).include?(name.to_s)
+    end
+
+    # Persona model name. Config entries and provider catalog ids are valid;
+    # anything else falls back to the default model.
+    def persona_model_name
+      name = @persona&.model
+      return nil if name.nil? || name.empty?
+
+      if @config.model_entry_by_name(name).nil? && !provider_model_id?(name)
+        warn "[persona] model '#{name}' is not in config.yml or the provider catalog — using the default model"
+        return nil
+      end
+
+      name
     end
 
     def tool_definitions
@@ -577,6 +856,48 @@ module Rubot
       [ name, arguments ]
     rescue JSON::ParserError
       [ name, {} ]
+    end
+
+    # Persist the provider's usage for this request. Streaming providers may
+    # return the usage inside the result hash; otherwise read last_usage.
+    def record_usage(result)
+      raw = result.is_a?(Hash) ? result["usage"] : nil
+      raw ||= @provider.last_usage if @provider.respond_to?(:last_usage)
+      return if raw.nil?
+
+      @session.record_usage(raw, provider: @provider.name)
+    rescue StandardError => e
+      warn "[usage] Failed to record usage: #{e.class}: #{e.message}" if @config.debug?
+    end
+
+    def pricing_catalog
+      @pricing_catalog ||= PricingCatalog.new(config: @config)
+    end
+
+    def resolve_context_window(model_id, provider_name, preset, entry)
+      override = preset["context_window_tokens"] || entry["context_window_tokens"] ||
+                 entry["contextWindowTokens"]
+      value = override.to_i
+      return value if value.positive?
+
+      pricing_catalog.context_window(model_id, provider: provider_name) ||
+        ModelInfo.context_window(model_id)
+    end
+
+    def resolve_rates(model_id, provider_name, preset, entry)
+      configured = ModelInfo.normalize_rates(preset["pricing"] || entry["pricing"])
+      return [ configured, "config" ] if configured
+
+      if provider_name.to_s == "ollama"
+        return [ { "input" => 0.0, "output" => 0.0, "cached_input" => 0.0,
+                   "cache_creation_input" => 0.0 }, "free" ]
+      end
+
+      catalog_rates = pricing_catalog.rates(model_id, provider: provider_name)
+      return [ catalog_rates, pricing_catalog.source ] if catalog_rates
+
+      builtin = ModelInfo.rates(model_id, provider: provider_name)
+      builtin ? [ builtin, "builtin" ] : [ nil, nil ]
     end
 
     def log_debug(msg)
@@ -647,6 +968,7 @@ module Rubot
         break if iterations >= limit
 
         result = @provider.chat(local_messages, tools: tool_definitions)
+        record_usage(result)
 
         if result.is_a?(Hash)
           response = result["content"] || ""
@@ -751,15 +1073,27 @@ module Rubot
       @feedback_learner.process(message, previous_turns)
     end
 
-    # Run conversation summarization if approaching the limit (always on)
-    def run_summarization
-      return unless @session.respond_to?(:summarize_and_trim!)
+    # Run automatic compaction when the transcript approaches the configured
+    # share of the model's context window. The estimate is recomputed from the
+    # transcript each time, so a compaction immediately lowers it and the next
+    # iteration does not compact again.
+    def run_auto_compaction
+      return unless @config.auto_compact?
+      return if @session.message_count <= @config.compact_keep_recent_messages
 
-      summary = @session.summarize_and_trim!(
-        provider: @provider,
-        system_prompt: build_system_prompt
-      )
-      warn "[summarization] Generated summary fragment" if summary && Rubot.debug?
+      window = context_window_tokens
+      return unless window.to_i.positive?
+
+      threshold = window * (@config.compact_threshold_percent / 100.0)
+      used = estimated_context_tokens
+      return if used < threshold
+
+      result = compact_session
+      if result && Rubot.debug?
+        warn "[compaction] auto: #{result[:summarized_messages]} messages summarized, " \
+             "context #{result[:context_before]} -> #{result[:context_after]} tokens (estimated)"
+      end
+      result
     end
   end
 end

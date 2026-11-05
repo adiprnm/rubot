@@ -198,3 +198,231 @@ class TestConfig < Minitest::Test
     assert_nil config.model_entry_by_name("anything")
   end
 end
+
+class TestConfigDynamicModels < Minitest::Test
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @config_path = File.join(@tmpdir, "config.yml")
+    File.write(@config_path, {
+      "agents" => { "defaults" => { "name" => "opencode-go" } },
+      "models" => [
+        {
+          "name" => "opencode-go",
+          "model" => "openai/deepseek-v4.1-flash",
+          "api_key" => "sk-opencode",
+          "api_base" => "https://opencode.ai/zen/go/v1",
+          "extra_headers" => { "x-custom" => "yes" }
+        }
+      ]
+    }.to_yaml)
+    @config = Rubot::Config.new(@config_path)
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+  end
+
+  def test_catalog_model_id_uses_the_active_entry_credentials
+    settings = @config.provider_settings("deepseek-v4-pro")
+
+    assert_equal "openai", settings.provider
+    assert_equal "deepseek-v4-pro", settings.model
+    assert_equal "sk-opencode", settings.api_key
+    assert_equal "https://opencode.ai/zen/go/v1", settings.api_base
+    assert_equal({ "x-custom" => "yes" }, settings.extra_headers)
+  end
+
+  def test_unknown_config_model_still_uses_the_raw_model_id
+    settings = @config.provider_settings("some-catalog-model")
+
+    assert_equal "some-catalog-model", settings.model
+    assert_equal "https://opencode.ai/zen/go/v1", settings.api_base
+  end
+end
+
+class TestConfigModelPresets < Minitest::Test
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(@workspace)
+    @config_path = File.join(@tmpdir, "config.yml")
+    write_config
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+  end
+
+  def write_config(extra = {})
+    File.write(@config_path, {
+      "agents" => { "defaults" => {
+        "workspace" => @workspace,
+        "name" => "opencode-go",
+        "model_preset" => "fast"
+      } },
+      "models" => [
+        {
+          "name" => "opencode-go",
+          "model" => "openai/deepseek-v4.1-flash",
+          "api_key" => "sk-test",
+          "api_base" => "https://opencode.ai/zen/go/v1"
+        }
+      ],
+      "model_presets" => {
+        "fast" => { "model" => "deepseek-v4.1-flash", "max_tokens" => 4096, "temperature" => 0.2 },
+        "deep" => { "model" => "deepseek-v4-pro", "max_tokens" => 8192, "temperature" => 0.1 }
+      }
+    }.merge(extra).to_yaml)
+    @config = Rubot::Config.new(@config_path)
+  end
+
+  def test_primary_is_first_and_named
+    assert_equal %w[fast deep], @config.model_preset_names
+    assert_equal "fast", @config.primary_model_preset_name
+  end
+
+  def test_default_preset_is_the_configured_primary
+    preset = @config.default_model_preset
+
+    assert_equal "fast", preset["name"]
+    assert_equal "deepseek-v4.1-flash", preset["model"]
+  end
+
+  def test_preset_inherits_credentials_from_the_catalog_model
+    preset = @config.model_preset("deep")
+
+    assert_equal "deepseek-v4-pro", preset["model"]
+    assert_equal "openai", preset["provider"]
+    assert_equal "sk-test", preset["api_key"]
+    assert_equal "https://opencode.ai/zen/go/v1", preset["api_base"]
+    assert_equal 8192, preset["max_tokens"]
+    assert_in_delta 0.1, preset["temperature"]
+  end
+
+  def test_set_and_delete_preset
+    preset = @config.set_model_preset("coding", {
+      "model" => "glm-5.3",
+      "temperature" => "0.15",
+      "max_tokens" => "2048"
+    })
+
+    assert_equal "glm-5.3", preset["model"]
+    assert_equal 2048, preset["max_tokens"]
+    assert_in_delta 0.15, preset["temperature"]
+
+    @config.save
+    raw = YAML.safe_load(File.read(@config_path))
+    assert_equal "glm-5.3", raw.dig("model_presets", "coding", "model")
+
+    assert @config.delete_model_preset("coding")
+    assert_nil @config.model_preset("coding")
+  end
+
+  def test_default_can_be_changed_and_cleared
+    assert_equal "deep", @config.set_default_model_preset("deep")
+    assert_equal "deep", @config.primary_model_preset_name
+    assert_equal "deepseek-v4-pro", @config.default_model_preset["model"]
+
+    assert_nil @config.set_default_model_preset("default")
+    assert_equal "default", @config.primary_model_preset_name
+    assert_equal "deepseek-v4.1-flash", @config.default_model_preset["model"]
+  end
+
+  def test_primary_alias_resolves_to_the_configured_default
+    assert_equal "fast", @config.model_preset("primary")["name"]
+  end
+
+  def test_default_is_always_available_without_configured_presets
+    write_config("model_presets" => {})
+
+    assert_equal [ "default" ], @config.model_preset_names
+    assert_equal "default", @config.primary_model_preset_name
+    assert_equal "deepseek-v4.1-flash", @config.default_model_preset["model"]
+  end
+
+  def test_default_name_is_reserved
+    assert_raises(ArgumentError) { @config.set_model_preset("default", { "model" => "glm-5.3" }) }
+  end
+
+  def test_primary_can_be_an_explicit_preset
+    preset = @config.set_model_preset("primary", { "model" => "glm-5.3" })
+
+    assert_equal "primary", preset["name"]
+    assert_equal "glm-5.3", @config.model_preset("primary")["model"]
+
+    assert_equal "primary", @config.set_default_model_preset("primary")
+    assert_equal "primary", @config.primary_model_preset_name
+    assert_equal "glm-5.3", @config.default_model_preset["model"]
+  end
+
+  def test_unknown_default_preset_falls_back_to_the_implicit_default
+    @config.data["agents"]["defaults"]["model_preset"] = "missing"
+
+    assert_equal "default", @config.primary_model_preset_name
+    assert_equal "deepseek-v4.1-flash", @config.default_model_preset["model"]
+  end
+end
+
+class TestConfigCompaction < Minitest::Test
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @config_path = File.join(@tmpdir, "config.yml")
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+  end
+
+  def write_config(defaults)
+    File.write(@config_path, {
+      "agents" => { "defaults" => defaults }
+    }.to_yaml)
+    Rubot::Config.new(@config_path)
+  end
+
+  def test_defaults
+    config = Rubot::Config.new("/nonexistent/config.yml")
+
+    assert config.auto_compact?
+    assert_in_delta 80.0, config.compact_threshold_percent
+    assert_equal 6, config.compact_keep_recent_messages
+  end
+
+  def test_nested_settings
+    config = write_config(
+      "compaction" => {
+        "auto" => false,
+        "threshold_percent" => 65,
+        "keep_recent_messages" => 12
+      }
+    )
+
+    refute config.auto_compact?
+    assert_in_delta 65.0, config.compact_threshold_percent
+    assert_equal 12, config.compact_keep_recent_messages
+  end
+
+  def test_fraction_threshold_is_converted_to_a_percentage
+    config = write_config("compaction" => { "threshold" => 0.75 })
+
+    assert_in_delta 75.0, config.compact_threshold_percent
+  end
+
+  def test_flat_aliases
+    config = write_config(
+      "auto_compact" => false,
+      "compact_threshold_percent" => 55,
+      "compact_keep_recent_messages" => 4
+    )
+
+    refute config.auto_compact?
+    assert_in_delta 55.0, config.compact_threshold_percent
+    assert_equal 4, config.compact_keep_recent_messages
+  end
+
+  def test_invalid_threshold_falls_back_to_the_default
+    config = write_config("compaction" => { "threshold_percent" => 0 })
+
+    assert_in_delta 80.0, config.compact_threshold_percent
+  end
+end

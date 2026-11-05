@@ -314,6 +314,13 @@ module Rubot
       assert_includes result[1], "new session"
     end
 
+    def test_compact_command_handles_an_empty_session
+      result = @tg.before_process("/compact")
+      assert_kind_of Array, result
+      assert_equal :skip, result[0]
+      assert_includes result[1], "Tidak ada"
+    end
+
     def test_new_command_is_case_insensitive
       result = @tg.before_process("/NEW")
       assert_kind_of Array, result
@@ -738,6 +745,386 @@ module Rubot
       attachments, = tg.send(:extract_attachments, photo_update["message"])
 
       assert_empty attachments
+    end
+  end
+
+  # The per-topic persona wizard: forum_topic_created opens it, inline buttons
+  # move between steps, and the system prompt arrives as ordinary chat text.
+  class TestTelegramPersona < Minitest::Test
+    class FakeCatalog
+      attr_reader :entries
+
+      def initialize(entries)
+        @entries = entries
+      end
+    end
+
+    class PersonaTelegram < Channels::Telegram
+      class FakeSession
+        attr_reader :personas
+
+        def initialize
+          @personas = []
+        end
+
+        def set_persona(persona)
+          @personas << persona
+          persona
+        end
+      end
+
+      attr_reader :sent, :keyboards, :deleted, :sessions, :answers
+
+      def initialize(**kwargs)
+        super
+        @sent = []
+        @keyboards = []
+        @deleted = []
+        @sessions = {}
+        @answers = []
+      end
+
+      def session_for(session_id)
+        @sessions[session_id] ||= FakeSession.new
+      end
+
+      def answer_callback_query(callback_id, text = nil)
+        @answers << [ callback_id, text ]
+        { "ok" => true }
+      end
+
+      private
+
+      def send_message(chat_id, text, thread_id = nil)
+        @sent << [ chat_id, text, thread_id ]
+        true
+      end
+
+      def send_message_plain(chat_id, text, thread_id = nil)
+        @sent << [ chat_id, text, thread_id ]
+        true
+      end
+
+      def send_keyboard_message(chat_id, text, thread_id, keyboard)
+        @keyboards << [ chat_id, text, thread_id, keyboard ]
+        1_000 + @keyboards.size
+      end
+
+      def delete_message(chat_id, message_id, thread_id = nil)
+        @deleted << [ chat_id, message_id, thread_id ]
+      end
+    end
+
+    def setup
+      @tmpdir = Dir.mktmpdir
+      @config = isolated_config(@tmpdir, name: "persona-model")
+      @config.data["model_presets"] = {
+        "fast" => { "model" => "test-model", "temperature" => 0.2, "max_tokens" => 8192 },
+        "deep" => { "model" => "deepseek-v4-pro", "temperature" => 0.1 }
+      }
+      @config.data["agents"]["defaults"]["model_preset"] = "fast"
+      @config.save
+      @agent = Rubot::Agent.new(
+        config: @config,
+        session_id: "persona",
+        tools: Rubot::Tools::Registry.new
+      )
+      @tg = PersonaTelegram.new(
+        agent: @agent,
+        channel_config: { "token" => "fake", "typing_indicator" => false }
+      )
+    end
+
+    def teardown
+      FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+    end
+
+    def topic_message(text: nil, thread_id: 7, chat_id: 42, created: false)
+      message = {
+        "chat" => { "id" => chat_id, "is_forum" => true },
+        "from" => { "id" => chat_id, "username" => "tester" }
+      }
+      message["message_thread_id"] = thread_id unless thread_id.nil?
+      message["text"] = text if text
+      message["forum_topic_created"] = { "name" => "trading" } if created
+      { "update_id" => 1, "message" => message }
+    end
+
+    def callback_update(data)
+      {
+        "update_id" => 2,
+        "callback_query" => {
+          "id" => "cb-1",
+          "data" => data,
+          "message" => { "message_id" => 500 }
+        }
+      }
+    end
+
+    def keyboard_data(keyboard)
+      keyboard.flatten.map { |button| button["callback_data"] }
+    end
+
+    def last_keyboard
+      @tg.keyboards.last[3]
+    end
+
+    def click(action)
+      data = keyboard_data(last_keyboard).find { |value| value.end_with?(":#{action}") }
+      refute_nil data, "expected a #{action} button in #{keyboard_data(last_keyboard).inspect}"
+      @tg.send(:process_update, callback_update(data))
+      data
+    end
+
+    def test_forum_topic_created_opens_the_preset_step
+      @tg.send(:process_update, topic_message(created: true))
+
+      assert_equal 1, @tg.keyboards.size
+      _chat_id, text, thread_id, = @tg.keyboards.last
+      assert_equal 7, thread_id
+      assert_includes text, "Langkah 1/3"
+      assert_includes text, "Pilih model preset"
+      assert_includes text, "fast (primary)"
+
+      data = keyboard_data(last_keyboard)
+      assert data.any? { |value| value.end_with?(":preset:0") }, data.inspect
+      assert data.any? { |value| value.end_with?(":preset:default") }, data.inspect
+    end
+
+    def test_forum_topic_created_is_ignored_when_a_persona_exists
+      @tg.send(:persona_store).set(
+        "42:7",
+        Rubot::Persona.new(name: "trading", preset: "fast", system_prompt: "Halo")
+      )
+
+      @tg.send(:process_update, topic_message(created: true))
+
+      assert_empty @tg.keyboards
+    end
+
+    def test_persona_wizard_happy_path_saves_and_applies_the_persona
+      @tg.send(:process_update, topic_message(created: true))
+      click("preset:0")
+
+      assert_includes @tg.keyboards.last[1], "Langkah 2/3"
+
+      @tg.send(:process_update, topic_message(text: "Kamu adalah asisten trading. Jawab singkat."))
+
+      assert_includes @tg.keyboards.last[1], "Langkah 3/3"
+      assert_includes @tg.keyboards.last[1], "Kamu adalah asisten trading."
+
+      click("save")
+
+      stored = @tg.send(:persona_store).get(42, 7)
+      assert_equal "fast", stored.preset
+      assert_nil stored.model
+      assert_equal "Kamu adalah asisten trading. Jawab singkat.", stored.system_prompt
+      assert_equal "topic-7", stored.name
+
+      session = @tg.sessions["tg_42_7"]
+      assert_equal "Kamu adalah asisten trading. Jawab singkat.", session.personas.last["system_prompt"]
+      assert @tg.sent.any? { |_chat, text, _thread| text.include?("Persona disimpan") }
+      assert_nil @tg.send(:wizard_for_topic, 42, 7)
+    end
+
+    def test_prompt_can_be_skipped_to_use_the_default
+      @tg.send(:process_update, topic_message(created: true))
+      click("preset:0")
+      click("prompt_default")
+
+      assert_includes @tg.keyboards.last[1], "Prompt: (default)"
+      click("save")
+
+      stored = @tg.send(:persona_store).get(42, 7)
+      assert_equal "fast", stored.preset
+      assert_nil stored.system_prompt
+    end
+
+    def test_persona_show_lists_the_active_persona
+      @tg.send(:persona_store).set(
+        "42:7",
+        Rubot::Persona.new(name: "trading", preset: "fast", system_prompt: "Jawab singkat.")
+      )
+
+      @tg.send(:process_update, topic_message(text: "/persona show"))
+
+      text = @tg.sent.last[1]
+      assert_includes text, "Persona topic ini"
+      assert_includes text, "fast"
+      assert_includes text, "test-model"
+      assert_includes text, "Jawab singkat."
+    end
+
+    def test_persona_reset_removes_it_and_clears_the_session
+      @tg.send(:persona_store).set(
+        "42:7",
+        Rubot::Persona.new(name: "trading", preset: "fast", system_prompt: "Jawab singkat.")
+      )
+
+      @tg.send(:process_update, topic_message(text: "/persona reset"))
+
+      assert_nil @tg.send(:persona_store).get(42, 7)
+      assert_equal [ nil ], @tg.sessions["tg_42_7"].personas
+      assert_includes @tg.sent.last[1], "dihapus"
+    end
+
+    def test_cancel_stops_an_active_wizard
+      @tg.send(:process_update, topic_message(created: true))
+      refute_nil @tg.send(:wizard_for_topic, 42, 7)
+
+      @tg.send(:process_update, topic_message(text: "/cancel"))
+
+      assert_nil @tg.send(:wizard_for_topic, 42, 7)
+      assert_includes @tg.sent.last[1], "dibatalkan"
+      refute_empty @tg.deleted
+    end
+
+    def test_cancel_without_a_wizard_is_harmless
+      @tg.send(:process_update, topic_message(text: "/cancel"))
+
+      assert_includes @tg.sent.last[1], "Tidak ada setup"
+    end
+
+    def test_persona_in_the_general_topic_uses_the_default
+      @tg.send(:process_update, topic_message(text: "/persona", thread_id: nil))
+
+      assert_empty @tg.keyboards
+      assert_includes @tg.sent.last[1], "General"
+    end
+
+    def test_persona_command_with_bot_suffix_is_recognized
+      @tg.send(:process_update, topic_message(text: "/persona@MyBot"))
+
+      assert_equal 1, @tg.keyboards.size
+    end
+
+    def test_first_message_in_a_new_topic_opens_the_wizard_as_fallback
+      @tg.send(:maybe_start_persona_wizard_for_new_topic, 42, 7)
+
+      assert_equal 1, @tg.keyboards.size
+      assert_includes @tg.keyboards.last[1], "Langkah 1/3"
+    end
+
+    def test_fallback_skips_topics_that_already_have_a_session
+      path = File.join(@config.workspace, "sessions", "tg_42_7.json")
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, "{}")
+
+      @tg.send(:maybe_start_persona_wizard_for_new_topic, 42, 7)
+
+      assert_empty @tg.keyboards
+    end
+
+    def test_help_mentions_persona_commands
+      result = @tg.before_process("/help")
+
+      assert_includes result[1], "/persona"
+      assert_includes result[1], "/cancel"
+    end
+
+    def catalog_entries
+      [
+        { "id" => "test-model", "name" => "Test Model" },
+        { "id" => "deepseek-v4-pro", "name" => "DeepSeek V4 Pro" },
+        { "id" => "glm-5.3", "name" => "GLM-5.3" }
+      ]
+    end
+
+    def use_fake_catalog!
+      @tg.instance_variable_set(:@model_catalog, FakeCatalog.new(catalog_entries))
+    end
+
+    def test_preset_picker_lists_the_configured_presets
+      @tg.send(:process_update, topic_message(created: true))
+
+      labels = @tg.keyboards.last[3].flatten.map { |button| button["text"] }
+      assert_includes labels, "fast ★"
+      assert_includes labels, "deep"
+      assert_includes @tg.keyboards.last[1], "fast (primary)"
+      assert_includes @tg.keyboards.last[1], "deepseek-v4-pro"
+    end
+
+    def test_selecting_a_preset_stores_the_preset_name
+      @tg.send(:process_update, topic_message(created: true))
+      click("preset:1")
+      @tg.send(:process_update, topic_message(text: "Kamu adalah asisten trading."))
+
+      assert_includes @tg.keyboards.last[1], "deep (`deepseek-v4-pro`)"
+
+      click("save")
+
+      stored = @tg.send(:persona_store).get(42, 7)
+      assert_equal "deep", stored.preset
+      assert_equal "deep", @tg.sessions["tg_42_7"].personas.last["preset"]
+    end
+
+    def test_models_command_lists_presets
+      result = @tg.before_process("/models")
+
+      assert_includes result[1], "Model Presets"
+      assert_includes result[1], "fast ★"
+      assert_includes result[1], "deep"
+    end
+
+    def test_model_command_switches_the_session_preset
+      result = @tg.before_process("/model deep")
+
+      assert_includes result[1], "preset **deep**"
+      assert_equal "deep", @agent.session.model_preset
+      assert_equal "deepseek-v4-pro", @agent.active_model_name
+    end
+
+    def test_model_command_rejects_unknown_preset
+      result = @tg.before_process("/model nope")
+
+      assert_includes result[1], "tidak ada"
+      assert_equal "fast", @agent.active_preset_name
+    end
+
+    def test_preset_set_creates_a_preset_and_persists_it
+      use_fake_catalog!
+
+      result = @tg.before_process("/preset set coding glm-5.3 temperature=0.15 max_tokens=4096")
+
+      assert_includes result[1], "Preset **coding** disimpan"
+      preset = @config.model_preset("coding")
+      assert_equal "glm-5.3", preset["model"]
+      assert_equal 0.15, preset["temperature"]
+      assert_equal 4096, preset["max_tokens"]
+
+      raw = YAML.safe_load(File.read(@config.config_path))
+      assert_equal "glm-5.3", raw.dig("model_presets", "coding", "model")
+    end
+
+    def test_preset_default_changes_the_default_for_new_sessions
+      result = @tg.before_process("/preset default deep")
+
+      assert_includes result[1], "sesi baru"
+      assert_equal "deep", @config.primary_model_preset_name
+
+      new_agent = Rubot::Agent.new(
+        config: @config,
+        session_id: "new-session",
+        tools: Rubot::Tools::Registry.new
+      )
+      assert_equal "deepseek-v4-pro", new_agent.active_model_name
+    end
+
+    def test_preset_delete_removes_it
+      result = @tg.before_process("/preset delete deep")
+
+      assert_includes result[1], "dihapus"
+      assert_nil @config.model_preset("deep")
+    end
+
+    def test_preset_models_lists_the_provider_catalog
+      use_fake_catalog!
+
+      result = @tg.before_process("/preset models")
+
+      assert_includes result[1], "Model tersedia"
+      assert_includes result[1], "deepseek-v4-pro"
+      assert_includes result[1], "glm-5.3"
     end
   end
 end

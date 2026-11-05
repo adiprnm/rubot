@@ -25,19 +25,20 @@ module Rubot
     class SessionActor
       attr_reader :ractor, :session_id
 
-      def initialize(config_data:, config_path:, session_id:, cron_actor: nil)
+      def initialize(config_data:, config_path:, session_id:, cron_actor: nil, persona: nil)
         @session_id = session_id.to_s
         @ractor = Ractor.new(
           {
             config_data: config_data,
             config_path: config_path,
             session_id: @session_id,
-            cron_actor: cron_actor
+            cron_actor: cron_actor,
+            persona: persona
           },
           name: "rubot-session-#{@session_id}"
         ) do |args|
           config = Config.from_data(args[:config_data], config_path: args[:config_path])
-          agent = Agent.new(config: config, session_id: args[:session_id])
+          agent = Agent.new(config: config, session_id: args[:session_id], persona: args[:persona])
           agent.cron_ractor = args[:cron_actor] if args[:cron_actor]
           SessionActor.serve(agent, args[:session_id])
         end
@@ -101,18 +102,28 @@ module Rubot
       def self.handle_request(agent, session_id, msg)
         value = case msg[:op]
         when :info                 then agent.startup_info
+        when :usage_report         then agent.usage_report
         when :models               then agent.config.models
         when :model_entry          then agent.config.model_entry_by_name(msg[:name])
         when :active_model_entry   then agent.config.active_model_entry
         when :workspace            then agent.config.workspace
         when :active_model_name    then agent.active_model_name
+        when :active_model_preset  then agent.active_model_preset
+        when :model_presets        then agent.model_presets
+        when :use_model_preset     then agent.use_model_preset(msg[:name], preset: msg[:preset])
         when :provider_name        then agent.provider.name
         when :session_id           then session_id
         when :message_count        then agent.session.message_count
         when :session_model_override then agent.session.model_override
+        when :model_preset        then agent.session.model_preset
         when :forced_skill         then agent.session.forced_skill
         when :use_model            then agent.use_model(msg[:name])
+        when :persona              then agent.persona_info
+        when :set_persona          then agent.set_persona(msg[:persona])
         when :clear_session        then agent.clear_session
+        when :compact_session      then agent.compact_session
+        when :context_window       then agent.context_window_tokens
+        when :estimated_context    then agent.estimated_context_tokens
         when :tool_list            then agent.tools.all.map(&:name)
         when :tool_count           then agent.tools.count
         when :tool_description     then agent.tools.get(msg[:name])&.description.to_s

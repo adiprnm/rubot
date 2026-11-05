@@ -9,12 +9,15 @@ module Rubot
   module Providers
     class Ollama < Provider
       def chat(messages, tools: nil)
+        reset_last_usage!
         payload = build_payload(messages, tools)
         response = make_request(payload)
+        track_usage(ollama_usage(response))
         extract_content(response)
       end
 
       def chat_stream(messages, tools: nil, &on_chunk)
+        reset_last_usage!
         payload = build_payload(messages, tools, stream: true)
         make_stream_request(payload, &on_chunk)
       end
@@ -84,6 +87,7 @@ module Rubot
         buffer = ""
         accumulated = ""
         tool_calls = nil
+        usage = nil
 
         with_retry do
           http = Net::HTTP.new(uri.host, uri.port)
@@ -125,7 +129,10 @@ module Rubot
                     tool_calls = delta["tool_calls"]
                   end
 
-                  break if data["done"] == true
+                  if data["done"] == true
+                    usage = ollama_usage(data)
+                    break
+                  end
                 rescue JSON::ParserError
                   # skip malformed chunks
                 end
@@ -133,8 +140,19 @@ module Rubot
             end
           end
 
+          track_usage(usage)
           [ accumulated, tool_calls ]
         end
+      end
+
+      def ollama_usage(raw)
+        return nil unless raw.is_a?(Hash)
+        return nil if raw["prompt_eval_count"].nil? && raw["eval_count"].nil?
+
+        {
+          "prompt_eval_count" => raw["prompt_eval_count"],
+          "eval_count" => raw["eval_count"]
+        }
       end
 
       def extract_content(response)

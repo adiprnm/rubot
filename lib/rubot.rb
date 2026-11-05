@@ -2,7 +2,13 @@
 
 require_relative "rubot/env_loader"
 require_relative "rubot/config"
+require_relative "rubot/model_info"
+require_relative "rubot/pricing_catalog"
+require_relative "rubot/persona"
+require_relative "rubot/persona_store"
+require_relative "rubot/model_catalog"
 require_relative "rubot/session"
+require_relative "rubot/usage"
 require_relative "rubot/provider"
 require_relative "rubot/providers/openai"
 require_relative "rubot/providers/anthropic"

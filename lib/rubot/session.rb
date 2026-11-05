@@ -4,11 +4,22 @@ require "json"
 require "fileutils"
 require "set"
 require "time"
+require_relative "usage"
 
 module Rubot
   class Session
-    attr_reader :id, :messages, :workspace
-    attr_accessor :summary, :forced_skill, :model_override
+    # Message-count safety net used by the legacy summarizer.
+    DEFAULT_MESSAGE_LIMIT = 100
+    # Messages kept verbatim after a compaction so the model still has the
+    # immediate turn in view.
+    DEFAULT_KEEP_RECENT_MESSAGES = 6
+    # Upper bound for the text sent to the summarizer in a single request.
+    # Without it, compacting a very long transcript could overflow the
+    # summarizer's own context window.
+    MAX_SUMMARY_INPUT_CHARS = 24_000
+
+    attr_reader :id, :messages, :workspace, :usage, :last_usage
+    attr_accessor :summary, :forced_skill, :model_override, :model_preset
 
     def initialize(id = "default", workspace: nil)
       @id = id
@@ -17,7 +28,22 @@ module Rubot
       @summary = nil
       @forced_skill = nil
       @model_override = nil
+      @model_preset = nil
+      @usage = Usage.zero
+      @last_usage = Usage.zero
       load!
+    end
+
+    # Record the token usage of one provider request. `raw` is the provider's
+    # usage hash (OpenAI/Anthropic/Ollama shapes are all accepted).
+    def record_usage(raw, provider: nil)
+      delta = Usage.from(raw, provider: provider)
+      return nil if delta.nil?
+
+      @last_usage = delta
+      @usage = @usage.merge(delta)
+      save!
+      delta
     end
 
     # Returns true if summarization has already been applied to this session
@@ -104,49 +130,94 @@ module Rubot
       @messages.size
     end
 
+    # Approximate token count of the transcript plus `extra_chars` (the
+    # system prompt, for example), used to decide when to compact. Ruby's
+    # standard library has no tokenizer, so this is the usual bytes/4
+    # heuristic plus a small per-message overhead.
+    def estimated_tokens(extra_chars: 0)
+      total = (extra_chars.to_i + summary_text.to_s.bytesize) / 4.0
+      @messages.each do |msg|
+        total += 4
+        total += msg["content"].to_s.bytesize / 4.0
+        total += JSON.generate(msg["tool_calls"]).bytesize / 4.0 if msg["tool_calls"]
+      end
+      total.ceil
+    end
+
     def clear!
       @messages = []
       @forced_skill = nil
       @summary = nil
       @model_override = nil
+      @model_preset = nil
+      @usage = Usage.zero
+      @last_usage = Usage.zero
       save!
     end
 
-    # Summarize the oldest messages that would be trimmed, append to
-    # the running summary, and then trim those messages. Called when
-    # the conversation approaches the history limit.
+    # Summarize old messages down to `keep_recent` and fold the result into
+    # the running summary. Used by `/compact` and by automatic compaction when
+    # the configured context threshold is reached.
     #
-    # Returns the text that was summarized (the new summary fragment),
-    # or nil if nothing was trimmed.
-    def summarize_and_trim!(provider:, system_prompt:)
+    # Returns nil when there is nothing to do, otherwise a plain-data hash
+    # (safe to cross a Ractor boundary):
+    #   { summary:, summarized_messages:, kept_messages:,
+    #     context_before:, context_after: }
+    def compact!(provider:, keep_recent: DEFAULT_KEEP_RECENT_MESSAGES, system_prompt: nil)
       return nil unless @workspace
       return nil if @messages.empty?
 
-      # Calculate how many messages to trim (keep 60% of the limit)
-      limit = 100  # session hard limit
-      return nil if @messages.size <= limit * 0.6
+      keep = keep_recent.to_i
+      keep = 1 if keep < 1
+      return nil if @messages.size <= keep
 
-      trim_count = @messages.size - (limit * 0.6).to_i
-      return nil if trim_count <= 0
+      cutoff = @messages.size - keep
+      # Never keep a tool result whose assistant message (with tool_calls) is
+      # about to be summarized away: that breaks the provider's pairing rules.
+      while cutoff < @messages.size && @messages[cutoff]["role"] == "tool"
+        cutoff += 1
+      end
+      return nil if cutoff <= 0
 
-      # Collect the messages to be summarized
-      to_summarize = @messages[0...trim_count]
+      to_summarize = @messages[0...cutoff]
       summary_text = call_summarizer(provider, system_prompt, to_summarize)
       return nil if summary_text.nil? || summary_text.strip.empty?
 
-      # Append to existing summary
-      append_summary(summary_text.strip)
-
-      # Trim the messages
-      @messages = @messages[trim_count..]
-
-      # Ensure we don't start with orphaned tool messages
-      while @messages.first && @messages.first["role"] == "tool"
-        @messages.shift
+      context_before = estimated_tokens
+      clean_summary = self.class.normalize_utf8(summary_text.strip)
+      @summary = if @summary.nil? || @summary.strip.empty?
+        clean_summary
+      else
+        "#{@summary}\n#{clean_summary}"
       end
-
+      @messages = @messages[cutoff..] || []
       save!
-      summary_text.strip
+
+      {
+        summary: summary_text.strip,
+        summarized_messages: to_summarize.size,
+        kept_messages: @messages.size,
+        context_before: context_before,
+        context_after: estimated_tokens
+      }
+    end
+
+    # Message-count based summarization kept for backwards compatibility and
+    # as a safety net. New callers should prefer #compact! with a context
+    # threshold.
+    #
+    # Returns the text that was summarized (the new summary fragment), or nil
+    # if nothing was trimmed.
+    def summarize_and_trim!(provider:, system_prompt:, limit: DEFAULT_MESSAGE_LIMIT)
+      return nil unless @workspace
+      return nil if @messages.empty?
+
+      # Keep 60% of the limit and summarize the rest.
+      keep = (limit * 0.6).to_i
+      return nil if @messages.size <= keep
+
+      result = compact!(provider: provider, keep_recent: keep, system_prompt: system_prompt)
+      result && result[:summary]
     end
 
     # Returns the summary text for inclusion in the system prompt
@@ -175,6 +246,9 @@ module Rubot
       data["summary"] = @summary if @summary
       data["forced_skill"] = @forced_skill if @forced_skill
       data["model_override"] = @model_override if @model_override
+      data["model_preset"] = @model_preset if @model_preset
+      data["usage"] = @usage.to_h
+      data["last_usage"] = @last_usage.to_h
 
       # Generate before opening the file: JSON.pretty_generate can raise (e.g.
       # invalid UTF-8), and truncating first would leave an empty session file.
@@ -191,17 +265,39 @@ module Rubot
 
     private
 
-    # Call the LLM to summarize a batch of old messages into a compact form
+    # Call the LLM to summarize a batch of old messages into a compact form.
+    # Very long transcripts are split into chunks so the summarizer request
+    # itself stays within the model's context window.
     def call_summarizer(provider, system_prompt, messages)
-      # Build a minimal context for summarization
+      batches = split_summary_batches(messages)
+      summaries = batches.filter_map { |batch| summarize_batch(provider, system_prompt, batch) }
+      return nil if summaries.empty?
+      return summaries.first if summaries.size == 1
+
+      merged = summarize_batch(
+        provider,
+        system_prompt,
+        summaries.map { |text| { "role" => "assistant", "content" => text } },
+        merging: true
+      )
+      merged || summaries.join("\n\n")
+    end
+
+    def summarize_batch(provider, system_prompt, messages, merging: false)
       context = messages.map do |msg|
         role = msg["role"]
         content = msg["content"] || ""
         "[#{role}]: #{content}"
       end.join("\n")
 
+      instruction = if merging
+        "Merge the following partial summaries into one concise paragraph."
+      else
+        "Summarize the following conversation history into a concise paragraph."
+      end
+
       summarize_prompt = <<~PROMPT.strip
-        Summarize the following conversation history into a concise paragraph.
+        #{instruction}
         Preserve important facts, decisions, and outcomes. Omit pleasantries
         and redundant exchanges. Keep it under 200 words.
 
@@ -209,19 +305,42 @@ module Rubot
         #{context}
       PROMPT
 
-      result = provider.chat(
-        [{ "role" => "user", "content" => summarize_prompt }],
-        tools: nil
-      )
+      request = []
+      sys = system_prompt.to_s.strip
+      request << { "role" => "system", "content" => sys } unless sys.empty?
+      request << { "role" => "user", "content" => summarize_prompt }
 
-      if result.is_a?(Hash)
-        result["content"]
-      else
-        result.to_s
-      end
+      result = provider.chat(request, tools: nil)
+      content = result.is_a?(Hash) ? result["content"] : result.to_s
+      content.to_s.strip.empty? ? nil : content
     rescue StandardError => e
       warn "[session:summarize] Failed: #{e.class}: #{e.message}" if Rubot.debug?
       nil
+    end
+
+    # Split messages so no single summarizer request exceeds
+    # MAX_SUMMARY_INPUT_CHARS.
+    def split_summary_batches(messages)
+      batches = []
+      current = []
+      current_chars = 0
+
+      messages.each do |msg|
+        size = msg["content"].to_s.bytesize
+        size += JSON.generate(msg["tool_calls"]).bytesize if msg["tool_calls"]
+
+        if !current.empty? && current_chars + size > MAX_SUMMARY_INPUT_CHARS
+          batches << current
+          current = []
+          current_chars = 0
+        end
+
+        current << msg
+        current_chars += size
+      end
+
+      batches << current unless current.empty?
+      batches
     end
 
     def load!
@@ -235,6 +354,9 @@ module Rubot
       @summary = data["summary"] if data["summary"]
       @forced_skill = data["forced_skill"] if data["forced_skill"]
       @model_override = data["model_override"] if data["model_override"]
+      @model_preset = data["model_preset"] if data["model_preset"]
+      @usage = Usage.from_h(data["usage"])
+      @last_usage = Usage.from_h(data["last_usage"])
     rescue JSON::ParserError => e
       # A truncated/corrupt session must not take the bot down: start fresh.
       warn "[session] ignoring unreadable session #{file_path}: #{e.message}"

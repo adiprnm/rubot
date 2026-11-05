@@ -5,10 +5,21 @@ agents:
   defaults:
     workspace: ~/.rubot/workspace
     name: gpt-4o-mini
+    # Preset used by new sessions. Remove it to use the implicit `default`
+    # preset built from the direct model fields above.
+    model_preset: primary
     max_tokens: 4096
     temperature: 0.7
     system_prompt: "You are Rubot, a helpful AI assistant running in the terminal.\nBe concise and helpful."
     max_tool_iterations: 50
+    # Context compaction. When the conversation reaches `threshold_percent` of
+    # the model's context window, older turns are summarized into the running
+    # summary and the most recent `keep_recent_messages` are kept verbatim.
+    # Use `/compact` to trigger it manually at any time.
+    compaction:
+      auto: true
+      threshold_percent: 80   # 0.8 is also accepted
+      keep_recent_messages: 6
     # Safety guard — restrict agent access to the workspace directory.
     # When true, file operations and command execution are confined to `workspace`.
     # Set to false to disable sandboxing (not recommended).
@@ -17,7 +28,36 @@ agents:
     # Write operations are always blocked outside the workspace.
     allow_read_outside_workspace: false
 
+model_presets:
+  # Named, complete model configurations. `/model <name>` switches the current
+  # session; `/preset set|default|delete` manages these from Telegram.
+  # `model` may be a `models` entry name or a provider model id.
+  primary:
+    model: gpt-4o-mini
+    max_tokens: 4096
+    temperature: 0.7
+    # Context window and prices used by /usage (USD per 1M tokens).
+    # By default these come from models.dev and are cached in
+    # <workspace>/model_pricing.json. Set them only to override.
+    context_window_tokens: 128000
+    # pricing:
+    #   input_per_mtok: 0.15
+    #   cached_input_per_mtok: 0.075
+    #   output_per_mtok: 0.60
+  # fast:
+  #   model: deepseek-v4.1-flash
+  #   temperature: 0.2
+  # local:
+  #   model: llama3
+  #   provider: ollama
+  #   api_base: http://localhost:11434
+
 models:
+  # Entries here are always available. When the provider exposes GET /models
+  # (OpenAI-compatible APIs such as OpenCode Go), /preset models lists the
+  # provider's full catalog. The catalog is cached in
+  # <workspace>/model_catalog.json and a selected catalog model reuses this
+  # entry's api_base/api_key.
   - name: gpt-4o-mini
     model: openai/gpt-4o-mini
     api_key: sk-your-key
@@ -62,6 +102,10 @@ channels:
     narration: true                  # send the model's progress narration as chat messages
     tool_notifications: true         # show/edit a status line while tools run
     max_message_length: 4096         # Telegram max message length
+    # Forum topics (groups with Topics enabled) get a per-topic persona:
+    # model + system prompt, stored in <workspace>/personas.json and managed
+    # with the /persona wizard. The bot must be a group admin (or privacy mode
+    # off) to receive forum_topic_created. General uses the default persona.
 
     # Webhook mode (alternative to long polling):
     # webhook: true
@@ -97,6 +141,27 @@ channels:
 # MEMORY.md — Persistent memory managed by the bot itself.
 #   The bot reads this on every session and can update it via the
 #   memory tool to remember facts, preferences, and context.
+#
+# personas.json — Per-topic model + system prompt for Telegram forum topics.
+#   Managed by the /persona wizard, keyed by "<chat_id>:<thread_id>".
+#   Example:
+#     {
+#       "-1001234567890:42": {
+#         "name": "trading",
+#         "model": "gpt-4o-mini",
+#         "system_prompt": "Kamu adalah asisten trading.",
+#         "created_at": "2026-02-11T10:00:00Z"
+#       }
+#     }
+#   If a persona model is removed from config.yml, the topic falls back to
+#   the default model with a warning.
+#
+# model_catalog.json — Cache of the provider's GET /models response. Deleting it
+#   is safe; the next /models or /persona command refreshes it.
+#
+# model_pricing.json — Cache of models.dev pricing/context data used by /usage.
+#   Refreshed every 24 hours. Delete it to force a refresh; if the API is
+#   unreachable the stale cache (or the bundled defaults) is used instead.
 #
 # Skills — specialized instruction sets loaded on demand.
 #   Stored in: ~/.rubot/workspace/skills/{skill-name}/SKILL.md

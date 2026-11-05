@@ -23,6 +23,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 📡 **Multi-channel** — REPL and Telegram, with a pluggable channel architecture
 - 📎 **Inbound attachments** — screenshots and files sent to Telegram are saved to the workspace, with dimensions and size added to the prompt
 - 🔈 **Progress narration** — the model explains what it is doing between tool calls ("Let me check the structure first."), sent as normal chat messages
+- 🗜️ **Context compaction** — `/compact` summarizes older turns, and auto-compaction kicks in at a configurable share of the context window
 - 📄 **`.env` support** — automatic environment variable loading from `.env` files
 - 🎛️ **CLI options** — single-message mode or interactive chat
 
@@ -140,8 +141,11 @@ $ rubot
 | `/help` | Show available commands |
 | `/clear` | Clear conversation history |
 | `/new` | Clear chat and start a new session |
+| `/compact` | Summarize older messages to free context |
 | `/session [name]` | Show or switch session |
 | `/info` | Show agent info (includes soul/memory status) |
+| `/usage` | Show context usage, cache hit rate, and estimated cost |
+| `/context` | Alias for `/usage` |
 | `/tools` | List available tools |
 | `/soul` | Show the bot's soul (SOUL.md) |
 | `/memory` | Show persistent memory (MEMORY.md) |
@@ -189,6 +193,10 @@ agents:
     temperature: 0.7
     system_prompt: "You are Rubot, a helpful AI assistant."
     max_tool_iterations: 50
+    compaction:
+      auto: true
+      threshold_percent: 80
+      keep_recent_messages: 6
 
 model_presets:
   primary:
@@ -271,7 +279,8 @@ model_presets:
 | `provider`, `api_base`, `api_key` | Optional overrides; inherited from the model entry / active entry |
 | `max_tokens`, `temperature` | Generation settings for this preset |
 | `reasoning_effort` | Optional provider reasoning hint |
-| `context_window_tokens` | Optional context window metadata |
+| `context_window_tokens` | Context window size for `/usage` (falls back to a built-in table) |
+| `pricing` | Token prices for the cost estimate (see below) |
 
 - `default` is always available as the implicit preset built from the direct
   `models` / `agents.defaults` fields. `/model default` follows it.
@@ -282,6 +291,67 @@ model_presets:
   per-session switch, returning to the primary preset.
 - `/model <preset>` switches the current session only and persists across
   restarts. It does not change `config.yml`.
+
+#### Usage and cost estimates
+
+`/usage` (alias `/context`) reports, for the current session:
+
+- context used vs. the model's context window,
+- cumulative input/output tokens and cache hit rate,
+- an estimated cost in USD.
+
+Pricing and context windows are fetched automatically from
+[models.dev](https://models.dev/api.json) and cached in
+`<workspace>/model_pricing.json` for 24 hours. The file is a plain JSON cache:
+delete it to force a refresh. Lookup precedence is:
+
+1. `pricing` / `context_window_tokens` in `config.yml`,
+2. the models.dev cache (or a fresh API response),
+3. the bundled defaults in `lib/rubot/model_info.rb`.
+
+You normally don't need to set prices manually. To override a specific model
+(USD per 1M tokens):
+
+```yaml
+model_presets:
+  primary:
+    model: gpt-4o-mini
+    context_window_tokens: 128000
+    pricing:
+      input_per_mtok: 0.15
+      cached_input_per_mtok: 0.075
+      output_per_mtok: 0.60
+```
+
+`pricing` may also be set on a `models` entry. Ollama models are treated as
+free. Usage is stored in the session file, so it survives restarts and resets
+with `/new` or `/clear`.
+
+#### Context compaction
+
+Long sessions eventually fill the model's context window. Rubot summarizes the
+older turns into the running summary (included in the system prompt as
+"Previous Conversation Summary") and keeps the most recent messages verbatim.
+
+- `/compact` — compact now, at any time. Reports how many messages were
+  summarized, how many were kept, and the estimated context before/after.
+- Automatic compaction — when the estimated context reaches
+  `threshold_percent` of the model's context window:
+
+```yaml
+agents:
+  defaults:
+    compaction:
+      auto: true               # default: true
+      threshold_percent: 80    # default: 80 (0.8 is also accepted)
+      keep_recent_messages: 6  # default: 6
+```
+
+A value of `100` disables auto-compaction by making the threshold unreachable
+(there is no room left to summarize); set `auto: false` to disable it
+outright. The context size is estimated from the transcript with a
+bytes-per-token heuristic, and very long transcripts are summarized in chunks
+so the summarizer request itself stays within the window.
 
 Telegram commands:
 
@@ -296,6 +366,8 @@ Telegram commands:
 | `/preset default <name>` | Choose the preset for new sessions (`default` clears it) |
 | `/preset delete <name>` | Remove a preset |
 | `/preset models [filter]` | List the provider's supported models |
+| `/usage` | Show context usage, cache hit rate, and estimated cost |
+| `/compact` | Summarize older messages to free context |
 
 ### Providers
 
@@ -919,7 +991,13 @@ Notes:
   Compose `extra_hosts` entry).
 - Telegram webhook mode additionally needs a port mapping in the override,
   e.g. `ports: ["8443:8443"]`.
-- The image contains only `webrick` plus the standard library. Test gems
+- The image ships `node`, `chromium`, `magick` (ImageMagick 7) and `ffmpeg`
+  on top of Ruby. The brand/carousel skills need them: Chromium screenshots
+  the HTML at 2×, `magick -resize` downsamples to the final size (e.g.
+  `magick cover@2x.png -resize 1080x1920 -strip cover.png`), and `ffmpeg`
+  encodes reels. They are installed at build time because the agent cannot
+  install packages on the fly and the safety guard blocks `PATH` exports.
+- Gems in the image are `webrick` plus the standard library. Test gems
   are excluded via `BUNDLE_WITHOUT=development:test`.
 
 ## Testing

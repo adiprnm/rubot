@@ -87,16 +87,57 @@ module Rubot
         call(:info)
       end
 
+      def usage_report
+        call(:usage_report)
+      end
+
       def active_model_name
         call(:active_model_name)
+      end
+
+      def active_model_preset
+        call(:active_model_preset)
+      end
+
+      def model_presets
+        call(:model_presets)
       end
 
       def use_model(name)
         call(:use_model, name: name)
       end
 
+      def use_model_preset(name, preset: nil)
+        call(:use_model_preset, name: name, preset: preset)
+      end
+
+      def persona
+        call(:persona)
+      end
+
+      # The session handle exposes plain data, matching Agent#persona_info.
+      def persona_info
+        persona
+      end
+
+      def set_persona(persona)
+        call(:set_persona, persona: persona)
+      end
+
       def clear_session
         call(:clear_session)
+      end
+
+      def compact_session
+        call(:compact_session)
+      end
+
+      def context_window_tokens
+        call(:context_window)
+      end
+
+      def estimated_context_tokens
+        call(:estimated_context)
       end
 
       def config
@@ -186,6 +227,10 @@ module Rubot
 
         def forced_skill
           @handle.call(:forced_skill)
+        end
+
+        def model_preset
+          @handle.call(:model_preset)
         end
 
         def forced_skill=(name)

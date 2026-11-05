@@ -123,13 +123,61 @@ class TestActors < Minitest::Test
     begin
       handle = pool.for("control")
 
-      assert_equal "test", handle.active_model_name
+      assert_equal "test-model", handle.active_model_name
       assert_equal "openai", handle.provider.name
       assert_equal [ "test" ], handle.config.models.map { |m| m["name"] }
       assert_equal @workspace, handle.config.workspace
       assert_includes handle.tools.names, "cron"
       refute handle.skill_registry.any?
       assert handle.memory.enabled?
+    ensure
+      pool.shutdown
+    end
+  end
+
+  def test_pool_applies_persona_from_store_when_spawning
+    config = write_config
+    File.write(File.join(@workspace, "personas.json"), JSON.generate(
+      "-100123:42" => {
+        "name" => "trading",
+        "model" => "test",
+        "system_prompt" => "Kamu adalah asisten trading."
+      }
+    ))
+    pool = Rubot::Actors::SessionPool.new(config: config)
+
+    begin
+      handle = pool.for("tg_-100123_42")
+
+      assert_equal "test-model", handle.active_model_name
+      assert_equal "trading", handle.persona["name"]
+      assert_equal "Kamu adalah asisten trading.", handle.persona["system_prompt"]
+      assert_nil pool.for("tg_123").persona, "General topic must use the default persona"
+    ensure
+      pool.shutdown
+    end
+  end
+
+  def test_set_persona_op_updates_a_live_session
+    config = write_config
+    pool = Rubot::Actors::SessionPool.new(config: config)
+
+    begin
+      handle = pool.for("tg_-100123_42")
+      assert_nil handle.persona
+
+      applied = handle.set_persona(
+        "name" => "trading",
+        "model" => "test",
+        "system_prompt" => "Jawab singkat."
+      )
+
+      assert_equal "Jawab singkat.", applied["system_prompt"]
+      assert_equal "Jawab singkat.", handle.persona["system_prompt"]
+      assert_equal "test-model", handle.active_model_name
+
+      assert_nil handle.set_persona(nil)
+      assert_nil handle.persona
     ensure
       pool.shutdown
     end
@@ -343,5 +391,64 @@ class TestActors < Minitest::Test
   ensure
     ractor&.send({ type: :shutdown })
     ractor&.join
+  end
+end
+
+class TestActorModelPresets < Minitest::Test
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(@workspace)
+    @config_path = File.join(@tmpdir, "config.yml")
+
+    File.write(@config_path, {
+      "agents" => { "defaults" => {
+        "workspace" => @workspace,
+        "name" => "test",
+        "model_preset" => "fast"
+      } },
+      "models" => [
+        {
+          "name" => "test",
+          "model" => "openai/fast-model",
+          "api_key" => "sk-test",
+          "api_base" => "http://127.0.0.1:1/v1"
+        }
+      ],
+      "model_presets" => {
+        "fast" => { "model" => "fast-model", "max_tokens" => 1024, "temperature" => 0.2 },
+        "deep" => { "model" => "deep-model", "max_tokens" => 8192, "temperature" => 0.1 }
+      }
+    }.to_yaml)
+
+    @config = Rubot::Config.new(@config_path)
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+  end
+
+  def test_actor_exposes_and_switches_model_presets
+    pool = Rubot::Actors::SessionPool.new(config: @config)
+
+    begin
+      handle = pool.for("preset-actor")
+
+      assert_equal "fast", handle.active_model_preset["name"]
+      assert_equal "fast-model", handle.active_model_name
+      assert_equal %w[fast deep], handle.model_presets.map { |preset| preset["name"] }
+
+      applied = handle.use_model_preset("deep")
+
+      assert_equal "deep", applied["name"]
+      assert_equal "deep-model", applied["model"]
+      assert_equal "deep-model", handle.active_model_name
+      assert_equal "deep", handle.session.model_preset
+
+      other = pool.for("another-actor")
+      assert_equal "fast", other.active_model_preset["name"]
+    ensure
+      pool.shutdown
+    end
   end
 end

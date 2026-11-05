@@ -28,17 +28,27 @@ ENV LANG=C.UTF-8 \
 # shell tool calls as `node featured/generate.mjs`. Installed here because the
 # agent cannot install packages on the fly (and PATH exports are blocked by the
 # safety guard). A couple of font packages keep Chromium text rendering sane.
+#
+# ImageMagick is the `magick` command used by the brand/carousel skills to
+# downsample 2x screenshots to their final size (`magick in@2x.png -resize ...`).
+# ffmpeg is used by the carousel-video recipes to build reels from slides.
+# Without these the agent renders @2x assets it cannot resize or encode, and
+# fails with "magick: not found".
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         nodejs \
         chromium \
+        imagemagick \
+        ffmpeg \
         ca-certificates \
         fonts-dejavu-core \
         fonts-liberation2; \
     rm -rf /var/lib/apt/lists/*; \
     node --version; \
-    chromium --version
+    chromium --version; \
+    magick -version | head -1; \
+    ffmpeg -version | head -1
 
 WORKDIR /app
 

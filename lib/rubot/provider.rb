@@ -39,10 +39,40 @@ module Rubot
   # Base class for all LLM providers.
   # Subclasses must implement #chat(messages, tools: nil)
   class Provider
-    attr_reader :config
+    attr_reader :config, :last_usage
+
+    # Build the provider implementation for an immutable ProviderSettings.
+    # Kept here so callers (Agent, ModelCatalog) share one mapping.
+    def self.build(settings)
+      case settings.provider.to_s.downcase
+      when "openai", "openai_compatible", "azure", "deepseek", "groq", "gemini", "mistral", "perplexity"
+        Providers::OpenAI.new(settings)
+      when "anthropic", "claude"
+        Providers::Anthropic.new(settings)
+      when "ollama"
+        Providers::Ollama.new(settings)
+      else
+        warn "Unknown provider '#{settings.provider}', falling back to OpenAI-compatible"
+        Providers::OpenAI.new(settings)
+      end
+    end
 
     def initialize(config)
       @config = config
+      @last_usage = nil
+    end
+
+    # The provider's usage hash for the most recent request, or nil.
+    # Providers reset this at the start of every chat/chat_stream call.
+    def reset_last_usage!
+      @last_usage = nil
+    end
+
+    # Return the provider's supported models as an array of hashes with at
+    # least an "id" key. Providers that cannot list models return [] and the
+    # caller falls back to config.yml entries.
+    def list_models
+      []
     end
 
     # Main chat interface. Returns the assistant's response string.
@@ -71,6 +101,13 @@ module Rubot
     end
 
     protected
+
+    # Remember the raw usage hash returned by the provider. The Agent
+    # normalizes it into a Rubot::Usage.
+    def track_usage(raw)
+      @last_usage = raw if raw.is_a?(Hash) && !raw.empty?
+      @last_usage
+    end
 
     # Wrap a block that performs an HTTP request. Retries on 429 with
     # exponential backoff (respects Retry-After header if present).

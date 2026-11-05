@@ -311,6 +311,48 @@ class TestSessionSummarization < Minitest::Test
     assert_equal 70, @session.message_count
   end
 
+  def test_estimated_tokens_grows_with_the_transcript
+    session = Rubot::Session.new("estimate", workspace: @workspace)
+    empty = session.estimated_tokens
+
+    session.add("user", "a" * 400)
+    session.add("assistant", "b" * 400)
+
+    assert_operator session.estimated_tokens, :>, empty + 150
+  end
+
+  def test_compact_keeps_recent_messages_and_returns_stats
+    20.times { |i| @session.add(i.even? ? "user" : "assistant", "Message #{i}") }
+
+    @provider.response = "Short summary"
+    result = @session.compact!(provider: @provider, keep_recent: 4)
+
+    refute_nil result
+    assert_equal "Short summary", result[:summary]
+    assert_equal 16, result[:summarized_messages]
+    assert_equal 4, result[:kept_messages]
+    assert_equal "Message 16", @session.messages.first["content"]
+    assert @session.summarized?
+    assert_operator result[:context_after], :<=, result[:context_before]
+  end
+
+  def test_compact_returns_nil_when_there_is_nothing_to_summarize
+    3.times { @session.add("user", "hi") }
+
+    assert_nil @session.compact!(provider: @provider, keep_recent: 6)
+  end
+
+  def test_compact_splits_large_transcripts_into_batches
+    6.times { |i| @session.add("user", "#{i}:" + ("x" * 20_000)) }
+
+    result = @session.compact!(provider: @provider, keep_recent: 1)
+
+    refute_nil result
+    # One request per batch plus one merge request.
+    assert_operator @provider.calls, :>, 2
+    assert_equal 1, @session.message_count
+  end
+
   def test_session_persists_summary_to_disk
     @session.append_summary("Disk test")
     file_path = @session.file_path
@@ -329,13 +371,16 @@ class TestSessionSummarization < Minitest::Test
 
   class FakeSummarizeProvider
     attr_accessor :response, :raise_error
+    attr_reader :calls
 
     def initialize
       @response = "Summary"
       @raise_error = false
+      @calls = 0
     end
 
     def chat(messages, tools: nil)
+      @calls += 1
       raise StandardError, "Provider error" if @raise_error
       @response
     end

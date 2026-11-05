@@ -24,14 +24,49 @@ module Rubot
       end
 
       def chat(messages, tools: nil)
+        reset_last_usage!
         payload = build_payload(messages, tools)
         response = make_request(payload)
+        track_usage(response["usage"])
         extract_content(response)
       end
 
       def chat_stream(messages, tools: nil, &on_chunk)
+        reset_last_usage!
         payload = build_payload(messages, tools, stream: true)
         make_stream_request(payload, &on_chunk)
+      end
+
+      # GET /models — OpenAI-compatible providers (including OpenCode Go)
+      # expose their supported model list there.
+      def list_models
+        uri = URI("#{api_base}/models")
+        request = Net::HTTP::Get.new(uri.request_uri)
+        request["Authorization"] = "Bearer #{@config.api_key}" if @config.api_key
+        apply_extra_headers(request)
+
+        response = Net::HTTP.start(
+          uri.host,
+          uri.port,
+          use_ssl: uri.scheme == "https",
+          open_timeout: 10,
+          read_timeout: 30
+        ) { |http| http.request(request) }
+
+        return [] unless response.code.to_i == 200
+
+        body = JSON.parse(response.body)
+        items = if body.is_a?(Hash)
+          body["data"] || body["models"] || []
+        else
+          []
+        end
+        Array(items).filter_map do |item|
+          item.is_a?(Hash) ? item : { "id" => item.to_s }
+        end
+      rescue StandardError => e
+        log_debug("list_models failed: #{e.class}: #{e.message}")
+        []
       end
 
       def format_tools(tools)
@@ -57,6 +92,7 @@ module Rubot
           "temperature" => @config.temperature
         }
         payload["stream"] = true if stream
+        payload["stream_options"] = { "include_usage" => true } if stream
         if tools && !tools.empty?
           payload["tools"] = format_tools(tools)
           payload["tool_choice"] = "auto"
@@ -109,6 +145,7 @@ module Rubot
         accumulated = ""
         reasoning_content = ""
         tool_calls_accum = {}
+        usage = nil
 
         with_retry do
           http = Net::HTTP.new(uri.host, uri.port)
@@ -144,6 +181,7 @@ module Rubot
 
                 begin
                   data = JSON.parse(data_str)
+                  usage = data["usage"] if data["usage"].is_a?(Hash)
                   delta = data.dig("choices", 0, "delta")
                   next unless delta
 
@@ -181,11 +219,13 @@ module Rubot
           end
 
           tool_calls = tool_calls_accum.empty? ? nil : tool_calls_accum.values
+          track_usage(usage)
 
           # Return as Hash for consistency with non-streaming extract_content
           result = { "content" => accumulated }
           result["tool_calls"] = tool_calls if tool_calls
           result["reasoning_content"] = reasoning_content if !reasoning_content.empty?
+          result["usage"] = usage if usage
           result
         end
       end
