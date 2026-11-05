@@ -469,9 +469,26 @@ channels:
 
 While it works, the bot sends the model's own narration as normal chat messages
 ("Let me check the structure first.", "Now I'll generate the image.") and keeps
-the technical detail in a separate status message that is edited in place and
+the technical detail in a separate status card that is edited in place and
 deleted once the final answer arrives. Set `narration: false` to silence the
-narration or `tool_notifications: false` to hide the status line.
+narration or `tool_notifications: false` to hide the status card.
+
+The card states only what is true — no "still working" filler:
+
+```
+✓ 💻 `shell_exec` · step 3 · 1m 05s
+$ bundle exec rspec test/agent_test.rb
+
+/stop untuk menghentikan
+```
+
+- The `✓` appears once the round has finished, i.e. while the model is being
+  asked again; without it, that tool call is the one currently running.
+- Edits are throttled to one per second per chat (Telegram's own limit) and an
+  identical card is never re-sent, so a batch of tools cannot flood the chat or
+  trip a 429. A 429 is retried once using the `retry_after` Telegram sends.
+- The `/stop` line appears once per request, and only after the third round or
+  after a minute — whichever comes first.
 
 #### Sending images and files to the bot
 

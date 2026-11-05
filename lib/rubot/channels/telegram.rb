@@ -69,6 +69,14 @@ module Rubot
         # so concurrent requests to different chats don't interfere.
         @status_messages = {}   # chat_thread_key => { chat_id:, thread_id:, message_id: }
         @tool_counts = {}       # chat_thread_key => Integer
+        # What the live status card is describing. Kept apart from
+        # @status_messages because a narration deletes the message but the
+        # step numbering and the elapsed clock must survive it.
+        @status_state = {}      # chat_thread_key => { tool_name:, emoji:, preview:, step:,
+                                #                     started_at:, finished:, round:, hint_sent: }
+        @status_last_text = {}  # chat_thread_key => String last rendered
+        @status_last_edit = {}  # chat_thread_key => Float monotonic seconds
+        @last_retry_after = 0   # seconds Telegram asked us to wait after a 429
         @status_mutex = Mutex.new
         @active_threads = []   # Track spawned threads for cleanup
         @threads_mutex = Mutex.new
@@ -2135,11 +2143,11 @@ module Rubot
       # deleted, so the conversation keeps a readable trace of what the bot did.
       # Controlled by `narration` (default: on) in the channel config.
       #
-      # The tool status message is a live "running tool" line, so it is dropped
-      # before the narration goes out: the newest words from the model must land
-      # at the bottom of the chat, and the next tool call opens a fresh status
-      # message underneath them. Otherwise the previous "Running tool" card stays
-      # above the narration that describes what happened after it.
+      # The tool status message is a live line about the current step, so it is
+      # dropped before the narration goes out: the newest words from the model
+      # must land at the bottom of the chat, and the next tool call opens a fresh
+      # status message underneath them. Otherwise the previous card stays above
+      # the narration that describes what happened after it.
       def send_narration(chat_id, thread_id, text)
         return unless @config.fetch("narration", true)
 
@@ -2159,65 +2167,148 @@ module Rubot
         "cron"        => "⏰",
       }.freeze
 
-      # Called before a tool executes. Updates the status message to show what's running.
+      # Telegram accepts roughly one message per second per chat and an edit
+      # counts as a message. A tool batch used to fire one edit per tool, so a
+      # five-tool round could trip 429 and leave the card frozen on an old step.
+      MIN_STATUS_EDIT_INTERVAL = 1.0
+
+      # Shown once per request, not on every edit.
+      STATUS_STOP_HINT = "/stop untuk menghentikan"
+
+      # Called before a tool executes. Updates the status card with the literal
+      # state: which tool, how many steps so far, and how long this request has
+      # been running. No prose — the card says what is true, nothing more.
       def notify_tool_started(chat_id, thread_id, tool_name, args)
         warn "[telegram] notify_tool_started: #{tool_name}" if Rubot.debug?
         key = status_key(chat_id, thread_id)
-        @status_mutex.synchronize do
-          @tool_counts[key] ||= 0
-          @tool_counts[key] += 1
+
+        state = @status_mutex.synchronize do
+          @tool_counts[key] = (@tool_counts[key] || 0) + 1
+          st = (@status_state[key] ||= { started_at: monotonic_now, hint_sent: false })
+          st[:tool_name] = tool_name
+          st[:emoji] = TOOL_EMOJIS[tool_name] || "⚙️"
+          st[:preview] = tool_preview(tool_name, args)
+          st[:step] = @tool_counts[key]
+          st[:finished] = false
+          st.dup
         end
-        emoji = TOOL_EMOJIS[tool_name] || "⚙️"
 
-        preview = case tool_name
-                  when "shell_exec"
-                    "```\n#{truncate(args["command"] || "...", 80)}\n```"
-                  when "file_ops"
-                    "#{args["operation"] || "read"}: #{truncate(args["path"] || "...", 60)}"
-                  when "web_fetch"
-                    "query: #{truncate(args["query"] || args["url"] || "...", 60)}"
-                  when "memory"
-                    "operation: #{args["operation"] || "..."}"
-                  when "cron"
-                    "operation: #{args["operation"] || "..."}"
-                  else
-                    "#{args.keys.first}: #{truncate(args.values.first.to_s, 60)}"
-                  end
-
-        count = @status_mutex.synchronize { @tool_counts[key] }
-        text = "#{emoji} **Running tool:** `#{tool_name}`\n"
-        text += "Step #{count}\n\n"
-        text += preview
-
-        warn "[telegram] Sending status message: #{text[0..100]}" if Rubot.debug?
-
-        # Edit existing status message or send a new one
-        update_or_send_status(chat_id, thread_id, text)
+        update_or_send_status(chat_id, thread_id, render_tool_status(state))
       end
 
-      # Called after a tool finishes. Briefly shows completion before next tool starts.
+      # Called after a tool finishes. The card is not touched here: a batch of
+      # five tools would mean five edits for no new information. The round
+      # completing (below) is the moment worth showing.
       def notify_tool_finished(chat_id, thread_id, tool_name, result)
-        # We don't send a separate "done" message — the next tool_call or final
-        # response will overwrite the status. But we log it for debugging.
         warn "[telegram] Tool #{tool_name} finished" if Rubot.debug?
       end
 
-      # Called after each agent round. Shows progress for multi-step operations.
+      # Called after each agent round, i.e. once the model has been asked again.
+      # No tool is running at this point, so the card marks the finished step
+      # (✓) and refreshes the elapsed clock and the one-time /stop hint.
       def notify_progress(chat_id, thread_id, round)
-        return unless round >= 2  # Only notify after 2+ rounds
+        key = status_key(chat_id, thread_id)
 
-        emoji = "🔄"
-        text = "#{emoji} **Still working** (round #{round})\n"
-        text += "_Running tool calls to complete your request_"
+        state = @status_mutex.synchronize do
+          st = @status_state[key]
+          next nil unless st
 
-        update_or_send_status(chat_id, thread_id, text)
+          st[:finished] = true
+          st[:round] = round
+          st[:hint_sent] = true if !st[:hint_sent] && stop_hint_due?(st, round)
+          st.dup
+        end
+        return unless state
+
+        # This edit carries the only news in the round, so wait out the throttle
+        # instead of dropping it (the wait is bounded by MIN_STATUS_EDIT_INTERVAL).
+        update_or_send_status(chat_id, thread_id, render_tool_status(state), wait: true)
+      end
+
+      # One line of literal state plus the tool's own arguments:
+      #
+      #   ✓ 💻 `shell_exec` · step 3 · 1m 05s
+      #   $ bundle exec rspec test/agent_test.rb
+      def render_tool_status(state)
+        elapsed = format_elapsed(monotonic_now - state[:started_at].to_f)
+        head = (state[:finished] ? "✓ " : "") + "#{state[:emoji]} `#{state[:tool_name]}`" \
+                                    " · step #{state[:step]} · #{elapsed}"
+        lines = [ head ]
+        preview = state[:preview].to_s
+        lines.push("", preview) unless preview.empty?
+        lines.push("", STATUS_STOP_HINT) if state[:hint_sent]
+        lines.join("\n")
+      end
+
+      def tool_preview(tool_name, args)
+        case tool_name
+        when "shell_exec"
+          "```\n#{truncate(args["command"] || "...", 80)}\n```"
+        when "file_ops"
+          "#{args["operation"] || "read"}: #{truncate(args["path"] || "...", 60)}"
+        when "web_fetch"
+          "query: #{truncate(args["query"] || args["url"] || "...", 60)}"
+        when "memory"
+          "operation: #{args["operation"] || "..."}"
+        when "cron"
+          "operation: #{args["operation"] || "..."}"
+        else
+          "#{args.keys.first}: #{truncate(args.values.first.to_s, 60)}"
+        end
+      end
+
+      # The stop hint appears once, and only when the request has gone on long
+      # enough that a user might wonder whether it is stuck.
+      def stop_hint_due?(state, round)
+        return true if round.to_i >= 3
+        monotonic_now - state[:started_at].to_f >= 60
+      end
+
+      def format_elapsed(seconds)
+        total = seconds.to_i.clamp(0, 24 * 3600)
+        return "#{total}s" if total < 60
+        return format("%dm %02ds", total / 60, total % 60) if total < 3600
+        format("%dh %02dm", total / 3600, (total % 3600) / 60)
+      end
+
+      def monotonic_now
+        Process.clock_gettime(Process::CLOCK_MONOTONIC)
       end
 
       # Send a new status message or edit the existing one (avoids message spam).
-      def update_or_send_status(chat_id, thread_id, text)
+      #
+      # Edits are throttled to one per MIN_STATUS_EDIT_INTERVAL per chat, and an
+      # identical text is not sent at all. With `wait: true` the caller blocks
+      # for the remainder of the interval instead of losing the update.
+      def update_or_send_status(chat_id, thread_id, text, wait: false)
         return unless @config.fetch("tool_notifications", true)
 
         key = status_key(chat_id, thread_id)
+        text = text.to_s
+
+        if wait
+          resume_at = @status_mutex.synchronize do
+            last = @status_last_edit[key]
+            last ? last + MIN_STATUS_EDIT_INTERVAL : 0.0
+          end
+          delay = resume_at - monotonic_now
+          sleep(delay) if delay.positive?
+        end
+
+        proceed = @status_mutex.synchronize do
+          last_at = @status_last_edit[key]
+          if @status_last_text[key] == text
+            false
+          elsif !wait && last_at && monotonic_now - last_at < MIN_STATUS_EDIT_INTERVAL
+            false
+          else
+            @status_last_edit[key] = monotonic_now
+            @status_last_text[key] = text
+            true
+          end
+        end
+        return unless proceed
+
         existing = @status_mutex.synchronize { @status_messages[key] }
         warn "[telegram] update_or_send_status: existing=#{!!existing}, key=#{key}" if Rubot.debug?
 
@@ -2250,7 +2341,12 @@ module Rubot
         key = status_key(chat_id, thread_id)
         @status_mutex.synchronize do
           info = @status_messages.delete(key)
-          @tool_counts.delete(key) if reset_count
+          if reset_count
+            @tool_counts.delete(key)
+            @status_state.delete(key)
+            @status_last_text.delete(key)
+            @status_last_edit.delete(key)
+          end
           return unless info
           delete_message(info[:chat_id], info[:message_id]) if info[:chat_id] && info[:message_id]
         end
@@ -2283,6 +2379,20 @@ module Rubot
 
       # Returns :ok, :entity_error or :error.
       def post_edit(chat_id, message_id, text, parse_mode)
+        result = post_edit_once(chat_id, message_id, text, parse_mode)
+        return result unless result == :rate_limited
+
+        # Telegram answered 429: it tells us how long to wait. Retry once. If the
+        # wait is long (a busy group), give up rather than stalling the agent
+        # loop — the next status update will repaint the card anyway.
+        retry_after = @last_retry_after.to_i.clamp(1, 5)
+        warn "[telegram] Edit rate limited, retrying in #{retry_after}s"
+        sleep(retry_after)
+        result = post_edit_once(chat_id, message_id, text, parse_mode)
+        result == :rate_limited ? :error : result
+      end
+
+      def post_edit_once(chat_id, message_id, text, parse_mode)
         body = { "chat_id" => chat_id, "message_id" => message_id, "text" => text }
         body["parse_mode"] = parse_mode if parse_mode
         url = URI("#{API_BASE}#{@token}/editMessageText")
@@ -2292,6 +2402,11 @@ module Rubot
 
         result = http_post(url, req)
         return :ok if result["ok"]
+
+        if result["error_code"].to_i == 429
+          @last_retry_after = result.dig("parameters", "retry_after").to_i
+          return :rate_limited
+        end
 
         warn "[telegram] Edit message error: #{result["description"]}"
         entity_error?(result["description"].to_s) ? :entity_error : :error

@@ -623,6 +623,121 @@ module Rubot
       assert_nil @tg.instance_variable_get(:@tool_counts)[status_key]
     end
 
+    # --- Live status card ---------------------------------------------------
+
+    # The card says only what is true: which tool, which step, how long. No
+    # "Still working" prose, because at that moment nothing is running.
+    def test_status_card_shows_literal_state_without_prose
+      texts = capture_status_texts
+
+      @tg.send(:notify_tool_started, 42, 7, "shell_exec", { "command" => "bundle exec rspec" })
+
+      assert_equal 1, texts.size
+      assert_includes texts[0], "💻 `shell_exec` · step 1 · 0s"
+      assert_includes texts[0], "bundle exec rspec"
+      refute_includes texts[0], "Running tool"
+      refute_includes texts[0], "Still working"
+    end
+
+    # A finished round means no tool is running, so the card marks the step done
+    # and offers the one escape hatch the user has while waiting.
+    def test_finished_round_marks_the_step_done_and_hints_stop_once
+      texts = capture_status_texts
+
+      @tg.send(:notify_tool_started, 42, 7, "file_ops", { "operation" => "read", "path" => "lib/rubot/agent.rb" })
+      @tg.send(:notify_progress, 42, 7, 2)
+      refute_includes texts.last, "/stop", "two rounds is not yet worth a stop hint"
+
+      @tg.send(:notify_progress, 42, 7, 3)
+      assert_includes texts.last, "✓"
+      assert_equal 1, texts.last.scan("/stop").size
+
+      @tg.send(:notify_progress, 42, 7, 9)
+      assert_equal 1, texts.last.scan("/stop").size, "the hint must not repeat"
+      refute_includes texts.last, "round", "the round counter stays internal"
+    end
+
+    def test_progress_without_a_tool_card_does_nothing
+      texts = capture_status_texts
+
+      @tg.send(:notify_progress, 42, 7, 5)
+
+      assert_empty texts
+    end
+
+    # Telegram allows ~1 message per second per chat, and an edit counts as one.
+    # Tools inside a single batch arrive faster than that.
+    def test_status_edits_are_throttled_to_one_per_second
+      clock = 0.0
+      @tg.define_singleton_method(:monotonic_now) { clock }
+      events = []
+      @tg.define_singleton_method(:send_message_with_id) do |*_args|
+        events << :sent
+        "sent-1"
+      end
+      @tg.define_singleton_method(:edit_message) { |*_args| events << :edited }
+
+      @tg.send(:update_or_send_status, 42, 7, "step 1")
+      @tg.send(:update_or_send_status, 42, 7, "step 2")
+      assert_equal [ :sent ], events, "an edit inside the interval is dropped"
+
+      clock = 1.5
+      @tg.send(:update_or_send_status, 42, 7, "step 2")
+      assert_equal [ :sent, :edited ], events
+    end
+
+    def test_identical_status_text_is_never_resent
+      clock = 0.0
+      @tg.define_singleton_method(:monotonic_now) { clock }
+      events = []
+      @tg.define_singleton_method(:send_message_with_id) do |*_args|
+        events << :sent
+        "sent-1"
+      end
+
+      @tg.send(:update_or_send_status, 42, 7, "step 1")
+      clock = 10.0
+      @tg.send(:update_or_send_status, 42, 7, "step 1")
+
+      assert_equal [ :sent ], events
+    end
+
+    # A 429 used to be swallowed, leaving the card frozen on an old step. It now
+    # retries once using the retry_after Telegram sends.
+    def test_post_edit_retries_once_after_a_429
+      calls = 0
+      @tg.define_singleton_method(:http_post) do |_url, _req|
+        calls += 1
+        if calls == 1
+          { "ok" => false, "error_code" => 429, "description" => "Too Many Requests",
+            "parameters" => { "retry_after" => 1 } }
+        else
+          { "ok" => true }
+        end
+      end
+      @tg.define_singleton_method(:sleep) { |_seconds| nil }
+
+      assert_equal :ok, @tg.send(:post_edit, 42, "sent-1", "hi", "HTML")
+      assert_equal 2, calls
+    end
+
+    def test_post_edit_gives_up_after_a_second_429
+      @tg.define_singleton_method(:http_post) do |_url, _req|
+        { "ok" => false, "error_code" => 429, "description" => "Too Many Requests",
+          "parameters" => { "retry_after" => 1 } }
+      end
+      @tg.define_singleton_method(:sleep) { |_seconds| nil }
+
+      assert_equal :error, @tg.send(:post_edit, 42, "sent-1", "hi", "HTML")
+    end
+
+    def test_format_elapsed
+      assert_equal "0s", @tg.send(:format_elapsed, 0)
+      assert_equal "59s", @tg.send(:format_elapsed, 59.9)
+      assert_equal "1m 05s", @tg.send(:format_elapsed, 65)
+      assert_equal "1h 02m", @tg.send(:format_elapsed, 3720)
+    end
+
     # Register a status message the way update_or_send_status would, without
     # touching the Telegram API.
     def seed_status_message(chat_id, thread_id, message_id)
@@ -630,6 +745,17 @@ module Rubot
       @tg.instance_variable_get(:@status_messages)[key] = {
         chat_id: chat_id, thread_id: thread_id, message_id: message_id
       }
+    end
+
+    # Capture what the status card would have rendered, bypassing the throttle
+    # and the Telegram API.
+    def capture_status_texts
+      texts = []
+      @tg.define_singleton_method(:update_or_send_status) do |_chat_id, _thread_id, text, **_options|
+        texts << text
+        true
+      end
+      texts
     end
   end
 
