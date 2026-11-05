@@ -393,7 +393,9 @@ module Rubot
       # two. Measuring with #length alone would overflow the 4096 limit on an
       # emoji-heavy reply.
       def measure(text)
-        text.length + text.count("\u{10000}-\u{10FFFF}")
+        # String#count with a huge codepoint range enumerates the whole range
+        # and is pathologically slow, so match the astral characters instead.
+        text.length + text.gsub(/[^\u{0}-\u{FFFF}]/, "").length
       end
 
       # Longest prefix of +text+ (in characters) that still fits the budget.

@@ -238,6 +238,17 @@ module Rubot
       assert_includes chunks.join, "puts 300"
     end
 
+    def test_chunks_measure_length_in_utf16_units
+      # Telegram's 4096 limit counts UTF-16 code units, so every emoji is two.
+      text = "😀 party " * 400
+      chunks = @converter.chunks(text, 100)
+
+      chunks.each do |chunk|
+        utf16 = chunk.length + chunk.gsub(/[^\u{0}-\u{FFFF}]/, "").length
+        assert_operator utf16, :<=, 100, "chunk exceeds 100 UTF-16 units"
+      end
+    end
+
     def test_split_does_not_break_an_html_entity
       text = ("a&b " * 200)
       chunks = @converter.chunks(text, 40)

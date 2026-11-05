@@ -25,6 +25,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 🔈 **Progress narration** — the model explains what it is doing between tool calls ("Let me check the structure first."), sent as normal chat messages
 - ⏹️ **`/stop`** — stops the running turn and kills the shell command it started
 - 🗜️ **Context compaction** — `/compact` summarizes older turns, and auto-compaction kicks in at a configurable share of the context window
+- 🎨 **Telegram HTML rendering** — model Markdown becomes Telegram HTML: nested bold/italic, `<blockquote expandable>`, spoilers, syntax-highlighted code, aligned monospace tables, and long replies split without breaking entities
 - 📄 **`.env` support** — automatic environment variable loading from `.env` files
 - 🎛️ **CLI options** — single-message mode or interactive chat
 
