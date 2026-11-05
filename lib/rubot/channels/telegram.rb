@@ -11,7 +11,7 @@ require_relative "../image_info"
 require_relative "../model_catalog"
 require_relative "../persona"
 require_relative "../persona_store"
-require_relative "../telegram_markdown"
+require_relative "../telegram_format"
 require_relative "../usage"
 require_relative "../opencode_usage"
 
@@ -1013,11 +1013,9 @@ module Rubot
 
         if response && !response.empty?
           warn "[telegram] Sending response (#{response.length} chars)" if Rubot.debug?
-          ok = send_message(chat_id, response, thread_id)
-          unless ok
-            warn "[telegram] Retrying with plain text (markdown may be invalid)"
-            send_message_plain(chat_id, response, thread_id)
-          end
+          # send_message already falls back to plain text per chunk, so there is
+          # nothing left to retry here — a second pass would duplicate messages.
+          warn "[telegram] Some chunks could not be delivered" unless send_message(chat_id, response, thread_id)
         else
           warn "[telegram] ⚠️ Empty response — agent produced no text output"
           send_message(chat_id, "⚠️ I completed processing but have no text result to share.", thread_id)
@@ -1807,67 +1805,60 @@ module Rubot
 
       # --------------- Sending Messages ---------------
 
-      # Send a message to Telegram. Returns true if all chunks sent successfully.
+      # Send a message to Telegram. Markdown becomes Telegram HTML and is split
+      # into chunks that never break an entity. A chunk Telegram refuses to
+      # parse is re-sent as plain text — only that chunk, so earlier ones are
+      # never duplicated. Returns true if every chunk reached the chat.
       def send_message(chat_id, text, thread_id = nil)
         max_length = @config.fetch("max_message_length", DEFAULT_MAX_LENGTH)
 
-        # Convert standard Markdown to Telegram MarkdownV2
-        converted_text = Rubot::TelegramMarkdown.convert(text)
-
-        # Split long messages
-        chunks = split_message(converted_text, max_length)
         all_ok = true
-        chunks.each do |chunk|
-          body = {
-            "chat_id" => chat_id,
-            "text" => chunk,
-            "parse_mode" => "MarkdownV2"
-          }
-          body["message_thread_id"] = thread_id if thread_id
-          url = URI("#{API_BASE}#{@token}/sendMessage")
-          req = Net::HTTP::Post.new(url)
-          req["Content-Type"] = "application/json"
-          req.body = body.to_json
-
-          begin
-            result = http_post(url, req)
-            unless result["ok"]
-              warn "[telegram] API error: #{result["description"]}"
-              all_ok = false
-            end
-          rescue StandardError => e
-            warn "[telegram] Failed to send message: #{e.message}"
+        Rubot::TelegramFormat.chunks(text, max_length).each do |chunk|
+          status = deliver(chat_id, chunk, thread_id, parse_mode: "HTML")
+          if status == :entity_error
+            # Only an unparsable entity is worth a plain-text retry. Retrying a
+            # timed-out request could post the same chunk twice.
+            plain = Rubot::TelegramFormat.to_plain(chunk)
+            all_ok = false unless delivered?(deliver(chat_id, plain, thread_id, parse_mode: nil))
+          elsif !delivered?(status)
             all_ok = false
           end
         end
         all_ok
       end
 
-      # Send a message without MarkdownV2 (plain text fallback for retries).
+      # Send text with no parse mode at all (already plain, or last resort).
       def send_message_plain(chat_id, text, thread_id = nil)
         max_length = @config.fetch("max_message_length", DEFAULT_MAX_LENGTH)
-        chunks = split_message(text, max_length)
-        all_ok = true
-        chunks.each do |chunk|
-          body = { "chat_id" => chat_id, "text" => chunk }
-          body["message_thread_id"] = thread_id if thread_id
-          url = URI("#{API_BASE}#{@token}/sendMessage")
-          req = Net::HTTP::Post.new(url)
-          req["Content-Type"] = "application/json"
-          req.body = body.to_json
-
-          begin
-            result = http_post(url, req)
-            unless result["ok"]
-              warn "[telegram] Plain text send error: #{result["description"]}"
-              all_ok = false
-            end
-          rescue StandardError => e
-            warn "[telegram] Failed to send plain text: #{e.message}"
-            all_ok = false
-          end
+        split_message(text, max_length).all? do |chunk|
+          delivered?(deliver(chat_id, chunk, thread_id, parse_mode: nil))
         end
-        all_ok
+      end
+
+      # True when deliver returned a Telegram Message object.
+      def delivered?(status)
+        status.is_a?(Hash)
+      end
+
+      # One sendMessage call. Returns the Telegram result hash on success,
+      # :entity_error when the markup could not be parsed, :error otherwise.
+      def deliver(chat_id, text, thread_id, parse_mode:)
+        body = { "chat_id" => chat_id, "text" => text }
+        body["parse_mode"] = parse_mode if parse_mode
+        body["message_thread_id"] = thread_id if thread_id
+        url = URI("#{API_BASE}#{@token}/sendMessage")
+        req = Net::HTTP::Post.new(url)
+        req["Content-Type"] = "application/json"
+        req.body = body.to_json
+
+        result = http_post(url, req)
+        return result if result["ok"]
+
+        warn "[telegram] API error: #{result["description"]}"
+        entity_error?(result["description"].to_s) ? :entity_error : :error
+      rescue StandardError => e
+        warn "[telegram] Failed to send message: #{e.message}"
+        :error
       end
 
       def split_message(text, max_length)
@@ -1965,10 +1956,11 @@ module Rubot
         url = URI("#{API_BASE}#{@token}/sendMessage")
         req = Net::HTTP::Post.new(url)
         req["Content-Type"] = "application/json"
+        text = "⚠️ **Dangerous Action Detected**\n\n#{description}\n\nThis could cause data loss. Proceed?"
         body = {
           "chat_id" => chat_id,
-          "text" => "⚠️ *Dangerous Action Detected*\n\n#{description}\n\nThis could cause data loss. Proceed?",
-          "parse_mode" => "Markdown",
+          "text" => Rubot::TelegramFormat.convert(text),
+          "parse_mode" => "HTML",
           "reply_markup" => {
             "inline_keyboard" => [
               [
@@ -2100,8 +2092,7 @@ module Rubot
 
         warn "[telegram] narration: #{text[0..80]}" if Rubot.debug?
         clear_status_message(chat_id, thread_id, reset_count: false)
-        ok = send_message(chat_id, text, thread_id)
-        send_message_plain(chat_id, text, thread_id) unless ok
+        send_message(chat_id, text, thread_id)
       end
 
       TOOL_EMOJIS = {
@@ -2170,20 +2161,16 @@ module Rubot
       def update_or_send_status(chat_id, thread_id, text)
         return unless @config.fetch("tool_notifications", true)
 
-        # Convert standard Markdown to Telegram MarkdownV2 to ensure
-        # all reserved characters are properly escaped.
-        converted_text = Rubot::TelegramMarkdown.convert(text)
-
         key = status_key(chat_id, thread_id)
         existing = @status_mutex.synchronize { @status_messages[key] }
         warn "[telegram] update_or_send_status: existing=#{!!existing}, key=#{key}" if Rubot.debug?
 
         if existing
           # Edit the existing status message
-          edit_message(chat_id, existing[:message_id], converted_text, thread_id)
+          edit_message(chat_id, existing[:message_id], text, thread_id)
         else
           # Send a new status message
-          msg_id = send_message_with_id(chat_id, converted_text, thread_id)
+          msg_id = send_message_with_id(chat_id, text, thread_id)
           warn "[telegram] Status message sent, id=#{msg_id}" if Rubot.debug?
           @status_mutex.synchronize do
             @status_messages[key] = { chat_id: chat_id, thread_id: thread_id, message_id: msg_id }
@@ -2216,56 +2203,50 @@ module Rubot
       # Send a message and return the message_id (for later editing/deletion).
       def send_message_with_id(chat_id, text, thread_id = nil)
         max_length = @config.fetch("max_message_length", DEFAULT_MAX_LENGTH)
-        chunks = split_message(text, max_length)
         last_id = nil
 
-        chunks.each do |chunk|
-          body = {
-            "chat_id" => chat_id,
-            "text" => chunk,
-            "parse_mode" => "MarkdownV2"
-          }
-          body["message_thread_id"] = thread_id if thread_id
-          url = URI("#{API_BASE}#{@token}/sendMessage")
-          req = Net::HTTP::Post.new(url)
-          req["Content-Type"] = "application/json"
-          req.body = body.to_json
-
-          begin
-            result = http_post(url, req)
-            if result["ok"]
-              last_id = result["result"]["message_id"]
-            else
-              warn "[telegram] API error: #{result["description"]}"
-            end
-          rescue StandardError => e
-            warn "[telegram] Failed to send message: #{e.message}"
+        Rubot::TelegramFormat.chunks(text, max_length).each do |chunk|
+          status = deliver(chat_id, chunk, thread_id, parse_mode: "HTML")
+          if status == :entity_error
+            plain = Rubot::TelegramFormat.to_plain(chunk)
+            status = deliver(chat_id, plain, thread_id, parse_mode: nil)
           end
+          last_id = status.dig("result", "message_id") if delivered?(status)
         end
         last_id
       end
 
-      # Edit an existing message by ID (used for status updates).
+      # Edit an existing message by ID (used for status updates). Takes Markdown:
+      # conversion happens here so callers never ship half-formatted text.
       def edit_message(chat_id, message_id, text, thread_id = nil)
-        body = {
-          "chat_id" => chat_id,
-          "message_id" => message_id,
-          "text" => text,
-          "parse_mode" => "MarkdownV2"
-        }
+        html = Rubot::TelegramFormat.convert(text)
+        return if post_edit(chat_id, message_id, html, "HTML") != :entity_error
+
+        post_edit(chat_id, message_id, Rubot::TelegramFormat.to_plain(html), nil)
+      end
+
+      # Returns :ok, :entity_error or :error.
+      def post_edit(chat_id, message_id, text, parse_mode)
+        body = { "chat_id" => chat_id, "message_id" => message_id, "text" => text }
+        body["parse_mode"] = parse_mode if parse_mode
         url = URI("#{API_BASE}#{@token}/editMessageText")
         req = Net::HTTP::Post.new(url)
         req["Content-Type"] = "application/json"
         req.body = body.to_json
 
-        begin
-          result = http_post(url, req)
-          unless result["ok"]
-            warn "[telegram] Edit message error: #{result["description"]}"
-          end
-        rescue StandardError => e
-          warn "[telegram] Failed to edit message: #{e.message}"
-        end
+        result = http_post(url, req)
+        return :ok if result["ok"]
+
+        warn "[telegram] Edit message error: #{result["description"]}"
+        entity_error?(result["description"].to_s) ? :entity_error : :error
+      rescue StandardError => e
+        warn "[telegram] Failed to edit message: #{e.message}"
+        :error
+      end
+
+      # Telegram's wording when the HTML/Markdown in a message cannot be parsed.
+      def entity_error?(description)
+        description.to_s.match?(/parse|entit|tag|unsupported start|can't find end/i)
       end
 
       # Delete a message by ID.
