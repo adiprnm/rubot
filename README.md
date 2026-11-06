@@ -378,9 +378,14 @@ agents:
 A value of `100` disables auto-compaction by making the threshold unreachable
 (there is no room left to summarize); set `auto: false` to disable it
 outright. The context size is estimated from the transcript with a
-bytes-per-token heuristic (reasoning blocks included), and very long
-transcripts are summarized in chunks so the summarizer request itself stays
-within the window.
+bytes-per-token heuristic (reasoning excluded, since it is never sent or
+summarized), and very long transcripts are summarized in chunks so the
+summarizer request itself stays within the window.
+
+Each compaction **merges** the previous running summary into the new one
+instead of appending a paragraph, and only the newest 6,000 characters of the
+summary are injected into the system prompt. Without that, every compaction
+added another paragraph to a block that was paid for on every request.
 
 On a model with a very large window the percentage threshold can be
 unreachable in practice (50% of 1M tokens is 500k). `threshold_tokens` adds an

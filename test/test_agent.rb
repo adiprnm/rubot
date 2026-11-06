@@ -786,6 +786,16 @@ class TestAgentCompaction < Minitest::Test
     assert @agent.session.summarized?
   end
 
+  def test_compaction_replaces_the_running_summary
+    fill_session(10)
+    @agent.session.append_summary("Old summary that must be merged away. " * 20)
+
+    @agent.compact_session
+
+    assert_equal "Summarized.", @agent.session.summary_text
+    refute_includes @agent.session.summary_text, "Old summary"
+  end
+
   def test_compact_session_returns_nil_for_a_short_conversation
     @agent.session.add("user", "hello")
 

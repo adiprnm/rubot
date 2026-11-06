@@ -21,8 +21,7 @@ module Rubot
           Use this to remember important facts, user preferences,
           or project context across sessions.
 
-          IMPORTANT: Memory can NEVER be fully erased or reset.
-          Only additive operations (append, update_section) are allowed.
+          Memory is additive: there is no full replace.
 
           Operations:
           - read: Read the entire memory
@@ -38,7 +37,7 @@ module Rubot
             "operation" => {
               "type" => "string",
               "enum" => [ "read", "append", "update_section" ],
-              "description" => "The memory operation to perform. Note: 'write' (full replace) is NOT available — memory cannot be reset."
+              "description" => "Memory operation (there is no full-replace write)"
             },
             "section" => {
               "type" => "string",
@@ -46,7 +45,7 @@ module Rubot
             },
             "content" => {
               "type" => "string",
-              "description" => "Content for write, or the fact to append"
+              "description" => "Fact to append"
             },
             "items" => {
               "type" => "array",

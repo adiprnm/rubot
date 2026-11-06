@@ -26,26 +26,11 @@ module Rubot
         <<~DESC.strip
           Schedule reminders, recurring tasks, and one-time alerts.
 
-          Use this when the user asks to:
-          - Remind them about something later (e.g. "remind me in 5 minutes")
-          - Run something on a schedule (e.g. "every hour", "daily at 9am")
-          - Run a shell command on a schedule
-
-          Schedule types:
-          - at_seconds: One-time reminder, seconds from now. Examples:
-            * "in 2 minutes" → 120
-            * "in 5 minutes" → 300
-            * "in 1 hour" → 3600
-            * "in 10 minutes" → 600
-          - every_seconds: Recurring interval in seconds. Examples:
-            * "every hour" → 3600
-            * "every 30 minutes" → 1800
-          - cron_expr: Standard 5-field cron expression. Examples:
-            * "daily at 9am" → "0 9 * * *"
-            * "every weekday at 6pm" → "0 18 * * 1-5"
-
           Operations: add, list, detail, remove, enable, disable
-          Tip: To view a job's details, use `/cron show <job-id>` (e.g. `/cron show abc123def456`).
+          Schedule, one per job:
+          - at_seconds: one-time, seconds from now (600 = 10 minutes)
+          - every_seconds: recurring interval (1800 = every 30 minutes)
+          - cron_expr: standard 5-field cron ("0 9 * * *" = daily 09:00)
         DESC
       end
 
@@ -56,43 +41,43 @@ module Rubot
             "operation" => {
               "type" => "string",
               "enum" => [ "add", "list", "detail", "remove", "enable", "disable" ],
-              "description" => "The cron operation to perform"
+              "description" => "Cron operation"
             },
             "message" => {
               "type" => "string",
-              "description" => "The message/task to execute when the job fires (required for add)"
+              "description" => "Task to run when the job fires (required for add)"
             },
             "command" => {
               "type" => "string",
-              "description" => "Shell command to execute directly (uses command mode)"
+              "description" => "Shell command to run instead of a message"
             },
             "cron_expr" => {
               "type" => "string",
-              "description" => "Cron expression for recurring schedule, e.g. '0 9 * * *'"
+              "description" => "5-field cron expression, e.g. '0 9 * * *'"
             },
             "every_seconds" => {
               "type" => "integer",
-              "description" => "Recurring interval in seconds, e.g. 3600 for every hour"
+              "description" => "Recurring interval in seconds, e.g. 3600"
             },
             "at_seconds" => {
               "type" => "integer",
-              "description" => "One-time delay in seconds from now, e.g. 600 for 10 minutes"
+              "description" => "One-time delay in seconds from now, e.g. 600"
             },
             "description" => {
               "type" => "string",
-              "description" => "Human-readable description of the job"
+              "description" => "Human-readable label"
             },
             "job_id" => {
               "type" => "string",
-              "description" => "Job ID (for remove, enable, disable)"
+              "description" => "Job id (remove, enable, disable)"
             },
             "target_chat_id" => {
               "type" => "integer",
-              "description" => "Telegram chat ID to deliver results to (set automatically by the channel)"
+              "description" => "Telegram chat id (set by the channel)"
             },
             "target_thread_id" => {
               "type" => "integer",
-              "description" => "Telegram topic/thread ID to deliver results to (set automatically by the channel)"
+              "description" => "Telegram topic id (set by the channel)"
             }
           },
           "required" => [ "operation" ]

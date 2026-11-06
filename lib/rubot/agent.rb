@@ -724,9 +724,11 @@ module Rubot
       @skill_registry.reload!
       parts = []
 
-      # 1. AGENTS.md rules (behavior guidelines)
+      # 1. AGENTS.md rules (behavior guidelines). The file's own "# Agent
+      # Rules" heading is stripped so it is not sent twice.
       if @agents_file.enabled? && !@agents_file.rules.empty?
-        parts << "# Agent Rules\n\n#{@agents_file.rules}"
+        rules = @agents_file.rules.sub(/\A#\s+Agent Rules\s*\n+/, "")
+        parts << "# Agent Rules\n\n#{rules}"
       end
 
       # 1b. Scripting language (Ruby for anything the bot writes itself)

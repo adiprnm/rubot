@@ -255,6 +255,17 @@ class TestSessionSummarization < Minitest::Test
     assert_includes @session.summary_text, "Second part"
   end
 
+  def test_summary_text_caps_a_long_running_summary
+    session = Rubot::Session.new("long-summary", workspace: nil)
+    session.append_summary("a" * 20_000)
+
+    text = session.summary_text
+
+    assert_operator text.length, :<=, Rubot::Session::MAX_SUMMARY_CHARS + 40
+    assert text.end_with?("a" * 100)
+    assert_includes text, "earlier summary omitted"
+  end
+
   def test_persistence_of_summary
     @session.append_summary("Persistent summary")
     session2 = Rubot::Session.new("summarize-test", workspace: @workspace)
@@ -481,13 +492,23 @@ class TestSessionHistoryWindowing < Minitest::Test
     assert_equal "thinking", @session.conversation_history[0]["reasoning_content"]
   end
 
-  def test_estimated_tokens_counts_reasoning_content
-    @session.add("assistant", "answer")
-    without = @session.estimated_tokens
+  def test_estimated_tokens_ignores_reasoning_content
+    with_reasoning = Rubot::Session.new("with-reasoning", workspace: nil)
+    with_reasoning.add("assistant", "answer", reasoning_content: "x" * 4_000)
 
-    @session.add("assistant", "answer", reasoning_content: "x" * 4_000)
+    without = Rubot::Session.new("without-reasoning", workspace: nil)
+    without.add("assistant", "answer")
 
-    assert_operator @session.estimated_tokens, :>=, without + 1_000
+    # Past reasoning is neither sent nor summarized, so it must not make the
+    # transcript look larger to the compaction trigger.
+    assert_equal without.estimated_tokens, with_reasoning.estimated_tokens
+  end
+
+  def test_message_tokens_counts_reasoning_for_the_request_budget
+    msg = { "role" => "assistant", "content" => "answer", "reasoning_content" => "x" * 4_000 }
+
+    assert_operator Rubot::Session.message_tokens(msg), :>=, 1_000
+    assert_operator Rubot::Session.message_tokens(msg), :>, Rubot::Session.message_tokens(msg, reasoning: false)
   end
 
   def test_safe_history_respects_the_token_budget

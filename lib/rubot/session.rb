@@ -17,6 +17,13 @@ module Rubot
     # Without it, compacting a very long transcript could overflow the
     # summarizer's own context window.
     MAX_SUMMARY_INPUT_CHARS = 24_000
+    # How much of the running summary is injected into the system prompt. Each
+    # compaction used to append another paragraph, so a long session ended up
+    # re-sending every summary it had ever produced (35 KB in one live
+    # session). The newest part is the relevant one; older paragraphs are
+    # dropped from the prompt (the file keeps them until the next compaction
+    # merges everything into one).
+    MAX_SUMMARY_CHARS = 6_000
     # User messages waiting to be extracted into MEMORY.md. Bounded so a long
     # stretch between extractions cannot grow the session file without limit.
     MAX_MEMORY_BACKLOG = 20
@@ -205,20 +212,25 @@ module Rubot
     # system prompt, for example), used to decide when to compact. Ruby's
     # standard library has no tokenizer, so this is the usual bytes/4
     # heuristic plus a small per-message overhead.
+    # Approximate size of the transcript, used to decide when to compact.
+    # Reasoning is deliberately excluded: past reasoning is never sent (see
+    # #conversation_history) and the summarizer never reads it, so counting it
+    # only made compaction fire early and pay for a summarizer request without
+    # shrinking the real prompt.
     def estimated_tokens(extra_chars: 0)
       total = (extra_chars.to_i + summary_text.to_s.bytesize) / 4.0
-      @messages.each { |msg| total += self.class.message_tokens(msg) }
+      @messages.each { |msg| total += self.class.message_tokens(msg, reasoning: false) }
       total.ceil
     end
 
-    # Approximate token cost of one message as it will be sent. Includes the
-    # reasoning block, which used to be omitted: on a tool-heavy turn it is the
-    # largest part of the prompt, so leaving it out made compaction believe the
-    # transcript was ~40% smaller than the provider's bill.
-    def self.message_tokens(msg)
+    # Approximate token cost of one message as it will be sent. The reasoning
+    # block is included by default because the turn being executed sends it.
+    def self.message_tokens(msg, reasoning: true)
       tokens = 4.0
       tokens += msg["content"].to_s.bytesize / 4.0
-      tokens += msg["reasoning_content"].to_s.bytesize / 4.0
+      if reasoning && msg["reasoning_content"]
+        tokens += msg["reasoning_content"].to_s.bytesize / 4.0
+      end
       tokens += JSON.generate(msg["tool_calls"]).bytesize / 4.0 if msg["tool_calls"]
       tokens
     end
@@ -260,16 +272,14 @@ module Rubot
       return nil if cutoff <= 0
 
       to_summarize = @messages[0...cutoff]
-      summary_text = call_summarizer(provider, system_prompt, to_summarize)
+      summary_text = call_summarizer(provider, system_prompt, to_summarize, previous: summary_text)
       return nil if summary_text.nil? || summary_text.strip.empty?
 
       context_before = estimated_tokens
       clean_summary = self.class.normalize_utf8(summary_text.strip)
-      @summary = if @summary.nil? || @summary.strip.empty?
-        clean_summary
-      else
-        "#{@summary}\n#{clean_summary}"
-      end
+      # Replace the old summary: the summarizer already merged it into this
+      # one. Appending here is what made the prompt grow without bound.
+      @summary = clean_summary
       @messages = @messages[cutoff..] || []
       save!
 
@@ -300,10 +310,20 @@ module Rubot
       result && result[:summary]
     end
 
-    # Returns the summary text for inclusion in the system prompt
+    # Returns the summary text for inclusion in the system prompt. Long
+    # summaries keep only the newest part: the summary is written
+    # chronologically, so the tail is what the current work depends on.
     def summary_text
       return nil if @summary.nil? || @summary.strip.empty?
-      @summary.strip
+
+      text = @summary.strip
+      return text if text.length <= MAX_SUMMARY_CHARS
+
+      tail = text[-MAX_SUMMARY_CHARS..].to_s
+      # Start at a sentence/paragraph boundary instead of mid-word.
+      boundary = tail.index(/[.\n]/)
+      tail = tail[(boundary + 1)..].to_s.lstrip if boundary && boundary < 200
+      "…(earlier summary omitted)\n#{tail}"
     end
 
     def file_path
@@ -349,9 +369,14 @@ module Rubot
     # Call the LLM to summarize a batch of old messages into a compact form.
     # Very long transcripts are split into chunks so the summarizer request
     # itself stays within the model's context window.
-    def call_summarizer(provider, system_prompt, messages)
+    def call_summarizer(provider, system_prompt, messages, previous: nil)
       batches = split_summary_batches(messages)
-      summaries = batches.filter_map { |batch| summarize_batch(provider, system_prompt, batch) }
+      summaries = batches.map do |batch|
+        # A single batch can take the previous summary directly in its prompt;
+        # with several batches the merge step below does that instead.
+        summarize_batch(provider, system_prompt, batch,
+                        previous: batches.size == 1 ? previous : nil)
+      end.compact
       return nil if summaries.empty?
       return summaries.first if summaries.size == 1
 
@@ -359,12 +384,13 @@ module Rubot
         provider,
         system_prompt,
         summaries.map { |text| { "role" => "assistant", "content" => text } },
-        merging: true
+        merging: true,
+        previous: previous
       )
-      merged || summaries.join("\n\n")
+      merged || [ previous, *summaries ].compact.join("\n\n")
     end
 
-    def summarize_batch(provider, system_prompt, messages, merging: false)
+    def summarize_batch(provider, system_prompt, messages, merging: false, previous: nil)
       context = messages.map do |msg|
         role = msg["role"]
         content = msg["content"] || ""
@@ -377,8 +403,16 @@ module Rubot
         "Summarize the following conversation history into a concise paragraph."
       end
 
+      previous_block = previous.to_s.strip.empty? ? "" : <<~PREV
+        Existing summary of even older turns. Merge it with the new material
+        into one cohesive summary; do not repeat it verbatim:
+        #{previous}
+
+      PREV
+
       summarize_prompt = <<~PROMPT.strip
         #{instruction}
+        #{previous_block}
         Preserve important facts, decisions, and outcomes. Omit pleasantries
         and redundant exchanges. Keep it under 200 words.
 
