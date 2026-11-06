@@ -99,6 +99,21 @@ class TestConfig < Minitest::Test
     assert config.debug?
   end
 
+  def test_external_editor_is_unset_by_default
+    config = Rubot::Config.new("/nonexistent/config.yml")
+    assert_nil config.external_editor
+  end
+
+  def test_external_editor_is_read_from_the_top_level_and_from_agent_defaults
+    File.write(@config_path, { "external_editor" => "code --wait" }.to_yaml)
+    assert_equal "code --wait", Rubot::Config.new(@config_path).external_editor
+
+    File.write(@config_path, {
+      "agents" => { "defaults" => { "external_editor" => "  nvim  " } }
+    }.to_yaml)
+    assert_equal "nvim", Rubot::Config.new(@config_path).external_editor
+  end
+
   def test_tools_enabled_by_default
     config = Rubot::Config.new("/nonexistent/config.yml")
     assert config.tools_enabled

@@ -85,3 +85,22 @@ test 'the canvas is pooled between frames' do
   s.present(first)
   assert first.equal?(s.frame)
 end
+
+test 'invalidate! repaints every row after another program used the tty' do
+  io = CountingIO.new
+  s = screen(io, 40, 10)
+
+  first = s.frame
+  first.put(2, 1, 'before the editor', :text)
+  s.present(first)
+
+  s.invalidate!
+  io.reset
+
+  second = s.frame
+  second.put(2, 1, 'before the editor', :text)
+  s.present(second)
+
+  assert io.bytes > 40, "expected a full repaint, wrote #{io.bytes} bytes"
+  assert_equal 'before the editor', plain(s.instance_variable_get(:@prev)[1]).strip
+end

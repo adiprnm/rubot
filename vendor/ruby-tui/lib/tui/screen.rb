@@ -38,6 +38,15 @@ module TUI
       true
     end
 
+    # Forget what the terminal currently shows, so the next frame repaints
+    # every row. Needed after the terminal was handed to another program
+    # (an external editor, a shell command) that painted over it.
+    def invalidate!
+      @prev = []
+      @canvas = nil
+      self
+    end
+
     # A pooled canvas, wiped where the previous tick drew.
     def frame
       @canvas ||= Canvas.new(@w, @h)

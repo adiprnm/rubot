@@ -602,6 +602,148 @@ module Rubot
       writer&.close
     end
 
+    # --- ctrl+g: edit the prompt in $EDITOR ---------------------------
+
+    def test_ctrl_g_hands_the_prompt_to_the_editor_and_takes_it_back
+      repl = build_repl
+      prompt = repl.instance_variable_get(:@prompt)
+      app = repl.instance_variable_get(:@app)
+      "hello".each_char { |c| prompt.handle_key(::TUI::Key.printable(c)) }
+
+      drafts = []
+      repl.define_singleton_method(:run_editor) do |path|
+        drafts << path
+        # What an editor does: starts from the prompt, writes it back.
+        File.write(path, File.read(path) + "\nsecond line\n")
+      end
+
+      handler = app.instance_variable_get(:@keys)[:ctrl_g]
+      refute_nil handler, "ctrl+g must have an app binding"
+      assert_equal false, prompt.handle_key(::TUI::Key.new(:ctrl_g)),
+                   "the prompt must not swallow ctrl+g"
+      handler.call(::TUI::Key.new(:ctrl_g))
+
+      assert_equal "hello\nsecond line", prompt.value, "the editor output replaces the buffer"
+      assert_equal 1, drafts.length
+      refute File.exist?(drafts.first), "the draft file must not outlive the edit"
+    end
+
+    def test_ctrl_g_keeps_the_prompt_when_the_editor_writes_nothing
+      repl = build_repl
+      prompt = repl.instance_variable_get(:@prompt)
+      "typed".each_char { |c| prompt.handle_key(::TUI::Key.printable(c)) }
+      repl.define_singleton_method(:run_editor) { |_path| nil }
+
+      repl.send(:edit_prompt)
+
+      assert_equal "typed", prompt.value
+    end
+
+    def test_ctrl_g_with_a_failing_editor_keeps_the_prompt_and_reports
+      repl = build_repl
+      prompt = repl.instance_variable_get(:@prompt)
+      "typed".each_char { |c| prompt.handle_key(::TUI::Key.printable(c)) }
+      repl.define_singleton_method(:run_editor) { |_path| raise Errno::ENOENT, "editor" }
+
+      repl.send(:edit_prompt)
+      repl.send(:pump)
+
+      assert_equal "typed", prompt.value
+      view = plain(repl.instance_variable_get(:@app).render_lines)
+      assert view.any? { |line| line.include?("editor: Errno::ENOENT") }, "the failure must be reported"
+    end
+
+    def test_editor_command_prefers_visual_over_editor_and_falls_back_to_vi
+      repl = build_repl
+      saved = ENV.to_h.slice("VISUAL", "EDITOR")
+      begin
+        ENV.delete("VISUAL")
+        ENV.delete("EDITOR")
+        assert_equal "vi", repl.send(:editor_command)
+
+        ENV["EDITOR"] = "nano --wait"
+        assert_equal "nano --wait", repl.send(:editor_command)
+
+        ENV["VISUAL"] = "nvim"
+        assert_equal "nvim", repl.send(:editor_command)
+      ensure
+        saved.each { |key, value| ENV[key] = value }
+        ([ "VISUAL", "EDITOR" ] - saved.keys).each { |key| ENV.delete(key) }
+      end
+    end
+
+    def test_configured_editor_wins_over_the_environment
+      agent = stub_agent
+      def agent.config
+        Struct.new(:external_editor).new("omarchy-launch-editor --inline")
+      end
+      repl = TUI.new(agent)
+      repl.send(:build_ui)
+      repl.send(:push_status_info)
+
+      saved = ENV.to_h.slice("VISUAL", "EDITOR")
+      begin
+        ENV["VISUAL"] = "nvim"
+        ENV["EDITOR"] = "nano"
+        assert_equal "omarchy-launch-editor --inline", repl.send(:editor_command)
+      ensure
+        saved.each { |key, value| ENV[key] = value }
+        ([ "VISUAL", "EDITOR" ] - saved.keys).each { |key| ENV.delete(key) }
+      end
+    end
+
+    def test_help_lists_the_editor_binding
+      repl = build_repl
+      repl.send(:handle_command, "/help")
+      repl.send(:pump)
+
+      view = plain(repl.instance_variable_get(:@app).render_lines)
+      line = view.find { |l| l.include?("ctrl+g") }
+      refute_nil line, "the ctrl+g key must be documented in /help"
+      assert_includes line, "EDITOR"
+    end
+
+    def test_ctrl_g_reads_as_a_control_byte_and_as_a_protocol_sequence
+      # With the keyboard protocol on, ctrl+g arrives as CSI 103;5u.
+      assert_equal :ctrl_g, ::TUI::Term::SEQUENCES["\e[103;5u"]
+
+      # Without it, it is a bare 0x07 (BEL) that must not be typed into the
+      # prompt as a character.
+      require "pty"
+      reader, writer = PTY.open
+      previous = $stdin
+      $stdin = reader
+      begin
+        writer.write("\a")
+        assert_equal :ctrl_g, ::TUI::Term.read_key(0.5)&.name
+        writer.write("\x02")
+        assert_equal :ctrl_b, ::TUI::Term.read_key(0.5)&.name
+      ensure
+        $stdin = previous
+        reader&.close
+        writer&.close
+      end
+    end
+
+    def test_hand_over_leaves_the_alternate_screen_and_restores_it
+      out = StringIO.new
+      handed_over = false
+      Rubot::TUI::Compat.hand_over(out) { handed_over = true }
+      seq = out.string
+
+      assert handed_over, "the child process must run between the two halves"
+
+      pop = seq.index("\e[<u")
+      alt_off = seq.index("\e[?1049l")
+      alt_on = seq.index("\e[?1049h")
+      push = seq.index("\e[>1u")
+
+      assert pop && alt_off && alt_on && push, "all four switches must be written: #{seq.inspect}"
+      assert_operator pop, :<, alt_off, "the key protocol is popped before the screen is handed over"
+      assert_operator alt_off, :<, alt_on, "the child gets the main screen"
+      assert_operator alt_on, :<, push, "the key protocol is pushed back on the alternate screen"
+    end
+
     def test_keyboard_protocol_is_pushed_after_the_alternate_screen_switch
       out = StringIO.new
       ::TUI::Term.session(out) { nil }

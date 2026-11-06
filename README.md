@@ -12,6 +12,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 🛠️ **Built-in tools** — shell execution, file operations, web fetching, persistent memory, cron scheduling
 - 💬 **Interactive REPL** — with streaming, command history, and tab completion
 - ⌨️ **Multiline prompt** — Shift+Enter inserts a newline and the input box grows with the text, word-wrapping long lines
+- 📝 **External editor** — Ctrl+G opens the half-typed prompt in `$EDITOR` and takes the edited text straight back into the input box
 - 📝 **Session management** — persistent conversation history
 - 🧬 **SOUL.md** — personality and identity file for persistent character
 - 🎛️ **Model presets** — named model configurations with a primary default, switchable per session and manageable from Telegram
@@ -171,6 +172,7 @@ $ rubot
 | `Shift+Enter`, `Alt+Enter` | Insert a newline |
 | `Up` / `Down` | Move between lines once the input has more than one, otherwise recall history |
 | `Tab` | Complete a `/command` |
+| `Ctrl+G` | Edit the prompt in `$EDITOR`, then take it back into the input |
 | `Esc` | Cancel the running turn, clear a selection |
 | `Ctrl+C` | Quit |
 | `PageUp` / `PageDown`, mouse wheel | Scroll the transcript |
@@ -187,6 +189,18 @@ Under the prompt, the status row tracks the running turn's estimated cost,
 cache hit rate, and how much of the model's context window is in use (for
 example `$0.004 · cache 87.3% · ctx 11.6%`), with the session and model on
 the right. Figures refresh after every turn; `/context` has the full report.
+
+`Ctrl+G` hands the prompt to an external editor for a long or multi-paragraph
+message, then reads it back into the input box. The editor is `external_editor`
+from `config.yml` when set, otherwise `$VISUAL`, `$EDITOR`, or `vi`. The TUI
+steps aside while the editor runs (alternate screen, raw mode, mouse tracking
+and the keyboard protocol are restored afterwards), so a normal full-screen
+editor works in place. The command has to block until the file is saved — use
+`code --wait`, not `code`:
+
+```yaml
+external_editor: nvim
+```
 
 ### CLI Options
 

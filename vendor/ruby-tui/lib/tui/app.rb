@@ -131,6 +131,13 @@ module TUI
       @screen.present(render_frame)
     end
 
+    # Make the next render repaint every row, whatever the diff thinks the
+    # terminal still shows. Used after another program owned the tty.
+    def invalidate!
+      @screen.invalidate!
+      self
+    end
+
     def render_lines
       render_frame.lines
     end

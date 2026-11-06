@@ -141,6 +141,7 @@ module Rubot
         when :model_entry          then agent.config.model_entry_by_name(msg[:name])
         when :active_model_entry   then agent.config.active_model_entry
         when :workspace            then agent.config.workspace
+        when :external_editor      then agent.config.external_editor
         when :active_model_name    then agent.active_model_name
         when :active_model_preset  then agent.active_model_preset
         when :model_presets        then agent.model_presets

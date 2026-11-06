@@ -153,6 +153,16 @@ module Rubot
       agent_defaults["temperature"] || 0.7
     end
 
+    # Command the TUI runs on ctrl+g to edit the prompt before sending it.
+    # Resolved from config first; the TUI falls back to $VISUAL, $EDITOR and
+    # then `vi`. The command has to block until the file is written (use
+    # `code --wait`, not `code`).
+    def external_editor
+      raw = data["external_editor"] || agent_defaults["external_editor"] || agent_defaults["externalEditor"]
+      text = raw.to_s.strip
+      text.empty? ? nil : text
+    end
+
     # --- Model presets ---------------------------------------------------
     #
     # A preset is a named, complete model configuration:

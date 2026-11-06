@@ -217,6 +217,10 @@ module Rubot
           @handle.call(:workspace)
         end
 
+        def external_editor
+          @handle.call(:external_editor)
+        end
+
         def name
           @handle.call(:active_model_name)
         end

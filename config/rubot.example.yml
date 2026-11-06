@@ -41,6 +41,11 @@ agents:
     # Write operations are always blocked outside the workspace.
     allow_read_outside_workspace: false
 
+# Editor opened by Ctrl+G in the TUI to write the prompt in. Falls back to
+# $VISUAL, then $EDITOR, then `vi` when unset. The command must block until
+# the file is saved (`code --wait`, not `code`).
+# external_editor: nvim
+
 model_presets:
   # Named, complete model configurations. `/model <name>` switches the current
   # session; `/preset set|default|delete` manages these from Telegram.

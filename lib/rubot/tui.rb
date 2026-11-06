@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "base64"
+require "shellwords"
+require "tmpdir"
 
 require_relative "usage"
 require_relative "opencode_usage"
@@ -29,8 +31,9 @@ module Rubot
   #   prompt box (thin bordered box, no placeholder/hints)
   #   status row (spinner · session/model)
   #
-  # Keys: enter send · tab completes /commands · ↑↓ history ·
-  # page-up/page-down scroll · esc cancels the running turn · ctrl-c quits.
+  # Keys: enter send · shift+enter newline · tab completes /commands · ↑↓ history ·
+  # ctrl+g edits the prompt in $EDITOR · page-up/page-down scroll · esc
+  # cancels the running turn · ctrl-c quits.
   #
   # Threading: the ruby-tui App owns the main thread. A worker thread feeds
   # submitted lines (messages and /commands) to the agent; streaming chunks,
@@ -72,6 +75,19 @@ module Rubot
     # read better in /help than as completion targets).
     COMPLETABLE = COMMANDS.keys.reject { |c| c.include?(" ") }.freeze
 
+    # Key bindings listed by /help. Only the discoverable ones: typing and
+    # the arrows need no explanation, the rest do.
+    KEYS = {
+      "enter"       => "Send the prompt",
+      "shift+enter" => "Insert a newline (the box grows)",
+      "ctrl+g"      => "Edit the prompt in $EDITOR, then take it back",
+      "tab"         => "Complete a /command",
+      "↑ / ↓"       => "Browse prompt history",
+      "esc"         => "Cancel the running turn",
+      "pgup/pgdn"   => "Scroll the conversation",
+      "ctrl-c"      => "Quit rubot"
+    }.freeze
+
     SPIN = %w[⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏].freeze
     MARK = { ok: "✓", warn: "!", err: "✗", info: "·", tool: "⚒", skill: "✦", cron: "⏰", note: "◆" }.freeze
     TURN_MARK = "✻"
@@ -110,6 +126,9 @@ module Rubot
       @worker = nil
       @app = nil
       @tui = false
+      # Resolved on the worker thread (agent.config may cross a Ractor
+      # boundary), then only read from the App thread.
+      @external_editor = nil
     end
 
     # Current session handle: a legacy in-process Agent or a Ractor-backed
@@ -239,6 +258,8 @@ module Rubot
         copy_selection
       end
       @app.on_key(:ctrl_c) { @app.quit }
+      # Hand the prompt to $EDITOR and take the result back into the input.
+      @app.on_key(:ctrl_g) { edit_prompt }
       @app.on_key(:escape) do
         @log.clear_selection
         cancel_turn
@@ -297,6 +318,9 @@ module Rubot
     end
 
     def push_status_info
+      # Read here, not on the App thread: agent.config is a Ractor view in
+      # actor mode, and the App thread must never block on a request.
+      @external_editor = configured_editor
       info = agent.startup_info
       @events << [ :status_right,
                   "session #{agent.session.id} · #{info[:provider]} · #{info[:model]}" ]
@@ -602,6 +626,63 @@ module Rubot
       @app.focus(@dialog)
     end
 
+    # ------------------------------------------------------------------
+    # External editor (ctrl+g)
+    # ------------------------------------------------------------------
+
+    # Edit the prompt in the configured editor and take back what it wrote.
+    # The draft starts as the current buffer, so ctrl+g on a half-typed
+    # message continues where the input box left off. An editor that writes
+    # nothing back (or cannot start) leaves the prompt exactly as it was,
+    # and nothing is lost either way: the draft is the same text.
+    def edit_prompt
+      path = draft_path
+      File.write(path, @prompt.value.to_s)
+      run_editor(path)
+      # Editors end the file with a newline; in the prompt box that would be
+      # a blank last line, not part of the message.
+      @prompt.value = File.read(path).gsub("\r\n", "\n").sub(/\n+\z/, "")
+      @app.focus(@prompt)
+    rescue StandardError => e
+      publish [ [ MARK[:err] + " ", :error ], [ "editor: #{e.class}: #{e.message}", :error ] ]
+    ensure
+      # The alternate screen came back blank, so the diff cache is stale.
+      @app&.invalidate!
+      begin
+        File.delete(path) if path && File.exist?(path)
+      rescue StandardError
+        nil
+      end
+    end
+
+    # The editor owns the terminal while it runs: the alternate screen, raw
+    # input, mouse tracking and the keyboard protocol all step aside and
+    # come back afterwards. The command runs through the shell so an editor
+    # entry like "code -w" or "omarchy-launch-editor --inline" works.
+    def run_editor(path)
+      Compat.hand_over($stdout) { system("#{editor_command} #{Shellwords.escape(path)}") }
+    end
+
+    # Config `external_editor`, then $VISUAL, $EDITOR, then vi.
+    def editor_command
+      [ @external_editor, ENV["VISUAL"], ENV["EDITOR"], "vi" ]
+        .map { |candidate| candidate.to_s.strip }
+        .find { |candidate| !candidate.empty? }
+    end
+
+    # Worker thread only: agent.config may be a Ractor view.
+    def configured_editor
+      agent.config.external_editor
+    rescue StandardError
+      nil
+    end
+
+    # One draft at a time per process; the `.md` suffix gives the editor
+    # markdown highlighting, which is what the prompt is written in.
+    def draft_path
+      File.join(Dir.tmpdir, "rubot-prompt-#{Process.pid}.md")
+    end
+
     def cancel_turn
       return unless @busy
       return if @stopping
@@ -669,6 +750,11 @@ module Rubot
         say("Available commands:", :info)
         COMMANDS.each do |syntax, desc|
           say_text(format("  %-20s %s", syntax, desc))
+        end
+        blank
+        say("Keys:", :info)
+        KEYS.each do |keys, desc|
+          say_text(format("  %-20s %s", keys, desc))
         end
         blank
       when "/clear"

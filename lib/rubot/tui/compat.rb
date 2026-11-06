@@ -17,6 +17,13 @@
 #    that push is discarded the moment the alternate screen is entered and
 #    shift+enter degrades to a plain \r (submit). The push has to happen
 #    after the screen switch; see patch_session!.
+# 4. Term#read_key names only ctrl+c, ctrl+d and ctrl+z; every other control
+#    byte is handed back as a printable character. Terminals without the
+#    keyboard protocol send ctrl+g as 0x07 (BEL), which would be typed into
+#    the prompt instead of opening the editor; see patch_control_keys!.
+#
+# The terminal is also handed to a child process (the external editor) and
+# taken back afterwards; see hand_over.
 #
 # Mouse input (wheel, press, drag, release) is handled by the vendored gem's
 # own Term#read_escape; do not install a second parser here — an overriding
@@ -82,6 +89,7 @@ module Rubot
         ::TUI::Term.const_set(:SEQUENCES, merged.freeze)
         patch_screen!
         patch_session!
+        patch_control_keys!
       end
 
       # Toggled while the TUI runs, restored after. 1002 = wheel/btn
@@ -117,6 +125,7 @@ module Rubot
           alias_method :rubot_keyboard_session, :session
 
           def session(output = $stdout, input = $stdin, &block)
+            Rubot::TUI::Compat.capture_terminal_state
             rubot_keyboard_session(output, input) do
               Rubot::TUI::Compat.write_online(output)
               begin
@@ -127,6 +136,72 @@ module Rubot
             end
           end
         end
+      end
+
+      # Control bytes the gem does not name (everything but ctrl+c, ctrl+d
+      # and ctrl+z, which Term#read_key handles itself) arrive as printable
+      # characters holding the raw byte. Normalise the whole C0 range to
+      # :ctrl_a .. :ctrl_z so bindings work on terminals that lack the
+      # keyboard protocol, and so a control byte is never typed into a
+      # buffer.
+      def self.patch_control_keys!
+        term = ::TUI::Term
+        return if term.singleton_class.method_defined?(:rubot_control_keys_read_key)
+
+        term.singleton_class.class_eval do
+          alias_method :rubot_control_keys_read_key, :read_key
+
+          def read_key(timeout = 0.0)
+            key = rubot_control_keys_read_key(timeout)
+            Rubot::TUI::Compat.control_key(key) || key
+          end
+        end
+      end
+
+      # The named key for a raw C0 byte (0x01-0x1a), or nil when `key` is
+      # not one.
+      def self.control_key(key)
+        return nil unless key&.printable?
+
+        char = key.name.to_s
+        return nil unless char.bytesize == 1 && char.ord.between?(1, 26)
+
+        ::TUI::Key.new(:"ctrl_#{(char.ord + 96).chr}")
+      end
+
+      # The cooked termios state Term.session is about to replace with raw
+      # mode. hand_over puts it back while a child process owns the tty.
+      def self.capture_terminal_state
+        @saved_terminal = `stty -g 2>/dev/null`.to_s.strip
+        nil
+      rescue StandardError
+        @saved_terminal = ""
+        nil
+      end
+
+      # Hand the terminal to another program (the external editor) and take
+      # it back afterwards: alternate screen, raw mode, mouse tracking and
+      # the keyboard protocol all belong to the TUI, and a full-screen
+      # editor needs the main screen, cooked input and none of our key
+      # modes in front of it. The caller has to invalidate the screen on
+      # return, because the alternate screen comes back blank.
+      def self.hand_over(output = $stdout)
+        # Only a real terminal has a termios state to give back; writing to
+        # a StringIO (tests, snapshots) must not touch the tty.
+        saved = output.equal?($stdout) ? @saved_terminal.to_s : ""
+        write_offline(output)
+        ::TUI::Term.write(output, ::TUI::Term::SHOW_CURSOR + ::TUI::Term::ALT_OFF + ::TUI::Style::RESET)
+        ::TUI::Term.flush(output)
+        system("stty #{saved}") unless saved.empty?
+        begin
+          yield
+        ensure
+          system("stty raw -echo") unless saved.empty?
+          ::TUI::Term.write(output, ::TUI::Term::ALT_ON + ::TUI::Term::CLEAR + ::TUI::Term::HIDE_CURSOR)
+          ::TUI::Term.flush(output)
+          write_online(output)
+        end
+        nil
       end
 
       # Replacement for Screen#present; identical to upstream except the
