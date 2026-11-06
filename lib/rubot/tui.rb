@@ -9,6 +9,7 @@ require_relative "opencode_usage"
 require_relative "tui/compat"
 require_relative "tui/log_view"
 require_relative "tui/markdown"
+require_relative "tui/command_menu"
 require_relative "tui/prompt_input"
 require_relative "tui/status_line"
 require_relative "tui/working_badge"
@@ -32,8 +33,9 @@ module Rubot
   #   status row (spinner · session/model)
   #
   # Keys: enter send · shift+enter newline · tab completes /commands · ↑↓ history ·
-  # ctrl+g edits the prompt in $EDITOR · page-up/page-down scroll · esc
-  # cancels the running turn · ctrl-c quits.
+  # typing / opens the command list (↑↓ picks one, enter takes it) · ctrl+g
+  # edits the prompt in $EDITOR · page-up/page-down scroll · esc cancels the
+  # running turn · ctrl-c quits.
   #
   # Threading: the ruby-tui App owns the main thread. A worker thread feeds
   # submitted lines (messages and /commands) to the agent; streaming chunks,
@@ -71,19 +73,26 @@ module Rubot
       "/quit"     => "Exit rubot"
     }.freeze
 
-    # Command names offered by tab completion (the parameterized variants
-    # read better in /help than as completion targets).
-    COMPLETABLE = COMMANDS.keys.reject { |c| c.include?(" ") }.freeze
+    # Command names offered by tab completion and the slash-command
+    # palette. The parameterized variants read better in /help, but their
+    # base name is what gets listed and completed (/stream, /use-model, …).
+    COMPLETABLE = COMMANDS.keys.map { |syntax| syntax.split.first }.uniq.freeze
+
+    # One description per completion target, so the palette can put it next
+    # to the command name. The first syntax that mentions a name wins.
+    DESCRIPTIONS = COMMANDS.each_with_object({}) do |(syntax, desc), out|
+      out[syntax.split.first] ||= desc
+    end.freeze
 
     # Key bindings listed by /help. Only the discoverable ones: typing and
     # the arrows need no explanation, the rest do.
     KEYS = {
-      "enter"       => "Send the prompt",
+      "enter"       => "Send the prompt, or take the highlighted /command",
       "shift+enter" => "Insert a newline (the box grows)",
       "ctrl+g"      => "Edit the prompt in $EDITOR, then take it back",
       "tab"         => "Complete a /command",
-      "↑ / ↓"       => "Browse prompt history",
-      "esc"         => "Cancel the running turn",
+      "↑ / ↓"       => "Pick a /command, move between lines, or browse history",
+      "esc"         => "Cancel the running turn, clear a selection, dismiss the list",
       "pgup/pgdn"   => "Scroll the conversation",
       "ctrl-c"      => "Quit rubot"
     }.freeze
@@ -204,6 +213,7 @@ module Rubot
       @tui = true
       @log = Rubot::TUI::LogView.new
       @status = Rubot::TUI::StatusLine.new
+      @menu = Rubot::TUI::CommandMenu.new(DESCRIPTIONS)
       @prompt = Rubot::TUI::PromptInput.new(@history, COMPLETABLE)
       @dialog = Rubot::TUI::ConfirmDialog.new
       @working = Rubot::TUI::WorkingBadge.new
@@ -222,6 +232,7 @@ module Rubot
       stack = ::TUI::Layout::Stack.new(direction: :vertical)
       stack.add(::TUI::Layout::Padding.new(@log, left: 1), size: ::TUI.flex(1))
       stack.add(@working, size: ::TUI.fixed(3))
+      stack.add(@menu, size: ::TUI.auto)         # slash-command palette
       stack.add(@prompt_box, size: ::TUI.auto)   # grows with multiline input
       stack.add(@status, size: ::TUI.fixed(1))
 
@@ -268,6 +279,9 @@ module Rubot
       # Typing, scrolling and new output all move the rows out from under a
       # highlight that was left on screen after a copy.
       @prompt.on(:change) { @log.clear_selection }
+      # The prompt owns the palette keys; it only reports what should be on
+      # screen. See PromptInput#handle_key.
+      @prompt.on(:menu) { |items, index| @menu.set_items(items, index) }
 
       @prompt.on(:submit) do |text|
         line = text.strip

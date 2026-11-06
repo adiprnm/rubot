@@ -312,6 +312,137 @@ module Rubot
       assert_equal [ "hi" ], events
     end
 
+    def test_slash_opens_the_command_menu
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      assert_empty input.menu_items
+
+      input.handle_key(::TUI::Key.printable("/"))
+
+      assert input.menu_open?, "a bare slash lists the commands"
+      assert_equal TUI::COMPLETABLE, input.menu_items
+      assert_equal 0, input.menu_index
+      assert_equal "/help", input.menu_items[input.menu_index], "the help command leads"
+    end
+
+    def test_menu_filters_as_the_prefix_grows
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      "/m".each_char { |c| input.handle_key(::TUI::Key.printable(c)) }
+      assert_equal %w[/models /model /memory], input.menu_items
+      assert_equal 0, input.menu_index
+
+      input.handle_key(::TUI::Key.printable("o"))
+      assert_equal %w[/models /model], input.menu_items
+      assert_equal 0, input.menu_index, "filtering starts the highlight over"
+    end
+
+    def test_escape_closes_the_menu_without_submitting_or_cancelling
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      submits = []
+      input.on(:submit) { |v| submits << v }
+      input.handle_key(::TUI::Key.printable("/"))
+
+      assert input.handle_key(::TUI::Key.new(:escape)), "the prompt swallows the key while the menu is up"
+      refute input.menu_open?
+      assert_equal "/", input.value
+      assert_empty submits
+    end
+
+    def test_arrow_keys_move_the_menu_highlight
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      input.handle_key(::TUI::Key.printable("/"))
+
+      input.handle_key(::TUI::Key.new(:down))
+      assert_equal 1, input.menu_index
+      input.handle_key(::TUI::Key.new(:down))
+      assert_equal 2, input.menu_index
+      input.handle_key(::TUI::Key.new(:up))
+      assert_equal 1, input.menu_index
+
+      input.handle_key(::TUI::Key.new(:up))
+      input.handle_key(::TUI::Key.new(:up))
+      assert_equal TUI::COMPLETABLE.length - 1, input.menu_index, "up wraps to the last row"
+    end
+
+    def test_enter_takes_the_highlighted_command_then_runs_it
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      submits = []
+      input.on(:submit) { |v| submits << v }
+      "/se".each_char { |c| input.handle_key(::TUI::Key.printable(c)) }
+      assert_equal %w[/session], input.menu_items
+
+      input.handle_key(::TUI::Key.new(:enter))
+      assert_equal "/session", input.value, "enter selects the command into the prompt"
+      refute input.menu_open?, "the list closes once the command is in the box"
+      assert_empty submits, "selecting is not sending"
+
+      input.handle_key(::TUI::Key.new(:enter))
+      assert_equal [ "/session" ], submits
+    end
+
+    def test_enter_runs_a_command_typed_in_full
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      submits = []
+      input.on(:submit) { |v| submits << v }
+      "/help".each_char { |c| input.handle_key(::TUI::Key.printable(c)) }
+      assert input.menu_open?, "the exact command is still highlighted"
+
+      input.handle_key(::TUI::Key.new(:enter))
+
+      assert_equal [ "/help" ], submits, "the highlight must not swallow a complete command"
+    end
+
+    def test_menu_closes_once_an_argument_is_typed
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      "/session".each_char { |c| input.handle_key(::TUI::Key.printable(c)) }
+      assert input.menu_open?
+
+      input.handle_key(::TUI::Key.printable(" "))
+      refute input.menu_open?, "a space marks the start of the argument"
+
+      input.handle_key(::TUI::Key.new(:enter))
+      assert_equal "/session ", input.value
+    end
+
+    def test_palette_renders_above_the_prompt
+      repl = build_repl
+      app = repl.instance_variable_get(:@app)
+      prompt = repl.instance_variable_get(:@prompt)
+
+      "/m".each_char { |c| prompt.handle_key(::TUI::Key.printable(c)) }
+      prompt.handle_key(::TUI::Key.new(:down))
+      view = plain(app.render_lines)
+
+      menu_ix = view.index { |l| l.include?("\u276f /model") }
+      prompt_ix = view.index { |l| l.include?("\u2502 /m") }
+      refute_nil menu_ix, "the highlighted command is drawn: #{view.map(&:strip).inspect}"
+      refute_nil prompt_ix
+      assert_operator menu_ix, :<, prompt_ix, "the palette sits above the input box"
+      assert view[menu_ix].include?("Show current active model"),
+             "the description stays on the row: #{view[menu_ix].inspect}"
+    end
+
+    def test_menu_only_opens_when_the_slash_starts_the_prompt
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      "hello /".each_char { |c| input.handle_key(::TUI::Key.printable(c)) }
+
+      refute input.menu_open?, "a slash inside a message is just text"
+    end
+
+    def test_command_menu_scrolls_the_highlight_into_view
+      items = TUI::COMPLETABLE
+      menu = TUI::CommandMenu.new(TUI::COMMANDS)
+      menu.set_items(items, items.length - 1)
+      menu.layout(::TUI::Rect.new(0, 0, 60, 3))
+
+      canvas = ::TUI::Canvas.new(60, 3)
+      menu.render(canvas)
+      rows = plain(canvas.lines)
+
+      assert_equal 3, rows.length
+      assert rows.any? { |l| l.include?("\u276f #{items.last}") },
+             "the last row stays visible on a short list: #{rows.inspect}"
+    end
+
     def test_tool_calls_render_pretty
       repl = build_repl
       ev = repl.instance_variable_get(:@events)

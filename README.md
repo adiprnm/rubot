@@ -10,7 +10,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - ⚡ **Ractor-powered sessions** — one actor per conversation, no shared mutable agent state
 - 🔌 **Multiple providers** — OpenAI, Anthropic, Ollama, or any OpenAI-compatible API
 - 🛠️ **Built-in tools** — shell execution, file operations, web fetching, persistent memory, cron scheduling
-- 💬 **Interactive REPL** — with streaming, command history, and tab completion
+- 💬 **Interactive REPL** — with streaming, command history, tab completion, and a slash-command palette
 - ⌨️ **Multiline prompt** — Shift+Enter inserts a newline and the input box grows with the text, word-wrapping long lines
 - 📝 **External editor** — Ctrl+G opens the half-typed prompt in `$EDITOR` and takes the edited text straight back into the input box
 - 📝 **Session management** — persistent conversation history
@@ -168,15 +168,21 @@ $ rubot
 
 | Key | Action |
 |-----|--------|
-| `Enter` | Send the prompt |
+| `Enter` | Send the prompt, or take the highlighted `/command` |
 | `Shift+Enter`, `Alt+Enter` | Insert a newline |
-| `Up` / `Down` | Move between lines once the input has more than one, otherwise recall history |
+| `Up` / `Down` | Move between lines once the input has more than one, otherwise recall history; while the command list is open, pick an entry |
 | `Tab` | Complete a `/command` |
 | `Ctrl+G` | Edit the prompt in `$EDITOR`, then take it back into the input |
 | `Esc` | Cancel the running turn, clear a selection |
 | `Ctrl+C` | Quit |
 | `PageUp` / `PageDown`, mouse wheel | Scroll the transcript |
 | Drag with the mouse | Select text; released selection is copied via OSC 52 |
+
+Typing `/` at the start of the prompt opens the command list above the input
+box, with each command's description on the right. Keep typing to filter it,
+use `Up`/`Down` to move the highlight, and press `Enter` to put the highlighted
+command in the prompt (a fully typed command runs on `Enter` instead). `Esc`
+dismisses the list, and a space closes it once you start typing an argument.
 
 The prompt grows with its content: hard newlines and long lines that wrap both
 add rows, up to six. `Shift+Enter` needs a terminal that reports the key
