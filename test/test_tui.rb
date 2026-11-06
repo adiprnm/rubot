@@ -63,6 +63,73 @@ module Rubot
       assert_operator status_ix, :>, prompt_ix, "status row sits under the input"
     end
 
+    def test_status_line_puts_session_metrics_left_of_session_info
+      repl = build_repl
+      ev = repl.instance_variable_get(:@events)
+      ev << [ :status_right, "session default · openai · gpt-test" ]
+      ev << [ :status_left, "$0.001 · cache 60% · ctx 8.2%" ]
+      repl.send(:pump)
+
+      line = plain(repl.instance_variable_get(:@app).render_lines)
+        .find { |l| l.include?("$0.001") }
+
+      assert line, "the metrics row renders"
+      assert_includes line, "cache 60%"
+      assert_includes line, "ctx 8.2%"
+      assert_includes line, "session default", "session info keeps its spot on the right"
+      assert_operator line.index("$0.001"), :<, line.index("session default"),
+                      "metrics sit on the left: #{line.inspect}"
+    end
+
+    def test_status_line_truncates_metrics_before_session_info
+      status = TUI::StatusLine.new
+      status.layout(::TUI::Rect.new(0, 0, 30, 1))
+      status.left = "$0.001 · cache 60% · ctx 8.2% · extra-wide-metric"
+      status.right = "session default"
+      canvas = ::TUI::Canvas.new(30, 1)
+      status.render(canvas)
+
+      row = plain(canvas.lines).first
+      assert_operator ::TUI::Text.width(row), :<=, 30, row.inspect
+      assert_includes row, "session default", "session info survives: #{row.inspect}"
+      assert_includes row, "\u2026", "the cut is marked: #{row.inspect}"
+    end
+
+    def test_usage_footer_updates_after_a_turn
+      repl = build_repl
+      agent = repl.instance_variable_get(:@agent)
+      agent.define_singleton_method(:process) { |_msg, **_opts, &_blk| "ok" }
+      agent.define_singleton_method(:flush_learning) { nil }
+      agent.define_singleton_method(:usage_report) do
+        { requests: 1, prompt_tokens: 1_000, cache_hit_rate: 0.6,
+          context_used: 10_500, context_window: 128_000, context_percent: 8.2,
+          cost: { "total" => 0.001234 } }
+      end
+
+      repl.send(:process_message, "hi")
+      repl.send(:pump)
+
+      view = plain(repl.instance_variable_get(:@app).render_lines)
+      assert view.any? { |l| l.include?("$0.001 · cache 60% · ctx 8.2%") },
+             "the footer carries the turn's usage: #{view.last(3).inspect}"
+    end
+
+    def test_clear_wipes_the_usage_footer
+      repl = build_repl
+      agent = repl.instance_variable_get(:@agent)
+      agent.define_singleton_method(:clear_session) { nil }
+      ev = repl.instance_variable_get(:@events)
+      ev << [ :status_left, "$0.001 · cache 60% · ctx 8.2%" ]
+      repl.send(:pump)
+      assert plain(repl.instance_variable_get(:@app).render_lines).any? { |l| l.include?("$0.001") }
+
+      repl.send(:handle_command, "/clear")
+      repl.send(:pump)
+
+      refute plain(repl.instance_variable_get(:@app).render_lines).any? { |l| l.include?("$0.001") },
+             "a cleared session has nothing to price"
+    end
+
     def test_start_fresh_session_clears_agent_session
       repl = build_repl
       agent = repl.instance_variable_get(:@agent)

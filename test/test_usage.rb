@@ -142,6 +142,46 @@ class TestUsage < Minitest::Test
     end
   end
 
+  def test_usage_report_footer
+    report = {
+      requests: 2, prompt_tokens: 1_000, cache_hit_rate: 0.6,
+      context_used: 10_500, context_window: 128_000, context_percent: 8.2,
+      cost: { "total" => 0.001234 }
+    }
+
+    assert_equal "$0.001 · cache 60% · ctx 8.2%",
+                 Rubot::UsageReport.footer(report)
+  end
+
+  def test_usage_report_footer_rounds_price_to_three_decimals
+    report = { requests: 1, prompt_tokens: 1_000, cache_hit_rate: 0.0,
+               context_used: 0, context_window: nil, context_percent: nil,
+               cost: { "total" => 1.23456 } }
+
+    assert_equal "$1.235", Rubot::UsageReport.price(report)
+  end
+
+  def test_usage_report_footer_is_blank_before_the_first_request
+    assert_equal "", Rubot::UsageReport.footer({ requests: 0, prompt_tokens: 0 })
+  end
+
+  def test_usage_report_footer_says_what_is_missing
+    report = {
+      requests: 1, prompt_tokens: 0, cache_hit_rate: 0.0,
+      context_used: 900, context_window: nil, context_percent: nil, cost: nil
+    }
+
+    assert_equal "cost n/a · cache n/a · ctx 900", Rubot::UsageReport.footer(report)
+  end
+
+  def test_compact_tokens
+    assert_equal "900", Rubot::UsageReport.compact_tokens(900)
+    assert_equal "1.5k", Rubot::UsageReport.compact_tokens(1_500)
+    assert_equal "128k", Rubot::UsageReport.compact_tokens(128_000)
+    assert_equal "2M", Rubot::UsageReport.compact_tokens(2_000_000)
+    assert_equal "1.2M", Rubot::UsageReport.compact_tokens(1_234_567)
+  end
+
   def test_model_info_is_ractor_safe
     assert Ractor.shareable?(Rubot::ModelInfo::PRICES)
     assert Ractor.shareable?(Rubot::ModelInfo::CONTEXT_WINDOWS)

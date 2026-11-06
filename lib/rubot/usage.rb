@@ -196,6 +196,53 @@ module Rubot
       format(" (hit rate %.1f%%)", report[:cache_hit_rate].to_f * 100)
     end
 
+    # One-line metrics for the TUI footer, e.g.
+    #
+    #   $0.001 · cache 60% · ctx 8.2%
+    #
+    # Returns "" while the session has no accounted request, so the footer
+    # stays out of the way before the first turn.
+    def footer(report)
+      return "" if report[:requests].to_i.zero?
+
+      [ price(report), cache(report), context(report) ].join(" · ")
+    end
+
+    def price(report)
+      cost = report[:cost]
+      cost ? format("$%.3f", cost["total"].to_f) : "cost n/a"
+    end
+
+    def cache(report)
+      return "cache n/a" if report[:prompt_tokens].to_i.zero?
+
+      pct = format("%.1f", report[:cache_hit_rate].to_f * 100).sub(/\.0\z/, "")
+      "cache #{pct}%"
+    end
+
+    # Share of the window in use. Falls back to the raw token count when the
+    # window is unknown; the footer stays short so it never elbows the
+    # session block on an 80-column terminal.
+    def context(report)
+      if report[:context_percent] && report[:context_window].to_i.positive?
+        format("ctx %.1f%%", report[:context_percent])
+      else
+        "ctx #{compact_tokens(report[:context_used])}"
+      end
+    end
+
+    # 1_500 -> "1.5k", 128_000 -> "128k", 2_000_000 -> "2M".
+    def compact_tokens(value)
+      n = value.to_i
+      return n.to_s if n < 1_000
+
+      if n < 1_000_000
+        format("%.1fk", n / 1_000.0).sub(/\.0k\z/, "k")
+      else
+        format("%.1fM", n / 1_000_000.0).sub(/\.0M\z/, "M")
+      end
+    end
+
     def money(value)
       format("%.6f", value.to_f).sub(/0+\z/, "").sub(/\.\z/, "")
     end

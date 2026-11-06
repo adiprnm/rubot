@@ -183,6 +183,11 @@ foot, iTerm2) or xterm's modifyOtherKeys — rubot turns both on for the duratio
 of the session. Terminals that cannot distinguish it (Alacritty) send a plain
 `Enter`.
 
+Under the prompt, the status row tracks the running turn's estimated cost,
+cache hit rate, and how much of the model's context window is in use (for
+example `$0.004 · cache 87.3% · ctx 11.6%`), with the session and model on
+the right. Figures refresh after every turn; `/context` has the full report.
+
 ### CLI Options
 
 | Option | Description |

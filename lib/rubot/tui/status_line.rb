@@ -4,15 +4,25 @@ require "tui"
 
 module Rubot
   class TUI
-    # One-row status strip: session and model on the right, nothing on the
-    # left (the working/cancelling indicator is the badge above the input).
+    # One-row status strip: live session metrics on the left (estimated cost,
+    # cache hit rate, context usage) and session/model on the right.
+    #
+    # The left side is the one that gets cut when the terminal is narrow: the
+    # session makes way for nothing, while the metrics lose their tail with
+    # an ellipsis instead of overlapping it.
     class StatusLine < ::TUI::Component
       attr_reader :spinner_idx
 
       def initialize
         super
         @spinner_idx = 0
+        @left = ""
         @right = ""
+      end
+
+      def left=(text)
+        @left = text.to_s
+        self
       end
 
       def right=(text)
@@ -37,10 +47,16 @@ module Rubot
       private
 
       def draw(canvas)
-        right = ::TUI::Text.truncate(" #{@right} ", @rect.w)
+        width = @rect.w
+        right = @right.empty? ? "" : ::TUI::Text.truncate(" #{@right} ", width)
         right_w = ::TUI::Text.width(right)
-        base = " " * [ @rect.w - right_w, 0 ].max
-        canvas.put(@rect.x, @rect.y, base + right, :muted)
+
+        # Reserve one blank cell between the two blocks; left yields first.
+        avail = width - right_w - 1
+        left = avail.positive? ? ::TUI::Text.truncate(@left, avail) : ""
+        left_w = ::TUI::Text.width(left)
+        gap = [ width - left_w - right_w, 0 ].max
+        canvas.put(@rect.x, @rect.y, left + (" " * gap) + right, :dim)
       end
     end
   end

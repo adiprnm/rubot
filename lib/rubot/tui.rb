@@ -296,6 +296,22 @@ module Rubot
       @events << [ :error_text, "#{e.class}: #{e.message}" ]
     end
 
+    # Compact cost / cache / context summary for the status row. Called from
+    # the worker thread: agent.usage_report may cross a Ractor boundary (and
+    # warm the pricing catalog), so it never runs on the App thread.
+    def usage_footer
+      Rubot::UsageReport.footer(agent.usage_report)
+    rescue StandardError
+      ""
+    end
+
+    # Publish fresh footer metrics from the worker thread. Not called on
+    # startup: a fresh session has nothing to price, and usage_report would
+    # warm the pricing catalog (a possible network fetch) for nothing.
+    def refresh_usage
+      @events << [ :status_left, usage_footer ]
+    end
+
     # ------------------------------------------------------------------
     # Event pump (runs on the App thread, once per tick)
     # ------------------------------------------------------------------
@@ -320,8 +336,10 @@ module Rubot
         @live_entry = nil
         @tool_entries.clear
         reset_turn_totals
+        @status.left = ""
       when :error_text then @log.add_entry([ [ MARK[:err] + " ", :error ], [ event[1].to_s, :error ] ])
       when :status_right then @status.right = event[1]
+      when :status_left then @status.left = event[1]
       when :stream_start
         @turn_started_at = monotonic_now
         # One blank line between the echoed prompt and the answer.
@@ -461,6 +479,10 @@ module Rubot
     ensure
       @events << [ :stream_end ]
       @events << [ :idle ]
+      # Fresh cost, cache and context figures for the footer under the input.
+      # Published after :idle so the working badge does not linger while the
+      # pricing catalog is read.
+      refresh_usage
     end
 
     # Allow a dangerous tool, blocking the worker until the dialog is
@@ -612,6 +634,7 @@ module Rubot
         agent.clear_session
         @events << [ :reset_turn_totals ]
         say("Session cleared.", :ok)
+        @events << [ :status_left, "" ]
       when "/new"
         # Silent restart: wipe the screen and start a fresh session.
         agent.clear_session
@@ -630,11 +653,13 @@ module Rubot
         else
           say("Nothing to compact yet (conversation is short or summarization failed).", :info)
         end
+        refresh_usage
       when "/session"
         if parts[1]
           switch_session(parts[1])
           say("Session switched to: #{parts[1]}", :ok)
           refresh_status
+          refresh_usage
         else
           say("Current session: #{agent.session.id}", :info)
           say_text("Model: #{agent.active_model_name}")
@@ -740,6 +765,7 @@ module Rubot
         say_text("Provider: #{agent.provider.name}")
         say_text("Persists for this session (cleared on /new).")
         refresh_status
+        refresh_usage
       else
         say("Model '#{model_name}' not found in config.yml.", :err)
         agent.config.models.each { |m| say_text("  - #{m["name"]}") }
@@ -819,8 +845,8 @@ module Rubot
       tools = info[:tools] ? "#{info[:tools]} tools" : "…"
 
       @log.add_entry([ [ Rubot::NAME, :title ] ])
-      @log.add_entry([ [ "provider #{provider} · model #{model} · #{tools}", :muted ] ])
-      @log.add_entry([ [ "type /help for commands · esc cancels a running turn · pgup/pgdn scrolls", :hint ] ])
+      @log.add_entry([ [ "provider #{provider} · model #{model} · #{tools}", :dim ] ])
+      @log.add_entry([ [ "type /help for commands · esc cancels a running turn · pgup/pgdn scrolls", :dim ] ])
       @log.add_entry([ [ "", nil ] ])
       @banner_count = @log.entry_count
       @status.right = "session #{@session_id} · #{provider} · #{model}" if info[:provider]
