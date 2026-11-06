@@ -1,7 +1,9 @@
 # frozen_string_literal: true
 
-# RuboCop Rails Omakase config (replicated without the gem)
-# Based on: https://github.com/rails/rubocop-rails-omakase
+# RuboCop Rails Omakase, loaded straight from the rubocop-rails-omakase gem.
+# https://github.com/rails/rubocop-rails-omakase
+inherit_gem:
+  rubocop-rails-omakase: rubocop.yml
 
 inherit_mode:
   merge:
@@ -9,195 +11,13 @@ inherit_mode:
 
 AllCops:
   SuggestExtensions: false
-  Exclude:
-    - "data/**/*"
 
-# All cops are disabled by default — only the ones below are enabled.
-Bundler:
+# rubot is a pure-Ruby project (no Rails). The omakase Rails cops only exist to
+# rewrite minitest assertions to their Rails spellings (assert_not over assert!,
+# refute_x over assert_not_x), so they stay off here.
+Rails:
   Enabled: false
-Gemspec:
+Rails/AssertNot:
   Enabled: false
-Layout:
+Rails/RefuteMethods:
   Enabled: false
-Lint:
-  Enabled: false
-Metrics:
-  Enabled: false
-Naming:
-  Enabled: false
-Security:
-  Enabled: false
-Style:
-  Enabled: false
-
-# --- Layout ---
-
-Layout/CaseIndentation:
-  Enabled: true
-  EnforcedStyle: end
-
-Layout/CommentIndentation:
-  Enabled: true
-
-Layout/ElseAlignment:
-  Enabled: true
-
-Layout/EmptyLineAfterMagicComment:
-  Enabled: true
-
-Layout/EmptyLinesAroundBlockBody:
-  Enabled: true
-
-Layout/EmptyLinesAroundClassBody:
-  Enabled: true
-
-Layout/EmptyLinesAroundMethodBody:
-  Enabled: true
-
-Layout/EmptyLinesAroundModuleBody:
-  Enabled: true
-
-Layout/EndAlignment:
-  Enabled: true
-  EnforcedStyleAlignWith: variable
-
-Layout/IndentationConsistency:
-  Enabled: false
-
-Layout/IndentationWidth:
-  Enabled: false
-
-Layout/LeadingCommentSpace:
-  Enabled: true
-
-Layout/SpaceAfterColon:
-  Enabled: true
-
-Layout/SpaceAfterComma:
-  Enabled: true
-
-Layout/SpaceAroundEqualsInParameterDefault:
-  Enabled: true
-
-Layout/SpaceAroundKeyword:
-  Enabled: true
-
-Layout/SpaceBeforeBlockBraces:
-  Enabled: true
-
-Layout/SpaceBeforeComma:
-  Enabled: true
-
-Layout/SpaceBeforeFirstArg:
-  Enabled: true
-
-Layout/SpaceInLambdaLiteral:
-  Enabled: true
-
-Layout/SpaceInsideArrayLiteralBrackets:
-  Enabled: true
-  EnforcedStyle: space
-  EnforcedStyleForEmptyBrackets: no_space
-
-Layout/SpaceInsideArrayPercentLiteral:
-  Enabled: true
-
-Layout/SpaceInsideBlockBraces:
-  Enabled: true
-  EnforcedStyleForEmptyBraces: space
-
-Layout/SpaceInsideHashLiteralBraces:
-  Enabled: true
-  EnforcedStyle: space
-  EnforcedStyleForEmptyBraces: no_space
-
-Layout/SpaceInsideParens:
-  Enabled: true
-
-Layout/SpaceInsidePercentLiteralDelimiters:
-  Enabled: false
-
-Layout/SpaceInsideReferenceBrackets:
-  Enabled: true
-
-Layout/TrailingEmptyLines:
-  Enabled: true
-
-Layout/TrailingWhitespace:
-  Enabled: true
-
-# --- Lint ---
-
-Lint/RedundantStringCoercion:
-  Enabled: true
-
-Lint/RequireParentheses:
-  Enabled: true
-
-Lint/UriEscapeUnescape:
-  Enabled: true
-
-# --- Style ---
-
-Style/AndOr:
-  Enabled: false
-
-Style/ColonMethodCall:
-  Enabled: true
-
-Style/DefWithParentheses:
-  Enabled: true
-
-Style/HashSyntax:
-  Enabled: true
-  EnforcedShorthandSyntax: either
-
-Style/MethodDefParentheses:
-  Enabled: true
-
-Style/ParenthesesAroundCondition:
-  Enabled: true
-
-Style/PercentLiteralDelimiters:
-  Enabled: true
-  PreferredDelimiters:
-    default: "()"
-    "%i": "[]"
-    "%I": "[]"
-    "%r": "{}"
-    "%w": "[]"
-    "%W": "[]"
-
-Style/RedundantPercentQ:
-  Enabled: false
-
-Style/RedundantReturn:
-  Enabled: true
-  AllowMultipleReturnValues: true
-
-Style/Semicolon:
-  Enabled: true
-  AllowAsExpressionSeparator: true
-
-Style/StabbyLambdaParentheses:
-  Enabled: true
-
-Style/StringLiterals:
-  Enabled: true
-  EnforcedStyle: double_quotes
-  Include:
-    - "app/**/*"
-    - "config/**/*"
-    - "lib/**/*"
-    - "test/**/*"
-    - "Gemfile"
-    - "db/seeds.rb"
-
-Style/TrailingCommaInArguments:
-  Enabled: true
-
-Style/TrailingCommaInArrayLiteral:
-  Enabled: true
-
-Style/TrailingCommaInHashLiteral:
-  Enabled: true

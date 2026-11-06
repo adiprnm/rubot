@@ -12,3 +12,8 @@ group :development, :test do
   gem "minitest", "~> 5.0"
   gem "rake"
 end
+
+group :development do
+  gem "rubocop", require: false
+  gem "rubocop-rails-omakase", require: false
+end
