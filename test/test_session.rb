@@ -380,6 +380,96 @@ class TestSessionSummarization < Minitest::Test
     assert_equal "Saved summary", session2.summary_text
   end
 
+  def test_context_estimate_anchors_on_the_last_usage
+    session = Rubot::Session.new("context-anchor", workspace: @workspace)
+    session.add("user", "hello")
+    session.record_usage({ "prompt_tokens" => 1_000, "completion_tokens" => 100 })
+    session.add("assistant", "hi")
+
+    assert session.context_anchored?
+    # The assistant reply is the usage's own output, not extra context.
+    assert_equal 1_100, session.context_tokens[:tokens]
+
+    session.add("user", "x" * 350)
+    # ~100 tokens estimated for the new message on top of the anchor.
+    assert_in_delta 1_200, session.context_tokens[:tokens], 1
+  end
+
+  def test_context_estimate_falls_back_to_the_transcript_without_a_usage
+    session = Rubot::Session.new("context-estimate", workspace: @workspace)
+    session.add("user", "x" * 350)
+
+    refute session.context_anchored?
+    assert_in_delta 100, session.context_tokens[:tokens], 1
+    assert_in_delta 200, session.context_tokens(extra_chars: 350)[:tokens], 1
+  end
+
+  def test_compaction_invalidates_the_context_anchor
+    20.times { |i| @session.add(i.even? ? "user" : "assistant", "Message #{i}") }
+    @session.record_usage({ "prompt_tokens" => 5_000, "completion_tokens" => 100 })
+
+    assert @session.context_anchored?
+    @session.compact!(provider: FakeSummarizeProvider.new, keep_recent: 4)
+
+    refute @session.context_anchored?
+    assert_operator @session.context_tokens[:tokens], :<, 5_000
+  end
+
+  def test_hard_message_trim_invalidates_the_context_anchor
+    session = Rubot::Session.new("context-trim", workspace: @workspace)
+    100.times { session.add("user", "Message") }
+    session.record_usage({ "prompt_tokens" => 5_000, "completion_tokens" => 100 })
+
+    session.add("user", "one more message past the cap")
+
+    refute session.context_anchored?
+  end
+
+  def test_cost_is_priced_per_request_with_the_rates_in_effect
+    session = Rubot::Session.new("cost-per-request", workspace: @workspace)
+
+    session.record_usage(
+      { "prompt_tokens" => 1_000_000, "completion_tokens" => 0 },
+      rates: { "input" => 1.0, "output" => 2.0, "cached_input" => 0.5 }
+    )
+    session.record_usage(
+      { "prompt_tokens" => 1_000_000, "completion_tokens" => 0 },
+      rates: { "input" => 10.0, "output" => 20.0, "cached_input" => 5.0 }
+    )
+
+    # A later model switch must not re-price the first request.
+    assert_in_delta 11.0, session.cost["total"], 0.000001
+    assert_in_delta 11.0, session.cost["input"], 0.000001
+  end
+
+  def test_cost_round_trips_through_the_session_file
+    session = Rubot::Session.new("cost-persist", workspace: @workspace)
+    session.add("user", "hi")
+    session.record_usage(
+      { "prompt_tokens" => 1_000, "completion_tokens" => 100, "prompt_tokens_details" => { "cached_tokens" => 500 } },
+      rates: { "input" => 3.0, "output" => 15.0, "cached_input" => 0.3 }
+    )
+
+    reloaded = Rubot::Session.new("cost-persist", workspace: @workspace)
+
+    assert_in_delta session.cost["total"], reloaded.cost["total"], 0.0000001
+    assert reloaded.context_anchored?
+  end
+
+  def test_auxiliary_usage_is_counted_in_the_cost_but_keeps_the_anchor
+    session = Rubot::Session.new("aux-cost", workspace: @workspace)
+    session.add("user", "hi")
+    session.record_usage({ "prompt_tokens" => 100, "completion_tokens" => 10 },
+                         rates: { "input" => 1.0, "output" => 1.0 })
+    anchor = session.last_usage.prompt_tokens
+
+    session.record_auxiliary_usage({ "prompt_tokens" => 50, "completion_tokens" => 5 },
+                                   rates: { "input" => 1.0, "output" => 1.0 })
+
+    assert_equal anchor, session.last_usage.prompt_tokens
+    assert_in_delta 0.000165, session.cost["total"], 0.0000001
+  end
+
   class FakeSummarizeProvider
     attr_accessor :response, :raise_error
     attr_reader :calls

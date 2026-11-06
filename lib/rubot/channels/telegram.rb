@@ -239,7 +239,7 @@ module Rubot
           "#{UsageReport.tokens(report[:context_used])} token (window tidak diketahui)"
         end
 
-        hit = if report[:prompt_tokens].to_i.zero?
+        hit = if report[:last_prompt_tokens].to_i.zero?
           "n/a"
         else
           format("%.1f%%", report[:cache_hit_rate].to_f * 100)
@@ -251,14 +251,16 @@ module Rubot
         lines << "Pesan: #{report[:messages]} | Request: #{report[:requests]}"
         lines << "Token: #{UsageReport.tokens(report[:prompt_tokens])} in / " \
                  "#{UsageReport.tokens(report[:completion_tokens])} out"
-        lines << "Cache: #{UsageReport.tokens(report[:cached_tokens])} cached (hit rate #{hit})"
+        lines << "Cache: #{UsageReport.tokens(report[:cached_tokens])} cached total " \
+                 "(hit rate #{hit} on request terakhir)"
 
         cost = report[:cost]
         if cost
           source = report[:price_source] ? " [#{report[:price_source]}]" : ""
           lines << "Estimasi biaya: `$#{UsageReport.money(cost['total'])}` " \
                    "(input $#{UsageReport.money(cost['input'])}, " \
-                   "cached $#{UsageReport.money(cost['cached_input'])}, " \
+                   "cache read $#{UsageReport.money(cost['cached_input'])}, " \
+                   "cache write $#{UsageReport.money(cost['cache_creation'])}, " \
                    "output $#{UsageReport.money(cost['output'])})#{source}"
         else
           lines << "Estimasi biaya: belum tersedia — set `pricing` di preset config.yml"

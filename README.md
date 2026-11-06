@@ -388,8 +388,28 @@ model_presets:
 `/context` reports, for the current session:
 
 - context used vs. the model's context window,
-- cumulative input/output tokens and cache hit rate,
+- cumulative input/output tokens, plus the cache hit rate of the most recent
+  request,
 - an estimated cost in USD.
+
+The three figures follow the same rules as Pi:
+
+- **Context** is anchored on the last provider request (its prompt plus the
+  reply it produced) and adds an estimate for anything appended since, so
+  tool output and a new user message are counted before they are sent. When
+  there is no usable request yet — a fresh session, or right after
+  `/compact` — it falls back to an estimate of the whole transcript plus the
+  system prompt. The same number drives the footer and the automatic
+  compaction threshold.
+- **Cache hit rate** describes the latest request only
+  (`cached / (uncached + cached + cache write)`), not the session average.
+  That is what shows whether the prompt cache is working now; a long session
+  with one early miss would otherwise hide it.
+- **Cost** is priced per request, with the rates of the model that served it,
+  and accumulated. Switching model with `/model` therefore does not re-price
+  earlier turns. Long-context tiers (`cost.tiers` on models.dev), cache reads,
+  and Anthropic 1-hour cache writes (charged at 2x the input rate) are taken
+  into account.
 
 #### OpenCode Go usage
 

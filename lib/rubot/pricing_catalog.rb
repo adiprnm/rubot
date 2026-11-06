@@ -5,6 +5,7 @@ require "fileutils"
 require "net/http"
 require "time"
 require "uri"
+require_relative "usage"
 
 module Rubot
   # Fetches model pricing and context windows from models.dev and caches a
@@ -17,10 +18,17 @@ module Rubot
   #
   # The cache keeps /context fast and keeps working when the network is down.
   # Delete the file to force a refresh.
+  #
+  # `network: false` reads only the cache file. The agent uses that while a
+  # turn is running so a slow or unreachable models.dev never delays an answer;
+  # the report path (and the footer after the turn) still refreshes it.
   class PricingCatalog
     SOURCE_URL = "https://models.dev/api.json"
     CACHE_FILENAME = "model_pricing.json"
     DEFAULT_TTL = 24 * 60 * 60
+    # Bump when the slimmed entry shape changes (e.g. adding `tiers`), so an
+    # older cache file is refreshed instead of being used for another day.
+    CACHE_VERSION = 2
 
     # Rubot provider names -> models.dev provider ids.
     PROVIDER_ALIASES = {
@@ -46,21 +54,26 @@ module Rubot
     end
 
     # Returns {"input" =>, "output" =>, "cached_input" =>,
-    # "cache_creation_input" =>} in USD per 1M tokens, or nil when unknown.
-    def rates(model, provider: nil)
-      entry = entry_for(model, provider: provider)
+    # "cache_creation_input" =>, "tiers" =>} in USD per 1M tokens, or nil when
+    # unknown. Tiers carry the rates that apply above a given input size.
+    def rates(model, provider: nil, network: true)
+      entry = entry_for(model, provider: provider, network: network)
       return nil unless entry && entry["priced"]
 
-      {
+      rates = {
         "input" => entry["input"].to_f,
         "output" => entry["output"].to_f,
         "cached_input" => (entry["cached_input"] || entry["input"]).to_f,
-        "cache_creation_input" => (entry["cache_creation_input"] || entry["input"].to_f * 1.25)
+        "cache_creation_input" =>
+          (entry["cache_creation_input"] || entry["input"].to_f * Usage::CACHE_WRITE_MULTIPLIER)
       }
+      tiers = entry["tiers"]
+      rates["tiers"] = tiers if tiers.is_a?(Array) && !tiers.empty?
+      rates
     end
 
-    def context_window(model, provider: nil)
-      entry = entry_for(model, provider: provider)
+    def context_window(model, provider: nil, network: true)
+      entry = entry_for(model, provider: provider, network: network)
       window = entry && entry["context_window"].to_i
       window&.positive? ? window : nil
     end
@@ -73,8 +86,8 @@ module Rubot
 
     private
 
-    def entry_for(model, provider: nil)
-      ensure_loaded
+    def entry_for(model, provider: nil, network: true)
+      ensure_loaded(network: network)
 
       provider_id = provider_key(provider)
       ids = candidate_ids(model, provider_id)
@@ -117,12 +130,19 @@ module Rubot
       ids.uniq
     end
 
-    def ensure_loaded
+    def ensure_loaded(network: true)
       return if @loaded_at && (Time.now - @loaded_at) < @ttl
 
       cached = read_cache
       if cached && fresh?(cached)
         install(cached["models"], "models.dev cache")
+        return
+      end
+
+      # The turn path must never block on the network: fall back to the stale
+      # cache (or the bundled defaults) and let the report path refresh.
+      unless network
+        install(cached["models"], "models.dev cache (stale)") if cached
         return
       end
 
@@ -159,6 +179,8 @@ module Rubot
     end
 
     def fresh?(cached)
+      return false unless cached["version"] == CACHE_VERSION
+
       updated_at = cached["updated_at"]
       return false unless updated_at
 
@@ -220,7 +242,7 @@ module Rubot
           priced = cost.key?("input") || cost.key?("output")
           next unless priced || context.positive?
 
-          result["#{provider_id}/#{model_id}"] = {
+          entry = {
             "id" => model_id.to_s,
             "provider" => provider_id.to_s,
             "input" => cost["input"],
@@ -230,9 +252,40 @@ module Rubot
             "context_window" => context.positive? ? context : nil,
             "priced" => priced
           }
+          tiers = parse_tiers(cost)
+          entry["tiers"] = tiers if tiers
+          result["#{provider_id}/#{model_id}"] = entry
         end
       end
       result
+    end
+
+    # models.dev publishes long-context surcharges as
+    # `cost.tiers[].tier.size`; Pi matches them against the request's input
+    # size (cached tokens included). Normalize them to the same shape as the
+    # base rates so Usage.cost can pick one.
+    def parse_tiers(cost)
+      raw = cost["tiers"]
+      return nil unless raw.is_a?(Array)
+
+      tiers = raw.filter_map do |tier|
+        next unless tier.is_a?(Hash)
+
+        spec = tier["tier"].is_a?(Hash) ? tier["tier"] : {}
+        threshold = (spec["size"] || tier["input_tokens_above"] || tier["inputTokensAbove"]).to_i
+        next unless threshold.positive?
+
+        {
+          "input_tokens_above" => threshold,
+          "input" => tier["input"],
+          "output" => tier["output"],
+          "cached_input" => tier["cache_read"] || tier["cacheRead"],
+          "cache_creation_input" => tier["cache_write"] || tier["cacheWrite"]
+        }.reject { |_, value| value.nil? }
+      end
+      return nil if tiers.empty?
+
+      tiers.sort_by { |tier| tier["input_tokens_above"] }
     end
 
     def read_cache
@@ -249,7 +302,7 @@ module Rubot
         nil
       end
 
-      { "models" => models, "updated_at" => updated_at }
+      { "models" => models, "updated_at" => updated_at, "version" => data["version"] }
     rescue JSON::ParserError, SystemCallError => e
       warn "[pricing_catalog] ignoring unreadable #{path}: #{e.message}"
       nil
@@ -261,6 +314,7 @@ module Rubot
 
       FileUtils.mkdir_p(File.dirname(path))
       payload = JSON.generate(
+        "version" => CACHE_VERSION,
         "updated_at" => Time.now.utc.iso8601,
         "source" => SOURCE_URL,
         "models" => models

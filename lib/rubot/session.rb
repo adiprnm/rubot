@@ -28,7 +28,7 @@ module Rubot
     # stretch between extractions cannot grow the session file without limit.
     MAX_MEMORY_BACKLOG = 20
 
-    attr_reader :id, :messages, :workspace, :usage, :last_usage
+    attr_reader :id, :messages, :workspace, :usage, :last_usage, :cost
     attr_accessor :summary, :forced_skill, :model_override, :model_preset
 
     def initialize(id = "default", workspace: nil)
@@ -41,31 +41,46 @@ module Rubot
       @model_preset = nil
       @usage = Usage.zero
       @last_usage = Usage.zero
+      # Cumulative cost, priced per request with the rates of the model that
+      # served it. nil means "no priced request yet".
+      @cost = nil
+      # True once a request could not be priced. The total is then incomplete
+      # and the report re-prices the aggregate instead of showing a low number.
+      @cost_partial = false
+      # Message count at the moment the last usage was recorded. nil disables
+      # the usage anchor for context estimates (see #context_tokens).
+      @last_usage_watermark = nil
       @memory_backlog = []
       load!
     end
 
     # Record the token usage of one provider request. `raw` is the provider's
-    # usage hash (OpenAI/Anthropic/Ollama shapes are all accepted).
-    def record_usage(raw, provider: nil)
+    # usage hash (OpenAI/Anthropic/Ollama shapes are all accepted). `rates`
+    # are the prices in effect for the model that served the request, so the
+    # cost is frozen at request time instead of being re-priced later with
+    # whatever model the session happens to end on (Pi prices per message).
+    def record_usage(raw, provider: nil, rates: nil)
       delta = Usage.from(raw, provider: provider)
       return nil if delta.nil?
 
       @last_usage = delta
+      @last_usage_watermark = @messages.size
       @usage = @usage.merge(delta)
+      add_cost(delta, rates)
       save!
       delta
     end
 
     # Same as #record_usage, but for requests that are not the user-facing turn
-    # (memory extraction, summarization). It adds to the totals without
-    # replacing `last_usage`, which is what `/context` uses to estimate how full
-    # the next request's context will be.
-    def record_auxiliary_usage(raw, provider: nil)
+    # (memory extraction, summarization, cron). It adds to the totals without
+    # replacing `last_usage` or the context anchor, which is what `/context`
+    # uses to estimate how full the next request's context will be.
+    def record_auxiliary_usage(raw, provider: nil, rates: nil)
       delta = Usage.from(raw, provider: provider)
       return nil if delta.nil?
 
       @usage = @usage.merge(delta)
+      add_cost(delta, rates)
       save!
       delta
     end
@@ -204,35 +219,106 @@ module Rubot
       history
     end
 
+    # Drop the old anchor when the hard message cap removes messages from the
+    # front: the last usage no longer describes this transcript.
+    def invalidate_context_anchor!
+      @last_usage_watermark = nil
+    end
+
+    def add_cost(delta, rates)
+      breakdown = Usage.cost(delta, rates)
+      if breakdown.nil?
+        @cost_partial = true
+        return
+      end
+
+      @cost ||= { "input" => 0.0, "cached_input" => 0.0, "cache_creation" => 0.0, "output" => 0.0, "total" => 0.0 }
+      breakdown.each { |key, value| @cost[key] = (@cost[key] || 0.0) + value.to_f }
+    end
+
+    # True when at least one request could not be priced (no rates known yet).
+    def cost_partial?
+      @cost_partial
+    end
+
+    def load_cost(raw)
+      return nil unless raw.is_a?(Hash) && !raw.empty?
+
+      raw.each_with_object({}) { |(key, value), acc| acc[key.to_s] = value.to_f }
+    end
+
     def message_count
       @messages.size
     end
 
-    # Approximate token count of the transcript plus `extra_chars` (the
-    # system prompt, for example), used to decide when to compact. Ruby's
-    # standard library has no tokenizer, so this is the usual bytes/4
-    # heuristic plus a small per-message overhead.
-    # Approximate size of the transcript, used to decide when to compact.
-    # Reasoning is deliberately excluded: past reasoning is never sent (see
-    # #conversation_history) and the summarizer never reads it, so counting it
-    # only made compaction fire early and pay for a summarizer request without
-    # shrinking the real prompt.
+    # Pi's `CHARS_PER_TOKEN`. Ruby has no tokenizer, so this is the same
+    # text-length heuristic Pi uses for the parts of the transcript that no
+    # provider usage report covers yet.
+    CHARS_PER_TOKEN = 3.5
+
+    # Approximate token count of the next request: the anchor from the latest
+    # provider usage plus an estimate of the messages added after it (or, when
+    # there is no usable anchor, an estimate of the whole transcript).
+    # `extra_chars` is the system prompt and is only needed for the fallback:
+    # an anchored usage already counted the prompt it was sent with.
+    def context_tokens(extra_chars: 0)
+      if context_anchored?
+        start = @last_usage_watermark.to_i
+        # The usage describes the request that produced the assistant message
+        # appended right after it. That reply is already in completion_tokens,
+        # so the trailing estimate starts on the message after it.
+        start += 1 if @messages[start] && @messages[start]["role"] == "assistant"
+        trailing = @messages[start..].to_a.sum { |msg| self.class.message_tokens(msg, reasoning: false) }
+        usage_tokens = @last_usage.prompt_tokens + @last_usage.completion_tokens
+        {
+          tokens: (usage_tokens + trailing).ceil,
+          usage_tokens: usage_tokens,
+          trailing_tokens: trailing.ceil,
+          anchored: true
+        }
+      else
+        tokens = extra_chars.to_i / CHARS_PER_TOKEN
+        @messages.each { |msg| tokens += self.class.message_tokens(msg, reasoning: false) }
+        { tokens: tokens.ceil, usage_tokens: 0, trailing_tokens: tokens.ceil, anchored: false }
+      end
+    end
+
+    # True when the last provider request still describes the transcript: it
+    # is discarded by compaction and by the hard message trim, which is what
+    # Pi does via `context_edit`/`compaction` invalidation.
+    def context_anchored?
+      @last_usage.requests.positive? && !@last_usage_watermark.nil?
+    end
+
+    # Approximate size of the next request, used to decide when to compact.
+    # Shares its formula with /context so the footer and the compaction
+    # trigger never disagree. Reasoning is deliberately excluded: past
+    # reasoning is never sent (see #conversation_history).
     def estimated_tokens(extra_chars: 0)
-      total = (extra_chars.to_i + summary_text.to_s.bytesize) / 4.0
-      @messages.each { |msg| total += self.class.message_tokens(msg, reasoning: false) }
-      total.ceil
+      context_tokens(extra_chars: extra_chars)[:tokens]
     end
 
     # Approximate token cost of one message as it will be sent. The reasoning
     # block is included by default because the turn being executed sends it.
     def self.message_tokens(msg, reasoning: true)
-      tokens = 4.0
-      tokens += msg["content"].to_s.bytesize / 4.0
-      if reasoning && msg["reasoning_content"]
-        tokens += msg["reasoning_content"].to_s.bytesize / 4.0
+      chars = text_chars(msg["content"])
+      chars += text_chars(msg["reasoning_content"]) if reasoning && msg["reasoning_content"]
+      chars += text_chars(JSON.generate(msg["tool_calls"])) if msg["tool_calls"]
+      (chars / CHARS_PER_TOKEN).ceil
+    rescue StandardError
+      (text_chars(msg["content"]) / CHARS_PER_TOKEN).ceil
+    end
+
+    # Text length of a content payload, which may be a string or a list of
+    # blocks (text/image parts).
+    def self.text_chars(value)
+      case value
+      when String then value.length
+      when Array then value.sum { |item| text_chars(item) }
+      when Hash then text_chars(value["text"] || value["content"])
+      when nil then 0
+      else value.to_s.length
       end
-      tokens += JSON.generate(msg["tool_calls"]).bytesize / 4.0 if msg["tool_calls"]
-      tokens
     end
 
     def clear!
@@ -243,6 +329,9 @@ module Rubot
       @model_preset = nil
       @usage = Usage.zero
       @last_usage = Usage.zero
+      @cost = nil
+      @cost_partial = false
+      @last_usage_watermark = nil
       @memory_backlog = []
       save!
     end
@@ -275,12 +364,16 @@ module Rubot
       summary_text = call_summarizer(provider, system_prompt, to_summarize, previous: summary_text)
       return nil if summary_text.nil? || summary_text.strip.empty?
 
-      context_before = estimated_tokens
+      prompt_chars = system_prompt.to_s.length
+      context_before = context_tokens(extra_chars: prompt_chars)[:tokens]
       clean_summary = self.class.normalize_utf8(summary_text.strip)
       # Replace the old summary: the summarizer already merged it into this
       # one. Appending here is what made the prompt grow without bound.
       @summary = clean_summary
       @messages = @messages[cutoff..] || []
+      # The transcript was rewritten, so the last request's usage no longer
+      # describes it (Pi invalidates its context estimate the same way).
+      invalidate_context_anchor!
       save!
 
       {
@@ -288,7 +381,7 @@ module Rubot
         summarized_messages: to_summarize.size,
         kept_messages: @messages.size,
         context_before: context_before,
-        context_after: estimated_tokens
+        context_after: context_tokens(extra_chars: prompt_chars)[:tokens]
       }
     end
 
@@ -470,6 +563,9 @@ module Rubot
       data["model_preset"] = @model_preset if @model_preset
       data["usage"] = @usage.to_h
       data["last_usage"] = @last_usage.to_h
+      data["cost"] = @cost if @cost
+      data["cost_partial"] = true if @cost_partial
+      data["last_usage_watermark"] = @last_usage_watermark if @last_usage_watermark
       data["memory_backlog"] = @memory_backlog if @memory_backlog && !@memory_backlog.empty?
 
       # Generate before opening the file: JSON.pretty_generate can raise (e.g.
@@ -607,6 +703,9 @@ module Rubot
       @model_preset = data["model_preset"] if data["model_preset"]
       @usage = Usage.from_h(data["usage"])
       @last_usage = Usage.from_h(data["last_usage"])
+      @cost = load_cost(data["cost"])
+      @cost_partial = data["cost_partial"] == true
+      @last_usage_watermark = data["last_usage_watermark"].is_a?(Integer) ? data["last_usage_watermark"] : nil
       @memory_backlog = Array(data["memory_backlog"]).map(&:to_s)
     rescue JSON::ParserError => e
       # A truncated/corrupt session must not take the bot down: start fresh.
@@ -631,6 +730,7 @@ module Rubot
       end
 
       @messages = @messages[trim_index..]
+      invalidate_context_anchor!
     end
 
     # Remove tool messages whose tool_call_id doesn't correspond to any

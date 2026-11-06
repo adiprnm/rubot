@@ -625,18 +625,19 @@ module Rubot
       )
     end
 
-    # Approximate size of the next request: transcript + system prompt.
+    # Approximate size of the next request: transcript + system prompt. Uses
+    # the latest provider usage as the anchor when it is still valid, exactly
+    # like /context, so compaction and the footer agree.
     def estimated_context_tokens
-      @session.estimated_tokens(extra_chars: build_system_prompt.bytesize)
+      context_usage[:tokens]
     end
 
     # Context window of the active model, or nil when it cannot be resolved.
     def context_window_tokens
       preset = @active_preset || {}
-      entry = @config.active_model_entry || {}
       model_id = preset["model"] || @session_model || @config.model
       provider_name = preset["provider"] || @provider.name
-      resolve_context_window(model_id, provider_name, preset, entry)
+      resolve_context_window(model_id, provider_name, preset)
     end
 
     # Token accounting and cost estimate for the current session.
@@ -644,35 +645,40 @@ module Rubot
     # Ractor boundary from a SessionActor.
     def usage_report
       preset = @active_preset || {}
-      entry = @config.active_model_entry || {}
       model_id = preset["model"] || @session_model || @config.model
       provider_name = preset["provider"] || @provider.name
 
-      window = resolve_context_window(model_id, provider_name, preset, entry)
-      rates, price_source = resolve_rates(model_id, provider_name, preset, entry)
-
+      window = resolve_context_window(model_id, provider_name, preset)
+      rates, price_source = resolve_rates(model_id, provider_name, preset)
+      context = context_usage
       usage = @session.usage
       last = @session.last_usage
-      # After a completed turn the transcript has grown by the assistant reply,
-      # so the next request's prompt is roughly prompt + completion tokens.
-      context_used = last.prompt_tokens + last.completion_tokens
 
       {
         model: active_model_name,
         model_id: model_id,
         provider: provider_name,
-        context_used: context_used,
+        context_used: context[:tokens],
+        context_anchored: context[:anchored],
         context_window: window,
-        context_percent: window.to_i.positive? ? context_used.to_f / window * 100 : nil,
+        context_percent: window.to_i.positive? ? context[:tokens].to_f / window * 100 : nil,
         messages: @session.message_count,
         requests: usage.requests,
         prompt_tokens: usage.prompt_tokens,
         completion_tokens: usage.completion_tokens,
         cached_tokens: usage.cached_tokens,
         cache_creation_tokens: usage.cache_creation_tokens,
-        cache_hit_rate: usage.cache_hit_rate,
+        # Like Pi, the headline cache figure describes the latest request, not
+        # the session total: that is what shows whether the cache is working
+        # now instead of on average since the conversation started.
+        cache_hit_rate: last.requests.positive? ? last.cache_hit_rate : 0.0,
+        last_prompt_tokens: last.prompt_tokens,
         total_tokens: usage.total_tokens,
-        cost: Usage.cost(usage, rates),
+        # Priced per request when it was recorded, so switching model mid-way
+        # does not re-price earlier turns. Legacy session files have no stored
+        # cost; price their totals with the current rates instead. A total that
+        # missed a request (no rates yet on the first turn) is re-priced too.
+        cost: (@session.cost && !@session.cost_partial?) ? @session.cost : Usage.cost(usage, rates),
         price_source: price_source
       }
     end
@@ -1109,32 +1115,61 @@ module Rubot
 
     # Persist the provider's usage for this request. Streaming providers may
     # return the usage inside the result hash; otherwise read last_usage.
-    def record_usage(result)
+    # `auxiliary` is for requests that are not the user-facing turn (cron,
+    # memory extraction, summarization): they count toward the totals without
+    # replacing the context anchor.
+    def record_usage(result, auxiliary: false)
       raw = result.is_a?(Hash) ? result["usage"] : nil
       raw ||= @provider.last_usage if @provider.respond_to?(:last_usage)
       return if raw.nil?
 
-      @session.record_usage(raw, provider: @provider.name)
+      rates = current_rates(network: false)
+      if auxiliary
+        @session.record_auxiliary_usage(raw, provider: @provider.name, rates: rates)
+      else
+        @session.record_usage(raw, provider: @provider.name, rates: rates)
+      end
     rescue StandardError => e
       warn "[usage] Failed to record usage: #{e.class}: #{e.message}" if @config.debug?
+    end
+
+    # Rate lookup for the model this agent is currently talking to. The turn
+    # path passes `network: false` so a slow models.dev never delays an answer.
+    def current_rates(network: true)
+      preset = @active_preset || {}
+      model_id = preset["model"] || @session_model || @config.model
+      provider_name = preset["provider"] || @provider.name
+      resolve_rates(model_id, provider_name, preset, network: network).first
+    end
+
+    # Context estimate for the next request. The system prompt is only needed
+    # when there is no usable usage anchor (fresh session, after compaction),
+    # because an anchor already includes the prompt it was sent with.
+    def context_usage
+      if @session.context_anchored?
+        @session.context_tokens
+      else
+        @session.context_tokens(extra_chars: build_system_prompt.length)
+      end
     end
 
     def pricing_catalog
       @pricing_catalog ||= PricingCatalog.new(config: @config)
     end
 
-    def resolve_context_window(model_id, provider_name, preset, entry)
-      override = preset["context_window_tokens"] || entry["context_window_tokens"] ||
-                 entry["contextWindowTokens"]
-      value = override.to_i
+    def resolve_context_window(model_id, provider_name, preset)
+      # Presets inherit `context_window_tokens` from their model entry, so
+      # there is no need to consult another model's entry here (doing that
+      # leaked the default model's window into a switched-to preset).
+      value = preset["context_window_tokens"].to_i
       return value if value.positive?
 
       pricing_catalog.context_window(model_id, provider: provider_name) ||
         ModelInfo.context_window(model_id)
     end
 
-    def resolve_rates(model_id, provider_name, preset, entry)
-      configured = ModelInfo.normalize_rates(preset["pricing"] || entry["pricing"])
+    def resolve_rates(model_id, provider_name, preset, network: true)
+      configured = ModelInfo.normalize_rates(preset["pricing"])
       return [ configured, "config" ] if configured
 
       if provider_name.to_s == "ollama"
@@ -1142,7 +1177,7 @@ module Rubot
                    "cache_creation_input" => 0.0 }, "free" ]
       end
 
-      catalog_rates = pricing_catalog.rates(model_id, provider: provider_name)
+      catalog_rates = pricing_catalog.rates(model_id, provider: provider_name, network: network)
       return [ catalog_rates, pricing_catalog.source ] if catalog_rates
 
       builtin = ModelInfo.rates(model_id, provider: provider_name)
@@ -1236,7 +1271,9 @@ module Rubot
         break if rounds >= limit
 
         result = @provider.chat(local_messages, tools: tool_definitions)
-        record_usage(result)
+        # A cron run is a separate, local transcript: count its tokens and cost,
+        # but never let it become the anchor for /context's context size.
+        record_usage(result, auxiliary: true)
 
         if result.is_a?(Hash)
           response = result["content"] || ""
@@ -1339,7 +1376,10 @@ module Rubot
       # Extraction is a real provider request; count it in the session totals
       # without overwriting `last_usage`, which `/context` uses for context size.
       if @memory_extractor.last_usage
-        @session.record_auxiliary_usage(@memory_extractor.last_usage, provider: @provider.name)
+        @session.record_auxiliary_usage(
+          @memory_extractor.last_usage, provider: @provider.name,
+          rates: current_rates(network: false)
+        )
       end
 
       if @config.memory_consolidate?

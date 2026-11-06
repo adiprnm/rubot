@@ -74,6 +74,78 @@ class TestUsage < Minitest::Test
     assert_nil Rubot::Usage.cost(Rubot::Usage.zero, nil)
   end
 
+  def test_normalizes_deepseek_prompt_cache_hit_tokens
+    usage = Rubot::Usage.from({
+      "prompt_tokens" => 1_000,
+      "completion_tokens" => 100,
+      "prompt_cache_hit_tokens" => 600
+    })
+
+    assert_equal 600, usage.cached_tokens
+    assert_in_delta 0.6, usage.cache_hit_rate
+  end
+
+  def test_normalizes_openai_cache_write_tokens
+    usage = Rubot::Usage.from({
+      "prompt_tokens" => 1_000,
+      "completion_tokens" => 100,
+      "prompt_tokens_details" => { "cached_tokens" => 600, "cache_write_tokens" => 200 }
+    })
+
+    assert_equal 600, usage.cached_tokens
+    assert_equal 200, usage.cache_creation_tokens
+  end
+
+  def test_normalizes_anthropic_one_hour_cache_writes
+    usage = Rubot::Usage.from({
+      "input_tokens" => 100,
+      "output_tokens" => 50,
+      "cache_read_input_tokens" => 700,
+      "cache_creation_input_tokens" => 200,
+      "cache_creation" => { "ephemeral_5m_input_tokens" => 150, "ephemeral_1h_input_tokens" => 50 }
+    })
+
+    assert_equal 200, usage.cache_creation_tokens
+    assert_equal 50, usage.cache_write_1h_tokens
+  end
+
+  def test_cost_charges_one_hour_cache_writes_at_double_the_input_rate
+    usage = Rubot::Usage.new(
+      prompt_tokens: 1_000_000, completion_tokens: 0,
+      cache_creation_tokens: 1_000_000, cache_write_1h_tokens: 1_000_000
+    )
+    rates = { "input" => 3.0, "output" => 15.0, "cache_creation_input" => 3.75 }
+
+    cost = Rubot::Usage.cost(usage, rates)
+
+    assert_in_delta 6.0, cost["cache_creation"]
+    assert_in_delta 6.0, cost["total"]
+  end
+
+  def test_cost_uses_a_long_context_tier_above_the_threshold
+    usage = Rubot::Usage.new(prompt_tokens: 300_000, completion_tokens: 0)
+    rates = {
+      "input" => 2.0, "output" => 4.0, "cached_input" => 0.2,
+      "tiers" => [ { "input_tokens_above" => 200_000, "input" => 4.0, "output" => 8.0 } ]
+    }
+
+    cost = Rubot::Usage.cost(usage, rates)
+
+    assert_in_delta 1.2, cost["input"]
+  end
+
+  def test_cost_ignores_a_tier_the_request_does_not_reach
+    usage = Rubot::Usage.new(prompt_tokens: 10_000, completion_tokens: 0)
+    rates = {
+      "input" => 2.0, "output" => 4.0,
+      "tiers" => [ { "input_tokens_above" => 200_000, "input" => 4.0, "output" => 8.0 } ]
+    }
+
+    cost = Rubot::Usage.cost(usage, rates)
+
+    assert_in_delta 0.02, cost["input"]
+  end
+
   def test_session_persists_usage
     Dir.mktmpdir do |dir|
       workspace = File.join(dir, "workspace")
@@ -142,6 +214,34 @@ class TestUsage < Minitest::Test
     end
   end
 
+  def test_usage_report_cache_hit_rate_describes_the_latest_request
+    Dir.mktmpdir do |dir|
+      workspace = File.join(dir, "workspace")
+      FileUtils.mkdir_p(workspace)
+      path = File.join(dir, "config.yml")
+      File.write(path, {
+        "agents" => { "defaults" => { "workspace" => workspace, "name" => "gpt-4o-mini" } },
+        "models" => [
+          { "name" => "gpt-4o-mini", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" }
+        ],
+        "provider" => "openai"
+      }.to_yaml)
+
+      config = Rubot::Config.new(path)
+      agent = Rubot::Agent.new(config: config, provider: SequencedUsageProvider.new, session_id: "latest-cache")
+      agent.instance_variable_set(:@pricing_catalog, NoPricingCatalog.new)
+
+      agent.process("one", stream: false)
+      agent.process("two", stream: false)
+      report = agent.usage_report
+
+      # Cumulative would be 50%, but the latest request only hit 10%.
+      assert_in_delta 0.1, report[:cache_hit_rate]
+      assert_equal 1_000, report[:last_prompt_tokens]
+      assert_equal 2_000, report[:prompt_tokens]
+    end
+  end
+
   def test_usage_report_footer
     report = {
       requests: 2, prompt_tokens: 1_000, cache_hit_rate: 0.6,
@@ -204,6 +304,27 @@ class TestUsage < Minitest::Test
 
     def source
       nil
+    end
+  end
+
+  class SequencedUsageProvider < Rubot::Provider
+    def initialize
+      super(nil)
+      @calls = 0
+    end
+
+    def name
+      "openai"
+    end
+
+    def chat(_messages, tools: nil)
+      @calls += 1
+      track_usage(
+        "prompt_tokens" => 1_000,
+        "completion_tokens" => 10,
+        "prompt_tokens_details" => { "cached_tokens" => @calls == 1 ? 900 : 100 }
+      )
+      { "content" => "hi" }
     end
   end
 

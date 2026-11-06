@@ -796,6 +796,34 @@ class TestAgentCompaction < Minitest::Test
     refute_includes @agent.session.summary_text, "Old summary"
   end
 
+  def test_usage_report_context_falls_back_to_an_estimate_after_compaction
+    @agent.instance_variable_set(:@pricing_catalog, OfflineCatalog.new)
+    fill_session(10)
+    @agent.session.record_usage({ "prompt_tokens" => 5_000, "completion_tokens" => 100 })
+    assert @agent.session.context_anchored?
+
+    @agent.compact_session
+
+    report = @agent.usage_report
+    refute report[:context_anchored]
+    # The pre-compaction prompt size must not linger in the footer.
+    assert_operator report[:context_used], :<, 5_000
+  end
+
+  class OfflineCatalog
+    def rates(*, **)
+      nil
+    end
+
+    def context_window(*, **)
+      nil
+    end
+
+    def source
+      nil
+    end
+  end
+
   def test_compact_session_returns_nil_for_a_short_conversation
     @agent.session.add("user", "hello")
 

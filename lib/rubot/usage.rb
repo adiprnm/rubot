@@ -9,17 +9,27 @@ module Rubot
   #   Ollama     prompt_eval_count / eval_count
   #
   # `prompt_tokens` here always means the *full* input side, cache included, so
-  # cache_hit_rate and cost can be computed uniformly.
+  # cache_hit_rate and cost can be computed uniformly. This mirrors Pi's
+  # `input + cacheRead + cacheWrite` while keeping a single field.
   class Usage
+    # Anthropic charges 1.25x the input rate for a 5-minute cache write and
+    # 2x for a 1-hour write. Providers that report the 1-hour subset land in
+    # `cache_write_1h_tokens` and are priced at the higher rate.
+    CACHE_WRITE_MULTIPLIER = 1.25
+    CACHE_WRITE_1H_MULTIPLIER = 2.0
+
     attr_reader :prompt_tokens, :completion_tokens, :cached_tokens,
-                :cache_creation_tokens, :reasoning_tokens, :requests
+                :cache_creation_tokens, :cache_write_1h_tokens,
+                :reasoning_tokens, :requests
 
     def initialize(prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0,
-                   cache_creation_tokens: 0, reasoning_tokens: 0, requests: 0)
+                   cache_creation_tokens: 0, cache_write_1h_tokens: 0,
+                   reasoning_tokens: 0, requests: 0)
       @prompt_tokens = prompt_tokens.to_i
       @completion_tokens = completion_tokens.to_i
       @cached_tokens = cached_tokens.to_i
       @cache_creation_tokens = cache_creation_tokens.to_i
+      @cache_write_1h_tokens = cache_write_1h_tokens.to_i
       @reasoning_tokens = reasoning_tokens.to_i
       @requests = requests.to_i
     end
@@ -40,14 +50,23 @@ module Rubot
         completion_details = stringify(hash["completion_tokens_details"])
         prompt = hash["prompt_tokens"].to_i
         completion = hash["completion_tokens"].to_i
-        cached = (hash["cached_tokens"] || details["cached_tokens"]).to_i
-        reasoning = (hash["reasoning_tokens"] || completion_details["reasoning_tokens"]).to_i
-        cache_creation = 0
+        # OpenAI-compatible gateways disagree on where cache reads live;
+        # DeepSeek reports `prompt_cache_hit_tokens`, others `cached_tokens`.
+        cached = number(
+          details["cached_tokens"], hash["cached_tokens"], hash["prompt_cache_hit_tokens"]
+        )
+        cache_creation = number(details["cache_write_tokens"], hash["cache_write_tokens"])
+        cache_write_1h = number(details["cache_write_1h_tokens"], hash["cache_write_1h_tokens"])
+        reasoning = number(hash["reasoning_tokens"], completion_details["reasoning_tokens"])
       elsif hash.key?("input_tokens") || hash.key?("output_tokens") ||
             hash.key?("cache_read_input_tokens") || hash.key?("cache_creation_input_tokens")
+        creation_details = stringify(hash["cache_creation"])
         input = hash["input_tokens"].to_i
         cached = hash["cache_read_input_tokens"].to_i
         cache_creation = hash["cache_creation_input_tokens"].to_i
+        cache_write_1h = number(
+          creation_details["ephemeral_1h_input_tokens"], hash["cache_write_1h_tokens"]
+        )
         prompt = input + cached + cache_creation
         completion = hash["output_tokens"].to_i
         reasoning = 0
@@ -56,10 +75,13 @@ module Rubot
         completion = hash["eval_count"].to_i
         cached = 0
         cache_creation = 0
+        cache_write_1h = 0
         reasoning = 0
       else
         return nil
       end
+
+      cache_write_1h = [ cache_write_1h, cache_creation ].min
 
       return nil if prompt.zero? && completion.zero?
 
@@ -68,6 +90,7 @@ module Rubot
         completion_tokens: completion,
         cached_tokens: cached,
         cache_creation_tokens: cache_creation,
+        cache_write_1h_tokens: cache_write_1h,
         reasoning_tokens: reasoning,
         requests: 1
       )
@@ -82,6 +105,7 @@ module Rubot
         completion_tokens: hash["completion_tokens"],
         cached_tokens: hash["cached_tokens"],
         cache_creation_tokens: hash["cache_creation_tokens"],
+        cache_write_1h_tokens: hash["cache_write_1h_tokens"],
         reasoning_tokens: hash["reasoning_tokens"],
         requests: hash["requests"]
       )
@@ -93,6 +117,13 @@ module Rubot
       value.each_with_object({}) { |(key, val), acc| acc[key.to_s] = val }
     end
 
+    # First present value, coerced to an integer. Providers omit fields they
+    # do not support, so a missing key must stay 0 rather than nil.
+    def self.number(*values)
+      value = values.compact.first
+      value.nil? ? 0 : value.to_i
+    end
+
     def merge(other)
       return self if other.nil?
 
@@ -101,6 +132,7 @@ module Rubot
         completion_tokens: completion_tokens + other.completion_tokens,
         cached_tokens: cached_tokens + other.cached_tokens,
         cache_creation_tokens: cache_creation_tokens + other.cache_creation_tokens,
+        cache_write_1h_tokens: cache_write_1h_tokens + other.cache_write_1h_tokens,
         reasoning_tokens: reasoning_tokens + other.reasoning_tokens,
         requests: requests + other.requests
       )
@@ -112,6 +144,10 @@ module Rubot
     end
 
     # Share of input tokens served from the provider's prompt cache (0.0..1.0).
+    #
+    # Like Pi, the number that matters is computed from the *latest* request
+    # (Session#last_usage), not from the session totals: a cumulative figure
+    # dilutes a cache regression behind the tokens of earlier turns.
     def cache_hit_rate
       return 0.0 if prompt_tokens.zero?
 
@@ -124,6 +160,7 @@ module Rubot
         "completion_tokens" => completion_tokens,
         "cached_tokens" => cached_tokens,
         "cache_creation_tokens" => cache_creation_tokens,
+        "cache_write_1h_tokens" => cache_write_1h_tokens,
         "reasoning_tokens" => reasoning_tokens,
         "requests" => requests
       }
@@ -134,21 +171,51 @@ module Rubot
     def self.cost(usage, rates)
       return nil unless rates.is_a?(Hash) && !rates.empty?
 
+      rates = effective_rates(rates, usage.prompt_tokens)
       input_rate = rates["input"].to_f
       output_rate = rates["output"].to_f
       cached_rate = (rates["cached_input"] || input_rate).to_f
-      cache_creation_rate = (rates["cache_creation_input"] || input_rate * 1.25).to_f
+      cache_creation_rate = (rates["cache_creation_input"] || input_rate * CACHE_WRITE_MULTIPLIER).to_f
 
       uncached = [ usage.prompt_tokens - usage.cached_tokens - usage.cache_creation_tokens, 0 ].max
+      long_write = [ usage.cache_write_1h_tokens, usage.cache_creation_tokens ].min
+      short_write = usage.cache_creation_tokens - long_write
+      cache_creation_cost =
+        (short_write * cache_creation_rate + long_write * input_rate * CACHE_WRITE_1H_MULTIPLIER) /
+        1_000_000.0
 
       breakdown = {
         "input" => uncached / 1_000_000.0 * input_rate,
         "cached_input" => usage.cached_tokens / 1_000_000.0 * cached_rate,
-        "cache_creation" => usage.cache_creation_tokens / 1_000_000.0 * cache_creation_rate,
+        "cache_creation" => cache_creation_cost,
         "output" => usage.completion_tokens / 1_000_000.0 * output_rate
       }
       breakdown["total"] = breakdown.values.sum
       breakdown
+    end
+
+    # Pi selects a pricing tier from the request's full input size (cached
+    # tokens included). Tiers with a `input_tokens_above` at or below the
+    # prompt are candidates; the highest one wins.
+    def self.effective_rates(rates, input_tokens)
+      tiers = rates["tiers"]
+      return rates unless tiers.is_a?(Array) && !tiers.empty?
+
+      best = nil
+      matched = -1
+      tiers.each do |tier|
+        next unless tier.is_a?(Hash)
+
+        tier = tier.each_with_object({}) { |(key, value), acc| acc[key.to_s] = value }
+        threshold = (tier["input_tokens_above"] || tier["inputTokensAbove"] || 0).to_i
+        next unless input_tokens > threshold && threshold > matched
+
+        best = tier
+        matched = threshold
+      end
+      return rates if best.nil?
+
+      rates.reject { |key, _| key.to_s == "tiers" }.merge(best)
     end
   end
 
@@ -162,14 +229,14 @@ module Rubot
       lines << "   Context:  #{tokens(report[:context_used])} / #{window(report)} tokens#{context_pct(report)}"
       lines << "   Messages: #{report[:messages]} | Requests: #{report[:requests]}"
       lines << "   Tokens:   #{tokens(report[:prompt_tokens])} in / #{tokens(report[:completion_tokens])} out"
-      lines << "   Cache:    #{tokens(report[:cached_tokens])} cached#{hit_rate(report)}"
+      lines << "   Cache:    #{tokens(report[:cached_tokens])} cached total#{hit_rate(report)}"
 
       cost = report[:cost]
       if cost
         source = report[:price_source] ? " [#{report[:price_source]}]" : ""
         lines << "   Cost:     $#{money(cost['total'])} " \
-                 "(in $#{money(cost['input'])}, cached $#{money(cost['cached_input'])}, " \
-                 "out $#{money(cost['output'])})#{source}"
+                 "(in $#{money(cost['input'])}, cache read $#{money(cost['cached_input'])}, " \
+                 "cache write $#{money(cost['cache_creation'])}, out $#{money(cost['output'])})#{source}"
       else
         lines << "   Cost:     unknown — set `pricing` on the model preset in config.yml"
       end
@@ -193,7 +260,7 @@ module Rubot
     def hit_rate(report)
       return " (hit rate n/a)" if report[:prompt_tokens].to_i.zero?
 
-      format(" (hit rate %.1f%%)", report[:cache_hit_rate].to_f * 100)
+      format(" (hit rate %.1f%% on the latest request)", report[:cache_hit_rate].to_f * 100)
     end
 
     # One-line metrics for the TUI footer, e.g.
