@@ -131,9 +131,13 @@ module TUI
       return self if y < 0 || y >= @h || w <= 0
 
       sid = Style.id(style)
-      cols = [ w, @w - x ].select(&:positive?)
+      from = [x, 0].max
+      to = [x + w - 1, @w - 1].min
       row = @styles[y]
-      cols.each { |cx| row[x + cx] = sid if x + cx >= 0 && x + cx < @w } # rubocop:disable Style/MapIntoArray -- sorted reads clearer
+      from.upto(to) { |cx| row[cx] = sid } if to >= from
+      # The row is no longer one uniform style, so row() must scan styles
+      # instead of packing it from the @flat cache.
+      @flat[y] = -1
       @dirty[y] = true
       @touched[y] = true
       self

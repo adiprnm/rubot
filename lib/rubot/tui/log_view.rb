@@ -105,14 +105,44 @@ module Rubot
         !!@sel
       end
 
-      # Plain text of the selected cells, read back from the composed
-      # canvas of the frame that drew the highlight.
-      def selection_text
-        return nil unless @sel && @canvas
+      # A press that was released without moving: a click, not a drag.
+      def point_selection?
+        !!@sel && @sel[:ax] == @sel[:hx] && @sel[:ay] == @sel[:hy]
+      end
 
-        x = @sel[:ax]..@sel[:hx]
-        ys = @sel[:ay]..@sel[:hy]
-        @canvas.excerpt(x.min, ys.min, x.max, ys.max)
+      # Plain text of the selection, one line per touched row. Only rows
+      # the drag actually crossed are included, and each line is the text
+      # from where the selection starts on that row to where it ends.
+      def selection_text
+        return nil unless @sel && @rect
+
+        selection_spans.map { |(y, from, to)| text_between(y, from, to).rstrip }.join("\n")
+      end
+
+      # The rows and column ranges the selection covers. This is linear, the
+      # way a terminal selects: the row where the drag started runs from the
+      # start column to the right edge, the row where it ended runs from the
+      # left edge to the end column, and the rows between span the full
+      # width. A bounding box would give a rectangle instead -- highlighting
+      # (and copying) whole columns the user never dragged over.
+      def selection_spans
+        return [] unless @sel && @rect
+
+        ax, ay = @sel[:ax], @sel[:ay]
+        hx, hy = @sel[:hx], @sel[:hy]
+
+        return [ [ ay, [ ax, hx ].min, [ ax, hx ].max ] ] if ay == hy
+
+        # Dragging up swaps which end is the anchor, but the top row always
+        # starts at its own cursor and runs right, and the bottom row always
+        # starts at the left edge and stops at its cursor.
+        top_x, top_y, bottom_x, bottom_y =
+          ay < hy ? [ ax, ay, hx, hy ] : [ hx, hy, ax, ay ]
+
+        spans = [ [ top_y, top_x, @rect.right ] ]
+        (top_y + 1...bottom_y).each { |y| spans << [ y, @rect.x, @rect.right ] }
+        spans << [ bottom_y, @rect.x, bottom_x ]
+        spans
       end
 
       # Drop entries; used by /new (the screen is wiped silently). `keep`
@@ -127,6 +157,7 @@ module Rubot
         @lines = @entry_lines.flatten(1)
         @scroll_y = 0
         @follow = true
+        @sel = nil
         self
       end
 
@@ -134,6 +165,8 @@ module Rubot
         @follow = false
         @scroll_y = (@scroll_y + delta).clamp(0, [ @lines.size - @rect.h, 0 ].max)
         @follow = @scroll_y >= [ @lines.size - @rect.h, 0 ].max
+        # The rows under the highlight just moved.
+        clear_selection
         self
       end
 
@@ -173,14 +206,29 @@ module Rubot
       private
 
       def paint_selection(canvas)
-        return unless selection?
-
-        ys = [ @sel[:ay], @sel[:hy] ].min..[ @sel[:ay], @sel[:hy] ].max
-        x_min = [ @sel[:ax], @sel[:hx] ].min
-        x_max = [ @sel[:ax], @sel[:hx] ].max
-        ys.each do |y|
-          canvas.overlay(x_min, y, [ x_max - x_min + 1, 1 ].max, :selection)
+        selection_spans.each do |(y, from, to)|
+          canvas.overlay(from, y, [ to - from + 1, 1 ].max, :selection)
         end
+      end
+
+      # Text on screen row `y` between columns `from` and `to`, read from the
+      # log's own wrapped lines rather than the composed canvas, so the
+      # scrollbar, gutter padding and unpainted tail never reach the
+      # clipboard.
+      def text_between(y, from, to)
+        line = @lines[y - @rect.y + @scroll_y]
+        return "" unless line
+
+        out = +""
+        col = @rect.x
+        line.each do |text, _style|
+          text.to_s.each_char do |ch|
+            width = ::TUI::Text.width(ch)
+            out << ch if width.positive? && col + width - 1 >= from && col <= to
+            col += width
+          end
+        end
+        out
       end
 
       def wrap(index)
@@ -265,7 +313,10 @@ module Rubot
       end
 
       def follow_bottom
+        before = @scroll_y
         @scroll_y = [ @lines.size - @rect.h, 0 ].max
+        # New output pushes the highlighted rows up the screen.
+        @sel = nil if @sel && @scroll_y != before
       end
 
       def draw_scrollbar(canvas)

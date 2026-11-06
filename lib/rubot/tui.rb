@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "base64"
+
 require_relative "usage"
 require_relative "opencode_usage"
 require_relative "tui/compat"
@@ -229,7 +231,14 @@ module Rubot
         copy_selection
       end
       @app.on_key(:ctrl_c) { @app.quit }
-      @app.on_key(:escape) { cancel_turn }
+      @app.on_key(:escape) do
+        @log.clear_selection
+        cancel_turn
+      end
+
+      # Typing, scrolling and new output all move the rows out from under a
+      # highlight that was left on screen after a copy.
+      @prompt.on(:change) { @log.clear_selection }
 
       @prompt.on(:submit) do |text|
         line = text.strip
@@ -470,20 +479,28 @@ module Rubot
       end
     end
 
-    # Send a selection to the terminal clipboard (OSC 52). Terminals have
-    # to be configured to accept it; otherwise Shift+drag selection is the
-    # terminal-native fallback.
+    # Send a selection to the terminal clipboard (OSC 52) and leave the
+    # highlight on screen, the way a terminal keeps its selection after the
+    # mouse is released; it is dropped by the next keystroke, scroll or
+    # batch of new output.
     def copy_selection
-      text = @log.selection_text
-      @log.clear_selection
+      # A click (press and release without a drag) dismisses the highlight
+      # instead of overwriting the clipboard with a single cell.
+      if @log.point_selection?
+        @log.clear_selection
+        return @app.render
+      end
 
-      return @app.render if text.nil? # repaint without the highlight
+      text = @log.selection_text
+      return @app.render if text.nil? || text.empty?
 
       ::TUI::Term.write($stdout, "\e]52;c;#{Base64.strict_encode64(text)}\a")
       ::TUI::Term.flush($stdout)
       @app.render
-    rescue StandardError
-      nil
+    rescue StandardError => e
+      # Never let a copy attempt take the TUI down, but do not swallow the
+      # reason either: on a broken clipboard path this is the only clue.
+      publish [ [ "copy failed: #{e.class}: #{e.message}", :muted ] ]
     end
 
     # One-line argument preview shown next to a tool call in the log. It is

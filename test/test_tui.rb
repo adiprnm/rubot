@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "stringio"
 require "test_helper"
 require "rubot"
 
@@ -457,8 +458,25 @@ module Rubot
       assert_equal Channels::TuiChannel, Channels::Registry::CHANNEL_MAP["tui"]
       assert_equal Channels::TuiChannel, Channels::Registry::CHANNEL_MAP["repl"]
     end
-  end
-end
+
+    # Drag-to-select and wheel scrolling both ride on SGR mouse reports.
+    # A compat patch once replaced the gem's parser with a wheel-only one,
+    # turning press/drag into :unknown keys and silently killing selection.
+    def test_mouse_reports_keep_their_coordinates_and_button
+      refute ::TUI::Term.respond_to?(:rubot_original_read_escape),
+             "compat must not override Term.read_escape"
+
+      key = ::TUI::Term.mouse_key(/\A\e\[<(\d+);(\d+);(\d+)([Mm])\z/.match("\e[<32;120;40M"))
+      assert_equal :mouse_drag, key.name
+      assert_equal 0, key.mouse_button
+      assert_equal 119, key.mouse_x
+      assert_equal 39, key.mouse_y
+
+      press = ::TUI::Term.mouse_key(/\A\e\[<(\d+);(\d+);(\d+)([Mm])\z/.match("\e[<0;12;5M"))
+      assert_equal :mouse_press, press.name
+      assert_equal 11, press.mouse_x
+      assert_equal 4, press.mouse_y
+    end
 
     def test_selection_flow_highlights_and_copies
       view = TUI::LogView.new
@@ -471,10 +489,150 @@ end
       view.begin_selection(2, 0)
       assert view.selection?
       view.extend_selection(8, 0)
-      assert_equal "llo wo".ljust(40).rstrip, view.selection_text.strip
+      view.render(canvas) # the App repaints on its next tick
+
+      assert_equal "llo wor", view.selection_text.strip
+      assert_equal (2..8).to_a, styled_columns(canvas, 0, :selection)
+
       view.clear_selection
       refute view.selection?
       assert_nil view.selection_text
+    end
+
+    # Text selection behaves like a terminal's: linear, not rectangular.
+    # The start row runs to the right edge, the rows between span the full
+    # width, and the end row starts at the left edge — so the highlight and
+    # the copied text follow the text, instead of being a bounding box.
+    def test_selection_is_linear_across_rows
+      view = TUI::LogView.new
+      view.layout(::TUI::Rect.new(0, 0, 20, 5))
+      view.add_entry([ [ "line one", :text ] ])
+      view.add_entry([ [ "line two", :text ] ])
+      view.add_entry([ [ "line three", :text ] ])
+      canvas = ::TUI::Canvas.new(20, 5)
+      view.render(canvas)
+
+      view.begin_selection(7, 0)
+      view.extend_selection(5, 2)
+      view.render(canvas)
+
+      assert_equal "e\nline two\nline t", view.selection_text
+      assert_equal (7..19).to_a, styled_columns(canvas, 0, :selection)
+      assert_equal (0..19).to_a, styled_columns(canvas, 1, :selection)
+      assert_equal (0..5).to_a, styled_columns(canvas, 2, :selection)
+    end
+
+    # Dragging upwards selects the same text as dragging downwards over the
+    # same cells, and blank rows in between stay in the selection.
+    def test_selection_dragged_upwards_and_over_blank_rows
+      view = TUI::LogView.new
+      view.layout(::TUI::Rect.new(0, 0, 20, 5))
+      view.add_entry([ [ "hello", :text ] ])
+      view.add_entry([ [ "", :text ] ])
+      view.add_entry([ [ "delta", :text ] ])
+      canvas = ::TUI::Canvas.new(20, 5)
+      view.render(canvas)
+
+      view.begin_selection(2, 2)
+      view.extend_selection(2, 0)
+      view.render(canvas)
+
+      assert_equal "llo\n\ndel", view.selection_text
+      assert_equal (2..19).to_a, styled_columns(canvas, 0, :selection)
+      assert_equal (0..19).to_a, styled_columns(canvas, 1, :selection)
+      assert_equal (0..2).to_a, styled_columns(canvas, 2, :selection)
+    end
+
+    # The scrollbar and the padding in the copied lines would be noise; the
+    # copy reads the log's own rows.
+    def test_selection_copy_has_no_scrollbar_or_trailing_padding
+      view = TUI::LogView.new
+      view.layout(::TUI::Rect.new(0, 0, 20, 3))
+      6.times { |i| view.add_entry([ [ "row #{i}", :text ] ]) }
+      canvas = ::TUI::Canvas.new(20, 3)
+      view.render(canvas)
+
+      view.begin_selection(0, 0)
+      view.extend_selection(19, 0)
+      view.render(canvas)
+
+      assert_equal "row 3", view.selection_text
+    end
+
+    # A terminal keeps its selection after the mouse is released; so does
+    # the log. The copy still happens on release.
+    def test_release_keeps_the_highlight_and_copies
+      out = StringIO.new
+      original = $stdout
+      begin
+        # Swapped before the App is built so its own output lands here too.
+        $stdout = out
+        repl = build_repl
+        log = repl.instance_variable_get(:@log)
+        log.clear
+        log.add_entry([ [ "hello world", :text ] ])
+        repl.instance_variable_get(:@app).render_frame
+
+        log.begin_selection(2, 0)
+        log.extend_selection(6, 0)
+        repl.send(:copy_selection)
+      ensure
+        $stdout = original
+      end
+
+      assert log.selection?, "the highlight must survive the mouse release"
+      assert_equal "hello", log.selection_text
+      assert_includes out.string, "\e]52;c;#{Base64.strict_encode64("hello")}\a"
+    end
+
+    # A click without a drag deselects; it must not put one character on the
+    # clipboard.
+    def test_click_drops_the_highlight_without_copying
+      out = StringIO.new
+      original = $stdout
+      begin
+        $stdout = out
+        repl = build_repl
+        log = repl.instance_variable_get(:@log)
+        log.clear
+        log.add_entry([ [ "hello world", :text ] ])
+        repl.instance_variable_get(:@app).render_frame
+
+        log.begin_selection(2, 0)
+        assert log.point_selection?
+        repl.send(:copy_selection)
+      ensure
+        $stdout = original
+      end
+
+      refute log.selection?, "a click must dismiss the highlight"
+      refute_includes out.string, "\e]52;"
+    end
+
+    # The highlight is screen-anchored, so anything that moves the rows or
+    # turns the page drops it instead of leaving it over other text.
+    def test_scrolling_and_typing_drop_the_highlight
+      repl = build_repl
+      log = repl.instance_variable_get(:@log)
+      prompt = repl.instance_variable_get(:@prompt)
+      5.times { |i| log.add_entry([ [ "row #{i}", :text ] ]) }
+      repl.instance_variable_get(:@app).render_frame
+
+      log.begin_selection(0, 0)
+      assert log.selection?
+      log.scroll_by(1)
+      refute log.selection?, "scrolling must drop the highlight"
+
+      log.begin_selection(0, 0)
+      prompt.handle_key(::TUI::Key.printable("x"))
+      refute log.selection?, "typing must drop the highlight"
+    end
+
+    # Column indexes of `row` painted with `style`.
+    def styled_columns(canvas, row, style)
+      sid = ::TUI::Style.id(style)
+      styles = canvas.instance_variable_get(:@styles)[row]
+      styles.each_index.select { |i| styles[i] == sid }
     end
 
     def test_markdown_bold_italic
@@ -482,3 +640,5 @@ end
 
       assert segs.include?([ "big", :md_bold_italic ])
     end
+  end
+end

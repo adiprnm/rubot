@@ -12,6 +12,11 @@
 # 2. Term::SEQUENCES misses the shift+enter sequences sent by kitty/WezTerm/
 #    iTerm2 (keyboard protocol) and xterm (modifyOtherKeys), which the prompt
 #    needs to insert a newline instead of submitting.
+#
+# Mouse input (wheel, press, drag, release) is handled by the vendored gem's
+# own Term#read_escape; do not install a second parser here — an overriding
+# parser turns SGR mouse reports into :unknown keys, which silently kills
+# wheel scrolling and drag-to-select.
 
 require "tui"
 
@@ -34,42 +39,6 @@ module Rubot
         ::TUI::Term.send(:remove_const, :SEQUENCES)
         ::TUI::Term.const_set(:SEQUENCES, merged)
         patch_screen!
-        patch_term_mouse!
-      end
-
-      # Wheel events arrive as SGR mouse reports (SGR): CSI < btn;col;row M
-      # or m (64 = wheel up, 65 = wheel down; 'm' is the release event the
-      # terminal sends right after, which we ignore so one wheel-step is
-      # one scroll). Upstream read_escape has no mouse parsing, so the rows
-      # would end as unknown keys.
-      MOUSE_RE = /\A\e\[<(?<btn>\d+);(?<col>\d+);(?<row>\d+)(?<dir>[Mm])\z/.freeze
-      WHEEL = { "$64" => :wheel_up, "$65" => :wheel_down }.freeze
-
-      def self.patch_term_mouse!
-        return if ::TUI::Term.method_defined?(:read_escape) # never: module method
-
-        ::TUI::Term.singleton_class.class_eval do
-          alias_method :rubot_original_read_escape, :read_escape
-
-          def read_escape
-            buf = + ::TUI::Term::ESC
-            deadline = 0.03
-            while buf.bytesize < 12 && IO.select([ $stdin ], nil, nil, deadline)
-              c = read_char
-              break if c.nil? || c.empty?
-              buf << c
-              break if buf.bytesize > 2 && c =~ /[A-Za-z~]/
-              deadline = 0.005
-            end
-            return ::TUI::Key.new(:escape) if buf.bytesize == 1
-
-            mouse = buf.match(MOUSE_RE)
-            name = WHEEL["$#{mouse[1]}"] if mouse && mouse[:dir] == "M"
-            return ::TUI::Key.new(name || :unknown) if mouse
-
-            ::TUI::Key.new(::TUI::Term::SEQUENCES[buf] || :unknown)
-          end
-        end
       end
 
       # Toggled while the TUI runs, restored after. 1002 = wheel/btn

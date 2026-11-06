@@ -12,6 +12,10 @@ gem "webrick", "~> 1.8"
 # Not yet published on rubygems.org; pin to the git repository.
 gem "ruby-tui", path: "vendor/ruby-tui"
 
+# Direct dependency for the OSC 52 clipboard write in the TUI. A bundled gem
+# since Ruby 3.4, so it has to be required (and declared) explicitly.
+gem "base64", "~> 0.3"
+
 group :development, :test do
   gem "minitest", "~> 5.0"
   gem "rake"

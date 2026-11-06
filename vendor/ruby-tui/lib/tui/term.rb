@@ -205,7 +205,11 @@ module TUI
       def read_escape
         buf = +ESC
         deadline = 0.03
-        while buf.bytesize < 12 && IO.select([$stdin], nil, nil, deadline)
+        # An SGR mouse report is at most "ESC [ < " + button + three digits
+        # each for column and row + modifiers + final byte, so 24 bytes is
+        # enough to never truncate one (a smaller cap drops the final byte on
+        # wide/tall terminals and the report parses as :unknown).
+        while buf.bytesize < 24 && IO.select([$stdin], nil, nil, deadline)
           c = read_char
           break if c.nil? || c.empty?
           buf << c
@@ -243,10 +247,7 @@ module TUI
           end
 
         key = Key.new(name)
-        key.mouse_button = button
-        key.mouse_x = col - 1
-        key.mouse_y = row - 1
-        key
+        key.at(col - 1, row - 1, button: button)
       end
 
       def move(row, col)

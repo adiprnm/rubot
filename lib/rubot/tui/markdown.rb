@@ -246,6 +246,8 @@ module Rubot
             body, span_style =
               if m[:code_body]
                 [ m[:code_body], :md_code ]
+              elsif m[:bi]
+                [ m[:bi], :md_bold_italic ]
               elsif m[:bold]
                 [ m[:bold], :md_bold ]
               elsif m[:ibold]
