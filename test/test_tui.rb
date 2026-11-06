@@ -332,6 +332,18 @@ module Rubot
       refute texts.any? { |t| t.include?("Turn took") }, "no turn footer after a stop"
       assert_equal "half an answer", texts[-2]
       assert_equal "", texts[-1], "one separator blank remains, no double blank"
+
+      app = repl.instance_variable_get(:@app)
+      line = app.render_lines.find { |l| l.include?("Operation canceled by user") }
+      refute_nil line, "the cancellation notice shows above the input"
+      assert_includes line, "38;5;203", "the notice is red"
+
+      ev = repl.instance_variable_get(:@events)
+      ev << [ :stream_start ]
+      repl.send(:pump)
+      repl.instance_variable_get(:@app).send(:run_timers)
+      refute plain(app.render_lines).any? { |l| l.include?("Operation canceled by user") },
+             "a new turn clears the notice"
     end
 
     def test_tool_summary_truncates_to_a_cell_budget

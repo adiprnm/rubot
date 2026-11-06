@@ -403,6 +403,7 @@ module Rubot
       when :status_right then @status.right = event[1]
       when :status_left then @status.left = event[1]
       when :stream_start
+        @working.notice = nil
         @turn_started_at = monotonic_now
         # One blank line between the echoed prompt and the answer.
         @log.add_entry([ [ "", nil ] ])
@@ -421,6 +422,7 @@ module Rubot
           # record. Keep one blank after it as the separator the next prompt
           # needs, but not the extra one the footer line would have sat above.
           @log.add_entry([ [ "", nil ] ]) unless @log.last_blank?
+          @working.notice = "Operation canceled by user"
         else
           @log.add_entry([ [ "", nil ] ])
           add_turn_summary
@@ -657,6 +659,7 @@ module Rubot
       @log.clear(keep: @banner_count)
       @live_entry = nil
       @tool_entries.clear
+      @working.notice = nil
       reset_turn_totals
       @status.left = ""
     end
