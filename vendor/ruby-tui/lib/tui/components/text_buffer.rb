@@ -42,6 +42,18 @@ module TUI
       str = str.tr("\n", '') unless @multiline
       return self if str.empty?
 
+      # A multi-line paste in a multiline buffer is a run of inserts with a
+      # hard newline between them, not one line carrying literal \n cells.
+      if @multiline && str.include?("\n")
+        first, *rest = str.split("\n", -1)
+        insert(first, silent: silent)
+        rest.each do |part|
+          newline
+          insert(part, silent: silent)
+        end
+        return self
+      end
+
       line = @lines[@row]
       @lines[@row] = line[0, @col].to_s + str + line[@col..-1].to_s
       @col += str.length

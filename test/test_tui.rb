@@ -429,6 +429,145 @@ module Rubot
       assert_equal "msg-a", input3.value
     end
 
+    def test_shift_enter_sequences_from_kitty_xterm_and_tmux
+      assert_equal :shift_enter, ::TUI::Term::SEQUENCES["\e[13;2u"], "kitty keyboard protocol"
+      assert_equal :shift_enter, ::TUI::Term::SEQUENCES["\e[27;2;13~"], "xterm modifyOtherKeys / tmux"
+      assert_equal :enter, ::TUI::Term::SEQUENCES.fetch("\r", :enter)
+    end
+
+    def test_keys_the_keyboard_protocol_disambiguates
+      table = ::TUI::Term::SEQUENCES
+
+      assert_equal :escape, table["\e[27u"], "esc arrives as CSI 27u once the protocol is on"
+      assert_equal :ctrl_c, table["\e[99;5u"], "ctrl+c arrives as CSI 99;5u, not 0x03"
+      assert_equal :ctrl_d, table["\e[100;5u"]
+      assert_equal :enter, table["\e[13u"]
+      assert_equal :shift_enter, table["\e[13;3u"], "alt+enter also inserts a newline"
+      assert_nil table["\e[97;3u"], "alt+letter stays unbound"
+    end
+
+    def test_read_key_understands_the_disambiguated_forms
+      require "pty"
+      reader, writer = PTY.open
+      previous = $stdin
+      $stdin = reader
+
+      { "\e[13;2u" => :shift_enter, "\e[99;5u" => :ctrl_c,
+        "\e[27u" => :escape, "\e[13u" => :enter, "\e[27;2;13~" => :shift_enter }.each do |sequence, expected|
+        writer.write(sequence)
+        assert_equal expected, ::TUI::Term.read_key(0.5)&.name,
+                     "#{sequence.inspect} should read as #{expected.inspect}"
+      end
+    ensure
+      $stdin = previous
+      reader&.close
+      writer&.close
+    end
+
+    def test_keyboard_protocol_is_pushed_after_the_alternate_screen_switch
+      out = StringIO.new
+      ::TUI::Term.session(out) { nil }
+      seq = out.string
+
+      alt_on = seq.index("\e[?1049h")
+      push = seq.index("\e[>1u")
+      pop = seq.index("\e[<u")
+      alt_off = seq.index("\e[?1049l")
+
+      refute_nil alt_on, "session must enter the alternate screen: #{seq.inspect}"
+      refute_nil push, "session must push the kitty keyboard protocol: #{seq.inspect}"
+      assert_operator alt_on, :<, push,
+                      "terminals keep a per-screen flag stack, so the push has to come after the switch"
+      assert_operator pop, :<, alt_off, "the flags must be popped before leaving the alternate screen"
+    end
+
+    def test_prompt_grows_when_a_line_wraps
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      assert_equal 1, input.measure(20, 24).last
+
+      ("a" * 45).each_char { |c| input.handle_key(::TUI::Key.printable(c)) }
+      assert_equal 3, input.measure(20, 24).last, "45 cells at 20 wide should need three rows"
+
+      input.handle_key(::TUI::Key.new(:shift_enter))
+      input.handle_key(::TUI::Key.new(:shift_enter))
+      assert_equal 5, input.measure(20, 24).last, "wrapped rows and hard newlines add up"
+    end
+
+    def test_prompt_wraps_a_long_line_across_rows
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      ("a" * 12).each_char { |c| input.handle_key(::TUI::Key.printable(c)) }
+      input.layout(::TUI::Rect.new(0, 0, 10, 3))
+
+      canvas = ::TUI::Canvas.new(10, 3)
+      input.render(canvas)
+      rows = plain(canvas.lines)
+
+      assert_equal "aaaaaaaaaa", rows[0], "first row is a full slice: #{rows.inspect}"
+      assert_equal "aa        ", rows[1], "the rest wraps to the next row: #{rows.inspect}"
+    end
+
+    def test_prompt_wraps_at_word_boundaries
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      "hello world".each_char { |c| input.handle_key(::TUI::Key.printable(c)) }
+      input.layout(::TUI::Rect.new(0, 0, 8, 3))
+
+      canvas = ::TUI::Canvas.new(8, 3)
+      input.render(canvas)
+      rows = plain(canvas.lines)
+
+      assert_equal "hello", rows[0].rstrip, "the row ends at the space: #{rows.inspect}"
+      assert_equal "world", rows[1].rstrip, "the word moves whole to the next row: #{rows.inspect}"
+    end
+
+    def test_prompt_breaks_a_word_that_cannot_fit
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      "abcdefghij".each_char { |c| input.handle_key(::TUI::Key.printable(c)) }
+      input.layout(::TUI::Rect.new(0, 0, 4, 4))
+
+      canvas = ::TUI::Canvas.new(4, 4)
+      input.render(canvas)
+      rows = plain(canvas.lines)
+
+      assert_equal "abcd", rows[0]
+      assert_equal "efgh", rows[1]
+      assert_equal "ij", rows[2].rstrip
+    end
+
+    def test_prompt_text_keeps_a_column_off_the_right_border
+      repl = build_repl
+      prompt = repl.instance_variable_get(:@prompt)
+      ("word " * 60).each_char { |c| prompt.handle_key(::TUI::Key.printable(c)) }
+      view = plain(repl.instance_variable_get(:@app).render_lines)
+
+      content = view.select { |line| line.end_with?("\u2502") && line.include?("word") }
+      refute_empty content, "the wrapped prompt should be on screen"
+      content.each do |line|
+        assert_equal " ", line[-2], "text must not touch the right border: #{line.inspect}"
+      end
+    end
+
+    def test_prompt_scrolls_to_the_cursor_row_when_wrapped
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      ("b" * 35).each_char { |c| input.handle_key(::TUI::Key.printable(c)) }
+      input.layout(::TUI::Rect.new(0, 0, 10, 2))
+
+      canvas = ::TUI::Canvas.new(10, 2)
+      input.render(canvas)
+      rows = plain(canvas.lines)
+
+      assert_equal "bbbbbbbbbb", rows[0], "the view scrolls to keep the cursor row visible: #{rows.inspect}"
+      assert_equal "bbbbb", rows[1].rstrip, "cursor sits on the last wrapped row: #{rows.inspect}"
+    end
+
+    def test_multiline_buffer_insert_turns_newlines_into_lines
+      buffer = ::TUI::TextBuffer.new("", multiline: true)
+      buffer.insert("one\ntwo")
+
+      assert_equal [ "one", "two" ], buffer.lines
+      assert_equal 1, buffer.row
+      assert_equal 3, buffer.col
+    end
+
     def test_stream_start_puts_blank_between_prompt_and_answer
       repl = build_repl
       app = repl.instance_variable_get(:@app)

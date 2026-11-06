@@ -11,6 +11,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 🔌 **Multiple providers** — OpenAI, Anthropic, Ollama, or any OpenAI-compatible API
 - 🛠️ **Built-in tools** — shell execution, file operations, web fetching, persistent memory, cron scheduling
 - 💬 **Interactive REPL** — with streaming, command history, and tab completion
+- ⌨️ **Multiline prompt** — Shift+Enter inserts a newline and the input box grows with the text, word-wrapping long lines
 - 📝 **Session management** — persistent conversation history
 - 🧬 **SOUL.md** — personality and identity file for persistent character
 - 🎛️ **Model presets** — named model configurations with a primary default, switchable per session and manageable from Telegram
@@ -161,6 +162,26 @@ $ rubot
 | `/cron delete <id>` | Delete a cron job |
 | `/stream on\|off` | Toggle streaming |
 | `/quit` | Exit |
+
+### TUI Keys
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Send the prompt |
+| `Shift+Enter`, `Alt+Enter` | Insert a newline |
+| `Up` / `Down` | Move between lines once the input has more than one, otherwise recall history |
+| `Tab` | Complete a `/command` |
+| `Esc` | Cancel the running turn, clear a selection |
+| `Ctrl+C` | Quit |
+| `PageUp` / `PageDown`, mouse wheel | Scroll the transcript |
+| Drag with the mouse | Select text; released selection is copied via OSC 52 |
+
+The prompt grows with its content: hard newlines and long lines that wrap both
+add rows, up to six. `Shift+Enter` needs a terminal that reports the key
+separately, which means the kitty keyboard protocol (kitty, Ghostty, WezTerm,
+foot, iTerm2) or xterm's modifyOtherKeys — rubot turns both on for the duration
+of the session. Terminals that cannot distinguish it (Alacritty) send a plain
+`Enter`.
 
 ### CLI Options
 

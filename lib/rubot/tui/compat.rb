@@ -12,6 +12,11 @@
 # 2. Term::SEQUENCES misses the shift+enter sequences sent by kitty/WezTerm/
 #    iTerm2 (keyboard protocol) and xterm (modifyOtherKeys), which the prompt
 #    needs to insert a newline instead of submitting.
+# 3. Term.session pushes the keyboard protocol *before* switching to the
+#    alternate screen. Terminals keep a separate flag stack per screen, so
+#    that push is discarded the moment the alternate screen is entered and
+#    shift+enter degrades to a plain \r (submit). The push has to happen
+#    after the screen switch; see patch_session!.
 #
 # Mouse input (wheel, press, drag, release) is handled by the vendored gem's
 # own Term#read_escape; do not install a second parser here — an overriding
@@ -26,40 +31,102 @@ module Rubot
       SHIFT_ENTER_SEQUENCES = {
         # kitty keyboard protocol / iTerm2 / WezTerm
         "\e[13;2u" => :shift_enter,
-        # xterm modifyOtherKeys
-        "\e[27;2u" => :shift_enter,
+        "\e[13;3u" => :shift_enter, # alt+enter
+        # xterm modifyOtherKeys level 2 and tmux extended-keys: CSI 27 ; mod ; code ~
+        "\e[27;2;13~" => :shift_enter,
+        "\e[27;3;13~" => :shift_enter,
         # escape-prefixed enter as sent by terminals without the protocols above
         "\e\r"     => :shift_enter,
         "\e\n"     => :shift_enter
       }.freeze
 
+      # The keyboard protocol sends keys that have no legacy encoding as
+      # "CSI code;modifiers u". Two of those matter to the app: Esc becomes
+      # CSI 27u (so the bare \e that cancels a turn never arrives) and ctrl+c
+      # becomes CSI 99;5u instead of 0x03 (so the quit binding never fires).
+      CSI_U    = /\A\e\[(\d+)(?:;(\d+))?u\z/
+      MOD_ALT  = 2
+      MOD_CTRL = 4
+
+      # Table lookup with a CSI u fallback. Kept as a Hash subclass so the
+      # vendored Term#read_escape needs no patching.
+      class Sequences < Hash
+        def [](sequence)
+          super || from_csi_u(sequence)
+        end
+
+        private
+
+        def from_csi_u(sequence)
+          match = CSI_U.match(sequence.to_s)
+          return nil unless match
+
+          code = match[1].to_i
+          mods = match[2] ? match[2].to_i - 1 : 0 # the parameter is 1-based
+
+          return :enter if code == 13 && mods.zero?
+          return :shift_enter if code == 13 && (mods & MOD_ALT).positive?
+          return :escape if code == 27 && mods.zero?
+          return :"ctrl_#{code.chr}" if (mods & MOD_CTRL).positive? && code.between?(97, 122)
+
+          nil
+        end
+      end
+
       def self.apply
         originals = ::TUI::Term::SEQUENCES
-        merged = originals.merge(SHIFT_ENTER_SEQUENCES).freeze
+        merged = Sequences.new
+        originals.each { |sequence, name| merged[sequence] = name }
+        merged.merge!(SHIFT_ENTER_SEQUENCES)
         ::TUI::Term.send(:remove_const, :SEQUENCES)
-        ::TUI::Term.const_set(:SEQUENCES, merged)
+        ::TUI::Term.const_set(:SEQUENCES, merged.freeze)
         patch_screen!
+        patch_session!
       end
 
       # Toggled while the TUI runs, restored after. 1002 = wheel/btn
-      # tracking, 1006 = SGR coordinates, and >1u is the kitty keyboard
-      # protocol which makes terminals report shift+enter (and alt+enter)
-      # as distinct sequences instead of a plain \r.
-      TTY_ON  = "\e[?1002h\e[?1006h\e[>1u".freeze
-      TTY_OFF = "\e[?1006l\e[?1002l\e[?1000l\e[<u".freeze
+      # tracking, 1006 = SGR coordinates, >1u is the kitty keyboard protocol
+      # which makes terminals report shift+enter (and alt+enter) as distinct
+      # sequences instead of a plain \r, and >4;2m is xterm's modifyOtherKeys
+      # (level 2) for the terminals that only speak that dialect.
+      TTY_ON  = "\e[?1002h\e[?1006h\e[>4;2m\e[>1u".freeze
+      TTY_OFF = "\e[>4;0m\e[<u\e[?1006l\e[?1002l\e[?1000l".freeze
 
-      def self.write_online
-        ::TUI::Term.write($stdout, TTY_ON)
-        ::TUI::Term.flush($stdout)
+      def self.write_online(output = $stdout)
+        ::TUI::Term.write(output, TTY_ON)
+        ::TUI::Term.flush(output)
       rescue StandardError
         nil
       end
 
-      def self.write_offline
-        ::TUI::Term.write($stdout, TTY_OFF)
-        ::TUI::Term.flush($stdout)
+      def self.write_offline(output = $stdout)
+        ::TUI::Term.write(output, TTY_OFF)
+        ::TUI::Term.flush(output)
       rescue StandardError
         nil
+      end
+
+      # Term.session writes ALT_ON, then yields. The keyboard/mouse modes
+      # are pushed from inside that block so they land on the alternate
+      # screen's own stack, and popped before it is left again.
+      def self.patch_session!
+        term = ::TUI::Term
+        return if term.singleton_class.method_defined?(:rubot_keyboard_session)
+
+        term.singleton_class.class_eval do
+          alias_method :rubot_keyboard_session, :session
+
+          def session(output = $stdout, input = $stdin, &block)
+            rubot_keyboard_session(output, input) do
+              Rubot::TUI::Compat.write_online(output)
+              begin
+                block.call
+              ensure
+                Rubot::TUI::Compat.write_offline(output)
+              end
+            end
+          end
+        end
       end
 
       # Replacement for Screen#present; identical to upstream except the

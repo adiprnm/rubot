@@ -160,10 +160,9 @@ module Rubot
       paint_banner
 
       # Wheel scrolling (mouse) and the kitty keyboard protocol (distinct
-      # shift/alt+enter); both restored on the way out.
-      Rubot::TUI::Compat.write_online
+      # shift/alt+enter) are pushed by Compat.patch_session!, inside the
+      # alternate screen, and restored on the way out.
       @app.run
-      Rubot::TUI::Compat.write_offline
 
       @mailbox << :stop
       @worker.join(2) if @worker
@@ -183,12 +182,13 @@ module Rubot
       @working = Rubot::TUI::WorkingBadge.new
       @tool_entries = {}
 
-      # The prompt box grows with newlines (shift+enter). One column of
-      # padding inside the border keeps the typed text off the frame.
-      # The working badge reserves a 3-row band above it (text with one
-      # blank row of padding above and below), so the layout never jumps.
+      # The prompt box grows with newlines (shift+enter) and wraps long
+      # lines. One column of padding on each side keeps the typed text off
+      # the frame. The working badge reserves a 3-row band above it (text
+      # with one blank row of padding above and below), so the layout never
+      # jumps.
       @prompt_box = ::TUI::Layout::Box.new(title_style: :hint)
-      @prompt_box.add(::TUI::Layout::Padding.new(@prompt, left: 1))
+      @prompt_box.add(::TUI::Layout::Padding.new(@prompt, left: 1, right: 1))
 
       # The window gutter plus the log's own one-column inset put every
       # conversation row exactly two characters in.
