@@ -129,7 +129,6 @@ module Rubot
       @turn_started_at = nil
       @turn_total_seconds = 0.0
       @turn_count = 0
-      @archived_session = nil
       @command_output = nil
 
       # Queues bridging worker/agent threads into the App thread. Component
@@ -155,8 +154,8 @@ module Rubot
     # Switch the active session. In actor mode this points the REPL at
     # another session handle (one actor per session).
     def switch_session(name)
+      @session_id = name.to_s
       if @pool
-        @session_id = name.to_s
         agent
       else
         @agent.switch_session(name)
@@ -176,6 +175,10 @@ module Rubot
     end
 
     def run
+      # Every launch starts a new conversation. The session file is only
+      # written once it has a message, so an untouched launch leaves nothing
+      # behind; previous conversations keep their own ids and stay resumable.
+      start_fresh_session
       if $stdout.tty? && $stdin.tty?
         run_tui
       else
@@ -195,9 +198,6 @@ module Rubot
       require "tui"
       build_ui
       spawn_worker
-      # Every launch starts from a fresh session; no leftover work leaks
-      # in, while the persona/default preset still apply.
-      start_fresh_session
       @mailbox << :sync
       paint_banner
 
@@ -212,19 +212,13 @@ module Rubot
     end
 
     def start_fresh_session
-      archive_previous_session
-      agent.clear_session
+      switch_session(Rubot::Session.fresh_id(session_workspace))
     end
 
-    # The launch starts a fresh default session, but the transcript it
-    # replaces stays on disk under a timestamped id so /resume can bring it
-    # back. The actor (and its loaded Session) must exist before the rename,
-    # otherwise the archive would be taken for the session being cleared.
-    def archive_previous_session
-      id = agent.session.id
-      @archived_session = Rubot::Session.archive!(agent.config.workspace, id)
-    rescue StandardError => e
-      warn "[tui] could not archive session: #{e.class}: #{e.message}" if Rubot.debug?
+    def session_workspace
+      @pool ? @pool.workspace : agent.config.workspace
+    rescue StandardError
+      nil
     end
 
     def build_ui
@@ -1141,9 +1135,6 @@ module Rubot
       @log.add_entry([ [ Rubot::NAME, :title ] ])
       @log.add_entry([ [ "provider #{provider} · model #{model} · #{tools}", :dim ] ])
       @log.add_entry([ [ "type /help for commands · esc cancels a running turn · pgup/pgdn scrolls", :dim ] ])
-      if @archived_session
-        @log.add_entry([ [ "last conversation kept as #{@archived_session} · /resume to continue it", :dim ] ])
-      end
       @log.add_entry([ [ "", nil ] ])
       @banner_count = @log.entry_count
       @status.right = "session #{@session_id} · #{provider} · #{model}" if info[:provider]

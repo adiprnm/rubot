@@ -177,15 +177,17 @@ module Rubot
              "a cleared session has nothing to price"
     end
 
-    def test_start_fresh_session_clears_agent_session
+    def test_start_fresh_session_switches_to_a_new_id
       repl = build_repl
       agent = repl.instance_variable_get(:@agent)
-      cleared = false
-      agent.define_singleton_method(:clear_session) { cleared = true }
+      switched = nil
+      agent.define_singleton_method(:switch_session) { |name| switched = name }
 
       repl.send(:start_fresh_session)
 
-      assert cleared
+      assert switched, "the launch switches to a fresh session"
+      refute_equal "default", switched, "the id belongs to this launch only"
+      assert_equal switched, repl.instance_variable_get(:@session_id)
     end
 
     def test_new_command_clears_conversation_but_keeps_banner
@@ -1578,11 +1580,12 @@ module Rubot
       end
     end
 
-    def test_start_fresh_session_archives_the_previous_conversation
+    def test_start_fresh_session_leaves_the_previous_conversation_untouched
       Dir.mktmpdir do |dir|
         workspace = File.join(dir, "workspace")
         FileUtils.mkdir_p(File.join(workspace, "sessions"))
-        File.write(File.join(workspace, "sessions", "default.json"), JSON.pretty_generate(
+        previous = File.join(workspace, "sessions", "default.json")
+        File.write(previous, JSON.pretty_generate(
           "id" => "default",
           "updated_at" => Time.now.iso8601,
           "messages" => [ { "role" => "user", "content" => "keep me" } ]
@@ -1590,15 +1593,14 @@ module Rubot
 
         repl = build_resume_repl(workspace)
         repl.send(:start_fresh_session)
-        repl.send(:paint_banner)
 
-        archived = repl.instance_variable_get(:@archived_session)
-        assert archived, "the previous conversation is kept"
-        assert File.exist?(File.join(workspace, "sessions", "#{archived}.json"))
-        refute File.exist?(File.join(workspace, "sessions", "default.json")),
-               "the fresh session owns the default id again"
-        assert_includes plain(repl.instance_variable_get(:@app).render_lines).join("\n"),
-                        "/resume to continue it"
+        assert File.exist?(previous), "the earlier conversation keeps its file and id"
+        assert_equal [ "keep me" ], JSON.parse(File.read(previous))["messages"].map { |m| m["content"] }
+
+        fresh_id = repl.instance_variable_get(:@session_id)
+        refute_equal "default", fresh_id
+        refute File.exist?(File.join(workspace, "sessions", "#{fresh_id}.json")),
+               "the new session is only written once it has a message"
       end
     end
   end

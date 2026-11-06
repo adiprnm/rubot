@@ -621,33 +621,35 @@ class TestSessionHistoryWindowing < Minitest::Test
     assert_equal "latest ask", Rubot::Session.find(@workspace, "work")[:last_prompt]
   end
 
-  def test_archive_renames_a_session_that_has_messages
-    session = Rubot::Session.new("default", workspace: @workspace)
-    session.add("user", "keep me")
+  def test_session_without_messages_is_not_written_to_disk
+    session = Rubot::Session.new("untouched", workspace: @workspace)
 
-    archived = Rubot::Session.archive!(@workspace, "default", stamp: "20260101-120000")
+    session.save!
 
-    assert_equal "default-20260101-120000", archived
-    refute File.exist?(File.join(@workspace, "sessions", "default.json"))
-    path = File.join(@workspace, "sessions", "#{archived}.json")
-    assert_equal [ "keep me" ], JSON.parse(File.read(path))["messages"].map { |m| m["content"] }
+    refute File.exist?(session.file_path), "an empty session leaves no file behind"
   end
 
-  def test_archive_leaves_an_empty_session_alone
-    Rubot::Session.new("empty", workspace: @workspace).save!
+  def test_clear_removes_the_session_file
+    session = Rubot::Session.new("cleared", workspace: @workspace)
+    session.add("user", "hello")
+    assert File.exist?(session.file_path)
 
-    assert_nil Rubot::Session.archive!(@workspace, "empty")
-    assert File.exist?(File.join(@workspace, "sessions", "empty.json"))
+    session.clear!
+
+    refute File.exist?(session.file_path), "a cleared session is gone from disk"
   end
 
-  def test_archive_adds_a_suffix_when_the_timestamp_is_taken
-    first = Rubot::Session.new("default", workspace: @workspace)
-    first.add("user", "first")
-    assert_equal "default-stamp", Rubot::Session.archive!(@workspace, "default", stamp: "stamp")
+  def test_fresh_id_avoids_ids_already_on_disk
+    dir = File.join(@workspace, "sessions")
+    FileUtils.mkdir_p(dir)
+    File.write(File.join(dir, "default-stamp.json"), "{}")
 
-    second = Rubot::Session.new("default", workspace: @workspace)
-    second.add("user", "second")
+    id = Rubot::Session.fresh_id(@workspace, stamp: "stamp")
 
-    assert_equal "default-stamp-2", Rubot::Session.archive!(@workspace, "default", stamp: "stamp")
+    assert_equal "default-stamp-2", id
+  end
+
+  def test_fresh_id_without_a_workspace_is_just_the_stamp
+    assert_equal "default-stamp", Rubot::Session.fresh_id(nil, stamp: "stamp")
   end
 end

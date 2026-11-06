@@ -336,6 +336,24 @@ module Rubot
       workspace && File.join(workspace, "sessions")
     end
 
+    # A session id that is not in use yet, used by the TUI to start a new
+    # conversation on every launch. The file itself is not created until the
+    # session has a message (see #save!), so quitting an untouched launch
+    # leaves nothing behind.
+    def self.fresh_id(workspace, prefix: "default", stamp: nil)
+      base = "#{prefix}-#{stamp || Time.now.strftime("%Y%m%d-%H%M%S")}"
+      dir = sessions_dir(workspace)
+      return base unless dir
+
+      candidate = base
+      counter = 1
+      while File.exist?(File.join(dir, "#{candidate}.json"))
+        counter += 1
+        candidate = "#{base}-#{counter}"
+      end
+      candidate
+    end
+
     # Plain-data summaries of the sessions saved in `workspace`, newest
     # first. Sessions without messages (and unreadable files) are left out:
     # /resume only offers something that can actually be continued.
@@ -372,41 +390,6 @@ module Rubot
       messages.is_a?(Array) ? normalize_utf8(messages) : []
     rescue JSON::ParserError, SystemCallError, EncodingError
       []
-    end
-
-    # Rename the transcript of `id` to a timestamped id so the conversation
-    # stays resumable after the caller starts a fresh session. Used at TUI
-    # launch, before the new session clears the file. Returns the archived
-    # id, or nil when there was nothing worth keeping.
-    def self.archive!(workspace, id, stamp: nil)
-      dir = sessions_dir(workspace)
-      return nil unless dir
-
-      id = id.to_s
-      return nil if id.empty?
-
-      source = File.join(dir, "#{id}.json")
-      return nil unless File.file?(source)
-
-      data = JSON.parse(File.read(source))
-      messages = data["messages"]
-      return nil unless messages.is_a?(Array) && !messages.empty?
-
-      suffix = stamp || Time.now.strftime("%Y%m%d-%H%M%S")
-      archived_id = "#{id}-#{suffix}"
-      target = File.join(dir, "#{archived_id}.json")
-      counter = 1
-      while File.exist?(target)
-        counter += 1
-        archived_id = "#{id}-#{suffix}-#{counter}"
-        target = File.join(dir, "#{archived_id}.json")
-      end
-
-      File.rename(source, target)
-      archived_id
-    rescue JSON::ParserError, SystemCallError, EncodingError => e
-      warn "[session] could not archive #{id}: #{e.class}: #{e.message}" if Rubot.debug?
-      nil
     end
 
     # Read one session file into the summary used by #index and #find.
@@ -462,8 +445,18 @@ module Rubot
     # Persist session to disk. Uses an exclusive file lock so a session
     # file is never partially written even if another process/Ractor
     # touches it at the same time.
+    #
+    # A session that has no content yet is not written, and an existing file
+    # for it is removed. That keeps a launch that the user closes before
+    # typing anything out of the sessions directory (and out of /resume).
     def save!
       return unless file_path
+
+      unless persistable?
+        FileUtils.rm_f(file_path)
+        return
+      end
+
       FileUtils.mkdir_p(File.dirname(file_path))
       data = {
         "id" => @id,
@@ -493,6 +486,20 @@ module Rubot
     end
 
     private
+
+    # A freshly created session has nothing worth a file yet. Messages are the
+    # obvious content; summary, usage and the memory backlog are kept too, so
+    # state written before the first message (or by tests/tools) survives.
+    def persistable?
+      return true unless @messages.empty?
+      return true if @summary && !@summary.strip.empty?
+      return true if @forced_skill || @model_override || @model_preset
+      return true if @usage.requests.positive?
+      return true if @last_usage.requests.positive?
+      return true if @memory_backlog && !@memory_backlog.empty?
+
+      false
+    end
 
     # Call the LLM to summarize a batch of old messages into a compact form.
     # Very long transcripts are split into chunks so the summarizer request
