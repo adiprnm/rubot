@@ -99,7 +99,7 @@ tools:
 # Multiple channels can run simultaneously.
 #
 # Available channels:
-#   repl     — Terminal REPL (default if no channels configured)
+#   tui      — Terminal UI chat (full-screen, ruby-tui). `repl` is a legacy alias.
 #   telegram — Telegram Bot (long polling or webhook)
 
 channels:

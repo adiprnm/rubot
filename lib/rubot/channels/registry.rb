@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "telegram"
-require_relative "repl_channel"
+require_relative "tui_channel"
 
 module Rubot
   module Channels
@@ -9,9 +9,10 @@ module Rubot
     module Registry
       CHANNEL_MAP = {
         "telegram" => Telegram,
-        "repl" => REPLChannel,
-        "terminal" => REPLChannel,
-        "console" => REPLChannel
+        "tui" => TuiChannel,
+        "repl" => TuiChannel,       # legacy alias
+        "terminal" => TuiChannel,
+        "console" => TuiChannel
       }.freeze
 
       # Load and start all channels configured in `data["channels"]`.

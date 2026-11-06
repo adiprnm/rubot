@@ -222,7 +222,7 @@ if ARGV.first == "check"
   # 4. Channels
   channels = config.data["channels"]
   if channels.nil? || channels.empty?
-    puts "ℹ️  No channels configured — will use default REPL"
+    puts "ℹ️  No channels configured — will use default TUI channel"
   elsif channels.is_a?(Hash)
     channels.each do |name, cfg|
       cfg ||= {}
@@ -272,7 +272,7 @@ if ARGV.first == "check"
     puts "✅ All checks passed! Ready to run:"
     puts "   rubot"
     puts "   rubot -C telegram  # Telegram only"
-    puts "   rubot -C repl      # REPL only"
+    puts "   rubot -C tui       # TUI only"
   else
     puts "❌ Some checks failed. Fix the issues above before running."
     exit 1
@@ -326,7 +326,7 @@ parser = OptionParser.new do |opts|
     options[:env_file] = e
   end
 
-  opts.on("-C", "--channel CHANNEL", "Channel to use: repl, telegram (default: repl)") do |c|
+  opts.on("-C", "--channel CHANNEL", "Channel to use: tui, telegram (default: tui)") do |c|
     options[:channel] = c
   end
 

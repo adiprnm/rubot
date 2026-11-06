@@ -35,3 +35,4 @@ docker-compose.local.yml
 !.env.*.example
 .rubot/
 docker-data/
+.bundle/
