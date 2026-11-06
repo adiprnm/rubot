@@ -858,6 +858,12 @@ File operations: read, write, append, list directories, get file info.
 ### `web_fetch`
 Fetch content from URLs via HTTP GET.
 
+HTML pages are converted to plain text before they enter the conversation:
+scripts, styles, comments, and tags are stripped, the document title is kept,
+and entities are decoded. JSON and other non-HTML bodies are passed through
+unmodified. Everything is truncated to 5,000 characters after stripping, so the
+budget is spent on content instead of markup.
+
 ### `memory`
 Read and update the bot's persistent MEMORY.md file.
 

@@ -47,10 +47,17 @@ class TestTools < Minitest::Test
   class FakeHTTPResponse
     attr_reader :body, :code, :message
 
-    def initialize(body)
+    def initialize(body, headers = {})
       @body = body
       @code = "200"
       @message = "OK"
+      @headers = headers
+    end
+
+    # Net::HTTPResponse supports header lookup via []. The web tool reads the
+    # content type that way.
+    def [](name)
+      @headers[name.to_s.downcase]
     end
   end
 
@@ -145,6 +152,109 @@ class TestTools < Minitest::Test
     end
 
     assert_equal false, fake.use_ssl
+  end
+
+  def test_web_fetch_strips_html_to_plain_text
+    html = <<~HTML
+      <!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <title>Example &amp; Test</title>
+          <style>body { color: red; }</style>
+          <script>var tracking = "should not appear";</script>
+        </head>
+        <body>
+          <!-- serverside comment should not appear -->
+          <h1>Hello&nbsp;world</h1>
+          <p>First paragraph with an entity: caf&#xe9;.</p>
+          <ul><li>Item one</li><li>Item two</li></ul>
+          <a href="/next">A link</a>
+        </body>
+      </html>
+    HTML
+    fake = FakeHTTP.new(FakeHTTPResponse.new(html, "content-type" => "text/html; charset=utf-8"))
+    tool = Rubot::Tools::Web.new
+
+    result = tool.stub(:resolve_and_check_host, "93.184.216.34") do
+      Net::HTTP.stub(:new, fake) do
+        tool.execute({ "url" => "https://example.com/" })
+      end
+    end
+
+    assert_includes result, "HTTP 200 OK (text/html)"
+    assert_includes result, "Example & Test"
+    assert_includes result, "Hello world"
+    assert_includes result, "café"
+    assert_includes result, "Item one"
+    assert_includes result, "A link"
+    refute_includes result, "<style>"
+    refute_includes result, "tracking"
+    refute_includes result, "comment"
+    refute_includes result, "&nbsp;"
+  end
+
+  def test_web_fetch_leaves_non_html_bodies_untouched
+    json = '{"results": [1, 2, 3]}'
+    fake = FakeHTTP.new(FakeHTTPResponse.new(json, "content-type" => "application/json"))
+    tool = Rubot::Tools::Web.new
+
+    result = tool.stub(:resolve_and_check_host, "93.184.216.34") do
+      Net::HTTP.stub(:new, fake) do
+        tool.execute({ "url" => "https://example.com/api" })
+      end
+    end
+
+    assert_includes result, json
+    refute_includes result, "truncated"
+  end
+
+  def test_web_fetch_truncates_after_html_stripping
+    # Markup that would be ~30x larger than the text it produces: the token
+    # win of stripping only materializes if the cap applies to the result.
+    paragraph = "<p>word word word</p>" * 500
+    html = "<html><head><title>T</title></head><body>#{paragraph}</body></html>"
+    fake = FakeHTTP.new(FakeHTTPResponse.new(html, "content-type" => "text/html"))
+    tool = Rubot::Tools::Web.new
+
+    result = tool.stub(:resolve_and_check_host, "93.184.216.34") do
+      Net::HTTP.stub(:new, fake) do
+        tool.execute({ "url" => "https://example.com/" })
+      end
+    end
+
+    assert result.length < Rubot::Tools::Web::MAX_BODY * 2
+    assert_includes result, "(body truncated)"
+  end
+
+  def test_web_fetch_heuristically_strips_html_without_content_type
+    html = "<html><body><script>noise()</script><p>kept text</p></body></html>"
+    fake = FakeHTTP.new(FakeHTTPResponse.new(html))
+    tool = Rubot::Tools::Web.new
+
+    result = tool.stub(:resolve_and_check_host, "93.184.216.34") do
+      Net::HTTP.stub(:new, fake) do
+        tool.execute({ "url" => "https://example.com/" })
+      end
+    end
+
+    assert_includes result, "kept text"
+    refute_includes result, "noise()"
+  end
+
+  def test_web_fetch_normalizes_utf8_charsets
+    page = "caf\xE9".b # latin-1 bytes for é
+    fake = FakeHTTP.new(FakeHTTPResponse.new(page, "content-type" => "text/html; charset=iso-8859-1"))
+    tool = Rubot::Tools::Web.new
+
+    result = tool.stub(:resolve_and_check_host, "93.184.216.34") do
+      Net::HTTP.stub(:new, fake) do
+        tool.execute({ "url" => "https://example.com/" })
+      end
+    end
+
+    assert result.valid_encoding?
+    assert_includes result, "café"
   end
 
   # --- send_file ---
