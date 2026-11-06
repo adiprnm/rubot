@@ -103,6 +103,40 @@ class TestProviders < Minitest::Test
     assert_equal "function", web_def["type"]
   end
 
+  def test_openai_payload_includes_reasoning_effort
+    settings = Rubot::ProviderSettings.new(
+      provider: "openai", model: "deepseek-v4.1-flash", api_key: "sk-test",
+      api_base: "https://example.invalid/v1", max_tokens: 256, temperature: 0.7,
+      reasoning_effort: "low"
+    )
+    provider = Rubot::Providers::OpenAI.new(settings)
+
+    payload = provider.send(:build_payload, [], nil)
+
+    assert_equal "low", payload["reasoning_effort"]
+  end
+
+  def test_openai_payload_omits_reasoning_effort_when_unset
+    settings = Rubot::ProviderSettings.new(
+      provider: "openai", model: "deepseek-v4.1-flash", api_key: "sk-test",
+      api_base: "https://example.invalid/v1", max_tokens: 256, temperature: 0.7
+    )
+    provider = Rubot::Providers::OpenAI.new(settings)
+
+    payload = provider.send(:build_payload, [], nil)
+
+    refute payload.key?("reasoning_effort")
+  end
+
+  def test_provider_settings_rejects_an_unknown_reasoning_effort
+    settings = Rubot::ProviderSettings.new(
+      provider: "openai", model: "m", api_key: "k", api_base: "http://127.0.0.1:1",
+      max_tokens: 16, temperature: 0.7, reasoning_effort: "extreme"
+    )
+
+    assert_nil settings.reasoning_effort
+  end
+
   def test_openai_requires_api_key
     config = make_config("api_key" => nil)
     provider = Rubot::Providers::OpenAI.new(config)

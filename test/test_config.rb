@@ -299,6 +299,26 @@ class TestConfigModelPresets < Minitest::Test
     assert_in_delta 0.1, preset["temperature"]
   end
 
+  def test_preset_reasoning_effort_reaches_provider_settings
+    write_config("model_presets" => {
+      "fast" => { "model" => "deepseek-v4.1-flash", "reasoning_effort" => "low" }
+    })
+
+    settings = @config.provider_settings_for_preset("fast")
+
+    assert_equal "low", settings.reasoning_effort
+  end
+
+  def test_agents_default_reasoning_effort_applies_without_a_preset
+    write_config("agents" => { "defaults" => {
+      "workspace" => @workspace,
+      "name" => "opencode-go",
+      "reasoning_effort" => "medium"
+    } })
+
+    assert_equal "medium", @config.provider_settings.reasoning_effort
+  end
+
   def test_set_and_delete_preset
     preset = @config.set_model_preset("coding", {
       "model" => "glm-5.3",

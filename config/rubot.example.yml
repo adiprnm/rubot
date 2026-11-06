@@ -49,6 +49,9 @@ model_presets:
     model: gpt-4o-mini
     max_tokens: 4096
     temperature: 0.7
+    # Optional OpenAI-style reasoning hint (minimal/low/medium/high), sent as
+    # `reasoning_effort`. Models that do not support it ignore the field.
+    # reasoning_effort: low
     # Context window and prices used by /usage (USD per 1M tokens).
     # By default these come from models.dev and are cached in
     # <workspace>/model_pricing.json. Set them only to override.

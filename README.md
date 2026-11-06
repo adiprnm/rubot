@@ -274,6 +274,7 @@ primary preset and switch per session with `/model <preset>`.
 agents:
   defaults:
     model_preset: primary
+    # reasoning_effort: low   # global default; a preset overrides it
 
 model_presets:
   primary:
@@ -297,7 +298,7 @@ model_presets:
 | `model` | Config `models` entry name or provider model id |
 | `provider`, `api_base`, `api_key` | Optional overrides; inherited from the model entry / active entry |
 | `max_tokens`, `temperature` | Generation settings for this preset |
-| `reasoning_effort` | Optional provider reasoning hint |
+| `reasoning_effort` | Sent as OpenAI `reasoning_effort` (`minimal`/`low`/`medium`/`high`). Models without support ignore it |
 | `context_window_tokens` | Context window size for `/context` (falls back to a built-in table) |
 | `pricing` | Token prices for the cost estimate (see below) |
 

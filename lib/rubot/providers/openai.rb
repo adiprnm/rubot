@@ -93,6 +93,8 @@ module Rubot
         }
         payload["stream"] = true if stream
         payload["stream_options"] = { "include_usage" => true } if stream
+        effort = @config.respond_to?(:reasoning_effort) ? @config.reasoning_effort : nil
+        payload["reasoning_effort"] = effort if effort
         if tools && !tools.empty?
           payload["tools"] = format_tools(tools)
           payload["tool_choice"] = "auto"

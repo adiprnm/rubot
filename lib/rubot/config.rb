@@ -132,8 +132,17 @@ module Rubot
         max_tokens: max_tokens,
         temperature: temperature,
         debug: debug?,
-        extra_headers: base_entry["extra_headers"].is_a?(Hash) ? base_entry["extra_headers"] : {}
+        extra_headers: base_entry["extra_headers"].is_a?(Hash) ? base_entry["extra_headers"] : {},
+        reasoning_effort: reasoning_effort
       )
+    end
+
+    # Global default reasoning effort ("minimal", "low", "medium", "high").
+    # Presets may override it with their own `reasoning_effort`.
+    def reasoning_effort
+      raw = agent_defaults["reasoning_effort"] || agent_defaults["reasoningEffort"]
+      text = raw.to_s.strip.downcase
+      text.empty? ? nil : text
     end
 
     def max_tokens
@@ -254,7 +263,8 @@ module Rubot
         max_tokens: preset["max_tokens"] || max_tokens,
         temperature: preset["temperature"] || temperature,
         debug: debug?,
-        extra_headers: preset["extra_headers"].is_a?(Hash) ? preset["extra_headers"] : {}
+        extra_headers: preset["extra_headers"].is_a?(Hash) ? preset["extra_headers"] : {},
+        reasoning_effort: preset["reasoning_effort"]
       )
     end
 

@@ -8,9 +8,11 @@ module Rubot
   # Providers only need these methods, so they can be built without
   # mutating (and without sharing) the live Config object.
   class ProviderSettings
-    attr_reader :provider, :model, :api_key, :api_base, :max_tokens, :temperature, :extra_headers
+    attr_reader :provider, :model, :api_key, :api_base, :max_tokens, :temperature,
+                :extra_headers, :reasoning_effort
 
-    def initialize(provider:, model:, api_key:, api_base:, max_tokens:, temperature:, debug: false, extra_headers: {})
+    def initialize(provider:, model:, api_key:, api_base:, max_tokens:, temperature:,
+                   debug: false, extra_headers: {}, reasoning_effort: nil)
       @provider = provider
       @model = model
       @api_key = api_key
@@ -19,11 +21,23 @@ module Rubot
       @temperature = temperature
       @debug = debug
       @extra_headers = (extra_headers || {}).dup.freeze
+      @reasoning_effort = normalize_effort(reasoning_effort)
       freeze
     end
 
     def debug?
       @debug
+    end
+
+    private
+
+    # "low" / "medium" / "high" (or nil). Anything else is treated as unset so
+    # a typo in config.yml does not make every request fail at the provider.
+    def normalize_effort(value)
+      text = value.to_s.strip.downcase
+      return nil if text.empty?
+
+      %w[minimal low medium high].include?(text) ? text.freeze : nil
     end
   end
 
