@@ -114,6 +114,53 @@ module Rubot
              "the footer carries the turn's usage: #{view.last(3).inspect}"
     end
 
+    def test_command_output_gets_one_blank_line_above_and_below_and_left_padding
+      repl = build_repl
+      agent = repl.instance_variable_get(:@agent)
+      agent.define_singleton_method(:clear_session) { nil }
+      log = repl.instance_variable_get(:@log)
+
+      repl.send(:handle_command, "/clear")
+      repl.send(:pump)
+
+      texts = log.instance_variable_get(:@entries).map { |segments| segments.map(&:first).join }
+      ix = texts.index { |text| text.include?("Session cleared.") }
+
+      assert ix, "the command printed its message"
+      assert_equal "", texts[ix - 1], "one blank line above"
+      assert_equal "", texts[ix + 1], "one blank line below"
+      refute_equal "", texts[ix - 2], "no double blank above"
+      assert_equal 2, log.instance_variable_get(:@indents)[ix], "two cells of left padding"
+    end
+
+    def test_command_output_keeps_a_single_blank_between_consecutive_commands
+      repl = build_repl
+      agent = repl.instance_variable_get(:@agent)
+      agent.define_singleton_method(:clear_session) { nil }
+      agent.define_singleton_method(:cancel!) { nil }
+      log = repl.instance_variable_get(:@log)
+
+      repl.send(:handle_command, "/clear")
+      repl.send(:handle_command, "/stop")
+      repl.send(:pump)
+
+      texts = log.instance_variable_get(:@entries).map { |segments| segments.map(&:first).join }
+      first = texts.index { |text| text.include?("Session cleared.") }
+      second = texts.index { |text| text.include?("Stop requested.") }
+
+      assert_equal first + 2, second, "only the shared blank line sits between them"
+    end
+
+    def test_plain_command_output_is_padded_with_blanks_and_two_spaces
+      Dir.mktmpdir do |dir|
+        repl = build_resume_repl(File.join(dir, "workspace"))
+        repl.instance_variable_set(:@tui, false)
+        out, _err = capture_io { repl.send(:handle_command, "/resume") }
+
+        assert_includes out, "\n  · No saved sessions yet.\n"
+      end
+    end
+
     def test_clear_wipes_the_usage_footer
       repl = build_repl
       agent = repl.instance_variable_get(:@agent)
@@ -1223,6 +1270,336 @@ module Rubot
       segs = TUI::Markdown.to_segments("***big***")
 
       assert segs.include?([ "big", :md_bold_italic ])
+    end
+
+    # ------------------------------------------------------------------
+    # /resume
+    # ------------------------------------------------------------------
+
+    class ResumeSessionView
+      attr_accessor :id
+
+      def initialize(id)
+        @id = id
+      end
+    end
+
+    class ResumeConfigView
+      attr_reader :workspace
+
+      def initialize(workspace)
+        @workspace = workspace
+      end
+    end
+
+    class ResumeAgent
+      attr_reader :config, :session, :switched
+
+      def initialize(workspace, session_id: "default")
+        @config = ResumeConfigView.new(workspace)
+        @session = ResumeSessionView.new(session_id)
+        @switched = []
+      end
+
+      def startup_info
+        { provider: "openai", model: "gpt-test", tools: 3 }
+      end
+
+      def active_model_name
+        "gpt-test"
+      end
+
+      def switch_session(name)
+        @switched << name.to_s
+        @session = ResumeSessionView.new(name.to_s)
+      end
+
+      def clear_session; end
+
+      def usage_report
+        nil
+      end
+    end
+
+    def saved_session(workspace, id, content, updated_at: Time.now.iso8601, messages: nil)
+      dir = File.join(workspace, "sessions")
+      FileUtils.mkdir_p(dir)
+      messages ||= [
+        { "role" => "user", "content" => content },
+        { "role" => "assistant", "content" => "answer to #{content}" }
+      ]
+      File.write(File.join(dir, "#{id}.json"), JSON.pretty_generate(
+        "id" => id,
+        "updated_at" => updated_at,
+        "messages" => messages
+      ))
+    end
+
+    def build_resume_repl(workspace)
+      repl = TUI.new(ResumeAgent.new(workspace))
+      repl.send(:build_ui)
+      repl.send(:paint_banner)
+      repl
+    end
+
+    def test_resume_writes_the_list_below_the_command_with_the_meta_on_the_right
+      Dir.mktmpdir do |dir|
+        workspace = File.join(dir, "workspace")
+        saved_session(workspace, "work", "fix the parser", updated_at: (Time.now - 7200).iso8601)
+
+        repl = build_resume_repl(workspace)
+        app = repl.instance_variable_get(:@app)
+        prompt = repl.instance_variable_get(:@prompt)
+        mailbox = repl.instance_variable_get(:@mailbox)
+        app.render_frame # the log knows its width before the first command
+
+        # Submit /resume the way the prompt does: the echo lands first, then
+        # the worker answers with the list.
+        prompt.value = "/resume"
+        prompt.handle_key(::TUI::Key.new(:enter))
+        repl.send(:pump)
+        repl.send(:handle_command, mailbox.pop)
+        repl.send(:pump)
+
+        session_list = repl.instance_variable_get(:@session_list)
+        assert_equal %w[work], session_list.entries.map { |entry| entry[:id] }
+        assert_same session_list, prompt.list, "the list owns the keyboard"
+        refute repl.instance_variable_get(:@overlay).shown?, "nothing floats"
+
+        view = plain(app.render_lines)
+        command_ix = view.index { |line| line.include?("❯ /resume") }
+        row_ix = view.index { |line| line.include?("fix the parser") }
+        assert command_ix, "the command is echoed"
+        assert row_ix, "the last prompt labels the row"
+        assert_operator row_ix, :>, command_ix, "the list sits under the command"
+        assert_equal "", view[row_ix - 1].strip, "one blank row between the command and the list"
+        assert_equal command_ix + 2, row_ix
+
+        line = view[row_ix]
+        assert_includes line, "2 msgs · 2h ago"
+        assert_operator line.index("2 msgs"), :>, line.length / 2, "meta hugs the right edge"
+        assert_equal view[command_ix][/\A */].length + 2, line[/\A */].length,
+                     "the list has two cells of left padding"
+      end
+    end
+
+    def test_resume_list_enter_resumes_the_highlighted_session
+      Dir.mktmpdir do |dir|
+        workspace = File.join(dir, "workspace")
+        saved_session(workspace, "work", "fix the parser")
+
+        repl = build_resume_repl(workspace)
+        agent = repl.instance_variable_get(:@agent)
+        prompt = repl.instance_variable_get(:@prompt)
+        mailbox = repl.instance_variable_get(:@mailbox)
+        repl.instance_variable_get(:@app).render_frame
+
+        repl.send(:handle_command, "/resume")
+        repl.send(:pump)
+        prompt.handle_key(::TUI::Key.new(:enter))
+
+        assert_nil prompt.list, "picking hands the keyboard back to the prompt"
+        command = mailbox.pop
+        assert_equal "/resume work", command
+
+        # The worker runs the queued command: the switch stays off the App thread.
+        repl.send(:handle_command, command)
+        repl.send(:pump)
+        assert_equal [ "work" ], agent.switched
+
+        view = plain(repl.instance_variable_get(:@app).render_lines).join("\n")
+        assert_includes view, "answer to fix the parser"
+        refute_includes view, "Resumed work", "no confirmation line after the replay"
+        refute_includes view, "Transcript restored"
+      end
+    end
+
+    def test_resume_list_escape_removes_the_rows_without_switching
+      Dir.mktmpdir do |dir|
+        workspace = File.join(dir, "workspace")
+        saved_session(workspace, "work", "fix the parser")
+
+        repl = build_resume_repl(workspace)
+        agent = repl.instance_variable_get(:@agent)
+        prompt = repl.instance_variable_get(:@prompt)
+        app = repl.instance_variable_get(:@app)
+        app.render_frame
+
+        repl.send(:handle_command, "/resume")
+        repl.send(:pump)
+        assert_includes plain(app.render_lines).join("\n"), "fix the parser"
+
+        prompt.handle_key(::TUI::Key.new(:escape))
+
+        assert_nil prompt.list, "escape hands the keyboard back to the prompt"
+        assert_empty agent.switched
+        view = plain(app.render_lines).join("\n")
+        refute_includes view, "fix the parser", "the list is taken back out"
+        refute_includes view, "↑/↓ choose"
+      end
+    end
+
+    def test_resume_without_a_tty_prints_the_list
+      Dir.mktmpdir do |dir|
+        workspace = File.join(dir, "workspace")
+        saved_session(workspace, "work", "fix the parser")
+
+        repl = build_resume_repl(workspace)
+        repl.instance_variable_set(:@tui, false)
+        out, _err = capture_io { repl.send(:handle_command, "/resume") }
+
+        assert_includes out, "Saved sessions:"
+        assert_includes out, "work"
+        assert_includes out, "2 msgs"
+        assert_includes out, "fix the parser"
+        assert_includes out, "/resume <number>"
+      end
+    end
+
+    def test_resume_accepts_a_session_id_and_rejects_unknown_ones
+      Dir.mktmpdir do |dir|
+        workspace = File.join(dir, "workspace")
+        saved_session(workspace, "work", "fix the parser")
+
+        repl = build_resume_repl(workspace)
+        agent = repl.instance_variable_get(:@agent)
+
+        repl.send(:handle_command, "/resume work")
+        repl.send(:pump)
+        assert_equal [ "work" ], agent.switched
+
+        repl.send(:handle_command, "/resume ../../etc/passwd")
+        repl.send(:pump)
+
+        assert_equal [ "work" ], agent.switched, "a path never resolves to a session"
+        view = plain(repl.instance_variable_get(:@app).render_lines).join("\n")
+        assert_includes view, "not found"
+      end
+    end
+
+    def test_resume_restores_prompts_tool_calls_and_answers
+      Dir.mktmpdir do |dir|
+        workspace = File.join(dir, "workspace")
+        saved_session(workspace, "work", "fix the parser", messages: [
+          { "role" => "user", "content" => "fix the parser" },
+          { "role" => "assistant", "content" => "Let me look at the file.",
+            "tool_calls" => [ {
+              "id" => "call-1",
+              "type" => "function",
+              "function" => { "name" => "file_ops",
+                              "arguments" => JSON.generate("operation" => "read", "path" => "/src/parser.rb") }
+            } ] },
+          { "role" => "tool", "content" => "1: def parse", "tool_call_id" => "call-1" },
+          { "role" => "assistant", "content" => "The blank line was skipped." }
+        ])
+
+        repl = build_resume_repl(workspace)
+        repl.send(:handle_command, "/resume work")
+        repl.send(:pump)
+
+        view = plain(repl.instance_variable_get(:@app).render_lines).join("\n")
+
+        assert_includes view, "❯ fix the parser", "the user prompt is echoed"
+        assert_includes view, "Let me look at the file.", "the narration is restored"
+        assert_includes view, "✓ file_ops read /src/parser.rb", "the finished tool row is restored"
+        assert_includes view, "The blank line was skipped.", "the answer is restored"
+        assert_operator view.index("❯ fix the parser"), :<, view.index("✓ file_ops")
+        assert_operator view.index("✓ file_ops"), :<, view.index("The blank line was skipped.")
+      end
+    end
+
+    def test_resume_prints_the_full_transcript_without_a_tty
+      Dir.mktmpdir do |dir|
+        workspace = File.join(dir, "workspace")
+        saved_session(workspace, "work", "fix the parser", messages: [
+          { "role" => "user", "content" => "fix the parser" },
+          { "role" => "assistant", "content" => "Let me look.",
+            "tool_calls" => [ {
+              "id" => "call-1",
+              "function" => { "name" => "shell_exec", "arguments" => JSON.generate("command" => "grep -n ruby") }
+            } ] },
+          { "role" => "tool", "content" => "42: ruby", "tool_call_id" => "call-1" },
+          { "role" => "assistant", "content" => "Found it." }
+        ])
+
+        repl = build_resume_repl(workspace)
+        repl.instance_variable_set(:@tui, false)
+        out, _err = capture_io { repl.send(:handle_command, "/resume work") }
+
+        assert_includes out, "❯ fix the parser"
+        assert_includes out, "✓ shell_exec grep -n ruby"
+        assert_includes out, "Found it."
+      end
+    end
+
+    def test_transcript_hides_continuation_prompts_and_merges_fragments
+      messages = [
+        { "role" => "user", "content" => "write a long thing" },
+        { "role" => "assistant", "content" => "Part one, " },
+        { "role" => "user", "content" => Rubot::Agent::CONTINUE_PROMPT },
+        { "role" => "assistant", "content" => "part two." }
+      ]
+
+      texts = Rubot::TUI::Transcript.entries(messages).map do |entry|
+        entry[:segments].map { |segment| segment[0].to_s }.join
+      end
+
+      assert_equal [ "❯ write a long thing", "", "Part one, part two.", "" ], texts
+      refute texts.any? { |text| text.include?("output limit") }
+    end
+
+    def test_transcript_shows_a_skill_load_as_its_own_row
+      messages = [
+        { "role" => "user", "content" => "use the skill" },
+        { "role" => "assistant", "content" => "",
+          "tool_calls" => [ {
+            "id" => "call-1",
+            "function" => { "name" => "file_ops",
+                            "arguments" => JSON.generate("operation" => "read", "path" => "/w/skills/omarchy/SKILL.md") }
+          } ] },
+        { "role" => "tool", "content" => "...", "tool_call_id" => "call-1" }
+      ]
+
+      text = Rubot::TUI::Transcript.entries(messages)
+        .map { |entry| entry[:segments].map { |segment| segment[0].to_s }.join }
+        .join("\n")
+
+      assert_includes text, "✓ skill omarchy"
+    end
+
+    def test_resume_says_when_nothing_is_saved
+      Dir.mktmpdir do |dir|
+        repl = build_resume_repl(File.join(dir, "workspace"))
+        repl.send(:handle_command, "/resume")
+        repl.send(:pump)
+
+        view = plain(repl.instance_variable_get(:@app).render_lines).join("\n")
+        assert_includes view, "No saved sessions yet."
+      end
+    end
+
+    def test_start_fresh_session_archives_the_previous_conversation
+      Dir.mktmpdir do |dir|
+        workspace = File.join(dir, "workspace")
+        FileUtils.mkdir_p(File.join(workspace, "sessions"))
+        File.write(File.join(workspace, "sessions", "default.json"), JSON.pretty_generate(
+          "id" => "default",
+          "updated_at" => Time.now.iso8601,
+          "messages" => [ { "role" => "user", "content" => "keep me" } ]
+        ))
+
+        repl = build_resume_repl(workspace)
+        repl.send(:start_fresh_session)
+        repl.send(:paint_banner)
+
+        archived = repl.instance_variable_get(:@archived_session)
+        assert archived, "the previous conversation is kept"
+        assert File.exist?(File.join(workspace, "sessions", "#{archived}.json"))
+        refute File.exist?(File.join(workspace, "sessions", "default.json")),
+               "the fresh session owns the default id again"
+        assert_includes plain(repl.instance_variable_get(:@app).render_lines).join("\n"),
+                        "/resume to continue it"
+      end
     end
   end
 end

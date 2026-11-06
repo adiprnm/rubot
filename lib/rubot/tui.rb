@@ -9,11 +9,13 @@ require_relative "opencode_usage"
 require_relative "tui/compat"
 require_relative "tui/log_view"
 require_relative "tui/markdown"
+require_relative "tui/transcript"
 require_relative "tui/command_menu"
 require_relative "tui/prompt_input"
 require_relative "tui/status_line"
 require_relative "tui/working_badge"
 require_relative "tui/confirm_dialog"
+require_relative "tui/session_list"
 
 
 Rubot::TUI::Compat.apply
@@ -56,6 +58,8 @@ module Rubot
       "/clear"    => "Clear conversation history",
       "/session"  => "Show current session ID",
       "/session NAME" => "Switch to a new session",
+      "/resume"   => "Pick a saved session to resume",
+      "/resume N|NAME" => "Resume a saved session",
       "/info"     => "Show agent info (provider, model, tools)",
       "/context"  => "Show context usage, cache hit rate, and estimated cost",
       "/usage"    => "Show OpenCode Go subscription usage",
@@ -125,6 +129,8 @@ module Rubot
       @turn_started_at = nil
       @turn_total_seconds = 0.0
       @turn_count = 0
+      @archived_session = nil
+      @command_output = nil
 
       # Queues bridging worker/agent threads into the App thread. Component
       # state is only ever mutated on the App thread (pump + key handlers).
@@ -206,7 +212,19 @@ module Rubot
     end
 
     def start_fresh_session
+      archive_previous_session
       agent.clear_session
+    end
+
+    # The launch starts a fresh default session, but the transcript it
+    # replaces stays on disk under a timestamped id so /resume can bring it
+    # back. The actor (and its loaded Session) must exist before the rename,
+    # otherwise the archive would be taken for the session being cleared.
+    def archive_previous_session
+      id = agent.session.id
+      @archived_session = Rubot::Session.archive!(agent.config.workspace, id)
+    rescue StandardError => e
+      warn "[tui] could not archive session: #{e.class}: #{e.message}" if Rubot.debug?
     end
 
     def build_ui
@@ -217,6 +235,14 @@ module Rubot
       @prompt = Rubot::TUI::PromptInput.new(@history, COMPLETABLE)
       @dialog = Rubot::TUI::ConfirmDialog.new
       @working = Rubot::TUI::WorkingBadge.new
+      @session_list = Rubot::TUI::SessionList.new(
+        log: @log,
+        on_select: lambda do |entry|
+          @prompt.list = nil
+          @mailbox << "/resume #{entry[:id]}"
+        end,
+        on_cancel: -> { @prompt.list = nil }
+      )
       @tool_entries = {}
 
       # The prompt box grows with newlines (shift+enter) and wraps long
@@ -236,10 +262,8 @@ module Rubot
       stack.add(@prompt_box, size: ::TUI.auto)   # grows with multiline input
       stack.add(@status, size: ::TUI.fixed(1))
 
-      @overlay = ::TUI::Layout::Overlay.new(
-        ::TUI::Layout::Padding.new(stack, left: 1),
-        @dialog
-      )
+      @overlay = ::TUI::Layout::Overlay.new(::TUI::Layout::Padding.new(stack, left: 1))
+      @overlay.add(@dialog)
       @app = ::TUI::App.new(@overlay)
 
       wire_bindings
@@ -377,12 +401,10 @@ module Rubot
     def apply_event(event)
       case event[0]
       when :entry then @log.add_entry(event[1])
+      when :command_output then add_command_output(event[1])
       when :clear_log
-        @log.clear(keep: @banner_count)
-        @live_entry = nil
-        @tool_entries.clear
-        reset_turn_totals
-        @status.left = ""
+        clear_log_keep_banner
+      when :replay_transcript then replay_transcript(event[1])
       when :error_text then @log.add_entry([ [ MARK[:err] + " ", :error ], [ event[1].to_s, :error ] ])
       when :status_right then @status.right = event[1]
       when :status_left then @status.left = event[1]
@@ -430,6 +452,7 @@ module Rubot
                       prev && prev[1],
                       prev && prev[2])
       when :confirm then show_confirm(event)
+      when :session_list then show_session_list(event[1])
       when :idle then
         @busy = false
         @stopping = false
@@ -440,40 +463,17 @@ module Rubot
     # `file_ops read …/SKILL.md` but as its own line, so the transcript says
     # plainly that the agent picked a skill up — the same way a tool call shows.
     def tool_call_segments(name, summary, skill)
-      if skill
-        [ [ "#{MARK[:skill]} ", :accent ], [ "skill ", :muted ], [ summary, :accent ] ]
-      else
-        [ [ "#{MARK[:tool]} ", :muted ], [ name.to_s, :accent ], [ " ", :muted ], [ summary, :dim ] ]
-      end
+      Rubot::TUI::Transcript.tool_call(name, summary, skill)
     end
 
     def set_tool_done(index, name, summary, skill = nil)
-      segments = if skill
-        # Slightly brighter than a finished tool row (muted): the skill name is
-        # what the reader came for, the label only marks the row.
-        [ [ "#{MARK[:ok]} ", :tool_ok ], [ "skill ", :dim ], [ summary, :dim ] ]
-      else
-        [ [ "#{MARK[:ok]} ", :tool_ok ], [ name, :muted ] ]
-      end
-      if summary && !summary.empty? && !skill
-        segments += [ [ " ", :muted ], [ summary, :dim ] ]
-      end
-      @log.set_entry(index, segments)
+      @log.set_entry(index, Rubot::TUI::Transcript.tool_done(name, summary, skill))
     end
 
     # Returns the skill name when this tool call reads a skill's SKILL.md,
     # nil otherwise. Only reads count: writing a skill file is not loading it.
     def skill_load(tool_name, args)
-      args = {} unless args.is_a?(Hash)
-      raw = nil
-      case tool_name.to_s
-      when "file_ops"
-        raw = args["path"] if args["operation"].to_s == "read"
-      when "shell_exec"
-        raw = args["command"] if args["command"].to_s.match?(READ_COMMANDS)
-      end
-      name = SKILL_PATH.match(raw.to_s)&.[](1)
-      name if name && !name.empty?
+      Rubot::TUI::Transcript.skill_load(tool_name, args)
     end
 
     def start_live_entry
@@ -608,24 +608,13 @@ module Rubot
     # cut to `max` cells so the row never wraps: the call marker, the tool
     # name and the separator are reserved by the caller.
     def tool_summary(tool_name, args, max: 64)
-      raw = case tool_name
-      when "shell_exec" then args["command"].to_s
-      when "file_ops"
-              "#{args["operation"]} #{args["path"]}"
-      else
-              args.inspect
-      end
-      line = raw.lines.first.to_s.strip
-      ::TUI::Text.truncate(line, max)
+      Rubot::TUI::Transcript.tool_summary(tool_name, args, max: max)
     end
 
     # Cells left for the argument preview after " ⚒ ", the tool name and
     # the separating space, keeping one cell clear of the scrollbar.
     def tool_summary_limit(tool_name)
-      width = @log.content_width
-      return 64 if width <= 0
-
-      [ width - 4 - ::TUI::Text.width(tool_name.to_s) - 2, 0 ].max
+      Rubot::TUI::Transcript.summary_limit(tool_name, @log.content_width)
     end
 
     def show_confirm(event)
@@ -638,6 +627,39 @@ module Rubot
       end
       @overlay.show(@dialog)
       @app.focus(@dialog)
+    end
+
+    # /resume writes the list into the transcript and hands the prompt over
+    # to it; picking an entry feeds a /resume <id> command back into the
+    # worker, so the switch itself stays on the worker thread.
+    def show_session_list(entries)
+      @prompt.list = @session_list if @session_list.open(entries)
+    end
+
+    # One blank line above and below, two cells of left padding.
+    def add_command_output(lines)
+      return if lines.nil? || lines.empty?
+
+      @log.add_entry([ [ "", nil ] ]) unless @log.last_blank?
+      lines.each { |segments| @log.add_entry(segments, indent: 2) }
+      @log.add_entry([ [ "", nil ] ])
+    end
+
+    def clear_log_keep_banner
+      @log.clear(keep: @banner_count)
+      @live_entry = nil
+      @tool_entries.clear
+      reset_turn_totals
+      @status.left = ""
+    end
+
+    # Restore a resumed conversation exactly as it looked while it was live:
+    # prompt echoes, streamed answers (Markdown), and finished tool rows.
+    def replay_transcript(messages)
+      clear_log_keep_banner
+      Rubot::TUI::Transcript.entries(messages, width: @log.content_width).each do |entry|
+        @log.add_entry(entry[:segments], keep_leading: entry[:keep_leading], indent: entry[:indent])
+      end
     end
 
     # ------------------------------------------------------------------
@@ -755,6 +777,7 @@ module Rubot
     # ------------------------------------------------------------------
 
     def handle_command(input)
+      @command_output = []
       parts = input.split
       cmd = parts.first.downcase
 
@@ -804,7 +827,10 @@ module Rubot
         else
           say("Current session: #{agent.session.id}", :info)
           say_text("Model: #{agent.active_model_name}")
+          say_text("Type /resume to browse saved sessions.")
         end
+      when "/resume"
+        handle_resume(parts[1])
       when "/info"
         say("Agent info:", :info)
         agent.startup_info.each { |k, v| say_text("#{k}: #{v}") }
@@ -890,6 +916,92 @@ module Rubot
     rescue StandardError => e
       say("#{e.class}: #{e.message}", :err)
       raise if Rubot.debug?
+    ensure
+      flush_command_output
+    end
+
+    def handle_resume(query)
+      sessions = Rubot::Session.index(agent.config.workspace)
+
+      if query.nil? || query.strip.empty?
+        # Interactively, /resume writes the list into the log; only a plain (piped) REPL
+        # has to print the list and take the number on the next line.
+        if @tui && !sessions.empty?
+          @events << [ :session_list, sessions ]
+        else
+          list_sessions(sessions)
+        end
+        return
+      end
+
+      entry = find_session(sessions, query)
+      unless entry
+        say("Session '#{query}' not found.", :err)
+        say_text("Type /resume to see saved sessions.")
+        return
+      end
+
+      resume_session(entry)
+    end
+
+    def list_sessions(sessions)
+      if sessions.empty?
+        say("No saved sessions yet.", :info)
+        say_text("Conversations are saved as they happen; /resume brings one back later.")
+        return
+      end
+
+      current = agent.session.id
+      blank
+      say("Saved sessions:", :info)
+      sessions.each_with_index do |session, index|
+        marker = session[:id] == current ? MARK[:ok] : " "
+        say_text(format("  %s %-2d %-28s %4d msgs · %-10s %s",
+                        marker, index + 1, session[:id], session[:messages],
+                        relative_time(session[:updated_at]), session[:last_prompt]))
+      end
+      blank
+      say_text("Resume one with /resume <number> or /resume <id>.")
+    end
+
+    # Only ids that are actually on disk resolve, which also keeps a crafted
+    # argument from escaping the sessions directory.
+    def find_session(sessions, query)
+      text = query.to_s.strip
+      return nil if text.empty?
+      return sessions[text.to_i - 1] if text.match?(/\A\d+\z/)
+
+      sessions.find { |session| session[:id] == text }
+    end
+
+    def resume_session(entry)
+      switch_session(entry[:id])
+      messages = Rubot::Session.transcript(agent.config.workspace, entry[:id])
+
+      # The App thread owns the log, so the whole restored transcript is
+      # handed over as one event and laid out there with the live renderer.
+      if @tui
+        @events << [ :replay_transcript, messages ]
+      else
+        print_transcript(messages)
+      end
+
+      refresh_status
+      refresh_usage
+    end
+
+    # Plain (piped) REPL: the same entries, without styles. Routed through
+    # #emit so it gets the same padding as any other command output.
+    def print_transcript(messages)
+      Rubot::TUI::Transcript.entries(messages).each do |entry|
+        indent = " " * entry[:indent].to_i
+        text = entry[:segments].map { |segment| segment[0].to_s }.join
+        text.split("\n", -1).each { |line| emit([ [ "#{indent}#{line}", :text ] ]) }
+      end
+    end
+
+    def relative_time(iso)
+      Rubot::TUI::SessionList.age(iso)
     end
 
     def handle_use_model(model_name)
@@ -943,17 +1055,58 @@ module Rubot
       when :text then [ [ text, :text ] ]
       else [ [ MARK[:info] + " ", :muted ], [ text, :dim ] ]
       end
-      publish segments
+      emit segments
     end
 
     def say_text(text, style = :dim)
       text.to_s.each_line(chomp: true) do |line|
-        publish [ [ line, style ] ]
+        emit [ [ line, style ] ]
       end
     end
 
     def blank
-      publish [ [ "", nil ] ]
+      emit [ [ "", nil ] ]
+    end
+
+    # A command's output is collected first, so the padding above and below it
+    # can be applied once, no matter how many say() calls it made.
+    def emit(segments)
+      if @command_output
+        @command_output << segments
+      else
+        publish segments
+      end
+    end
+
+    # Give every command output one blank line above and below and two cells
+    # of left padding. Commands may print their own blank lines; the edges are
+    # trimmed here so the result is always exactly one.
+    def flush_command_output
+      lines = @command_output
+      @command_output = nil
+      return if lines.nil? || lines.empty?
+
+      lines.shift while blank_entry?(lines.first)
+      lines.pop while blank_entry?(lines.last)
+      return if lines.empty?
+
+      if @tui
+        @events << [ :command_output, lines ]
+      else
+        publish [ [ "", nil ] ]
+        lines.each do |segments|
+          segments.map { |text, _style| text.to_s }.join.split("\n", -1).each do |line|
+            publish [ [ "  #{line}", :text ] ]
+          end
+        end
+        publish [ [ "", nil ] ]
+      end
+    end
+
+    def blank_entry?(segments)
+      return false unless segments
+
+      segments.all? { |text, _style| text.to_s.empty? }
     end
 
     # Output goes to the TUI log when running, else straight to stdout in
@@ -988,6 +1141,9 @@ module Rubot
       @log.add_entry([ [ Rubot::NAME, :title ] ])
       @log.add_entry([ [ "provider #{provider} · model #{model} · #{tools}", :dim ] ])
       @log.add_entry([ [ "type /help for commands · esc cancels a running turn · pgup/pgdn scrolls", :dim ] ])
+      if @archived_session
+        @log.add_entry([ [ "last conversation kept as #{@archived_session} · /resume to continue it", :dim ] ])
+      end
       @log.add_entry([ [ "", nil ] ])
       @banner_count = @log.entry_count
       @status.right = "session #{@session_id} · #{provider} · #{model}" if info[:provider]

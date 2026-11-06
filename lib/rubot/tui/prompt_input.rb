@@ -12,6 +12,10 @@ module Rubot
     # into the buffer). All key sets are consumed here so they never bubble
     # into global bindings or focus movement.
     class PromptInput < ::TUI::MultiLine
+      # An inline session list opened by /resume. While it is set it owns the
+      # keyboard, so the prompt neither edits nor submits until it is done.
+      attr_accessor :list
+
       def initialize(history, commands)
         super(max_rows: 6)
         @history = history
@@ -57,6 +61,8 @@ module Rubot
       end
 
       def handle_key(key)
+        return @list.handle_key(key) if @list
+
         case key.name
         when :up
           if menu_open?

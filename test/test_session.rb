@@ -534,4 +534,120 @@ class TestSessionHistoryWindowing < Minitest::Test
 
     assert_equal [ "assistant" ], history.map { |m| m["role"] }.uniq
   end
+
+  # ------------------------------------------------------------------
+  # Saved-session index (/resume)
+  # ------------------------------------------------------------------
+
+  def write_session(id, updated_at:, messages:)
+    dir = File.join(@workspace, "sessions")
+    FileUtils.mkdir_p(dir)
+    File.write(File.join(dir, "#{id}.json"), JSON.pretty_generate(
+      "id" => id,
+      "updated_at" => updated_at,
+      "messages" => messages
+    ))
+  end
+
+  def test_index_lists_sessions_newest_first_and_skips_empty_ones
+    write_session("older", updated_at: "2026-01-01T10:00:00+07:00", messages: [
+      { "role" => "user", "content" => "  fix   the parser\nplease " },
+      { "role" => "assistant", "content" => "done" }
+    ])
+    write_session("newer", updated_at: "2026-01-02T10:00:00+07:00", messages: [
+      { "role" => "user", "content" => "new topic" }
+    ])
+    write_session("empty", updated_at: "2026-01-03T10:00:00+07:00", messages: [])
+
+    entries = Rubot::Session.index(@workspace)
+
+    assert_equal %w[newer older], entries.map { |entry| entry[:id] }
+    assert_equal 2, entries.last[:messages]
+    assert_equal "fix the parser please", entries.last[:last_prompt]
+    refute entries.last.key?(:timestamp), "sort key stays internal"
+  end
+
+  def test_index_skips_unreadable_session_files
+    dir = File.join(@workspace, "sessions")
+    FileUtils.mkdir_p(dir)
+    File.write(File.join(dir, "corrupt.json"), "{\"messages\": [")
+    write_session("good", updated_at: "2026-01-01T10:00:00+07:00", messages: [
+      { "role" => "user", "content" => "hello" }
+    ])
+
+    assert_equal %w[good], Rubot::Session.index(@workspace).map { |entry| entry[:id] }
+  end
+
+  def test_index_without_a_workspace_is_empty
+    assert_empty Rubot::Session.index(nil)
+    assert_nil Rubot::Session.find(nil, "default")
+  end
+
+  def test_find_returns_a_saved_session_summary
+    write_session("work", updated_at: "2026-01-01T10:00:00+07:00", messages: [
+      { "role" => "user", "content" => "question" },
+      { "role" => "tool", "content" => "noise" },
+      { "role" => "assistant", "content" => "answer" }
+    ])
+
+    entry = Rubot::Session.find(@workspace, "work")
+
+    assert_equal "work", entry[:id]
+    assert_equal "question", entry[:last_prompt]
+    assert_nil Rubot::Session.find(@workspace, "missing")
+  end
+
+  def test_transcript_returns_every_message_of_a_saved_session
+    write_session("work", updated_at: "2026-01-01T10:00:00+07:00", messages: [
+      { "role" => "user", "content" => "question" },
+      { "role" => "assistant", "content" => "" },
+      { "role" => "tool", "content" => "result" }
+    ])
+
+    messages = Rubot::Session.transcript(@workspace, "work")
+
+    assert_equal %w[user assistant tool], messages.map { |m| m["role"] }
+    assert_equal "result", messages.last["content"]
+    assert_empty Rubot::Session.transcript(@workspace, "missing")
+  end
+
+  def test_last_prompt_is_the_newest_user_message
+    write_session("work", updated_at: "2026-01-01T10:00:00+07:00", messages: [
+      { "role" => "user", "content" => "first question" },
+      { "role" => "assistant", "content" => "reply" },
+      { "role" => "user", "content" => "latest ask" }
+    ])
+
+    assert_equal "latest ask", Rubot::Session.find(@workspace, "work")[:last_prompt]
+  end
+
+  def test_archive_renames_a_session_that_has_messages
+    session = Rubot::Session.new("default", workspace: @workspace)
+    session.add("user", "keep me")
+
+    archived = Rubot::Session.archive!(@workspace, "default", stamp: "20260101-120000")
+
+    assert_equal "default-20260101-120000", archived
+    refute File.exist?(File.join(@workspace, "sessions", "default.json"))
+    path = File.join(@workspace, "sessions", "#{archived}.json")
+    assert_equal [ "keep me" ], JSON.parse(File.read(path))["messages"].map { |m| m["content"] }
+  end
+
+  def test_archive_leaves_an_empty_session_alone
+    Rubot::Session.new("empty", workspace: @workspace).save!
+
+    assert_nil Rubot::Session.archive!(@workspace, "empty")
+    assert File.exist?(File.join(@workspace, "sessions", "empty.json"))
+  end
+
+  def test_archive_adds_a_suffix_when_the_timestamp_is_taken
+    first = Rubot::Session.new("default", workspace: @workspace)
+    first.add("user", "first")
+    assert_equal "default-stamp", Rubot::Session.archive!(@workspace, "default", stamp: "stamp")
+
+    second = Rubot::Session.new("default", workspace: @workspace)
+    second.add("user", "second")
+
+    assert_equal "default-stamp-2", Rubot::Session.archive!(@workspace, "default", stamp: "stamp")
+  end
 end

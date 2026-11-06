@@ -331,6 +331,134 @@ module Rubot
       File.join(@workspace, "sessions", "#{@id}.json")
     end
 
+    # Directory holding one JSON file per session.
+    def self.sessions_dir(workspace)
+      workspace && File.join(workspace, "sessions")
+    end
+
+    # Plain-data summaries of the sessions saved in `workspace`, newest
+    # first. Sessions without messages (and unreadable files) are left out:
+    # /resume only offers something that can actually be continued.
+    def self.index(workspace)
+      dir = sessions_dir(workspace)
+      return [] unless dir && Dir.exist?(dir)
+
+      Dir.glob(File.join(dir, "*.json"))
+        .filter_map { |path| describe(path) }
+        .sort_by { |entry| entry[:timestamp] }
+        .reverse
+        .map { |entry| entry.except(:timestamp) }
+    end
+
+    # Summary of one saved session, or nil when there is nothing to resume.
+    def self.find(workspace, id)
+      dir = sessions_dir(workspace)
+      return nil unless dir
+
+      describe(File.join(dir, "#{id}.json"))&.except(:timestamp)
+    end
+
+    # Full message list of a saved session, used by /resume to restore the
+    # transcript exactly as it was.
+    def self.transcript(workspace, id)
+      dir = sessions_dir(workspace)
+      return [] unless dir
+
+      path = File.join(dir, "#{id}.json")
+      return [] unless File.file?(path)
+
+      data = JSON.parse(File.read(path))
+      messages = data["messages"]
+      messages.is_a?(Array) ? normalize_utf8(messages) : []
+    rescue JSON::ParserError, SystemCallError, EncodingError
+      []
+    end
+
+    # Rename the transcript of `id` to a timestamped id so the conversation
+    # stays resumable after the caller starts a fresh session. Used at TUI
+    # launch, before the new session clears the file. Returns the archived
+    # id, or nil when there was nothing worth keeping.
+    def self.archive!(workspace, id, stamp: nil)
+      dir = sessions_dir(workspace)
+      return nil unless dir
+
+      id = id.to_s
+      return nil if id.empty?
+
+      source = File.join(dir, "#{id}.json")
+      return nil unless File.file?(source)
+
+      data = JSON.parse(File.read(source))
+      messages = data["messages"]
+      return nil unless messages.is_a?(Array) && !messages.empty?
+
+      suffix = stamp || Time.now.strftime("%Y%m%d-%H%M%S")
+      archived_id = "#{id}-#{suffix}"
+      target = File.join(dir, "#{archived_id}.json")
+      counter = 1
+      while File.exist?(target)
+        counter += 1
+        archived_id = "#{id}-#{suffix}-#{counter}"
+        target = File.join(dir, "#{archived_id}.json")
+      end
+
+      File.rename(source, target)
+      archived_id
+    rescue JSON::ParserError, SystemCallError, EncodingError => e
+      warn "[session] could not archive #{id}: #{e.class}: #{e.message}" if Rubot.debug?
+      nil
+    end
+
+    # Read one session file into the summary used by #index and #find.
+    def self.describe(path)
+      return nil unless File.file?(path)
+
+      data = JSON.parse(File.read(path))
+      messages = data["messages"]
+      return nil unless messages.is_a?(Array) && !messages.empty?
+
+      updated = begin
+        Time.iso8601(data["updated_at"].to_s)
+      rescue ArgumentError, TypeError
+        File.mtime(path)
+      end
+
+      {
+        id: File.basename(path, ".json"),
+        messages: messages.size,
+        updated_at: updated.iso8601,
+        timestamp: updated.to_f,
+        last_prompt: last_prompt(messages)
+      }
+    rescue JSON::ParserError, SystemCallError, EncodingError
+      nil
+    end
+
+    # The newest thing the user asked, which is what /resume shows for each
+    # session. Falls back to any message with text.
+    def self.last_prompt(messages)
+      message = messages.reverse.find { |msg| msg["role"] == "user" && !text_content(msg["content"]).empty? }
+      message ||= messages.reverse.find { |msg| !text_content(msg["content"]).empty? }
+      snippet(text_content(message && message["content"]), 100)
+    end
+
+    def self.text_content(content)
+      case content
+      when String then content
+      when Array
+        content.filter_map { |part| part.is_a?(Hash) ? part["text"] : part }.join(" ")
+      when Hash then content["text"].to_s
+      else ""
+      end
+    end
+
+    def self.snippet(text, limit)
+      clean = text.to_s.gsub(/\s+/, " ").strip
+      return clean if clean.length <= limit
+
+      "#{clean[0, limit - 1]}…"
+    end
+
     # Persist session to disk. Uses an exclusive file lock so a session
     # file is never partially written even if another process/Ractor
     # touches it at the same time.

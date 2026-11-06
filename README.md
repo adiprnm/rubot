@@ -13,7 +13,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 💬 **Interactive REPL** — with streaming, command history, tab completion, and a slash-command palette
 - ⌨️ **Multiline prompt** — Shift+Enter inserts a newline and the input box grows with the text, word-wrapping long lines
 - 📝 **External editor** — Ctrl+G opens the half-typed prompt in `$EDITOR` and takes the edited text straight back into the input box
-- 📝 **Session management** — persistent conversation history
+- 📝 **Session management** — persistent conversation history, with `/resume` to browse and reopen any saved session
 - 🧬 **SOUL.md** — personality and identity file for persistent character
 - 🎛️ **Model presets** — named model configurations with a primary default, switchable per session and manageable from Telegram
 - 🎭 **Per-topic personas** — each Telegram forum topic can have its own model preset and system prompt, set up with an inline-button wizard
@@ -144,6 +144,9 @@ $ rubot
 
 ### REPL Commands
 
+Every command's output is set apart in the transcript: one blank line above
+and below it, and two cells of left padding.
+
 | Command | Description |
 |---------|-------------|
 | `/help` | Show available commands |
@@ -152,6 +155,8 @@ $ rubot
 | `/stop` | Stop the task that is running (Ctrl+C during a turn does the same) |
 | `/compact` | Summarize older messages to free context |
 | `/session [name]` | Show or switch session |
+| `/resume` | Show saved sessions under the command; `↑`/`↓` + `Enter` resumes one (plain REPL: numbered list) |
+| `/resume <n\|id>` | Reopen a saved session by number or id |
 | `/info` | Show agent info (includes soul/memory status) |
 | `/context` | Show context usage, cache hit rate, and estimated cost |
 | `/usage` | Show OpenCode Go subscription usage |
@@ -163,6 +168,20 @@ $ rubot
 | `/cron delete <id>` | Delete a cron job |
 | `/stream on\|off` | Toggle streaming |
 | `/quit` | Exit |
+
+Sessions live as JSON files under `<workspace>/sessions/`. In the TUI each
+launch starts a fresh default conversation and keeps the previous one under a
+timestamped id, so nothing is lost: `/resume` writes the saved sessions into
+the transcript, right under the echoed command (not a floating window), newest
+first, each row showing the last prompt with the message count and age pinned
+to the right edge. `Up`/`Down` (or `PageUp`/`PageDown`) move the highlight,
+`Enter` resumes the selected session and restores its whole transcript — every
+user prompt, tool call, and assistant answer, rendered exactly as it looked
+while the session was live — and `Esc` takes the list back out without
+switching. `/resume 2` and `/resume <id>` reopen a session without the list (a
+piped, non-tty REPL replays the transcript as plain text), and `/resume`
+alone prints the numbered list there. `/session <name>` still switches
+directly.
 
 ### TUI Keys
 
