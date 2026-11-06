@@ -106,6 +106,7 @@ module Rubot
           on_tool_call: ->(name, args) { events << [ :tool_started, name, args ] },
           on_tool_result: ->(name, result) { events << [ :tool_finished, name, result ] },
           on_progress: ->(round, tool_count) { events << [ :progress, round, tool_count ] },
+          on_stopped: -> { events << [ :stopped ] },
           on_confirm: lambda do |name, args|
             id = SecureRandom.hex(6)
             events << [ :confirm, id, name, args ]

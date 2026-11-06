@@ -411,4 +411,57 @@ class TestProviders < Minitest::Test
 
     assert_nil provider.send(:parse_retry_after, mock_resp)
   end
+
+  # A blocked provider read must not be waited out: closing the session from
+  # the cancellation token is what makes esc instant while the model is still
+  # thinking (before the first token) or in the middle of an answer.
+  def test_a_stop_closes_a_blocked_streaming_read
+    require "socket"
+
+    server = TCPServer.new("127.0.0.1", 0)
+    port = server.addr[1]
+    config = make_config("api_base" => "http://127.0.0.1:#{port}/v1")
+    provider = Rubot::Providers::OpenAI.new(config.provider_settings)
+
+    server_thread = Thread.new do
+      client = server.accept
+      begin
+        while (line = client.gets)
+          break if line == "\r\n"
+        end
+        client.write("HTTP/1.1 200 OK\r\n")
+        client.write("Content-Type: text/event-stream\r\n")
+        client.write("\r\n")
+        client.write("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"}}]}\n\n")
+        client.flush
+        # The stream stays open without another chunk, exactly like a model
+        # that is still generating. Only the stop can end the read.
+        sleep 30
+      ensure
+        client.close
+      end
+    end
+
+    token = Rubot::Cancellation.new.start!
+    chunks = Queue.new
+    canceller = Thread.new do
+      chunks.pop
+      token.cancel!
+    end
+
+    Thread.current[:rubot_cancellation] = token
+    before = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    error = assert_raises(Rubot::Cancelled) do
+      provider.chat_stream([ { "role" => "user", "content" => "hi" } ]) { |chunk| chunks << chunk }
+    end
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - before
+
+    assert_instance_of Rubot::Cancelled, error
+    assert_operator elapsed, :<, 5, "a blocked read must abort on stop, not wait for the provider"
+    assert canceller.join(2)
+  ensure
+    Thread.current[:rubot_cancellation] = nil
+    server_thread&.kill
+    server&.close
+  end
 end

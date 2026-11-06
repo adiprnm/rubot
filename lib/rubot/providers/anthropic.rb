@@ -106,6 +106,7 @@ module Rubot
       end
 
       def make_request(payload)
+        Rubot::Cancellation.check!
         uri = URI("#{api_base}/v1/messages")
         log_debug("Request: #{JSON.generate(payload)}")
 
@@ -120,7 +121,9 @@ module Rubot
           request["x-api-key"] = api_key
           request["anthropic-version"] = API_VERSION
 
-          http.request(request, JSON.generate(payload))
+          with_cancellable_http(http) do
+            http.request(request, JSON.generate(payload))
+          end
         end
         log_debug("Response: #{response.code}")
 
@@ -135,6 +138,7 @@ module Rubot
       end
 
       def make_stream_request(payload, &on_chunk)
+        Rubot::Cancellation.check!
         uri = URI("#{api_base}/v1/messages")
 
         buffer = ""
@@ -158,74 +162,79 @@ module Rubot
           request["x-api-key"] = api_key
           request["anthropic-version"] = API_VERSION
 
-          http.request(request, JSON.generate(payload)) do |response|
-            unless response.code.to_i == 200
-              body = +""
-              response.read_body { |b| body << b }
-              if response.code.to_i == 429
-                raise RateLimitError.new(parse_retry_after(response))
+          with_cancellable_http(http) do
+            http.request(request, JSON.generate(payload)) do |response|
+              unless response.code.to_i == 200
+                body = +""
+                response.read_body { |b| body << b }
+                if response.code.to_i == 429
+                  raise RateLimitError.new(parse_retry_after(response))
+                end
+                raise "API error #{response.code}: #{body}"
               end
-              raise "API error #{response.code}: #{body}"
-            end
 
-            response.read_body do |chunk|
-              buffer += chunk
-              while (newline_idx = buffer.index("\n"))
-                line = buffer[0...newline_idx].strip
-                buffer = buffer[(newline_idx + 1)..] || ""
-                next if line.empty?
-                next unless line.start_with?("data: ")
+              response.read_body do |chunk|
+                # Stop at the next chunk when the turn was cancelled: raising
+                # here aborts the request instead of draining the stream.
+                Rubot::Cancellation.check!
+                buffer += chunk
+                while (newline_idx = buffer.index("\n"))
+                  line = buffer[0...newline_idx].strip
+                  buffer = buffer[(newline_idx + 1)..] || ""
+                  next if line.empty?
+                  next unless line.start_with?("data: ")
 
-                data_str = line[6..]
-                begin
-                  data = JSON.parse(data_str)
-                  type = data["type"]
+                  data_str = line[6..]
+                  begin
+                    data = JSON.parse(data_str)
+                    type = data["type"]
 
-                  case type
-                  when "message_start"
-                    start_usage = data.dig("message", "usage")
-                    usage = start_usage.dup if start_usage.is_a?(Hash)
-                  when "message_delta"
-                    delta_usage = data["usage"]
-                    usage = (usage || {}).merge(delta_usage) if delta_usage.is_a?(Hash)
-                    stop_reason = data.dig("delta", "stop_reason") || stop_reason
-                  when "message_stop"
-                    saw_stop = true
-                  when "content_block_start"
-                    block = data["content_block"]
-                    if block && block["type"] == "tool_use"
-                      current_tool_name = block["name"]
-                      current_tool_id = block["id"]
-                      current_tool_input = block["input"] ? JSON.generate(block["input"]) : ""
-                    end
-                  when "content_block_delta"
-                    delta = data["delta"]
-                    if delta
-                      if delta["type"] == "text_delta"
-                        accumulated += delta["text"]
-                        yield delta["text"], nil if on_chunk
-                      elsif delta["type"] == "input_json_delta"
-                        current_tool_input += delta["partial_json"]
+                    case type
+                    when "message_start"
+                      start_usage = data.dig("message", "usage")
+                      usage = start_usage.dup if start_usage.is_a?(Hash)
+                    when "message_delta"
+                      delta_usage = data["usage"]
+                      usage = (usage || {}).merge(delta_usage) if delta_usage.is_a?(Hash)
+                      stop_reason = data.dig("delta", "stop_reason") || stop_reason
+                    when "message_stop"
+                      saw_stop = true
+                    when "content_block_start"
+                      block = data["content_block"]
+                      if block && block["type"] == "tool_use"
+                        current_tool_name = block["name"]
+                        current_tool_id = block["id"]
+                        current_tool_input = block["input"] ? JSON.generate(block["input"]) : ""
+                      end
+                    when "content_block_delta"
+                      delta = data["delta"]
+                      if delta
+                        if delta["type"] == "text_delta"
+                          accumulated += delta["text"]
+                          yield delta["text"], nil if on_chunk
+                        elsif delta["type"] == "input_json_delta"
+                          current_tool_input += delta["partial_json"]
+                        end
+                      end
+                    when "content_block_stop"
+                      if current_tool_name && current_tool_id
+                        idx = tool_calls_accum.size
+                        tool_calls_accum[idx] = {
+                          "id" => current_tool_id,
+                          "type" => "function",
+                          "function" => {
+                            "name" => current_tool_name,
+                            "arguments" => current_tool_input
+                          }
+                        }
+                        current_tool_name = ""
+                        current_tool_id = ""
+                        current_tool_input = ""
                       end
                     end
-                  when "content_block_stop"
-                    if current_tool_name && current_tool_id
-                      idx = tool_calls_accum.size
-                      tool_calls_accum[idx] = {
-                        "id" => current_tool_id,
-                        "type" => "function",
-                        "function" => {
-                          "name" => current_tool_name,
-                          "arguments" => current_tool_input
-                        }
-                      }
-                      current_tool_name = ""
-                      current_tool_id = ""
-                      current_tool_input = ""
-                    end
+                  rescue JSON::ParserError
+                    # skip malformed chunks
                   end
-                rescue JSON::ParserError
-                  # skip malformed chunks
                 end
               end
             end

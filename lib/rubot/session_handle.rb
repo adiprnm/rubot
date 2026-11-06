@@ -48,7 +48,7 @@ module Rubot
       end
 
       def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil,
-                  on_assistant_text: nil, stream: true, &on_chunk)
+                  on_assistant_text: nil, on_stopped: nil, stream: true, &on_chunk)
         events = Ractor::Port.new
         control = nil
 
@@ -71,6 +71,8 @@ module Rubot
             on_tool_result&.call(event[1], event[2])
           when :progress
             on_progress&.call(event[1], event[2])
+          when :stopped
+            on_stopped&.call
           when :confirm
             answered = begin
               on_confirm ? on_confirm.call(event[2], event[3]) : false

@@ -111,6 +111,7 @@ module Rubot
       end
 
       def make_request(payload)
+        Rubot::Cancellation.check!
         uri = URI("#{api_base}/chat/completions")
 
         log_debug("Request: #{JSON.generate(payload)}")
@@ -125,7 +126,9 @@ module Rubot
           request["Authorization"] = "Bearer #{@config.api_key}"
           apply_extra_headers(request)
 
-          http.request(request, JSON.generate(payload))
+          with_cancellable_http(http) do
+            http.request(request, JSON.generate(payload))
+          end
         end
         log_debug("Response: #{response.code} - #{response.body[0..500]}")
 
@@ -140,6 +143,7 @@ module Rubot
       end
 
       def make_stream_request(payload, &on_chunk)
+        Rubot::Cancellation.check!
         uri = URI("#{api_base}/chat/completions")
         log_debug("Stream request: #{JSON.generate(payload)}")
 
@@ -162,65 +166,71 @@ module Rubot
           request["Authorization"] = "Bearer #{@config.api_key}"
           apply_extra_headers(request)
 
-          http.request(request, JSON.generate(payload)) do |response|
-            unless response.code.to_i == 200
-              body = +""
-              response.read_body { |b| body << b }
-              if response.code.to_i == 429
-                raise RateLimitError.new(parse_retry_after(response))
-              end
-              raise "API error #{response.code}: #{body}"
-            end
-
-            response.read_body do |chunk|
-              buffer += chunk
-              while (newline_idx = buffer.index("\n"))
-                line = buffer[0...newline_idx].strip
-                buffer = buffer[(newline_idx + 1)..] || ""
-                next if line.empty?
-                next unless line.start_with?("data: ")
-
-                data_str = line[6..]
-                if data_str == "[DONE]"
-                  saw_done = true
-                  next
+          with_cancellable_http(http) do
+            http.request(request, JSON.generate(payload)) do |response|
+              unless response.code.to_i == 200
+                body = +""
+                response.read_body { |b| body << b }
+                if response.code.to_i == 429
+                  raise RateLimitError.new(parse_retry_after(response))
                 end
+                raise "API error #{response.code}: #{body}"
+              end
 
-                begin
-                  data = JSON.parse(data_str)
-                  usage = data["usage"] if data["usage"].is_a?(Hash)
-                  finish_reason = data.dig("choices", 0, "finish_reason") || finish_reason
-                  delta = data.dig("choices", 0, "delta")
-                  next unless delta
+              response.read_body do |chunk|
+                # The user may have stopped the turn: unwinding here closes the
+                # response and aborts the request instead of streaming the rest
+                # of the answer first.
+                Rubot::Cancellation.check!
+                buffer += chunk
+                while (newline_idx = buffer.index("\n"))
+                  line = buffer[0...newline_idx].strip
+                  buffer = buffer[(newline_idx + 1)..] || ""
+                  next if line.empty?
+                  next unless line.start_with?("data: ")
 
-                  if delta["content"]
-                    accumulated += delta["content"]
-                    yield delta["content"], nil if on_chunk
+                  data_str = line[6..]
+                  if data_str == "[DONE]"
+                    saw_done = true
+                    next
                   end
 
-                  if delta["reasoning_content"]
-                    reasoning_content += delta["reasoning_content"]
-                  end
+                  begin
+                    data = JSON.parse(data_str)
+                    usage = data["usage"] if data["usage"].is_a?(Hash)
+                    finish_reason = data.dig("choices", 0, "finish_reason") || finish_reason
+                    delta = data.dig("choices", 0, "delta")
+                    next unless delta
 
-                  if delta["tool_calls"]
-                    delta["tool_calls"].each do |tc|
-                      idx = tc["index"]
-                      tool_calls_accum[idx] ||= {
-                        "id" => "",
-                        "type" => "function",
-                        "function" => { "name" => "", "arguments" => "" }
-                      }
-                      tool_calls_accum[idx]["id"] = tc["id"] if tc["id"]
-                      if tc.dig("function", "name")
-                        tool_calls_accum[idx]["function"]["name"] += tc["function"]["name"]
-                      end
-                      if tc.dig("function", "arguments")
-                        tool_calls_accum[idx]["function"]["arguments"] += tc["function"]["arguments"]
+                    if delta["content"]
+                      accumulated += delta["content"]
+                      yield delta["content"], nil if on_chunk
+                    end
+
+                    if delta["reasoning_content"]
+                      reasoning_content += delta["reasoning_content"]
+                    end
+
+                    if delta["tool_calls"]
+                      delta["tool_calls"].each do |tc|
+                        idx = tc["index"]
+                        tool_calls_accum[idx] ||= {
+                          "id" => "",
+                          "type" => "function",
+                          "function" => { "name" => "", "arguments" => "" }
+                        }
+                        tool_calls_accum[idx]["id"] = tc["id"] if tc["id"]
+                        if tc.dig("function", "name")
+                          tool_calls_accum[idx]["function"]["name"] += tc["function"]["name"]
+                        end
+                        if tc.dig("function", "arguments")
+                          tool_calls_accum[idx]["function"]["arguments"] += tc["function"]["arguments"]
+                        end
                       end
                     end
+                  rescue JSON::ParserError
+                    # skip malformed chunks
                   end
-                rescue JSON::ParserError
-                  # skip malformed chunks
                 end
               end
             end

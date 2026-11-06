@@ -410,9 +410,21 @@ module Rubot
       when :chunk then append_live(event[1])
       # Clearance also resets any tool-line bookkeeping.
       when :stream_end
+        # A stop before the first token leaves an empty live entry behind; drop
+        # it so the cancelled turn does not leave a blank row of its own.
+        if event[1] && @live_entry && @live_text.to_s.strip.empty?
+          @log.remove_last
+        end
         @live_entry = nil
-        @log.add_entry([ [ "", nil ] ])
-        add_turn_summary
+        if event[1]
+          # A cancelled turn gets no footer: the partial answer is the whole
+          # record. Keep one blank after it as the separator the next prompt
+          # needs, but not the extra one the footer line would have sat above.
+          @log.add_entry([ [ "", nil ] ]) unless @log.last_blank?
+        else
+          @log.add_entry([ [ "", nil ] ])
+          add_turn_summary
+        end
       when :reset_turn_totals then reset_turn_totals
       when :assistant_text
         @log.add_entry([ [ MARK[:note] + " ", :muted ] ] + Markdown.to_segments(event[1]), keep_leading: true, indent: 2)
@@ -534,10 +546,12 @@ module Rubot
 
       @events << [ :stream_start ]
       response = +""
+      stopped = false
       agent.process(message,
                     on_confirm: on_confirm,
                     on_tool_call: ->(name, args) { @events << [ :tool_call, name, args ] },
                     on_tool_result: ->(name, _result) { @events << [ :tool_done, name ] },
+                    on_stopped: -> { stopped = true },
                     stream: @stream) do |chunk|
         @events << [ :chunk, chunk.to_s ]
         response << chunk.to_s
@@ -550,7 +564,7 @@ module Rubot
     rescue StandardError => e
       @events << [ :error_text, "#{e.class}: #{e.message}" ]
     ensure
-      @events << [ :stream_end ]
+      @events << [ :stream_end, stopped ]
       @events << [ :idle ]
       # Fresh cost, cache and context figures for the footer under the input.
       # Published after :idle so the working badge does not linger while the

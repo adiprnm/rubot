@@ -1070,6 +1070,35 @@ class TestAgentCancellation < Minitest::Test
     alias chat_stream chat
   end
 
+  # Streams forever, obeying the same cancellation contract real providers
+  # use: a stop is noticed at the next chunk.
+  class EndlessStreamProvider
+    attr_reader :calls
+
+    def initialize
+      @calls = 0
+    end
+
+    def name
+      "openai"
+    end
+
+    def chat(_messages, tools: nil)
+      { "content" => "done" }
+    end
+
+    def chat_stream(_messages, tools: nil, &on_chunk)
+      @calls += 1
+      1_000.times do |i|
+        Rubot::Cancellation.check!
+        on_chunk&.call("chunk #{i} ")
+        sleep 0.01
+      end
+
+      { "content" => "never finishes" }
+    end
+  end
+
   def setup
     @tmpdir = Dir.mktmpdir
     @workspace = File.join(@tmpdir, "workspace")
@@ -1143,6 +1172,33 @@ class TestAgentCancellation < Minitest::Test
     assert_operator elapsed, :<, 8, "the command must be killed, not waited out"
     assert_equal 1, agent.provider.calls
     assert_includes response, "Stopped by user"
+  end
+
+  def test_stop_interrupts_a_streaming_answer_at_the_next_chunk
+    agent = build_agent(EndlessStreamProvider.new)
+    chunks = Queue.new
+    response = nil
+
+    # The stop arrives from another thread, the way the TUI's esc handler and
+    # the session actor's watcher thread send it.
+    canceller = Thread.new do
+      chunks.pop
+      agent.cancel!
+    end
+
+    before = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    runner = Thread.new do
+      response = agent.process("keep talking", stream: true) { |chunk| chunks << chunk }
+    end
+
+    assert runner.join(5), "the turn must end at the next streamed chunk"
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - before
+
+    assert_operator elapsed, :<, 3, "a streaming answer must stop without reading it all"
+    assert canceller.join(2)
+    assert_equal 1, agent.provider.calls, "no further provider rounds after the stop"
+    assert_includes response, "Stopped by user"
+    refute_includes response, "never finishes"
   end
 end
 

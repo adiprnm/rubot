@@ -2,6 +2,7 @@
 
 require "json"
 require "net/http"
+require_relative "cancellation"
 
 module Rubot
   # Immutable view of the settings needed to construct a provider.
@@ -142,6 +143,41 @@ module Rubot
     end
 
     protected
+
+    # Run an HTTP request so the turn's cancellation token can interrupt it.
+    #
+    # A blocked read (waiting for headers or for the next stream chunk) does
+    # not return on its own, so a boolean check between chunks would only be
+    # seen after the provider finished answering. The started session is
+    # registered with the token instead: cancel! closes it from the watcher
+    # thread, the blocked read raises, and the error is re-raised as Cancelled
+    # so the agent treats it as a stop rather than a provider failure.
+    def with_cancellable_http(http)
+      token = Cancellation.current
+
+      http.start
+      begin
+        token&.track_connection(http)
+        raise Cancelled if token&.cancelled?
+
+        yield
+      rescue Cancelled
+        raise
+      rescue StandardError
+        # A connection closed under a blocked read surfaces as IOError or
+        # Net::HTTP*Error, depending on where the thread was.
+        raise Cancelled if token&.cancelled?
+
+        raise
+      ensure
+        token&.untrack_connection(http)
+        begin
+          http.finish if http.started?
+        rescue StandardError
+          nil
+        end
+      end
+    end
 
     # Build the normalized result hash every provider returns. `truncated`
     # travels with the content so the agent can finish the answer instead of

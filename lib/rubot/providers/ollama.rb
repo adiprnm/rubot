@@ -55,6 +55,7 @@ module Rubot
       end
 
       def make_request(payload)
+        Rubot::Cancellation.check!
         uri = URI("#{api_base}/api/chat")
         log_debug("Request: #{JSON.generate(payload)}")
 
@@ -67,7 +68,9 @@ module Rubot
           request = Net::HTTP::Post.new(uri.request_uri)
           request["Content-Type"] = "application/json"
 
-          http.request(request, JSON.generate(payload))
+          with_cancellable_http(http) do
+            http.request(request, JSON.generate(payload))
+          end
         end
         log_debug("Response: #{response.code}")
 
@@ -82,6 +85,7 @@ module Rubot
       end
 
       def make_stream_request(payload, &on_chunk)
+        Rubot::Cancellation.check!
         uri = URI("#{api_base}/api/chat")
 
         buffer = ""
@@ -100,45 +104,50 @@ module Rubot
           request = Net::HTTP::Post.new(uri.request_uri)
           request["Content-Type"] = "application/json"
 
-          http.request(request, JSON.generate(payload)) do |response|
-            unless response.code.to_i == 200
-              body = +""
-              response.read_body { |b| body << b }
-              if response.code.to_i == 429
-                raise RateLimitError.new(parse_retry_after(response))
+          with_cancellable_http(http) do
+            http.request(request, JSON.generate(payload)) do |response|
+              unless response.code.to_i == 200
+                body = +""
+                response.read_body { |b| body << b }
+                if response.code.to_i == 429
+                  raise RateLimitError.new(parse_retry_after(response))
+                end
+                raise "API error #{response.code}: #{body}"
               end
-              raise "API error #{response.code}: #{body}"
-            end
 
-            response.read_body do |chunk|
-              buffer += chunk
-              while (newline_idx = buffer.index("\n"))
-                line = buffer[0...newline_idx].strip
-                buffer = buffer[(newline_idx + 1)..] || ""
-                next if line.empty?
+              response.read_body do |chunk|
+                # Abort at the next chunk after a stop, rather than reading the
+                # whole answer and discarding it afterwards.
+                Rubot::Cancellation.check!
+                buffer += chunk
+                while (newline_idx = buffer.index("\n"))
+                  line = buffer[0...newline_idx].strip
+                  buffer = buffer[(newline_idx + 1)..] || ""
+                  next if line.empty?
 
-                begin
-                  data = JSON.parse(line)
-                  delta = data.dig("message")
-                  next unless delta
+                  begin
+                    data = JSON.parse(line)
+                    delta = data.dig("message")
+                    next unless delta
 
-                  if delta["content"]
-                    accumulated += delta["content"]
-                    yield delta["content"], nil if on_chunk
+                    if delta["content"]
+                      accumulated += delta["content"]
+                      yield delta["content"], nil if on_chunk
+                    end
+
+                    if delta["tool_calls"]
+                      tool_calls = delta["tool_calls"]
+                    end
+
+                    if data["done"] == true
+                      usage = ollama_usage(data)
+                      done_reason = data["done_reason"]
+                      saw_done = true
+                      break
+                    end
+                  rescue JSON::ParserError
+                    # skip malformed chunks
                   end
-
-                  if delta["tool_calls"]
-                    tool_calls = delta["tool_calls"]
-                  end
-
-                  if data["done"] == true
-                    usage = ollama_usage(data)
-                    done_reason = data["done_reason"]
-                    saw_done = true
-                    break
-                  end
-                rescue JSON::ParserError
-                  # skip malformed chunks
                 end
               end
             end

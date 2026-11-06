@@ -312,6 +312,28 @@ module Rubot
       assert_includes line, "(Total time 31m 40s \u00b7 2 turns)"
     end
 
+    def test_a_cancelled_turn_skips_the_footer_and_the_blank_above_it
+      repl = build_repl
+      agent = repl.instance_variable_get(:@agent)
+      agent.define_singleton_method(:process) do |_message, on_stopped: nil, **_opts, &on_chunk|
+        on_chunk&.call("half an answer")
+        on_stopped&.call
+        "half an answer\n\n#{Rubot::Agent::STOP_NOTICE}"
+      end
+      agent.define_singleton_method(:flush_learning) { nil }
+      agent.define_singleton_method(:usage_report) { nil }
+
+      repl.send(:process_message, "stop me")
+      repl.send(:pump)
+
+      entries = repl.instance_variable_get(:@log).instance_variable_get(:@entries)
+      texts = entries.map { |segments| segments.map(&:first).join }
+
+      refute texts.any? { |t| t.include?("Turn took") }, "no turn footer after a stop"
+      assert_equal "half an answer", texts[-2]
+      assert_equal "", texts[-1], "one separator blank remains, no double blank"
+    end
+
     def test_tool_summary_truncates_to_a_cell_budget
       long = { "command" => "x" * 200 }
 

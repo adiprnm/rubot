@@ -177,8 +177,10 @@ module Rubot
     #                     "Let me check the structure first."). Channels forward
     #                     this to the user as a regular message while work continues.
     #                     Yields (text).
+    #   on_stopped:       Called once when the turn ended because the user
+    #                     stopped it, before the stop notice is appended.
     def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil,
-                on_assistant_text: nil, stream: true, &on_chunk)
+                on_assistant_text: nil, on_stopped: nil, stream: true, &on_chunk)
       # Fire any due cron jobs and collect their results
       cron_results = fire_due_cron_jobs
       warn "[cron] fire_due_cron_jobs returned #{cron_results.size} result(s)" if Rubot.debug?
@@ -228,19 +230,33 @@ module Rubot
         end
 
         # Adaptive: compact the transcript when it crosses the configured
-        # share of the model's context window.
-        run_auto_compaction
+        # share of the model's context window. Compaction calls the provider,
+        # so a stop during it unwinds here like any other provider call.
+        begin
+          run_auto_compaction
+        rescue Cancelled
+          stopped = true
+          break
+        end
 
         messages = build_messages
         log_debug("Sending #{messages.size} messages to provider")
 
-        result = if block_given? && stream
-          @provider.chat_stream(messages, tools: tool_definitions) do |chunk, tool_data|
-            response += chunk if chunk
-            yield chunk if chunk && block_given?
+        result = begin
+          if block_given? && stream
+            @provider.chat_stream(messages, tools: tool_definitions) do |chunk, tool_data|
+              response += chunk if chunk
+              yield chunk if chunk && block_given?
+            end
+          else
+            @provider.chat(messages, tools: tool_definitions)
           end
-        else
-          @provider.chat(messages, tools: tool_definitions)
+        rescue Cancelled
+          # The user stopped the turn while the provider was answering. The
+          # partial answer is discarded, exactly as when the stop lands after
+          # the response arrived.
+          stopped = true
+          break
         end
 
         record_usage(result)
@@ -407,7 +423,7 @@ module Rubot
       cron_tool = @tools.get("cron")
       has_callback = cron_tool && cron_tool.respond_to?(:has_fire_callback?) && cron_tool.has_fire_callback?
 
-      unless has_callback
+      unless has_callback || stopped
         cron_results.each do |cr|
           warn "[cron] Processing job #{cr[:job_id]} mode=#{cr[:mode]}" if Rubot.debug?
           case cr[:mode]
@@ -425,6 +441,8 @@ module Rubot
           end
         end
       end
+
+      on_stopped&.call if stopped
 
       if stopped
         answer << "\n\n" unless answer.empty?

@@ -73,3 +73,72 @@ class TestCancellation < Minitest::Test
     end
   end
 end
+
+class TestCancellationChecks < Minitest::Test
+  # Stands in for the started Net::HTTP session a provider registers.
+  class FakeConnection
+    attr_reader :closed
+
+    def initialize
+      @started = true
+      @closed = false
+    end
+
+    def started?
+      @started
+    end
+
+    def finish
+      @started = false
+      @closed = true
+    end
+  end
+
+  def teardown
+    Thread.current[:rubot_cancellation] = nil
+  end
+
+  def test_check_raises_only_when_the_turn_was_stopped
+    token = Rubot::Cancellation.new.start!
+    assert_nil token.check!
+
+    token.cancel!
+
+    assert_raises(Rubot::Cancelled) { token.check! }
+  end
+
+  def test_current_is_the_token_set_on_the_thread
+    token = Rubot::Cancellation.new.start!
+    Thread.current[:rubot_cancellation] = token
+
+    assert_same token, Rubot::Cancellation.current
+
+    token.cancel!
+    assert_raises(Rubot::Cancelled) { Rubot::Cancellation.check! }
+  end
+
+  def test_check_without_a_running_turn_does_nothing
+    assert_nil Rubot::Cancellation.current
+    assert_nil Rubot::Cancellation.check!
+  end
+
+  def test_cancel_closes_a_tracked_connection
+    connection = FakeConnection.new
+    token = Rubot::Cancellation.new.start!
+    token.track_connection(connection)
+
+    token.cancel!
+
+    assert connection.closed, "a stop must close the session a provider is blocked on"
+  end
+
+  def test_tracking_after_cancel_closes_the_connection_immediately
+    connection = FakeConnection.new
+    token = Rubot::Cancellation.new.start!
+    token.cancel!
+
+    token.track_connection(connection)
+
+    assert connection.closed
+  end
+end
