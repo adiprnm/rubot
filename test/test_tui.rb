@@ -334,6 +334,77 @@ module Rubot
       assert_includes done, [ "shell_exec", :muted ], "completed name recedes"
     end
 
+    def test_skill_load_gets_its_own_transcript_line
+      repl = build_repl
+      ev = repl.instance_variable_get(:@events)
+      path = File.expand_path("~/.rubot/workspace/skills/kanyaah-brand/SKILL.md")
+      ev << [ :tool_call, "file_ops", { "operation" => "read", "path" => path } ]
+      ev << [ :tool_done, "file_ops" ]
+      app = repl.instance_variable_get(:@app)
+      app.send(:run_timers)
+
+      view = plain(app.render_lines)
+      refute view.any? { |l| l.include?("file_ops") }, "the skill load is not a plain file row"
+      skill_lines = view.select { |l| l.include?("kanyaah-brand") }
+      assert_equal 1, skill_lines.size, "one line for the skill, got: #{skill_lines.inspect}"
+      line = skill_lines.first
+      assert_includes line, "\u2713 skill kanyaah-brand", "read skill reads as a completed skill row: #{line.inspect}"
+      refute_includes line, "SKILL.md"
+      refute_includes line, "\u2726"
+    end
+
+    def test_skill_load_in_flight_shows_the_skill_marker
+      repl = build_repl
+      ev = repl.instance_variable_get(:@events)
+      path = File.expand_path("~/.rubot/workspace/skills/writing/SKILL.md")
+      ev << [ :tool_call, "file_ops", { "operation" => "read", "path" => path } ]
+      app = repl.instance_variable_get(:@app)
+      app.send(:run_timers)
+
+      line = plain(app.render_lines).find { |l| l.include?("writing") }
+      assert line, "skill row renders while reading"
+      assert_includes line, "\u2726 skill writing"
+    end
+
+    def test_shell_cat_of_a_skill_file_also_counts
+      repl = build_repl
+      ev = repl.instance_variable_get(:@events)
+      ev << [ :tool_call, "shell_exec", { "command" => "cat ~/.rubot/workspace/skills/writing/SKILL.md | head -40" } ]
+      app = repl.instance_variable_get(:@app)
+      app.send(:run_timers)
+
+      line = plain(app.render_lines).find { |l| l.include?("writing") }
+      assert line, "cat of SKILL.md renders as a skill row"
+      assert_includes line, "\u2726 skill writing"
+    end
+
+    def test_writing_a_skill_file_stays_a_tool_row
+      repl = build_repl
+      ev = repl.instance_variable_get(:@events)
+      path = File.expand_path("~/.rubot/workspace/skills/new-skill/SKILL.md")
+      ev << [ :tool_call, "file_ops", { "operation" => "write", "path" => path } ]
+      ev << [ :tool_done, "file_ops" ]
+      app = repl.instance_variable_get(:@app)
+      app.send(:run_timers)
+
+      view = plain(app.render_lines)
+      assert view.any? { |l| l.include?("file_ops") }, "writes keep the tool row: #{view.inspect}"
+      refute view.any? { |l| l.include?("skill new-skill") }
+    end
+
+    def test_regular_file_read_stays_a_tool_row
+      repl = build_repl
+      ev = repl.instance_variable_get(:@events)
+      ev << [ :tool_call, "file_ops", { "operation" => "read", "path" => "/tmp/notes.md" } ]
+      app = repl.instance_variable_get(:@app)
+      app.send(:run_timers)
+
+      line = plain(app.render_lines).find { |l| l.include?("notes.md") }
+      assert line, "regular read renders"
+      assert_includes line, "file_ops read /tmp/notes.md"
+      refute_includes line, "\u2726"
+    end
+
     def test_back_to_back_tool_calls_have_no_spacer
       repl = build_repl
       ev = repl.instance_variable_get(:@events)

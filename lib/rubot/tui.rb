@@ -73,8 +73,16 @@ module Rubot
     COMPLETABLE = COMMANDS.keys.reject { |c| c.include?(" ") }.freeze
 
     SPIN = %w[⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏].freeze
-    MARK = { ok: "✓", warn: "!", err: "✗", info: "·", tool: "⚒", cron: "⏰", note: "◆" }.freeze
+    MARK = { ok: "✓", warn: "!", err: "✗", info: "·", tool: "⚒", skill: "✦", cron: "⏰", note: "◆" }.freeze
     TURN_MARK = "✻"
+
+    # Skills are loaded by reading their SKILL.md through the file tool (see
+    # SkillRegistry#to_system_prompt). The TUI spots that path so a skill load
+    # gets its own transcript row instead of hiding inside a file_ops row.
+    SKILL_PATH = %r{/skills/([^/\s]+)/SKILL\.md}
+
+    # Shell commands that only dump a file's contents count as reading.
+    READ_COMMANDS = /\b(cat|bat|less|more|head|tail)\b/
 
     def initialize(agent = nil, stream: true, pool: nil, on_cron: nil)
       @agent = agent
@@ -368,20 +376,21 @@ module Rubot
           end
           @live_entry = nil
         end
-        summary = tool_summary(event[1], event[2], max: tool_summary_limit(event[1]))
-        index = @log.add_entry([
-          [ "⚒ ", :muted ],
-          [ event[1].to_s, :accent ],
-          [ " ", :muted ],
-          [ summary, :dim ]
-        ], keep_leading: true, indent: 2)
-        @tool_entries[event[1].to_s] = [ index, summary ]
+        skill = skill_load(event[1], event[2])
+        summary = if skill
+          ::TUI::Text.truncate(skill, tool_summary_limit("skill"))
+        else
+          tool_summary(event[1], event[2], max: tool_summary_limit(event[1]))
+        end
+        index = @log.add_entry(tool_call_segments(event[1], summary, skill), keep_leading: true, indent: 2)
+        @tool_entries[event[1].to_s] = [ index, summary, skill ]
       when :tool_done
         # The ⚒ line flips to ✓ in place — one line per tool call.
         prev = @tool_entries.delete(event[1].to_s)
         set_tool_done(prev ? prev[0] : @log.add_entry([ [ "✓ ", :tool_ok ], [ event[1].to_s, :muted ] ], indent: 2),
                       event[1].to_s,
-                      prev && prev[1])
+                      prev && prev[1],
+                      prev && prev[2])
       when :confirm then show_confirm(event)
       when :idle then
         @busy = false
@@ -389,12 +398,44 @@ module Rubot
       end
     end
 
-    def set_tool_done(index, name, summary)
-      segments = [ [ "✓ ", :tool_ok ], [ name, :muted ] ]
-      if summary && !summary.empty?
+    # The row for a tool call in flight. A skill load is not shown as
+    # `file_ops read …/SKILL.md` but as its own line, so the transcript says
+    # plainly that the agent picked a skill up — the same way a tool call shows.
+    def tool_call_segments(name, summary, skill)
+      if skill
+        [ [ "#{MARK[:skill]} ", :accent ], [ "skill ", :muted ], [ summary, :accent ] ]
+      else
+        [ [ "#{MARK[:tool]} ", :muted ], [ name.to_s, :accent ], [ " ", :muted ], [ summary, :dim ] ]
+      end
+    end
+
+    def set_tool_done(index, name, summary, skill = nil)
+      segments = if skill
+        # Slightly brighter than a finished tool row (muted): the skill name is
+        # what the reader came for, the label only marks the row.
+        [ [ "#{MARK[:ok]} ", :tool_ok ], [ "skill ", :dim ], [ summary, :dim ] ]
+      else
+        [ [ "#{MARK[:ok]} ", :tool_ok ], [ name, :muted ] ]
+      end
+      if summary && !summary.empty? && !skill
         segments += [ [ " ", :muted ], [ summary, :dim ] ]
       end
       @log.set_entry(index, segments)
+    end
+
+    # Returns the skill name when this tool call reads a skill's SKILL.md,
+    # nil otherwise. Only reads count: writing a skill file is not loading it.
+    def skill_load(tool_name, args)
+      args = {} unless args.is_a?(Hash)
+      raw = nil
+      case tool_name.to_s
+      when "file_ops"
+        raw = args["path"] if args["operation"].to_s == "read"
+      when "shell_exec"
+        raw = args["command"] if args["command"].to_s.match?(READ_COMMANDS)
+      end
+      name = SKILL_PATH.match(raw.to_s)&.[](1)
+      name if name && !name.empty?
     end
 
     def start_live_entry

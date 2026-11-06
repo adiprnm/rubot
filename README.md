@@ -20,7 +20,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 🧠 **MEMORY.md** — persistent memory the bot can read and update across sessions
 - ⏰ **Cron scheduling** — schedule reminders, recurring tasks, and timed alerts
 - 🔒 **Safety guard** — dangerous command filtering (PicoClaw-style sandboxing)
-- 🎯 **Skills system** — pluggable skill definitions via SKILL.md files in the workspace
+- 🎯 **Skills system** — pluggable skill definitions via SKILL.md files in the workspace; loading one shows up in the TUI transcript as its own `✦ skill <name>` row, and flips to `✓` once read
 - 📡 **Multi-channel** — REPL and Telegram, with a pluggable channel architecture
 - 📎 **Inbound attachments** — screenshots and files sent to Telegram are saved to the workspace, with dimensions and size added to the prompt
 - 🔈 **Progress narration** — the model explains what it is doing between tool calls ("Let me check the structure first."), sent as normal chat messages
