@@ -11,6 +11,16 @@ module Rubot
     # in place (streaming responses), and the view auto-follows the bottom
     # unless the user has scrolled away from it.
     class LogView < ::TUI::Component
+      # The scrollbar owns the last column of the view, so text wraps one
+      # cell short of the right edge. Reserved even when no bar is drawn,
+      # which keeps the wrap stable as output grows past the page height.
+      SCROLLBAR_W = 1
+
+      # A leading list/quote marker. Wrapped rows are indented by the
+      # marker's width so continuation lines sit under the item text
+      # instead of under the marker itself.
+      LIST_PREFIX = /\A(\s*(?:[•▏]|[-*+]|\d+[.)])\s+)/.freeze
+
       def initialize
         super
         @entries = []        # [[text, style], ...] per entry
@@ -40,10 +50,11 @@ module Rubot
         @entries.length
       end
 
-      # Cells available to a single row of content. Used to truncate lines
-      # that must not wrap (tool call rows). Zero before the first layout.
+      # Cells available to a single row of content, scrollbar excluded.
+      # Used to truncate lines that must not wrap (tool call rows). Zero
+      # before the first layout.
       def content_width
-        @rect ? @rect.w : 0
+        @rect ? text_width : 0
       end
 
       def last_blank?
@@ -231,9 +242,14 @@ module Rubot
         out
       end
 
+      # Cells available to text: everything but the scrollbar column.
+      def text_width
+        [ @rect.w - SCROLLBAR_W, 1 ].max
+      end
+
       def wrap(index)
-        indent = [ @indents[index].to_i, [ @rect.w - 1, 0 ].max ].min
-        width = [ @rect.w - indent, 1 ].max
+        indent = [ @indents[index].to_i, [ text_width - 1, 0 ].max ].min
+        width = [ text_width - indent, 1 ].max
         lines = wrap_segments(@entries[index], width, keep_leading: @keep_leading[index])
         @entry_lines[index] = indent.positive? ? indent_lines(lines, indent) : lines
       end
@@ -241,8 +257,8 @@ module Rubot
       def rewrap_all
         @wrap_w = @rect.w
         @entry_lines = @entries.each_with_index.map do |entry, i|
-          indent = [ @indents[i].to_i, [ @rect.w - 1, 0 ].max ].min
-          width = [ @rect.w - indent, 1 ].max
+          indent = [ @indents[i].to_i, [ text_width - 1, 0 ].max ].min
+          width = [ text_width - indent, 1 ].max
           lines = wrap_segments(entry, width, keep_leading: @keep_leading[i])
           indent.positive? ? indent_lines(lines, indent) : lines
         end
@@ -257,59 +273,89 @@ module Rubot
       end
 
       def wrap_segments(segments, width, keep_leading: false)
+        # "\n" in segment text is a hard row break (multiline input,
+        # markdown blocks). Split into hard lines first, so each one can
+        # carry its own hanging indent.
+        hard_lines = [ [] ]
+        segments.each do |(text, style)|
+          text.to_s.split("\n", -1).each_with_index do |part, i|
+            hard_lines << [] if i.positive?
+            hard_lines.last << [ part, style ] unless part.empty?
+          end
+        end
+
+        hard_lines.flat_map do |line|
+          wrap_hard_line(line, width, keep_leading: keep_leading)
+        end
+      end
+
+      def wrap_hard_line(segments, width, keep_leading: false)
+        hang = hanging_indent(segments, keep_leading: keep_leading)
+        hang = [ hang, [ width - 1, 0 ].max ].min
+        prefix = hang.positive? ? [ [ " " * hang, nil ] ] : []
+
         lines = [ [] ]
         used = 0
+        at_start = true
+
+        new_row = lambda do
+          lines << prefix.dup
+          used = hang
+          at_start = true
+        end
 
         segments.each do |(text, style)|
-          # "\n" in segment text is a hard row break (multiline input,
-          # markdown blocks).
-          parts = text.to_s.split("\n", -1)
-          parts.each_with_index do |part, i|
-            if i.positive?
-              lines << []
-              used = 0
-              next if part.empty?
+          text.to_s.split(/(?<= )|(?= )/).each do |token|
+            if token.strip.empty?
+              space_w = ::TUI::Text.width(token)
+              next if at_start && !keep_leading
+              next if used + space_w > width
+
+              lines.last << [ token, style ]
+              used += space_w
+              next
             end
 
-            part.split(/(?<= )|(?= )/).each do |token|
-              if token.strip.empty?
-                space_w = ::TUI::Text.width(token)
-                next if used.zero? && !keep_leading
-                next if used + space_w > width
+            token_w = ::TUI::Text.width(token)
+            new_row.call if used + token_w > width && used.positive?
 
-                lines.last << [ token, style ]
-                used += space_w
-                next
-              end
-
-              token_w = ::TUI::Text.width(token)
-              if used + token_w > width && used.positive?
-                lines << []
-                used = 0
-              end
-
-              if token_w > width
-                used = push_hard_broken(lines, token, style, width)
-              else
-                lines.last << [ token, style ]
-                used += token_w
-              end
+            if token_w > width
+              used = push_hard_broken(lines, token, style, width, prefix)
+            else
+              lines.last << [ token, style ]
+              used += token_w
             end
+            at_start = false
           end
         end
 
         lines
       end
 
+      # Width of a leading marker like "  • " or "  12. ". Leading spaces
+      # only count when they will actually be rendered.
+      def hanging_indent(segments, keep_leading:)
+        head = segments.map { |(text, _style)| text.to_s }.join
+        head = head.lstrip unless keep_leading
+        match = head.match(LIST_PREFIX)
+        match ? ::TUI::Text.width(match[1]) : 0
+      end
+
       # Break a token that does not fit on any line, cell by cell.
-      def push_hard_broken(lines, token, style, width)
+      def push_hard_broken(lines, token, style, width, prefix)
         token.to_s.each_char do |ch|
           cw = ::TUI::Text.width(ch)
-          used = ::TUI::Text.width(lines.last.map(&:first).join)
-          lines << [] if used + cw > width
+          used = line_width(lines.last)
+          if used + cw > width
+            lines << prefix.dup
+          end
           lines.last << [ ch, style ]
         end
-        ::TUI::Text.width(lines.last.map(&:first).join)
+        line_width(lines.last)
+      end
+
+      def line_width(line)
+        line.sum { |(text, _style)| ::TUI::Text.width(text.to_s) }
       end
 
       def follow_bottom

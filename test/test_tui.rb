@@ -320,6 +320,40 @@ module Rubot
       assert_equal [ [ "two", :text ] ], rows[1]
     end
 
+    # The scrollbar sits in the last column; wrapped text must stop one cell
+    # short of it instead of running underneath it.
+    def test_wrapped_rows_stay_clear_of_the_scrollbar_column
+      view = TUI::LogView.new
+      view.layout(::TUI::Rect.new(0, 0, 20, 4))
+      6.times { |i| view.add_entry([ [ "row #{i}", :text ] ]) }
+      view.add_entry([ [ "x" * 100, :text ] ])
+      view.render(::TUI::Canvas.new(20, 4))
+
+      width = view.content_width
+      assert_equal 19, width
+      view.instance_variable_get(:@lines).each do |row|
+        assert_operator row.sum { |(text, _)| ::TUI::Text.width(text.to_s) }, :<=, width,
+                        "row reaches the scrollbar: #{row.inspect}"
+      end
+    end
+
+    # A wrapped list item should continue under the item's text, not under
+    # the bullet.
+    def test_wrapped_list_items_hang_under_the_item_text
+      view = TUI::LogView.new
+      view.layout(::TUI::Rect.new(0, 0, 30, 10))
+      view.add_entry([ [ "  • alpha beta gamma delta epsilon zeta eta theta", nil ] ],
+                     keep_leading: true, indent: 2)
+
+      rows = view.instance_variable_get(:@lines).map { |row| row.map(&:first).join }
+      assert_operator rows.size, :>, 1, "the item must wrap"
+      first_text = rows[0].index("alpha")
+      rows[1..].each do |row|
+        assert_equal first_text, row.index(row.strip),
+                     "continuation starts under the item text: #{row.inspect}"
+      end
+    end
+
     def test_markdown_formatter_blocks_and_inline
       segs = TUI::Markdown.to_segments("# Title\n\n**bold** *em* `code` [link](http://x)~~s~~\n\n- a\n- b\n\n```ruby\nputs 1\n```")
       styles = segs
