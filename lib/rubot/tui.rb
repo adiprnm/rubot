@@ -13,6 +13,10 @@ require_relative "tui/confirm_dialog"
 
 Rubot::TUI::Compat.apply
 
+# The completed-tool marker is a softened green: the bright ":success"
+# green is reserved for explicit confirmations ("✓ Session cleared").
+::TUI::Style.define(:tool_ok, fg: 71)
+
 module Rubot
   # Terminal channel REPL for rubot, built on ruby-tui
   # (https://github.com/adiprnm/ruby-tui).
@@ -20,7 +24,7 @@ module Rubot
   # Layout (borderless):
   #
   #   scrolled conversation log
-  #   input box (thin bordered box, no placeholder/hints)
+  #   prompt box (thin bordered box, no placeholder/hints)
   #   status row (spinner · session/model)
   #
   # Keys: enter send · tab completes /commands · ↑↓ history ·
@@ -68,6 +72,7 @@ module Rubot
 
     SPIN = %w[⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏].freeze
     MARK = { ok: "✓", warn: "!", err: "✗", info: "·", tool: "⚒", cron: "⏰", note: "◆" }.freeze
+    TURN_MARK = "✻"
 
     def initialize(agent = nil, stream: true, pool: nil, on_cron: nil)
       @agent = agent
@@ -81,6 +86,10 @@ module Rubot
       @stopping = false
       @live_entry = nil
       @live_text = +""
+      @banner_count = 0
+      @turn_started_at = nil
+      @turn_total_seconds = 0.0
+      @turn_count = 0
 
       # Queues bridging worker/agent threads into the App thread. Component
       # state is only ever mutated on the App thread (pump + key handlers).
@@ -172,21 +181,23 @@ module Rubot
       @working = Rubot::TUI::WorkingBadge.new
       @tool_entries = {}
 
-      # The prompt box grows with newlines (shift+enter). The working
-      # badge reserves a 3-row band above it (text with one blank row of
-      # padding above and below), so the layout never jumps.
+      # The prompt box grows with newlines (shift+enter). One column of
+      # padding inside the border keeps the typed text off the frame.
+      # The working badge reserves a 3-row band above it (text with one
+      # blank row of padding above and below), so the layout never jumps.
       @prompt_box = ::TUI::Layout::Box.new(title_style: :hint)
-      @prompt_box.add(@prompt)
+      @prompt_box.add(::TUI::Layout::Padding.new(@prompt, left: 1))
 
-      # Whole-window padding: 2 columns of gutter on the left.
+      # The window gutter plus the log's own one-column inset put every
+      # conversation row exactly two characters in.
       stack = ::TUI::Layout::Stack.new(direction: :vertical)
-      stack.add(@log, size: ::TUI.flex(1))
+      stack.add(::TUI::Layout::Padding.new(@log, left: 1), size: ::TUI.flex(1))
       stack.add(@working, size: ::TUI.fixed(3))
       stack.add(@prompt_box, size: ::TUI.auto)   # grows with multiline input
       stack.add(@status, size: ::TUI.fixed(1))
 
       @overlay = ::TUI::Layout::Overlay.new(
-        ::TUI::Layout::Padding.new(stack, left: 2),
+        ::TUI::Layout::Padding.new(stack, left: 1),
         @dialog
       )
       @app = ::TUI::App.new(@overlay)
@@ -296,12 +307,14 @@ module Rubot
       case event[0]
       when :entry then @log.add_entry(event[1])
       when :clear_log
-        @log.clear
+        @log.clear(keep: @banner_count)
         @live_entry = nil
         @tool_entries.clear
+        reset_turn_totals
       when :error_text then @log.add_entry([ [ MARK[:err] + " ", :error ], [ event[1].to_s, :error ] ])
       when :status_right then @status.right = event[1]
       when :stream_start
+        @turn_started_at = monotonic_now
         # One blank line between the echoed prompt and the answer.
         @log.add_entry([ [ "", nil ] ])
         start_live_entry
@@ -310,8 +323,10 @@ module Rubot
       when :stream_end
         @live_entry = nil
         @log.add_entry([ [ "", nil ] ])
+        add_turn_summary
+      when :reset_turn_totals then reset_turn_totals
       when :assistant_text
-        @log.add_entry([ [ MARK[:note] + " ", :muted ] ] + Markdown.to_segments(event[1]))
+        @log.add_entry([ [ MARK[:note] + " ", :muted ] ] + Markdown.to_segments(event[1]), keep_leading: true, indent: 2)
       when :tool_call
         # The answer never continues inside the entry that preceded the
         # tool. A phantom continuation live entry (start of the turn's next
@@ -326,18 +341,18 @@ module Rubot
           end
           @live_entry = nil
         end
-        summary = tool_summary(event[1], event[2])
+        summary = tool_summary(event[1], event[2], max: tool_summary_limit(event[1]))
         index = @log.add_entry([
-          [ " ⚒ ", :muted ],
+          [ "⚒ ", :muted ],
           [ event[1].to_s, :accent ],
           [ " ", :muted ],
           [ summary, :dim ]
-        ])
+        ], keep_leading: true, indent: 2)
         @tool_entries[event[1].to_s] = [ index, summary ]
       when :tool_done
         # The ⚒ line flips to ✓ in place — one line per tool call.
         prev = @tool_entries.delete(event[1].to_s)
-        set_tool_done(prev ? prev[0] : @log.add_entry([ [ " ✓ ", :success ], [ event[1].to_s, :muted ] ]),
+        set_tool_done(prev ? prev[0] : @log.add_entry([ [ "✓ ", :tool_ok ], [ event[1].to_s, :muted ] ], indent: 2),
                       event[1].to_s,
                       prev && prev[1])
       when :confirm then show_confirm(event)
@@ -348,7 +363,7 @@ module Rubot
     end
 
     def set_tool_done(index, name, summary)
-      segments = [ [ " ✓ ", :success ], [ name, :accent ] ]
+      segments = [ [ "✓ ", :tool_ok ], [ name, :muted ] ]
       if summary && !summary.empty?
         segments += [ [ " ", :muted ], [ summary, :dim ] ]
       end
@@ -359,7 +374,7 @@ module Rubot
       @busy = true
       @stopping = false
       @live_text = +""
-      @live_entry = @log.add_entry([ [ "", :text ] ])
+      @live_entry = @log.add_entry([ [ "", :text ] ], keep_leading: true, indent: 2)
     end
 
     def append_live(chunk)
@@ -370,7 +385,44 @@ module Rubot
       end
 
       @live_text << chunk.to_s
-      @log.set_entry(@live_entry, Markdown.to_segments(@live_text))
+      @log.set_entry(@live_entry, Markdown.to_segments(@live_text), keep_leading: true, indent: 2)
+    end
+
+    # Footer after a turn: how long the model took, plus the running total
+    # for this session. Called once per :stream_end, on the App thread.
+    def add_turn_summary
+      duration = @turn_started_at ? [ monotonic_now - @turn_started_at, 0 ].max : 0.0
+      @turn_started_at = nil
+      @turn_total_seconds += duration
+      @turn_count += 1
+
+      turns = @turn_count == 1 ? "turn" : "turns"
+      text = "Turn took #{format_duration(duration)} " \
+             "(Total time #{format_duration(@turn_total_seconds)} · #{@turn_count} #{turns})"
+      @log.add_entry([ [ "#{TURN_MARK} ", :muted ], [ text, :dim ] ])
+      @log.add_entry([ [ "", nil ] ])
+    end
+
+    def reset_turn_totals
+      @turn_started_at = nil
+      @turn_total_seconds = 0.0
+      @turn_count = 0
+    end
+
+    def format_duration(seconds)
+      total = seconds.to_i
+      hours, rest = total.divmod(3600)
+      minutes, secs = rest.divmod(60)
+
+      parts = []
+      parts << "#{hours}h" if hours.positive?
+      parts << "#{minutes}m" if minutes.positive? || hours.positive?
+      parts << "#{secs}s" if secs.positive? || parts.empty?
+      parts.join(" ")
+    end
+
+    def monotonic_now
+      Process.clock_gettime(Process::CLOCK_MONOTONIC)
     end
 
     # ------------------------------------------------------------------
@@ -434,8 +486,10 @@ module Rubot
       nil
     end
 
-    # One-line argument preview shown next to a tool call in the log.
-    def tool_summary(tool_name, args)
+    # One-line argument preview shown next to a tool call in the log. It is
+    # cut to `max` cells so the row never wraps: the call marker, the tool
+    # name and the separator are reserved by the caller.
+    def tool_summary(tool_name, args, max: 64)
       raw = case tool_name
       when "shell_exec" then args["command"].to_s
       when "file_ops"
@@ -444,7 +498,16 @@ module Rubot
               args.inspect
       end
       line = raw.lines.first.to_s.strip
-      line.length > 64 ? "#{line[0, 64]}…" : line
+      ::TUI::Text.truncate(line, max)
+    end
+
+    # Cells left for the argument preview after " ⚒ ", the tool name and
+    # the separating space, keeping one cell clear of the scrollbar.
+    def tool_summary_limit(tool_name)
+      width = @log.content_width
+      return 64 if width <= 0
+
+      [ width - 4 - ::TUI::Text.width(tool_name.to_s) - 2, 0 ].max
     end
 
     def show_confirm(event)
@@ -530,6 +593,7 @@ module Rubot
         blank
       when "/clear"
         agent.clear_session
+        @events << [ :reset_turn_totals ]
         say("Session cleared.", :ok)
       when "/new"
         # Silent restart: wipe the screen and start a fresh session.
@@ -741,6 +805,7 @@ module Rubot
       @log.add_entry([ [ "provider #{provider} · model #{model} · #{tools}", :muted ] ])
       @log.add_entry([ [ "type /help for commands · esc cancels a running turn · pgup/pgdn scrolls", :hint ] ])
       @log.add_entry([ [ "", nil ] ])
+      @banner_count = @log.entry_count
       @status.right = "session #{@session_id} · #{provider} · #{model}" if info[:provider]
     end
 

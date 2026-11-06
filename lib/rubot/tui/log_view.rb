@@ -14,6 +14,8 @@ module Rubot
       def initialize
         super
         @entries = []        # [[text, style], ...] per entry
+        @keep_leading = []   # entries whose leading spaces are meaningful
+        @indents = []        # left padding (cells) applied to every wrapped row
         @entry_lines = []    # wrapped rows per entry
         @lines = []          # flattened rows, cached for rendering
         @wrap_w = 0
@@ -24,12 +26,24 @@ module Rubot
       # Append an entry. `segments` is a list of [text, style] pairs.
       # Returns the entry index so it can be updated later via #set_entry
       # while a response streams in.
-      def add_entry(segments)
+      def add_entry(segments, keep_leading: false, indent: 0)
         @entries << segments
+        @keep_leading << keep_leading
+        @indents << indent
         wrap @entries.length - 1
         @lines = @entry_lines.flatten(1)
         follow_bottom if @follow
         @entries.length - 1
+      end
+
+      def entry_count
+        @entries.length
+      end
+
+      # Cells available to a single row of content. Used to truncate lines
+      # that must not wrap (tool call rows). Zero before the first layout.
+      def content_width
+        @rect ? @rect.w : 0
       end
 
       def last_blank?
@@ -42,6 +56,8 @@ module Rubot
         return if @entries.empty?
 
         @entries.pop
+        @keep_leading.pop
+        @indents.pop
         @entry_lines.pop
         @lines = @entry_lines.flatten(1)
         follow_bottom if @follow
@@ -49,10 +65,12 @@ module Rubot
       end
 
       # Replace an entry in place; `segments` is a list of [text, style] pairs.
-      def set_entry(index, segments)
+      def set_entry(index, segments, keep_leading: nil, indent: nil)
         return unless index && @entries[index]
 
         @entries[index] = segments
+        @keep_leading[index] = keep_leading unless keep_leading.nil?
+        @indents[index] = indent unless indent.nil?
         wrap index
         @lines = @entry_lines.flatten(1)
         follow_bottom if @follow
@@ -97,11 +115,16 @@ module Rubot
         @canvas.excerpt(x.min, ys.min, x.max, ys.max)
       end
 
-      # Drop all entries; used by /new (the screen is wiped silently).
-      def clear
-        @entries = []
-        @entry_lines = []
-        @lines = []
+      # Drop entries; used by /new (the screen is wiped silently). `keep`
+      # retains the first N entries — the banner — so a new session clears
+      # the conversation without losing the heading.
+      def clear(keep: 0)
+        keep = [ [ keep, 0 ].max, @entries.length ].min
+        @entries = @entries[0, keep] || []
+        @keep_leading = @keep_leading[0, keep] || []
+        @indents = @indents[0, keep] || []
+        @entry_lines = @entry_lines[0, keep] || []
+        @lines = @entry_lines.flatten(1)
         @scroll_y = 0
         @follow = true
         self
@@ -161,19 +184,31 @@ module Rubot
       end
 
       def wrap(index)
-        width = [ @rect.w, 1 ].max
-        @entry_lines[index] = wrap_segments(@entries[index], width)
+        indent = [ @indents[index].to_i, [ @rect.w - 1, 0 ].max ].min
+        width = [ @rect.w - indent, 1 ].max
+        lines = wrap_segments(@entries[index], width, keep_leading: @keep_leading[index])
+        @entry_lines[index] = indent.positive? ? indent_lines(lines, indent) : lines
       end
 
       def rewrap_all
         @wrap_w = @rect.w
-        width = [ @rect.w, 1 ].max
-        @entry_lines = @entries.map { |entry| wrap_segments(entry, width) }
+        @entry_lines = @entries.each_with_index.map do |entry, i|
+          indent = [ @indents[i].to_i, [ @rect.w - 1, 0 ].max ].min
+          width = [ @rect.w - indent, 1 ].max
+          lines = wrap_segments(entry, width, keep_leading: @keep_leading[i])
+          indent.positive? ? indent_lines(lines, indent) : lines
+        end
         @lines = @entry_lines.flatten(1)
         @scroll_y = [ @lines.size - @rect.h, 0 ].max if @follow
       end
 
-      def wrap_segments(segments, width)
+      # Pad every non-empty wrapped row, including soft-wrap continuations.
+      def indent_lines(lines, indent)
+        pad = " " * indent
+        lines.map { |line| line.empty? ? line : [ [ pad, nil ] ] + line }
+      end
+
+      def wrap_segments(segments, width, keep_leading: false)
         lines = [ [] ]
         used = 0
 
@@ -191,7 +226,8 @@ module Rubot
             part.split(/(?<= )|(?= )/).each do |token|
               if token.strip.empty?
                 space_w = ::TUI::Text.width(token)
-                next unless used.positive? && used + space_w <= width
+                next if used.zero? && !keep_leading
+                next if used + space_w > width
 
                 lines.last << [ token, style ]
                 used += space_w

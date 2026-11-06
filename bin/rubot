@@ -272,13 +272,21 @@ if ARGV.first == "check"
     puts "✅ All checks passed! Ready to run:"
     puts "   rubot"
     puts "   rubot -C telegram  # Telegram only"
-    puts "   rubot -C tui       # TUI only"
+    puts "   rubot tui          # TUI only, skip configured channels"
   else
     puts "❌ Some checks failed. Fix the issues above before running."
     exit 1
   end
 
   exit
+end
+
+# Subcommand: `rubot tui` runs the terminal UI on its own, ignoring the
+# channels (Telegram gateway included) configured in config.yml.
+forced_channel = nil
+if %w[tui repl chat].include?(ARGV.first)
+  forced_channel = "tui"
+  ARGV.shift
 end
 
 options = {}
@@ -336,11 +344,15 @@ parser = OptionParser.new do |opts|
     puts "Subcommands:"
     puts "  init    Initialize config, workspace, and default files"
     puts "  check   Validate config and test channel connections"
+    puts "  tui     Run the terminal UI only (ignore configured channels)"
     exit
   end
 end
 
 parser.parse!
+
+# The `tui` subcommand wins over -C and over the configured channel list.
+options[:channel] = forced_channel if forced_channel
 
 # Load environment variables from .env file (CLI flag or auto-detect)
 Rubot::EnvLoader.load(options[:env_file])

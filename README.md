@@ -96,6 +96,9 @@ Checks your config, API key, workspace, and channel connections before you start
 # Interactive mode
 rubot
 
+# Terminal UI only, even when other channels (e.g. Telegram) are enabled
+rubot tui
+
 # Single message
 rubot -m "What is Ruby?"
 
@@ -173,7 +176,7 @@ $ rubot
 | `--no-stream` | Disable streaming output |
 | `-e, --env-file PATH` | Load environment variables from a file |
 | `-v, --version` | Show version |
-| `-C, --channel CHANNEL` | Channel to use: repl, telegram (default: repl) |
+| `-C, --channel CHANNEL` | Channel to use: tui, telegram (default: configured channels) |
 | `-h, --help` | Show help |
 
 ### Subcommands
@@ -182,6 +185,7 @@ $ rubot
 |------------|-------------|
 | `rubot init` | Initialize config, workspace, and default files |
 | `rubot check` | Validate config and test channel connections |
+| `rubot tui` | Run the terminal UI only and skip every configured channel |
 
 ## Configuration
 

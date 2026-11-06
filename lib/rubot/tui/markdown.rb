@@ -27,7 +27,9 @@ module Rubot
         md_code_blk: { fg: 250, bg: 234 },
         md_link:     { fg: 39, underline: true },
         md_rule:     { fg: 238 },
-        md_quote:    { fg: 245 }
+        md_quote:    { fg: 245 },
+        md_table_border: { fg: 245 },
+        md_table_head:   { fg: 255, bold: true }
       }.freeze
 
       INLINE_RE = /
@@ -178,14 +180,23 @@ module Rubot
         end
 
         # Full-grid table: every row boxed, columns aligned, header bold.
+        # Cells are inline-parsed, so **bold** and `code` inside a cell keep
+        # their style and their markup characters do not count for width.
         def render_table(rows, segments)
-          cols   = rows.map(&:length).max
-          widths = (0...cols).map { |c| rows.map { |r| ::TUI::Text.width(r[c].to_s) }.max }
-          bar    = widths.map { |w| "─" * (w + 2) }
+          cols  = rows.map(&:length).max
+          cells = rows.each_with_index.map do |row, k|
+            (0...cols).map do |c|
+              inline(row[c].to_s, k.zero? ? :md_table_head : nil)
+            end
+          end
+          widths = (0...cols).map do |c|
+            cells.map { |row| cell_width(row[c]) }.max || 0
+          end
+          bar = widths.map { |w| "─" * (w + 2) }
 
           emit_table_line(segments, "┌" + bar.join("┬") + "┐")
-          rows.each_with_index do |row, k|
-            emit_table_line(segments, table_row(row, widths, k.zero? ? :md_h : :text))
+          cells.each_with_index do |row, k|
+            emit_table_row(segments, row, widths)
             emit_table_line(segments, "├" + bar.join("┼") + "┤") if k.zero?
           end
           emit_table_line(segments, "└" + bar.join("┴") + "┘")
@@ -193,18 +204,24 @@ module Rubot
 
         def emit_table_line(segments, text)
           new_row(segments)
-          segments << [ text, :md_rule ]
+          segments << [ text, :md_table_border ]
         end
 
-        def table_row(row, widths, style)
-          out = +"│"
-          (0...widths.length).each do |c|
-            cell = row[c].to_s
-            pad  = widths[c] - ::TUI::Text.width(cell)
-            cell += " " * pad if pad.positive?
-            out << " #{cell} │"
+        def cell_width(cell)
+          (cell || []).sum { |(text, _style)| ::TUI::Text.width(text.to_s) }
+        end
+
+        def emit_table_row(segments, cells, widths)
+          new_row(segments)
+          segments << [ "│", :md_table_border ]
+          widths.each_with_index do |width, c|
+            cell = cells[c] || []
+            pad = width - cell_width(cell)
+            segments << [ " ", :md_table_border ]
+            segments.concat(cell)
+            segments << [ " " * (pad + 1), :md_table_border ]
+            segments << [ "│", :md_table_border ]
           end
-          out
         end
 
         def new_row(segments)

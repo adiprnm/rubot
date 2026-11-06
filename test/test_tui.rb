@@ -44,18 +44,22 @@ module Rubot
       assert lines.first.include?("rubot"), "should show the banner title, got: #{lines.first}"
       assert view.any? { |l| l.include?("provider openai") }, "should show banner info"
       refute view.any? { |l| l.include?("ready") }, "no \"ready\" text anywhere"
-      assert view.any? { |l| l.include?("\u256d") && l.include?("\u256e") }, "should show the input box border"
+      assert view.any? { |l| l.include?("\u256d") && l.include?("\u256e") }, "should show the prompt border"
       refute view.any? { |l| l.include?("type a message") }, "no placeholder in the input"
       refute view.any? { |l| l.include?("enter send") }, "no key hints in the input"
     end
 
     def test_status_line_renders_below_input
-      view = plain(build_repl.instance_variable_get(:@app).render_lines)
+      repl = build_repl
+      prompt = repl.instance_variable_get(:@prompt)
+      prompt.handle_key(::TUI::Key.printable("h"))
+      app = repl.instance_variable_get(:@app)
+      view = plain(app.render_lines)
       status_ix = view.index { |l| l.include?("session default") }
-      border_ix = view.index { |l| l.include?("\u256d") && l.include?("\u256e") }
+      prompt_ix = view.index { |l| l.include?("h") }
 
-      assert border_ix && status_ix, "both must render"
-      assert_operator status_ix, :>, border_ix, "status row sits under the input"
+      assert prompt_ix && status_ix, "both must render"
+      assert_operator status_ix, :>, prompt_ix, "status row sits under the input"
     end
 
     def test_start_fresh_session_clears_agent_session
@@ -69,19 +73,77 @@ module Rubot
       assert cleared
     end
 
-    def test_new_command_clears_silently
+    def test_new_command_clears_conversation_but_keeps_banner
       repl = build_repl
       app = repl.instance_variable_get(:@app)
-      assert_operator app.render_lines.size, :>, 0, "banner present before /new"
+      log = repl.instance_variable_get(:@log)
+      banner_count = log.entry_count
+      assert_operator banner_count, :>, 0, "banner present before /new"
+      log.add_entry([ [ "hello", :text ] ])
       agent = repl.instance_variable_get(:@agent)
       agent.define_singleton_method(:clear_session) { nil }
 
       repl.send(:handle_command, "/new")
-      app.send(:run_timers)
+      repl.send(:pump)
 
-      assert_equal 0, repl.instance_variable_get(:@log).instance_variable_get(:@entries).size,
-                   "screen must be emptied"
+      texts = log.instance_variable_get(:@entries).map { |e| e.map(&:first).join }
+      assert_equal banner_count, texts.size, "conversation is dropped, banner is kept"
+      refute texts.any? { |t| t.include?("hello") }, "conversation text is gone"
+      assert texts.first.include?("rubot"), "heading still rendered"
       refute plain(app.render_lines).any? { |l| l.include?("Started a new session") }, "no text output"
+    end
+
+    def test_prompt_input_has_one_space_padding_inside_the_border
+      repl = build_repl
+      prompt = repl.instance_variable_get(:@prompt)
+      "hi".each_char { |c| prompt.handle_key(::TUI::Key.printable(c)) }
+      view = plain(repl.instance_variable_get(:@app).render_lines)
+      prompt_line = view.find { |l| l.include?("hi") }
+
+      assert prompt_line, "prompt row renders"
+      assert_equal 3, prompt_line.index("h"), "one space between the border and the text"
+    end
+
+    def test_assistant_stream_aligns_under_the_typed_prompt
+      repl = build_repl
+      ev = repl.instance_variable_get(:@events)
+      ev << [ :entry, [ [ "❯ ", :accent ], [ "Hi met", :text ] ] ]
+      ev << [ :stream_start ]
+      ev << [ :chunk, "Halo! Ada yang bisa gue bantu?" ]
+      repl.send(:pump)
+
+      view = plain(repl.instance_variable_get(:@app).render_lines)
+      user_line = view.find { |l| l.include?("Hi met") }
+      reply_line = view.find { |l| l.include?("Halo!") }
+
+      assert user_line && reply_line, "both rows render"
+      assert_equal user_line.index("H"), reply_line.index("H"),
+                   "agent text sits where the user's text starts, two cells after the marker"
+    end
+
+    def test_assistant_wrapped_lines_keep_the_left_padding
+      view = TUI::LogView.new
+      view.layout(::TUI::Rect.new(0, 0, 24, 10))
+      view.add_entry([ [ "word " * 20, nil ] ], indent: 2)
+
+      rows = view.instance_variable_get(:@lines)
+      assert_operator rows.size, :>, 1, "the paragraph must wrap"
+      rows.each { |row| assert_equal "  ", row.first[0], "every wrapped row is padded: #{row.inspect}" }
+    end
+
+    def test_prompt_grows_with_newlines
+      repl = build_repl
+      prompt = repl.instance_variable_get(:@prompt)
+      "one".each_char { |c| prompt.handle_key(::TUI::Key.printable(c)) }
+      prompt.handle_key(::TUI::Key.new(:shift_enter))
+      "two".each_char { |c| prompt.handle_key(::TUI::Key.printable(c)) }
+
+      view = plain(repl.instance_variable_get(:@app).render_lines)
+      one = view.index { |l| l.include?("one") }
+      two = view.index { |l| l.include?("two") }
+
+      assert one && two, "both prompt lines render"
+      assert_equal one + 1, two, "the prompt occupies consecutive rows"
     end
 
     def test_tool_call_splits_streamed_answer
@@ -102,15 +164,59 @@ module Rubot
 
       assert_equal "first answer", texts[tool_ix - 2]
       assert_equal [ [ "", nil ] ], entries[tool_ix - 1], "one spacer between answer and tool"
-      assert_equal "second answer", texts.select { |t| !t.strip.empty? }.last, "post-tool answer is its own entry"
+      assert_includes texts, "second answer", "post-tool answer is its own entry"
     end
 
-    def test_tool_summary_truncates_with_ellipsis
+    def test_turn_footer_reports_duration_and_running_totals
+      repl = build_repl
+      app = repl.instance_variable_get(:@app)
+      ev = repl.instance_variable_get(:@events)
+      now = repl.send(:monotonic_now)
+
+      ev << [ :stream_start ]
+      repl.send(:pump)
+      repl.instance_variable_set(:@turn_started_at, now - 145)
+      ev << [ :stream_end ]
+      repl.send(:pump)
+
+      line = plain(app.render_lines).find { |l| l.include?("Turn took") }
+      assert line, "a turn footer is shown"
+      assert_includes line, "\u273b Turn took 2m 25s"
+      assert_includes line, "(Total time 2m 25s \u00b7 1 turn)"
+
+      ev << [ :stream_start ]
+      repl.send(:pump)
+      repl.instance_variable_set(:@turn_started_at, now - 1755)
+      ev << [ :stream_end ]
+      repl.send(:pump)
+
+      line = plain(app.render_lines).reverse.find { |l| l.include?("Turn took") }
+      assert_includes line, "Turn took 29m 15s"
+      assert_includes line, "(Total time 31m 40s \u00b7 2 turns)"
+    end
+
+    def test_tool_summary_truncates_to_a_cell_budget
       long = { "command" => "x" * 200 }
 
-      expected = "x" * 64 + "\u2026"
+      summary = build_repl.send(:tool_summary, "shell_exec", long)
 
-      assert_equal expected, build_repl.send(:tool_summary, "shell_exec", long)
+      assert summary.end_with?("\u2026"), "ellipsis marks the cut: #{summary.inspect}"
+      assert_operator ::TUI::Text.width(summary), :<=, 64
+    end
+
+    def test_tool_line_fits_inside_the_log_width
+      repl = build_repl
+      app = repl.instance_variable_get(:@app)
+      ev = repl.instance_variable_get(:@events)
+      app.render_lines # lay the log out so it knows its width
+      ev << [ :tool_call, "shell_exec", { "command" => "y" * 500 } ]
+      repl.send(:pump)
+
+      row = plain(app.render_lines).find { |l| l.include?("shell_exec") }
+      assert row, "tool line must render"
+      assert_operator ::TUI::Text.width(row.strip), :<=, repl.instance_variable_get(:@log).content_width,
+                      "tool row must not exceed the log width: #{row.inspect}"
+      assert row.include?("\u2026"), "long arguments are cut"
     end
 
     def test_submit_echoes_prompt_on_screen
@@ -153,6 +259,11 @@ module Rubot
       assert tool_lines.first.include?("\u2713") && tool_lines.first.include?("ruby --version"),
              "done line keeps the summary: #{tool_lines.first.inspect}"
       refute tool_lines.first.include?("\u2692")
+
+      entries = repl.instance_variable_get(:@log).instance_variable_get(:@entries)
+      done = entries.find { |e| e.any? { |(t, _)| t.include?("shell_exec") } }
+      assert_includes done, [ "✓ ", :tool_ok ], "completed marker uses the calm green"
+      assert_includes done, [ "shell_exec", :muted ], "completed name recedes"
     end
 
     def test_back_to_back_tool_calls_have_no_spacer
@@ -234,6 +345,25 @@ module Rubot
       assert rows.any? { |r| r.start_with?("\u251c") }, "header separator"
       assert rows.last.start_with?("\u2514"), "bottom border"
       assert rows[1].include?("\u2502 col a \u2502"), "cells boxed: #{rows[1].inspect}"
+    end
+
+    def test_markdown_table_styles_header_and_inline_cells
+      segs = TUI::Markdown.to_segments("| a | **b** |\n|---|---|\n| c | **d** |")
+
+      assert segs.include?([ "a", :md_table_head ]), "header text is bold: #{segs.inspect}"
+      assert segs.include?([ "b", :md_bold ]), "header markup parses"
+      assert segs.include?([ "d", :md_bold ]), "body markup parses"
+      assert segs.include?([ "c", nil ]), "body text keeps the default style"
+      assert segs.any? { |(t, s)| t.start_with?("\u250c") && s == :md_table_border }, "bright border"
+    end
+
+    def test_markdown_table_width_ignores_markup
+      rows = TUI::Markdown.to_segments("| **b** | y |\n|---|---|\n| x | z |")
+        .slice_when { |(t, _), (u, _)| t == "\n" }.map { |r| r.map(&:first).join.chomp }
+
+      assert_equal "\u2502 b \u2502 y \u2502", rows[1],
+                   "bold markers do not count for column width: #{rows[1].inspect}"
+      assert_equal rows[1].length, rows[3].length, "cells line up"
     end
 
     def test_markdown_plain_text_unchanged

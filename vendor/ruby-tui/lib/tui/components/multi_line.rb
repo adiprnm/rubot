@@ -48,7 +48,7 @@ module TUI
     end
 
     def measure(_max_w, _max_h)
-      [[@buffer.lines.size, @max_rows].min, 1]
+      [1, [[@buffer.lines.size, @max_rows].min, 1].max]
     end
 
     def layout(rect)
@@ -122,8 +122,9 @@ module TUI
 
     def keep_cursor_visible
       height = [@rect&.h || @max_rows, 1].max
-      @scroll_row = @buffer.row - height + 1 if @buffer.row - @scroll_row >= height
-      @scroll_row = [@scroll_row, @buffer.row].min
+      @scroll_row = @buffer.row if @buffer.row < @scroll_row
+      @scroll_row = @buffer.row - height + 1 if @buffer.row >= @scroll_row + height
+      @scroll_row = [@scroll_row, [@buffer.lines.size - height, 0].max].min
       @scroll_row = 0 if @scroll_row.negative?
     end
   end
