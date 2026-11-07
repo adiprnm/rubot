@@ -28,6 +28,11 @@ module Rubot
     # too low for the model.
     MAX_CONTINUATIONS = 2
 
+    # How often a turn in flight may publish provisional cost/context figures.
+    # Five times a second keeps the footer moving without turning every
+    # streamed chunk into an event the UI has to drain.
+    LIVE_USAGE_INTERVAL = 0.2
+
     # Tool results kept verbatim in the request. Everything older is shortened:
     # a tool-heavy turn re-sends its entire stdout on every round, and the
     # model rarely needs the full log of a command it already acted on.
@@ -289,10 +294,32 @@ module Rubot
         messages = build_messages
         log_debug("Sending #{messages.size} messages to provider")
 
+        # The request is about to leave. Its input size is best estimated from
+        # the last measured usage plus everything appended since — the same
+        # figure /context shows — so the context number starts from an anchor
+        # instead of a guess that would jump backwards when usage lands.
+        live = { prompt_tokens: context_usage[:tokens], output_tokens: 0 }
+        emit_usage(on_usage, live: live)
+
         result = begin
           if block_given? && stream
+            live_chars = 0
+            live_emitted_at = 0.0
             @provider.chat_stream(messages, tools: tool_definitions) do |chunk, tool_data|
               response += chunk if chunk
+              if chunk && !chunk.empty?
+                # The answer is arriving, so the output side of the cost and
+                # the answer the next request will carry both grow now. Rate
+                # limited: repainting faster than the eye (or the event pump)
+                # can follow would be noise, not freshness.
+                live_chars += chunk.length
+                live[:output_tokens] = (live_chars / Session::CHARS_PER_TOKEN).ceil
+                now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                if now - live_emitted_at >= LIVE_USAGE_INTERVAL
+                  live_emitted_at = now
+                  emit_usage(on_usage, live: live)
+                end
+              end
               yield chunk if chunk && block_given?
             end
           else
@@ -775,7 +802,12 @@ module Rubot
     #
     # `network: false` is the mid-turn path: figures that are already known,
     # without a models.dev lookup a running turn must not wait on.
-    def usage_report(network: true)
+    #
+    # `live` carries provisional numbers for a request that has not come back
+    # yet (see #process): `prompt_tokens` is the size of the request in flight
+    # and `output_tokens` the answer streamed so far. They are estimates, and
+    # the report says so, so a channel can show a figure that moves.
+    def usage_report(network: true, live: nil)
       preset = @active_preset || {}
       model_id = preset["model"] || @session_model || @config.model
       provider_name = preset["provider"] || @provider.name
@@ -785,6 +817,15 @@ module Rubot
       context = context_usage
       usage = @session.usage
       last = @session.last_usage
+      provisional = live.is_a?(Hash)
+      live_prompt = provisional ? live[:prompt_tokens].to_i : 0
+      live_output = provisional ? live[:output_tokens].to_i : 0
+
+      # What the next request will carry while this one is still streaming:
+      # the request that just went out plus the answer arriving now.
+      if provisional
+        context = { tokens: live_prompt + live_output, anchored: context[:anchored] }
+      end
 
       {
         model: active_model_name,
@@ -796,8 +837,10 @@ module Rubot
         context_percent: window.to_i.positive? ? context[:tokens].to_f / window * 100 : nil,
         messages: @session.message_count,
         requests: usage.requests,
-        prompt_tokens: usage.prompt_tokens,
-        completion_tokens: usage.completion_tokens,
+        # While a request is in flight its tokens are not measured yet; the
+        # provisional ones are added on top of what the session has recorded.
+        prompt_tokens: usage.prompt_tokens + live_prompt,
+        completion_tokens: usage.completion_tokens + live_output,
         cached_tokens: usage.cached_tokens,
         cache_creation_tokens: usage.cache_creation_tokens,
         # Like Pi, the headline cache figure describes the latest request, not
@@ -805,7 +848,7 @@ module Rubot
         # now instead of on average since the conversation started.
         cache_hit_rate: last.requests.positive? ? last.cache_hit_rate : 0.0,
         last_prompt_tokens: last.prompt_tokens,
-        total_tokens: usage.total_tokens,
+        total_tokens: usage.total_tokens + live_prompt + live_output,
         # Priced per request when it was recorded, so switching model mid-way
         # does not re-price earlier turns. Legacy session files have no stored
         # cost; price their totals with the current rates instead. A total that
@@ -813,9 +856,33 @@ module Rubot
         # The session's cost hash is mutated in place on every request, so a
         # report hands out a copy: a caller that keeps an earlier figure (the
         # live footer does) must not see it change underneath.
-        cost: (@session.cost && !@session.cost_partial?) ? @session.cost.dup : Usage.cost(usage, rates),
+        cost: build_cost(usage, rates, live_prompt, live_output,
+                         last.requests.positive? ? last.cache_hit_rate : 0.0),
+        # True while part of the figure is estimated from a request that has
+        # not returned yet. A channel can mark it instead of passing it off as
+        # a measured number.
+        provisional: provisional,
         price_source: price_source
       }
+    end
+
+    # Session cost, plus the in-flight request's contribution when there is
+    # one. The in-flight input is priced with the previous request's cache
+    # share as the assumption: prompt caching makes the prefix of a growing
+    # conversation the cached part, so pricing it all as uncached would show a
+    # figure that collapses the moment the real usage lands.
+    def build_cost(usage, rates, live_prompt, live_output, cached_share = 0.0)
+      stored = (@session.cost && !@session.cost_partial?) ? @session.cost.dup : Usage.cost(usage, rates)
+      return stored if live_prompt.zero? && live_output.zero?
+
+      live = Usage.new(prompt_tokens: live_prompt, completion_tokens: live_output,
+                       cached_tokens: (live_prompt * cached_share.to_f).round)
+      extra = Usage.cost(live, rates)
+      return stored unless extra
+
+      %w[input cached_input cache_creation output total].each_with_object({}) do |key, acc|
+        acc[key] = stored[key].to_f + extra[key].to_f
+      end
     end
 
     # OpenCode Go subscription allowance for the active provider. Returns plain
@@ -1366,10 +1433,10 @@ module Rubot
     # Publish live figures to a caller that wants them mid-turn. Failing to
     # produce a footer must never cost the user their answer, so every error
     # here is swallowed after a debug note.
-    def emit_usage(callback)
+    def emit_usage(callback, live: nil)
       return unless callback
 
-      callback.call(usage_report(network: false))
+      callback.call(usage_report(network: false, live: live))
     rescue StandardError => e
       warn "[usage] Failed to publish live usage: #{e.class}: #{e.message}" if @config.debug?
     end

@@ -1573,6 +1573,44 @@ class TestAgentUiDiff < Minitest::Test
 end
 
 class TestAgentLiveUsage < Minitest::Test
+  # Streams its answer in chunks with a pause between them, so the figures
+  # published mid-turn can be observed while the answer is still arriving.
+  class StreamingProvider
+    def initialize(chunks: 4, chunk: "kata " * 40, pause: 0.25)
+      @chunks = chunks
+      @chunk = chunk
+      @pause = pause
+      @last_usage = nil
+    end
+
+    def name
+      "test"
+    end
+
+    def last_usage
+      @last_usage
+    end
+
+    def chat(_messages, tools: nil)
+      raise "streamed only"
+    end
+
+    def chat_stream(_messages, tools: nil)
+      text = +""
+      @chunks.times do
+        sleep @pause
+        text << @chunk
+        yield @chunk, nil
+      end
+      @last_usage = {
+        "prompt_tokens" => 1_000,
+        "completion_tokens" => 200,
+        "prompt_tokens_details" => { "cached_tokens" => 800 }
+      }
+      { "content" => text, "usage" => @last_usage }
+    end
+  end
+
   # Two provider calls carrying usage: the first asks for a tool, the second
   # answers. The second prompt is bigger, exactly like a real tool loop, so a
   # live footer has something to show before the turn ends.
@@ -1642,6 +1680,7 @@ class TestAgentLiveUsage < Minitest::Test
         }
       ]
     }.to_yaml)
+    @config_path = config_path
 
     @agent = Rubot::Agent.new(
       config: Rubot::Config.new(config_path),
@@ -1660,23 +1699,74 @@ class TestAgentLiveUsage < Minitest::Test
     reports
   end
 
+  # Measured reports only: a provisional one describes a request that has not
+  # landed yet, so it says nothing about the provider's cache behaviour.
+  def measured_reports
+    collect_reports.reject { |report| report[:provisional] }
+  end
+
   def test_usage_is_published_before_the_turn_finishes
-    reports = collect_reports
+    reports = measured_reports
 
     refute_empty reports
     assert_equal 1, reports.first[:requests], "first report should cover the first request"
     assert_equal 2, reports.last[:requests], "last report should cover both requests"
   end
 
-  def test_cache_hit_rate_follows_the_latest_request
+  # The provider says nothing about tokens until its answer is complete, so a
+  # turn that only published measured figures would sit still for its whole
+  # duration. The first report has to describe the request in flight.
+  def test_first_report_describes_the_request_in_flight
     reports = collect_reports
+    first = reports.first
+
+    assert first[:provisional], "the request has not returned yet"
+    assert_operator first[:prompt_tokens], :>, 0, "the request being sent has a size"
+    assert_operator first[:context_used], :>, 0
+  end
+
+  def test_the_last_report_is_measured_data_again
+    reports = collect_reports
+
+    refute reports.last[:provisional]
+  end
+
+  # Streamed text is the only moving target a turn has: the answer grows as
+  # the chunks arrive, so the cost and the context estimate have to follow it
+  # instead of waiting for the usage block at the end.
+  def test_cost_and_context_follow_the_streamed_answer
+    provider = StreamingProvider.new(chunks: 12, chunk: "kata " * 40)
+    agent = Rubot::Agent.new(
+      config: Rubot::Config.new(@config_path),
+      provider: provider,
+      session_id: "live-usage-stream"
+    )
+
+    reports = []
+    agent.process("hello", on_usage: ->(report) { reports << report }) { |_chunk| }
+
+    live = reports.select { |r| r[:provisional] }
+    measured = reports.reject { |r| r[:provisional] }
+
+    refute_empty live, "the stream should publish figures while it runs"
+    refute_empty measured, "and the final figures once usage lands"
+
+    outputs = live.map { |r| r[:completion_tokens] }
+    assert_equal outputs.sort, outputs, "the output estimate only grows"
+    assert_operator outputs.last, :>, outputs.first, "the answer moved the output figure"
+    assert_operator live.map { |r| r[:context_used] }.last,
+                    :>, live.map { |r| r[:context_used] }.first
+  end
+
+  def test_cache_hit_rate_follows_the_latest_request
+    reports = measured_reports
 
     assert_in_delta 0.8, reports.first[:cache_hit_rate], 0.01
     assert_in_delta 0.8, reports.last[:cache_hit_rate], 0.01
   end
 
   def test_cost_grows_while_the_turn_is_running
-    reports = collect_reports
+    reports = measured_reports
 
     first = reports.first[:cost]["total"]
     last = reports.last[:cost]["total"]
@@ -1686,7 +1776,7 @@ class TestAgentLiveUsage < Minitest::Test
   end
 
   def test_context_estimate_moves_with_the_transcript
-    reports = collect_reports
+    reports = measured_reports
 
     assert_operator reports.last[:context_used], :>, reports.first[:context_used]
   end

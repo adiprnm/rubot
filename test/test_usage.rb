@@ -249,16 +249,25 @@ class TestUsage < Minitest::Test
       cost: { "total" => 0.001234 }
     }
 
-    assert_equal "$0.001 · cache 60% · ctx 8.2%",
+    assert_equal "$0.0012 · cache 60% · ctx 8.2%",
                  Rubot::UsageReport.footer(report)
   end
 
-  def test_usage_report_footer_rounds_price_to_three_decimals
+  def test_usage_report_footer_keeps_cent_precision
     report = { requests: 1, prompt_tokens: 1_000, cache_hit_rate: 0.0,
                context_used: 0, context_window: nil, context_percent: nil,
                cost: { "total" => 1.23456 } }
 
     assert_equal "$1.235", Rubot::UsageReport.price(report)
+  end
+
+  # A live figure is only useful if the digits it prints can actually move.
+  def test_usage_report_footer_marks_a_provisional_price
+    report = { requests: 1, prompt_tokens: 1_000, cache_hit_rate: 0.6,
+               context_used: 10_500, context_window: 128_000, context_percent: 8.2,
+               cost: { "total" => 0.0004 }, provisional: true }
+
+    assert_equal "~$0.0004 · cache 60% · ctx 8.2%", Rubot::UsageReport.footer(report)
   end
 
   def test_usage_report_footer_is_populated_before_the_first_request

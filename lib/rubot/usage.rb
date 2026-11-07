@@ -276,7 +276,22 @@ module Rubot
 
     def price(report)
       cost = report[:cost]
-      cost ? format("$%.3f", cost["total"].to_f) : "cost n/a"
+      return "cost n/a" unless cost
+
+      # A provisional figure is part estimate: the request it prices has not
+      # come back yet. Marking it keeps the moving number honest instead of
+      # passing an estimate off as a measurement.
+      value = format("$%s", decimals(cost["total"].to_f))
+      report[:provisional] ? "~#{value}" : value
+    end
+
+    # Precision follows the size of the number: three decimals would sit at
+    # $0.000 for a whole cheap turn and never appear to move, which is exactly
+    # the opposite of what a live figure is for.
+    def decimals(total)
+      return format("%.4f", total) if total.positive? && total < 0.01
+
+      format("%.3f", total)
     end
 
     def cache(report)

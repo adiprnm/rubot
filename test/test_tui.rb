@@ -246,7 +246,7 @@ module Rubot
       repl.send(:pump)
 
       view = plain(repl.instance_variable_get(:@app).render_lines)
-      assert view.any? { |l| l.include?("$0.001 · cache 60% · ctx 8.2%") },
+      assert view.any? { |l| l.include?("$0.0012 · cache 60% · ctx 8.2%") },
              "the footer carries the turn's usage: #{view.last(3).inspect}"
     end
 
@@ -288,7 +288,7 @@ module Rubot
 
       repl.send(:process_message, "hi")
 
-      assert_equal [ "$0.004 · cache 90% · ctx 3.9%", "$0.009 · cache 80% · ctx 7.0%" ], footers
+      assert_equal [ "$0.0040 · cache 90% · ctx 3.9%", "$0.0090 · cache 80% · ctx 7.0%" ], footers
     end
 
     def test_command_output_gets_one_blank_line_above_and_below_and_left_padding
