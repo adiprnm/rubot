@@ -1564,6 +1564,33 @@ module Rubot
       assert_equal "bbbbb", rows[1].rstrip, "cursor sits on the last wrapped row: #{rows.inspect}"
     end
 
+    def test_prompt_cursor_moves_without_reversing_the_rest_of_the_line
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      "abc".each_char { |c| input.handle_key(::TUI::Key.printable(c)) }
+      2.times { input.handle_key(::TUI::Key.new(:left)) }
+      input.layout(::TUI::Rect.new(0, 0, 10, 1))
+
+      canvas = ::TUI::Canvas.new(10, 1)
+      input.render(canvas)
+
+      assert_equal [ 1 ], styled_columns(canvas, 0, :cursor),
+                   "the cursor must sit where the arrow keys moved it"
+      row = canvas.row(0)
+      assert_includes row, ::TUI::Style::RESET + ::TUI::Style.resolve(:text),
+                      "reverse video must not bleed into the text after the cursor: #{row.inspect}"
+    end
+
+    def test_canvas_resets_style_between_runs
+      canvas = ::TUI::Canvas.new(4, 1)
+      canvas.put(0, 0, "a", :text)
+      canvas.put(1, 0, "b", :cursor)
+      canvas.put(2, 0, "c", :text)
+
+      row = canvas.row(0)
+      assert_includes row, ::TUI::Style::RESET + ::TUI::Style.resolve(:text),
+                      "a style run must not inherit attributes from the previous run: #{row.inspect}"
+    end
+
     def test_multiline_buffer_insert_turns_newlines_into_lines
       buffer = ::TUI::TextBuffer.new("", multiline: true)
       buffer.insert("one\ntwo")

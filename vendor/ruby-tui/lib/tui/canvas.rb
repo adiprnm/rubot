@@ -272,7 +272,7 @@ module TUI
       # The common case: one style across the whole row and no hyperlinks ->
       # one pack call.
       if @flat[y] >= 0 && !@has_links[y]
-        out << Style.sgr(@flat[y]) << chars.pack('U*') << Style::RESET
+        out << Style::RESET << Style.sgr(@flat[y]) << chars.pack('U*') << Style::RESET
         out.delete!(NUL.chr) if @wide[y]
         return out
       end
@@ -290,8 +290,13 @@ module TUI
         x += 1
         x += 1 while x < @w && styles[x] == sid && (!linked || links[x] == lid)
 
-        out << Style.sgr(sid) if sid != cur
-        cur = sid
+        # Styles are additive SGR attributes: without a reset, the reverse
+        # video of a cursor (or the bold/background of any other run) would
+        # leak into every following run on the row.
+        if sid != cur
+          out << Style::RESET << Style.sgr(sid)
+          cur = sid
+        end
         if lid != cur_link
           out << (lid.zero? ? OSC8_CLOSE : osc8_open(@link_urls[lid - 1]))
           cur_link = lid
