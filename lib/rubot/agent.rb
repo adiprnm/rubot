@@ -195,8 +195,16 @@ module Rubot
     # Due cron jobs are fired first, their output prepended to the response.
     #
     # Callbacks (optional):
-    #   on_tool_call:     Called before each tool executes. Yields (tool_name, arguments).
-    #   on_tool_result:   Called after each tool executes. Yields (tool_name, result).
+    #   on_tool_call:     Called before each tool executes. Yields (tool_name, arguments,
+    #                     ui_snapshot) — the file's before-content when this call is
+    #                     about to change a file, nil otherwise. Taken here, inside
+    #                     whatever thread or Ractor runs the tool, because a caller
+    #                     that reads the file after hearing about the call is racing
+    #                     the tool: a delete finishes before the snapshot is taken.
+    #   on_tool_result:   Called after each tool executes. Yields (tool_name, result,
+    #                     ui_diff) — { "path", "before", "after" } for a file that
+    #                     changed, nil otherwise. Both payloads travel with the
+    #                     event so a channel only has to render them.
     #   on_progress:      Called after each full round. Yields (round_count, tool_count).
     #   on_usage:         Called with fresh usage report data as soon as a request's
     #                     tokens are recorded and after every round's tool results,
@@ -409,7 +417,7 @@ module Rubot
                 "ERROR: the arguments for #{tool_name} were not a valid JSON " \
                   "object. Re-issue the call with one complete JSON object."
               end
-              on_tool_result&.call(tool_name, tool_error)
+              on_tool_result&.call(tool_name, tool_error, nil)
               @session.add("tool", tool_error, tool_call_id: tool_call_id)
               next
             end
@@ -417,7 +425,7 @@ module Rubot
             # Check for dangerous action that could cause data loss
             if @cancellation.cancelled?
               stopped = true
-              on_tool_result&.call(tool_name, CANCELLED_TOOL_RESULT)
+              on_tool_result&.call(tool_name, CANCELLED_TOOL_RESULT, nil)
               @session.add("tool", CANCELLED_TOOL_RESULT, tool_call_id: tool_call_id)
               next
             end
@@ -432,10 +440,12 @@ module Rubot
               end
             end
 
-            # Fire pre-execution callback
-            on_tool_call&.call(tool_name, arguments)
-
+            # Fire pre-execution callback. The before-content travels with it:
+            # whoever renders the diff must not read the file afterwards, or a
+            # fast operation (delete is one syscall) wins the race and the diff
+            # has nothing to show.
             ui_snapshot = file_ui_snapshot(tool_name, arguments)
+            on_tool_call&.call(tool_name, arguments, ui_snapshot)
 
             begin
               tool_result = @tools.execute(tool_name, arguments)
@@ -447,15 +457,17 @@ module Rubot
             # and the chat message valid UTF-8.
             tool_result = Session.normalize_utf8(tool_result.to_s)
 
-            # Fire post-execution callback
-            on_tool_result&.call(tool_name, tool_result)
+            # Add tool result to session. A successful write carries its
+            # before/after text so the TUI can rebuild the diff on /resume,
+            # and hands the same text to the channel that just heard the call.
+            ui_diff = file_ui_diff(ui_snapshot, tool_result)
+            on_tool_result&.call(tool_name, tool_result, ui_diff)
 
             log_debug("Tool result: #{tool_result[0..200]}")
 
             # Add tool result to session. A successful write carries its
             # before/after text so the TUI can rebuild the diff on /resume.
-            @session.add("tool", tool_result, tool_call_id: tool_call_id,
-                                           ui_diff: file_ui_diff(ui_snapshot, tool_result))
+            @session.add("tool", tool_result, tool_call_id: tool_call_id, ui_diff: ui_diff)
           end
 
           # Continue the loop to get the next response

@@ -894,14 +894,22 @@ module Rubot
     # --- file diffs ----------------------------------------------------
 
     # Run one turn whose tool writes `after` into `path`, the way the agent
-    # loop does it: on_tool_call fires before the write, on_tool_result after.
-    def run_file_tool(repl, operation:, path:, after:)
+    # loop does it: on_tool_call fires before the write, on_tool_result after,
+    # and both carry the file's before/after text. The TUI never reads the file
+    # itself — that raced the tool, so a delete's diff came out empty.
+    def run_file_tool(repl, operation:, path:, after:, snapshot_after_write: false)
       agent = repl.instance_variable_get(:@agent)
       agent.define_singleton_method(:process) do |_message, on_tool_call: nil, on_tool_result: nil, **_opts, &_blk|
-        on_tool_call&.call("file_ops", { "operation" => operation, "path" => path })
+        before = File.exist?(path) ? File.read(path, encoding: "UTF-8") : nil
+        args = { "operation" => operation, "path" => path }
+        on_tool_call&.call("file_ops", args, { path: path, expanded: File.expand_path(path), before: before })
         # nil after means the call removed the file, as `delete` does.
         after.nil? ? FileUtils.rm_f(path) : File.write(path, after)
-        on_tool_result&.call("file_ops", "ok")
+        # The before-content is the one taken before the write; reading it now
+        # (snapshot_after_write) is what a racing caller would see.
+        seen = snapshot_after_write && File.exist?(path) ? File.read(path, encoding: "UTF-8") : before
+        ui_diff = { "path" => path, "before" => seen, "after" => after }
+        on_tool_result&.call("file_ops", "ok", ui_diff)
         "done"
       end
       agent.define_singleton_method(:flush_learning) { nil }
@@ -1025,12 +1033,31 @@ module Rubot
       end
     end
 
-    def test_reads_never_get_a_diff
+    def test_a_tool_that_changed_no_file_gets_no_diff
       repl = build_repl
-      snapshot = repl.send(:file_snapshot, "file_ops", { "operation" => "read", "path" => __FILE__ })
 
-      assert_nil snapshot, "a read has nothing to diff"
-      assert_nil repl.send(:file_snapshot, "shell_exec", { "command" => "true" })
+      assert_nil repl.send(:file_diff, nil), "no payload, no diff"
+      assert_nil repl.send(:file_diff, {}), "an empty payload has nothing to draw"
+      assert_nil repl.send(:file_diff, { "path" => "x", "before" => nil, "after" => nil }),
+                 "a file that never existed did not change"
+    end
+
+    # The delete runs before the TUI ever sees the result, so a renderer that
+    # reads the file itself finds nothing. The before-content has to come from
+    # the payload, and the removal still has to draw every line it took away.
+    def test_a_delete_draws_from_the_payload_though_the_file_is_gone
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "gone.md")
+        File.write(path, "one\ntwo\n")
+        repl = run_file_tool(build_repl, operation: "delete", path: path, after: nil)
+
+        refute File.exist?(path), "the file is gone by the time the diff is drawn"
+        git = entry_texts(repl).drop_while { |text| !text.match?(/\A[+-]\d/) }
+        assert git.any?, "a delete gets a diff: #{entry_texts(repl).inspect}"
+        assert_includes git.first, "-2"
+        assert(git.any? { |row| row.include?("│ one") && row.include?("- ") })
+        assert(git.any? { |row| row.include?("│ two") && row.include?("- ") })
+      end
     end
 
     def test_pi_diff_keeps_three_context_lines_and_numbers_the_rows

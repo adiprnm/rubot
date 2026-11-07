@@ -110,8 +110,8 @@ module Rubot
 
         callbacks = {
           on_assistant_text: ->(text) { events << [ :assistant_text, text ] },
-          on_tool_call: ->(name, args) { events << [ :tool_started, name, args ] },
-          on_tool_result: ->(name, result) { events << [ :tool_finished, name, result ] },
+          on_tool_call: ->(name, args, snapshot) { events << [ :tool_started, name, args, snapshot ] },
+          on_tool_result: ->(name, result, ui_diff) { events << [ :tool_finished, name, result, ui_diff ] },
           on_progress: ->(round, tool_count) { events << [ :progress, round, tool_count ] },
           # Live cost/cache/context, computed inside the Ractor so the caller
           # never has to ask a busy actor for it.

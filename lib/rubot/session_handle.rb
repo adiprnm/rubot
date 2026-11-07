@@ -89,9 +89,9 @@ module Rubot
           when :assistant_text
             on_assistant_text&.call(event[1])
           when :tool_started
-            on_tool_call&.call(event[1], event[2])
+            on_tool_call&.call(event[1], event[2], event[3])
           when :tool_finished
-            on_tool_result&.call(event[1], event[2])
+            on_tool_result&.call(event[1], event[2], event[3])
           when :progress
             on_progress&.call(event[1], event[2])
           when :usage

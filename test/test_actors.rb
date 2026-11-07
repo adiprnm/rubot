@@ -514,7 +514,7 @@ class TestActors < Minitest::Test
     narrations = []
     response = handle.process(
       "hi",
-      on_tool_call: ->(name, args) { tool_calls << [ name, args ] },
+      on_tool_call: ->(name, args, _snapshot) { tool_calls << [ name, args ] },
       on_assistant_text: ->(text) { narrations << text }
     ) do |chunk|
       chunks << chunk

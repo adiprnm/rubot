@@ -1040,9 +1040,9 @@ module Rubot
 
         response = process_message(prompt, session_id: session_id, on_assistant_text: ->(narration) {
           send_narration(chat_id, thread_id, narration)
-        }, on_tool_call: ->(tool_name, args) {
+        }, on_tool_call: ->(tool_name, args, _snapshot) {
           notify_tool_started(chat_id, thread_id, tool_name, args)
-        }, on_tool_result: ->(tool_name, result) {
+        }, on_tool_result: ->(tool_name, result, _ui_diff) {
           notify_tool_finished(chat_id, thread_id, tool_name, result)
         }, on_progress: ->(round, tool_count) {
           notify_progress(chat_id, thread_id, round)

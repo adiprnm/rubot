@@ -625,20 +625,13 @@ module Rubot
       @events << [ :stream_start ]
       response = +""
       stopped = false
-      # Before-content of each file a tool is about to write, keyed by tool
-      # name and dropped as soon as its result comes back. Gated on @tui:
-      # the plain REPL drains no events, so a diff there would be work with
-      # nowhere to go.
-      file_changes = {}
       agent.process(message,
                     on_confirm: on_confirm,
-                    on_tool_call: lambda do |name, args|
-                      file_changes[name.to_s] = file_snapshot(name, args) if @tui
+                    on_tool_call: proc do |name, args, _snapshot|
                       @events << [ :tool_call, name, args ]
                     end,
-                    on_tool_result: lambda do |name, _result|
-                      diff = @tui ? file_diff(file_changes.delete(name.to_s)) : nil
-                      @events << [ :tool_done, name, diff ]
+                    on_tool_result: proc do |name, _result, ui_diff|
+                      @events << [ :tool_done, name, file_diff(ui_diff) ]
                     end,
                     on_stopped: -> { stopped = true },
                     on_usage: ->(report) { live_usage(report) },
@@ -679,36 +672,15 @@ module Rubot
       end
     end
 
-    # The content of a file before a file tool call touches it, so the TUI can
-    # diff it afterwards. Reads and other tools return nil. Every operation
-    # that changes a file is here — write (create or overwrite), append, edit
-    # and delete — so no change reaches the screen without its diff. Runs on
-    # the worker thread, before the tool executes.
-    def file_snapshot(name, args)
-      return nil unless name.to_s == "file_ops" && args.is_a?(Hash)
-      return nil unless %w[write append edit delete].include?(args["operation"].to_s)
+    # The diff rows for the before/after text the agent attached to a tool
+    # result, or nil when the call changed no file. Both sides are already
+    # read by then — inside whatever ran the tool, so nothing here races it.
+    # A delete leaves no file behind, so its after-content is nil and every
+    # line it had renders as a removal.
+    def file_diff(ui_diff)
+      return nil unless ui_diff.is_a?(Hash)
 
-      path = args["path"].to_s
-      return nil if path.empty?
-
-      expanded = File.expand_path(path)
-      before = File.exist?(expanded) ? File.read(expanded, encoding: "UTF-8") : nil
-      { path: path, expanded: expanded, before: before }
-    rescue StandardError
-      nil
-    end
-
-    # The diff rows for a snapshot taken before the tool ran, read back from
-    # disk afterwards. nil when the file did not change. A file that is gone
-    # afterwards was deleted, so its after-content is nil and every line it
-    # had renders as a removal. Runs on the worker thread, after the tool
-    # executes.
-    def file_diff(snapshot)
-      return nil unless snapshot
-
-      expanded = snapshot[:expanded]
-      after = File.exist?(expanded) ? File.read(expanded, encoding: "UTF-8") : nil
-      Rubot::TUI::Diff.rows(snapshot[:before], after, path: snapshot[:path])
+      Rubot::TUI::Diff.rows(ui_diff["before"], ui_diff["after"], path: ui_diff["path"])
     rescue StandardError
       nil
     end

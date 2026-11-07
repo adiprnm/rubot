@@ -1152,11 +1152,11 @@ class TestAgentCancellation < Minitest::Test
     seen = []
 
     response = agent.process("do two things", stream: false,
-      on_tool_call: ->(name, _args) {
+      on_tool_call: ->(name, _args, _snapshot) {
         seen << name
         agent.cancel!
       },
-      on_tool_result: ->(_name, result) { seen << result })
+      on_tool_result: ->(_name, result, _ui_diff) { seen << result })
 
     assert_equal 1, agent.provider.calls, "no further provider round after /stop"
     assert_equal 1, seen.count("file_ops"), "only the first tool runs"
@@ -1185,7 +1185,7 @@ class TestAgentCancellation < Minitest::Test
 
     runner = Thread.new do
       response = agent.process("sleep", stream: false,
-        on_tool_call: ->(_name, _args) { started << true })
+        on_tool_call: ->(_name, _args, _snapshot) { started << true })
     end
 
     started.pop
@@ -1416,7 +1416,7 @@ class TestAgentSteering < Minitest::Test
     @agent.process(
       "do the task",
       stream: false,
-      on_tool_call: ->(_name, _args) { @agent.steer("check the logs instead") },
+      on_tool_call: ->(_name, _args, _snapshot) { @agent.steer("check the logs instead") },
       on_steer: ->(text) { steered << text }
     )
 
