@@ -126,6 +126,36 @@ module Rubot
       assert_includes row, "\u2026", "the cut is marked: #{row.inspect}"
     end
 
+    def test_working_badge_shows_the_elapsed_clock_next_to_working
+      badge = TUI::WorkingBadge.new
+      badge.layout(::TUI::Rect.new(0, 0, 80, 3))
+      badge.tick(:work)
+
+      canvas = ::TUI::Canvas.new(80, 3)
+      badge.render(canvas)
+
+      row = plain(canvas.lines)[1]
+      assert_includes row, "working · 0s · esc cancels", row.inspect
+      assert_match(/working · \d+s · esc cancels/, row)
+    end
+
+    def test_working_badge_counts_minutes_and_clears_when_idle
+      badge = TUI::WorkingBadge.new
+      badge.layout(::TUI::Rect.new(0, 0, 80, 3))
+      badge.tick(:work)
+      badge.instance_variable_set(:@started_at, Process.clock_gettime(Process::CLOCK_MONOTONIC) - 125)
+
+      canvas = ::TUI::Canvas.new(80, 3)
+      badge.render(canvas)
+      assert_includes plain(canvas.lines)[1], "working · 2m 05s · esc cancels"
+
+      badge.tick(nil)
+      canvas = ::TUI::Canvas.new(80, 3)
+      badge.render(canvas)
+      assert_nil badge.elapsed, "the clock stops with the turn"
+      refute plain(canvas.lines).join.include?("working"), "idle band is blank"
+    end
+
     def test_workspace_line_sits_between_the_prompt_and_the_usage_footer
       repl = build_repl
       line = repl.instance_variable_get(:@workspace_line)
