@@ -567,6 +567,18 @@ class TestAgentCatalogModels < Minitest::Test
     assert_equal "deepseek-v4.1-flash", agent.active_model_name
   end
 
+  def test_a_model_from_the_live_catalog_can_be_used
+    agent = build_agent
+    catalog = agent.model_catalog
+    # The provider answered with a model that is not in the disk cache yet.
+    catalog.instance_variable_set(:@entries, [ { "id" => "brand-new-model", "name" => "Brand New" } ])
+    catalog.instance_variable_set(:@fetched_at, Time.now)
+
+    assert_equal "brand-new-model", agent.use_model("brand-new-model")
+    assert_equal "brand-new-model", agent.active_model_name
+    assert_equal "brand-new-model", agent.session.model_override
+  end
+
   def test_persona_model_removed_from_catalog_falls_back
     agent = build_agent(persona: { "model" => "not-a-real-model" })
 

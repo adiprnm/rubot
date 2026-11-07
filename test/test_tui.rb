@@ -1550,6 +1550,10 @@ module Rubot
         view = plain(app.render_lines).join("\n")
         refute_includes view, "fix the parser", "the list is taken back out"
         refute_includes view, "↑/↓ choose"
+
+        entries = repl.instance_variable_get(:@log).instance_variable_get(:@entries)
+        assert_equal "", entries.last.map { |text, _| text.to_s }.join.strip,
+                     "one blank line below the cancelled command"
       end
     end
 
@@ -1690,6 +1694,394 @@ module Rubot
         view = plain(repl.instance_variable_get(:@app).render_lines).join("\n")
         assert_includes view, "No saved sessions yet."
       end
+    end
+
+    # ------------------------------------------------------------------
+    # /models
+    # ------------------------------------------------------------------
+
+    class ModelsConfigView
+      def initialize(models)
+        @models = models
+      end
+
+      def models
+        @models
+      end
+
+      def model_entry_by_name(name)
+        @models.find { |model| model["name"] == name }
+      end
+    end
+
+    class ModelsSessionView
+      attr_accessor :model_override
+
+      def initialize
+        @model_override = nil
+      end
+
+      def id
+        "default"
+      end
+    end
+
+    class ModelsProviderView
+      def name
+        "openai"
+      end
+    end
+
+    # An agent that knows a provider catalog, so /models has something to
+    # list that config.yml does not mention.
+    class ModelsAgent
+      attr_reader :config, :session, :provider, :used
+
+      def initialize(models:, catalog:, active: "gpt-test")
+        @config = ModelsConfigView.new(models)
+        @session = ModelsSessionView.new
+        @provider = ModelsProviderView.new
+        @catalog = catalog
+        @active = active
+        @used = []
+      end
+
+      def startup_info
+        { provider: "openai", model: @active, tools: 3 }
+      end
+
+      def provider_models
+        @catalog
+      end
+
+      def active_model_name
+        @active
+      end
+
+      def use_model(name)
+        @used << name.to_s
+        @active = name.to_s
+        @session.model_override = name.to_s
+        name.to_s
+      end
+
+      def usage_report
+        nil
+      end
+    end
+
+    def build_models_repl(models: [], catalog: [], active: "gpt-test")
+      repl = TUI.new(ModelsAgent.new(models: models, catalog: catalog, active: active))
+      repl.send(:build_ui)
+      repl.send(:paint_banner)
+      repl
+    end
+
+    def test_models_lists_the_models_the_provider_supports
+      repl = build_models_repl(
+        catalog: [
+          { "id" => "gpt-5", "name" => "GPT-5" },
+          { "id" => "gpt-5-mini", "name" => "GPT-5 mini" }
+        ]
+      )
+      app = repl.instance_variable_get(:@app)
+      prompt = repl.instance_variable_get(:@prompt)
+      app.render_frame
+
+      repl.send(:handle_command, "/models")
+      repl.send(:pump)
+
+      model_list = repl.instance_variable_get(:@model_list)
+      assert_equal %w[gpt-5 gpt-5-mini], model_list.entries.map { |entry| entry[:id] }
+      assert_same model_list, prompt.list, "the list owns the keyboard"
+
+      view = plain(app.render_lines).join("\n")
+      assert_includes view, "Models supported by openai (2)"
+      assert_includes view, "gpt-5"
+      assert_includes view, "GPT-5 mini"
+      assert_includes view, "↑/↓ choose · enter select · esc cancel"
+    end
+
+    def test_models_adds_the_configured_models_the_provider_does_not_list
+      repl = build_models_repl(
+        catalog: [ { "id" => "gpt-5", "name" => "GPT-5" } ],
+        models: [ { "name" => "fast", "model" => "openai/deepseek-v4" } ]
+      )
+      app = repl.instance_variable_get(:@app)
+      app.render_frame
+
+      repl.send(:handle_command, "/models")
+      repl.send(:pump)
+
+      model_list = repl.instance_variable_get(:@model_list)
+      assert_equal %w[gpt-5 fast], model_list.entries.map { |entry| entry[:id] }
+      assert_includes plain(app.render_lines).join("\n"), "deepseek-v4"
+    end
+
+    def test_models_marks_the_active_model
+      repl = build_models_repl(
+        catalog: [
+          { "id" => "gpt-5", "name" => "GPT-5" },
+          { "id" => "gpt-5-mini", "name" => "GPT-5 mini" }
+        ],
+        active: "gpt-5-mini"
+      )
+      app = repl.instance_variable_get(:@app)
+      app.render_frame
+
+      repl.send(:handle_command, "/models")
+      repl.send(:pump)
+
+      model_list = repl.instance_variable_get(:@model_list)
+      active = model_list.entries.select { |entry| entry[:active] }.map { |entry| entry[:id] }
+      assert_equal [ "gpt-5-mini" ], active
+
+      view = plain(app.render_lines).join("\n")
+      line = view.lines.find { |l| l.include?("GPT-5 mini") }
+      assert_includes line, "✓"
+      assert_includes line, "gpt-5-mini"
+    end
+
+    def test_models_enter_switches_the_active_session_to_the_highlighted_model
+      repl = build_models_repl(
+        catalog: [
+          { "id" => "gpt-5", "name" => "GPT-5" },
+          { "id" => "gpt-5-mini", "name" => "GPT-5 mini" }
+        ]
+      )
+      agent = repl.instance_variable_get(:@agent)
+      app = repl.instance_variable_get(:@app)
+      prompt = repl.instance_variable_get(:@prompt)
+      mailbox = repl.instance_variable_get(:@mailbox)
+      app.render_frame
+
+      repl.send(:handle_command, "/models")
+      repl.send(:pump)
+
+      prompt.handle_key(::TUI::Key.new(:down))
+      prompt.handle_key(::TUI::Key.new(:enter))
+
+      assert_nil prompt.list, "picking hands the keyboard back to the prompt"
+      command = mailbox.pop
+      assert_equal "/use-model gpt-5-mini", command
+
+      # The worker runs the queued command: the switch stays off the App thread.
+      repl.send(:handle_command, command)
+      repl.send(:pump)
+
+      assert_equal [ "gpt-5-mini" ], agent.used
+      view = plain(app.render_lines).join("\n")
+      assert_includes view, "Switched to model: gpt-5-mini"
+      refute_includes view, "↑/↓ choose", "the list is taken back out"
+    end
+
+    def test_models_escape_removes_the_list_without_switching
+      repl = build_models_repl(catalog: [ { "id" => "gpt-5", "name" => "GPT-5" } ])
+      agent = repl.instance_variable_get(:@agent)
+      app = repl.instance_variable_get(:@app)
+      prompt = repl.instance_variable_get(:@prompt)
+      app.render_frame
+
+      repl.send(:handle_command, "/models")
+      repl.send(:pump)
+      assert_includes plain(app.render_lines).join("\n"), "gpt-5"
+
+      prompt.handle_key(::TUI::Key.new(:escape))
+
+      assert_nil prompt.list, "escape hands the keyboard back to the prompt"
+      assert_empty agent.used
+      view = plain(app.render_lines).join("\n")
+      refute_includes view, "gpt-5", "the list is taken back out"
+      refute_includes view, "↑/↓ choose"
+    end
+
+    def test_a_cancelled_model_list_leaves_one_blank_line_below_the_command
+      repl = build_models_repl(catalog: [ { "id" => "gpt-5", "name" => "GPT-5" } ])
+      log = repl.instance_variable_get(:@log)
+      prompt = repl.instance_variable_get(:@prompt)
+      app = repl.instance_variable_get(:@app)
+      mailbox = repl.instance_variable_get(:@mailbox)
+      app.render_frame
+
+      prompt.value = "/models"
+      prompt.handle_key(::TUI::Key.new(:enter))
+      repl.send(:pump)
+      repl.send(:handle_command, mailbox.pop)
+      repl.send(:pump)
+
+      prompt.handle_key(::TUI::Key.new(:escape))
+      repl.send(:pump)
+
+      entries = log.instance_variable_get(:@entries)
+      command_ix = entries.rindex { |entry| entry.map { |text, _| text.to_s }.join.include?("/models") }
+      assert command_ix, "the command is echoed"
+      assert_equal "", entries[command_ix + 1].map { |text, _| text.to_s }.join.strip,
+                   "one blank line below the cancelled command"
+      assert_equal command_ix + 1, entries.length - 1, "nothing else is left over"
+    end
+
+    def test_a_command_without_output_leaves_one_blank_line_below_it
+      repl = build_models_repl(catalog: [])
+      log = repl.instance_variable_get(:@log)
+      app = repl.instance_variable_get(:@app)
+      mailbox = repl.instance_variable_get(:@mailbox)
+      app.render_frame
+
+      prompt = repl.instance_variable_get(:@prompt)
+      prompt.value = "/quit"
+      prompt.handle_key(::TUI::Key.new(:enter))
+      repl.send(:pump)
+      repl.send(:handle_command, mailbox.pop)
+      repl.send(:pump)
+
+      entries = log.instance_variable_get(:@entries)
+      command_ix = entries.rindex { |entry| entry.map { |text, _| text.to_s }.join.include?("/quit") }
+      assert command_ix, "the command is echoed"
+      assert_equal "", entries[command_ix + 1].map { |text, _| text.to_s }.join.strip,
+                   "one blank line below the command"
+    end
+
+    def test_models_filters_the_list_by_name
+      repl = build_models_repl(
+        catalog: [
+          { "id" => "gpt-5", "name" => "GPT-5" },
+          { "id" => "claude-sonnet", "name" => "Claude Sonnet" }
+        ]
+      )
+      app = repl.instance_variable_get(:@app)
+      app.render_frame
+
+      repl.send(:handle_command, "/models claude")
+      repl.send(:pump)
+
+      model_list = repl.instance_variable_get(:@model_list)
+      assert_equal [ "claude-sonnet" ], model_list.entries.map { |entry| entry[:id] }
+    end
+
+    def test_models_list_is_padded_and_surrounded_by_blank_rows
+      repl = build_models_repl(catalog: [ { "id" => "gpt-5", "name" => "GPT-5" } ])
+      app = repl.instance_variable_get(:@app)
+      app.render_frame
+
+      repl.send(:handle_command, "/models")
+      repl.send(:pump)
+
+      view = plain(app.render_lines)
+      header_ix = view.index { |line| line.include?("Models supported by") }
+      search_ix = view.index { |line| line.include?("search:") }
+      row_ix = view.index { |line| line.include?("gpt-5") }
+      hint_ix = view.index { |line| line.include?("↑/↓ choose") }
+
+      assert_equal "", view[header_ix - 1].strip, "one blank row above the header"
+      assert_equal "", view[search_ix - 1].strip, "one blank row above the search"
+      assert_equal "", view[row_ix - 1].strip, "one blank row between the search and the rows"
+      assert_equal "", view[row_ix + 1].strip, "one blank row below the rows"
+      assert_equal "", view[hint_ix - 1].strip, "one blank row above the hint"
+
+      assert_equal 4, view[header_ix][/\A */].length, "the header is padded by two cells"
+      assert_equal view[search_ix][/\A */].length, view[header_ix][/\A */].length,
+                   "the header lines up with the search row"
+    end
+
+    def test_typing_in_the_list_searches_the_models
+      repl = build_models_repl(
+        catalog: [
+          { "id" => "gpt-5", "name" => "GPT-5" },
+          { "id" => "claude-sonnet", "name" => "Claude Sonnet" },
+          { "id" => "claude-opus", "name" => "Claude Opus" }
+        ]
+      )
+      app = repl.instance_variable_get(:@app)
+      prompt = repl.instance_variable_get(:@prompt)
+      app.render_frame
+
+      repl.send(:handle_command, "/models")
+      repl.send(:pump)
+
+      model_list = repl.instance_variable_get(:@model_list)
+      assert_equal 3, model_list.entries.length
+
+      "claude".each_char { |char| prompt.handle_key(::TUI::Key.printable(char)) }
+
+      assert_equal %w[claude-sonnet claude-opus], model_list.entries.map { |entry| entry[:id] }
+      assert_equal "claude", model_list.filter
+
+      view = plain(app.render_lines).join("\n")
+      assert_includes view, "search: claude"
+      assert_includes view, "(2/3)"
+      refute_includes view, "gpt-5"
+    end
+
+    def test_backspace_widens_the_search
+      repl = build_models_repl(
+        catalog: [
+          { "id" => "gpt-5", "name" => "GPT-5" },
+          { "id" => "claude-sonnet", "name" => "Claude Sonnet" }
+        ]
+      )
+      app = repl.instance_variable_get(:@app)
+      prompt = repl.instance_variable_get(:@prompt)
+      app.render_frame
+
+      repl.send(:handle_command, "/models")
+      repl.send(:pump)
+
+      model_list = repl.instance_variable_get(:@model_list)
+      "claude".each_char { |char| prompt.handle_key(::TUI::Key.printable(char)) }
+      assert_equal 1, model_list.entries.length
+
+      prompt.handle_key(::TUI::Key.new(:backspace))
+
+      assert_equal "claud", model_list.filter
+      assert_equal 1, model_list.entries.length
+
+      5.times { prompt.handle_key(::TUI::Key.new(:backspace)) }
+
+      assert_equal "", model_list.filter
+      assert_equal 2, model_list.entries.length
+    end
+
+    def test_escape_clears_the_search_before_it_closes_the_list
+      repl = build_models_repl(
+        catalog: [
+          { "id" => "gpt-5", "name" => "GPT-5" },
+          { "id" => "claude-sonnet", "name" => "Claude Sonnet" }
+        ]
+      )
+      app = repl.instance_variable_get(:@app)
+      prompt = repl.instance_variable_get(:@prompt)
+      app.render_frame
+
+      repl.send(:handle_command, "/models")
+      repl.send(:pump)
+
+      model_list = repl.instance_variable_get(:@model_list)
+      "claude".each_char { |char| prompt.handle_key(::TUI::Key.printable(char)) }
+
+      prompt.handle_key(::TUI::Key.new(:escape))
+
+      assert_same model_list, prompt.list, "the first escape clears the search"
+      assert_equal "", model_list.filter
+      assert_equal 2, model_list.entries.length
+
+      prompt.handle_key(::TUI::Key.new(:escape))
+
+      assert_nil prompt.list, "the second escape closes the list"
+      refute_includes plain(app.render_lines).join("\n"), "↑/↓ choose"
+    end
+
+    def test_a_search_without_a_match_says_so
+      repl = build_models_repl(catalog: [ { "id" => "gpt-5", "name" => "GPT-5" } ])
+      app = repl.instance_variable_get(:@app)
+      prompt = repl.instance_variable_get(:@prompt)
+      app.render_frame
+
+      repl.send(:handle_command, "/models")
+      repl.send(:pump)
+
+      "zzz".each_char { |char| prompt.handle_key(::TUI::Key.printable(char)) }
+
+      assert_includes plain(app.render_lines).join("\n"), "no model matches"
     end
 
     def test_start_fresh_session_leaves_the_previous_conversation_untouched

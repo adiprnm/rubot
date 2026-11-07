@@ -144,6 +144,12 @@ module Rubot
 
     protected
 
+    # The extra headers configured for this provider, as a plain hash.
+    def extra_headers
+      headers = @config.respond_to?(:extra_headers) ? @config.extra_headers : {}
+      headers.is_a?(Hash) ? headers : {}
+    end
+
     # Run an HTTP request so the turn's cancellation token can interrupt it.
     #
     # A blocked read (waiting for headers or for the next stream chunk) does

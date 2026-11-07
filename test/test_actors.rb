@@ -256,6 +256,22 @@ class TestActors < Minitest::Test
     end
   end
 
+  def test_session_handle_exposes_the_provider_models
+    config = write_config
+    File.write(File.join(@workspace, "model_catalog.json"), JSON.generate(
+      "models" => [ { "id" => "deepseek-v4-pro", "name" => "DeepSeek V4 Pro" } ]
+    ))
+    pool = Rubot::Actors::SessionPool.new(config: config)
+
+    begin
+      handle = pool.for("models")
+
+      assert_equal [ "deepseek-v4-pro" ], handle.provider_models.map { |model| model["id"] }
+    ensure
+      pool.shutdown
+    end
+  end
+
   def test_pool_applies_persona_from_store_when_spawning
     config = write_config
     File.write(File.join(@workspace, "personas.json"), JSON.generate(

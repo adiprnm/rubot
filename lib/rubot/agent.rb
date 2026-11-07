@@ -598,6 +598,18 @@ module Rubot
       @session_model
     end
 
+    # The models the provider supports, from its /models catalog. The list is
+    # cached (in memory and on disk), so an unreachable provider does not
+    # empty the picker. Providers that cannot list models return [].
+    def provider_models
+      model_catalog.entries
+    end
+
+    # The memoized provider catalog.
+    def model_catalog
+      @model_catalog ||= ModelCatalog.new(config: @config)
+    end
+
     # Returns the active model name (session override or config default)
     def active_model_name
       @session_model || @config.name
@@ -1133,7 +1145,11 @@ module Rubot
 
     # A model from the provider's /models catalog rather than config.yml.
     def provider_model_id?(name)
-      ModelCatalog.cached_model_ids(@config.workspace).include?(name.to_s)
+      id = name.to_s
+      return true if ModelCatalog.cached_model_ids(@config.workspace).include?(id)
+
+      # The catalog loaded in this process knows its ids without a fetch.
+      @model_catalog&.cached_ids.to_a.include?(id)
     end
 
     # Persona model name. Config entries and provider catalog ids are valid;

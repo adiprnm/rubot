@@ -147,6 +147,7 @@ module Rubot
         when :usage_report         then agent.usage_report
         when :opencode_usage       then agent.opencode_usage
         when :models               then agent.config.models
+        when :provider_models      then agent.provider_models
         when :model_entry          then agent.config.model_entry_by_name(msg[:name])
         when :active_model_entry   then agent.config.active_model_entry
         when :workspace            then agent.config.workspace

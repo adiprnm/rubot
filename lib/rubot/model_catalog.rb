@@ -58,6 +58,14 @@ module Rubot
       end
     end
 
+    # The ids of the models already loaded in memory. No network call is
+    # made: an empty list means the catalog was never fetched.
+    def cached_ids
+      @mutex.synchronize do
+        Array(@entries).filter_map { |model| model.is_a?(Hash) ? model["id"] : nil }
+      end
+    end
+
     def self.cache_path(workspace)
       File.join(workspace.to_s, CACHE_FILENAME)
     end

@@ -16,6 +16,7 @@ require_relative "tui/status_line"
 require_relative "tui/working_badge"
 require_relative "tui/confirm_dialog"
 require_relative "tui/session_list"
+require_relative "tui/model_list"
 
 
 Rubot::TUI::Compat.apply
@@ -64,7 +65,7 @@ module Rubot
       "/info"     => "Show agent info (provider, model, tools)",
       "/context"  => "Show context usage, cache hit rate, and estimated cost",
       "/usage"    => "Show OpenCode Go subscription usage",
-      "/models"   => "List available models from config",
+      "/models"   => "List the models the provider supports",
       "/model"    => "Show current active model",
       "/use-model NAME" => "Switch to a model for this session",
       "/tools"    => "List available tools",
@@ -236,6 +237,14 @@ module Rubot
         on_select: lambda do |entry|
           @prompt.list = nil
           @mailbox << "/resume #{entry[:id]}"
+        end,
+        on_cancel: -> { @prompt.list = nil }
+      )
+      @model_list = Rubot::TUI::ModelList.new(
+        log: @log,
+        on_select: lambda do |entry|
+          @prompt.list = nil
+          @mailbox << "/use-model #{entry[:id]}"
         end,
         on_cancel: -> { @prompt.list = nil }
       )
@@ -474,6 +483,7 @@ module Rubot
                       prev && prev[2])
       when :confirm then show_confirm(event)
       when :session_list then show_session_list(event[1])
+      when :model_list then show_model_list(event[1], event[2], event[3])
       when :idle then
         @busy = false
         @stopping = false
@@ -679,6 +689,13 @@ module Rubot
       @prompt.list = @session_list if @session_list.open(entries)
     end
 
+    # /models writes the provider's model list into the transcript and hands
+    # the prompt over to it; picking a model feeds a /use-model <id> command
+    # back into the worker, so the switch itself stays on the worker thread.
+    def show_model_list(entries, title = nil, filter = nil)
+      @prompt.list = @model_list if @model_list.open(entries, title: title, filter: filter)
+    end
+
     # One blank line above and below, two cells of left padding.
     def add_command_output(lines)
       return if lines.nil? || lines.empty?
@@ -835,6 +852,9 @@ module Rubot
 
     def handle_command(input)
       @command_output = []
+      # A command that brings its own blank line (a list, or a wiped
+      # transcript) does not get one from the flush.
+      @command_owns_blank = false
       parts = input.split
       cmd = parts.first.downcase
 
@@ -858,6 +878,7 @@ module Rubot
         @events << [ :status_left, "" ]
       when "/new"
         # Silent restart: wipe the screen and start a fresh session.
+        @command_owns_blank = true
         agent.clear_session
         @events << [ :clear_log ]
         refresh_status
@@ -900,17 +921,7 @@ module Rubot
         say_text(Rubot::OpencodeUsageReport.render(agent.opencode_usage))
         blank
       when "/models"
-        models = agent.config.models
-        if models.empty?
-          say("No models configured in config.yml.", :warn)
-        else
-          active = agent.active_model_name
-          say("Available models:", :info)
-          models.each do |m|
-            marker = m["name"] == active ? MARK[:ok] : " "
-            say_text("  #{marker} #{m["name"]} (#{m["model"]})")
-          end
-        end
+        handle_models_command(parts[1])
       when "/model"
         active = agent.active_model_name
         entry = agent.config.model_entry_by_name(active) || agent.config.active_model_entry
@@ -984,6 +995,7 @@ module Rubot
         # Interactively, /resume writes the list into the log; only a plain (piped) REPL
         # has to print the list and take the number on the next line.
         if @tui && !sessions.empty?
+          @command_owns_blank = true
           @events << [ :session_list, sessions ]
         else
           list_sessions(sessions)
@@ -1061,6 +1073,136 @@ module Rubot
       Rubot::TUI::SessionList.age(iso)
     end
 
+    # /models lists the models the provider supports and lets the user pick
+    # one for the active session. The list comes from the provider's /models
+    # endpoint; config.yml entries the provider does not advertise are added
+    # at the end, so a configured model stays selectable.
+    def handle_models_command(query = nil)
+      entries = provider_model_entries
+      if entries.empty?
+        say("No models available.", :warn)
+        say_text("The provider returned no model catalog, and config.yml has no models.")
+        return
+      end
+
+      filter = query.to_s.strip
+      shown = entries.select { |entry| Rubot::TUI::ModelList.matches?(entry, filter) }
+      if shown.empty?
+        say("No model matches '#{filter}'.", :warn)
+        return
+      end
+
+      if @tui
+        @command_owns_blank = true
+        @events << [ :model_list, entries, model_list_title(entries), filter ]
+      else
+        say("Models supported by #{provider_name}:", :info)
+        shown.each do |entry|
+          marker = entry[:active] ? MARK[:ok] : " "
+          label = entry[:label].to_s
+          label = "" if label == entry[:id].to_s
+          say_text("  #{marker} #{entry[:id]}#{label.empty? ? "" : " (#{label})"}")
+        end
+      end
+    end
+
+    def model_list_title(entries)
+      "Models supported by #{provider_name}"
+    end
+
+    def provider_name
+      agent.provider.name
+    rescue StandardError
+      "the provider"
+    end
+
+    # The models the provider supports, as picker entries. Each entry has an
+    # "id" (what the provider is asked for), a "label" (a friendlier name)
+    # and an "active" flag.
+    def provider_model_entries
+      catalog = provider_catalog_entries
+      config_entries = config_model_entries
+
+      known = catalog.map { |model| model["id"] }
+      entries = catalog.map do |model|
+        { id: model["id"], label: model["name"], active: false }
+      end
+
+      # A configured model the provider does not advertise is still usable,
+      # so it is listed under its config name.
+      config_entries.each do |entry|
+        model = entry["model"].to_s
+        id = model.include?("/") ? model.split("/").last : model
+        next if known.include?(id) || known.include?(entry["name"].to_s)
+
+        entries << { id: entry["name"].to_s, label: model, active: false }
+      end
+
+      active = active_model_ids
+      entries.each do |entry|
+        label_id = entry[:label].to_s.split("/").last
+        entry[:active] = active.include?(entry[:id].to_s) || active.include?(label_id)
+      end
+
+      entries
+    end
+
+    # The provider's own model catalog, as plain hashes.
+    def provider_catalog_entries
+      models = agent.provider_models
+      models = [] unless models.is_a?(Array)
+      models.filter_map do |model|
+        next unless model.is_a?(Hash)
+
+        id = (model["id"] || model["name"]).to_s.strip
+        next if id.empty?
+
+        { "id" => id, "name" => (model["name"] || id).to_s.strip }
+      end
+    rescue StandardError => e
+      say("Could not read the model catalog: #{e.message}", :warn)
+      []
+    end
+
+    # The models configured in config.yml.
+    def config_model_entries
+      models = agent.config.models
+      return [] unless models.is_a?(Array)
+
+      models.select { |model| model.is_a?(Hash) && model["name"] }
+    rescue StandardError
+      []
+    end
+
+    # Every id the active model can be known by: the provider model id, the
+    # config entry name and the model id of that entry.
+    def active_model_ids
+      ids = []
+      name = agent.active_model_name.to_s
+      ids << name
+      ids << name.split("/").last
+
+      entry = begin
+        agent.config.model_entry_by_name(name)
+      rescue StandardError
+        nil
+      end
+      if entry.is_a?(Hash)
+        model = entry["model"].to_s
+        ids << model
+        ids << model.split("/").last
+      end
+
+      override = begin
+        agent.session.model_override.to_s
+      rescue StandardError
+        ""
+      end
+      ids << override
+
+      ids.reject(&:empty?).uniq
+    end
+
     def handle_use_model(model_name)
       if model_name.nil?
         say("Usage: /use-model <model-name>", :warn)
@@ -1070,14 +1212,17 @@ module Rubot
 
       result = agent.use_model(model_name)
       if result
-        entry = agent.config.model_entry_by_name(result)
-        say("Switched to model: #{result} (#{entry["model"]})", :ok)
+        # A config entry is known by its name, a provider model by its id.
+        entry = agent.config.model_entry_by_name(model_name)
+        label = entry.is_a?(Hash) && entry["model"] ? entry["model"].to_s : ""
+        label = "" if label == result.to_s
+        say("Switched to model: #{result}#{label.empty? ? "" : " (#{label})"}", :ok)
         say_text("Provider: #{agent.provider.name}")
         say_text("Persists for this session (cleared on /new).")
         refresh_status
         refresh_usage
       else
-        say("Model '#{model_name}' not found in config.yml.", :err)
+        say("Model '#{model_name}' not found in config.yml or the provider catalog.", :err)
         agent.config.models.each { |m| say_text("  - #{m["name"]}") }
       end
     end
@@ -1141,7 +1286,14 @@ module Rubot
     def flush_command_output
       lines = @command_output
       @command_output = nil
-      return if lines.nil? || lines.empty?
+
+      if lines.nil? || lines.empty?
+        # A command that prints nothing still leaves one blank line below it,
+        # so whatever comes next is set apart from it. A list command brings
+        # its own spacing.
+        publish([ [ "", nil ] ]) unless @command_owns_blank
+        return
+      end
 
       lines.shift while blank_entry?(lines.first)
       lines.pop while blank_entry?(lines.last)

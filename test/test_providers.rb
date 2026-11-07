@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
+require "socket"
 
 class TestProviders < Minitest::Test
   def setup
@@ -10,6 +11,35 @@ class TestProviders < Minitest::Test
 
   def teardown
     FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+  end
+
+  # A throwaway HTTP server that answers every request with the same body.
+  def with_stub_server(body)
+    server = TCPServer.new("127.0.0.1", 0)
+    port = server.addr[1]
+
+    thread = Thread.new do
+      loop do
+        client = server.accept
+        request = +""
+        request << client.readpartial(4096) until request.include?("\r\n\r\n")
+
+        client.write("HTTP/1.1 200 OK\r\n")
+        client.write("Content-Type: application/json\r\n")
+        client.write("Content-Length: #{body.bytesize}\r\n")
+        client.write("Connection: close\r\n\r\n")
+        client.write(body)
+      ensure
+        client&.close
+      end
+    rescue IOError, Errno::EBADF
+      nil
+    end
+
+    yield "http://127.0.0.1:#{port}"
+  ensure
+    thread&.kill
+    server&.close
   end
 
   def make_config(overrides = {})
@@ -187,6 +217,29 @@ class TestProviders < Minitest::Test
     assert provider
   end
 
+  def test_anthropic_lists_its_models
+    body = JSON.generate(
+      "data" => [
+        { "id" => "claude-sonnet-4-5", "display_name" => "Claude Sonnet 4.5" },
+        { "id" => "claude-opus-4-1", "display_name" => "Claude Opus 4.1" }
+      ]
+    )
+
+    with_stub_server(body) do |base|
+      config = make_config({
+        "provider" => "anthropic",
+        "anthropic_api_key" => "sk-ant-test",
+        "anthropic_api_base" => base
+      })
+      provider = Rubot::Providers::Anthropic.new(config.provider_settings)
+
+      models = provider.list_models
+
+      assert_equal %w[claude-sonnet-4-5 claude-opus-4-1], models.map { |model| model["id"] }
+      assert_equal "Claude Sonnet 4.5", models.first["name"]
+    end
+  end
+
   # --- Ollama Provider ---
 
   def test_ollama_provider_name
@@ -223,6 +276,28 @@ class TestProviders < Minitest::Test
     })
     provider = Rubot::Providers::Ollama.new(config)
     assert provider
+  end
+
+  def test_ollama_lists_its_models
+    body = JSON.generate(
+      "models" => [
+        { "name" => "llama3:latest" },
+        { "name" => "qwen3:8b" }
+      ]
+    )
+
+    with_stub_server(body) do |base|
+      config = make_config({
+        "provider" => "ollama",
+        "model" => "llama3",
+        "ollama_host" => base
+      })
+      provider = Rubot::Providers::Ollama.new(config.provider_settings)
+
+      models = provider.list_models
+
+      assert_equal %w[llama3:latest qwen3:8b], models.map { |model| model["id"] }
+    end
   end
 
   # --- Provider base class ---

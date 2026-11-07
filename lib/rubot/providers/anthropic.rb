@@ -43,6 +43,39 @@ module Rubot
         end
       end
 
+      # GET /v1/models — the models Anthropic serves.
+      def list_models
+        uri = URI("#{api_base}/v1/models")
+        request = Net::HTTP::Get.new(uri.request_uri)
+        request["x-api-key"] = api_key if api_key
+        request["anthropic-version"] = API_VERSION
+        extra_headers.each { |name, value| request[name] = value.to_s }
+
+        response = Net::HTTP.start(
+          uri.host,
+          uri.port,
+          use_ssl: uri.scheme == "https",
+          open_timeout: 10,
+          read_timeout: 30
+        ) { |http| http.request(request) }
+
+        return [] unless response.code.to_i == 200
+
+        body = JSON.parse(response.body)
+        items = body.is_a?(Hash) ? (body["data"] || []) : []
+        Array(items).filter_map do |item|
+          next unless item.is_a?(Hash)
+
+          id = item["id"]
+          next if id.nil? || id.to_s.strip.empty?
+
+          { "id" => id.to_s.strip, "name" => (item["display_name"] || id).to_s.strip }
+        end
+      rescue StandardError => e
+        log_debug("list_models failed: #{e.class}: #{e.message}")
+        []
+      end
+
       private
 
       def build_payload(messages, tools, system_prompt, stream: false)

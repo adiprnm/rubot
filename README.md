@@ -16,6 +16,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 📝 **Session management** — persistent conversation history, a new session per TUI launch, and `/resume` to browse and reopen any saved session
 - 🧬 **SOUL.md** — personality and identity file for persistent character
 - 🎛️ **Model presets** — named model configurations with a primary default, switchable per session and manageable from Telegram
+- 🎚️ **Model picker** — `/models` lists every model the provider supports and switches the active session to the one you pick
 - 🎭 **Per-topic personas** — each Telegram forum topic can have its own model preset and system prompt, set up with an inline-button wizard
 - 📋 **AGENTS.md** — YAML frontmatter config + markdown behavior rules
 - 🧠 **MEMORY.md** — persistent memory the bot can read and update across sessions
@@ -146,7 +147,10 @@ $ rubot
 ### REPL Commands
 
 Every command's output is set apart in the transcript: one blank line above
-and below it, and two cells of left padding.
+and below it, and two cells of left padding. A command that prints nothing
+still leaves one blank line below it, so whatever comes next is set apart from
+it — and so does a list that is cancelled (`/models`, `/resume`): the rows go
+back out, and the blank line stays.
 
 | Command | Description |
 |---------|-------------|
@@ -159,6 +163,9 @@ and below it, and two cells of left padding.
 | `/resume` | Show saved sessions under the command; `↑`/`↓` + `Enter` resumes one (plain REPL: numbered list) |
 | `/resume <n\|id>` | Reopen a saved session by number or id |
 | `/info` | Show agent info (includes soul/memory status) |
+| `/models` | List the models the provider supports; type to search, `↑`/`↓` + `Enter` switches the active session to one (plain REPL: printed list) |
+| `/models <text>` | Show only the models whose id or name contains `<text>` |
+| `/use-model <name\|id>` | Switch the active session to a configured model or a provider model id |
 | `/context` | Show context usage, cache hit rate, and estimated cost |
 | `/usage` | Show OpenCode Go subscription usage |
 | `/tools` | List available tools |
@@ -185,6 +192,23 @@ out without switching. `/resume 2` and `/resume <id>` reopen a session without
 the list (a piped, non-tty REPL replays the transcript as plain text), and
 `/resume` alone prints the numbered list there. `/session <name>` still switches
 directly.
+
+`/models` asks the provider which models it serves (`GET /models` for
+OpenAI-compatible APIs, `GET /v1/models` for Anthropic, `GET /api/tags` for
+Ollama) and writes the list into the transcript, right under the echoed
+command. Models configured in `config.yml` that the provider does not
+advertise are listed as well, so a configured model stays selectable. The
+model the session is running is marked with `✓`. Typing searches the list:
+every keystroke narrows it to the models whose id or name contains what has
+been typed, `Backspace` undoes a character, and the header counts the matches
+(`(2/30)`). `Up`/`Down` (or
+`PageUp`/`PageDown`) move the highlight, `Enter` switches the active session
+to the highlighted model — it stays switched until `/new` — and `Esc` clears
+the search, and closes the list once the search is empty. `/models <text>`
+narrows the list to the models whose id or name contains that text. The
+catalog is cached
+in `<workspace>/model_catalog.json`, so a provider that is temporarily
+unreachable still shows the last known list.
 
 ### TUI Keys
 
@@ -346,6 +370,10 @@ including OpenCode Go), `/preset models` lists the provider's own catalog
 instead of only the entries in `config.yml`. The catalog is cached at
 `<workspace>/model_catalog.json`; a preset that references a catalog model id
 reuses the active config entry's `api_base` and `api_key`.
+
+The TUI's `/models` reads the same catalog — Anthropic (`GET /v1/models`) and
+Ollama (`GET /api/tags`) included — and switches the active session to the
+model you pick.
 
 ### Model Presets
 

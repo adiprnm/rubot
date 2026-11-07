@@ -131,7 +131,14 @@ module Rubot
 
       def dismiss
         reset
+        leave_blank
         @on_cancel&.call
+      end
+
+      # One blank line below the command, so whatever comes next is set
+      # apart from it.
+      def leave_blank
+        @log.add_entry([ [ "", nil ] ])
       end
 
       # Take the rows, the hint and the blanks back out of the transcript.

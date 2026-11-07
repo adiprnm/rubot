@@ -145,6 +145,11 @@ module Rubot
         call(:model_presets)
       end
 
+      # The models the provider supports, from its /models catalog.
+      def provider_models
+        call(:provider_models)
+      end
+
       def use_model(name)
         call(:use_model, name: name)
       end
