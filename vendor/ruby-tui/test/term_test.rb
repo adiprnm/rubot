@@ -120,3 +120,32 @@ test 'only status and data styles carry a hue' do
                "only semantic status styles should be coloured, got #{hued.inspect}"
 end
 
+
+test 'bracketed paste arrives as one paste key' do
+  read_end, write_end = IO.pipe
+  write_end.write("\e[200~hello\r\nworld\e[201~")
+  old = $stdin
+  $stdin = read_end
+  key = TUI::Term.read_key(0.5)
+  assert_equal :paste, key.name
+  assert_equal "hello\nworld", key.char
+ensure
+  $stdin = old
+  read_end.close
+  write_end.close
+end
+
+test 'a large bracketed paste survives intact' do
+  payload = "lorem ipsum dolor sit amet \r\n" * 300
+  read_end, write_end = IO.pipe
+  write_end.write("\e[200#{payload}\e[201~".sub('200', '200~'))
+  old = $stdin
+  $stdin = read_end
+  key = TUI::Term.read_key(0.5)
+  assert_equal :paste, key.name
+  assert_equal payload.gsub("\r\n", "\n"), key.char
+ensure
+  $stdin = old
+  read_end.close
+  write_end.close
+end

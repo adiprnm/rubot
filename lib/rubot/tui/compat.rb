@@ -111,8 +111,11 @@ module Rubot
       # which makes terminals report shift+enter (and alt+enter) as distinct
       # sequences instead of a plain \r, and >4;2m is xterm's modifyOtherKeys
       # (level 2) for the terminals that only speak that dialect.
-      TTY_ON  = "\e[?1002h\e[?1006h\e[>4;2m\e[>1u".freeze
-      TTY_OFF = "\e[>4;0m\e[<u\e[?1006l\e[?1002l\e[?1000l".freeze
+      # 2004 = bracketed paste: the terminal wraps a paste in
+      # ESC[200~...ESC[201~ so it can be inserted as one chunk instead of
+      # N keystrokes (which made large pastes quadratic in the prompt).
+      TTY_ON  = "\e[?1002h\e[?1006h\e[>4;2m\e[>1u\e[?2004h".freeze
+      TTY_OFF = "\e[?2004l\e[>4;0m\e[<u\e[?1006l\e[?1002l\e[?1000l".freeze
 
       def self.write_online(output = $stdout)
         ::TUI::Term.write(output, TTY_ON)

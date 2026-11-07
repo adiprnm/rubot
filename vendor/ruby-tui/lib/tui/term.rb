@@ -19,6 +19,12 @@ module TUI
     # DEC 2026: present everything between these as one atomic frame.
     SYNC_ON     = "#{CSI}?2026h".freeze
     SYNC_OFF    = "#{CSI}?2026l".freeze
+    # Bracketed paste: the terminal wraps a paste in these markers so it
+    # can be read as one chunk instead of one keystroke per character.
+    PASTE_ON    = "#{CSI}?2004h".freeze
+    PASTE_OFF   = "#{CSI}?2004l".freeze
+    PASTE_START = "#{CSI}200~".freeze
+    PASTE_END   = "#{CSI}201~".freeze
 
     ZERO_WIDTH = [0x0300..0x036F, 0x200B..0x200F, 0xFE00..0xFE0F].freeze
     WIDE = [
@@ -120,14 +126,14 @@ module TUI
       # only implements IO#winsize, and IO#ioctl is not available either, so
       # saving/restoring the tty via stty is the portable path.
       def session(output = $stdout, _input = $stdin)
-        write(output, ALT_ON + HIDE_CURSOR + CLEAR)
+        write(output, ALT_ON + HIDE_CURSOR + CLEAR + PASTE_ON)
         flush(output)
         saved = raw_mode_on
         begin
           yield
         ensure
           raw_mode_off(saved)
-          write(output, SHOW_CURSOR + ALT_OFF + Style::RESET)
+          write(output, SHOW_CURSOR + PASTE_OFF + ALT_OFF + Style::RESET)
           flush(output)
         end
         nil
@@ -217,6 +223,7 @@ module TUI
           deadline = 0.005
         end
         return Key.new(:escape) if buf.bytesize == 1
+        return read_paste if buf == PASTE_START
 
         # SGR mouse report: button;col;row with a final M (press/motion)
         # or m (release). Button codes: 0..2 buttons, +32 drag motion,
@@ -225,6 +232,25 @@ module TUI
         return mouse_key(Regexp.last_match) if mouse
 
         Key.new(SEQUENCES[buf] || :unknown)
+      end
+
+      # Bracketed paste: ESC [ 200 ~ payload ESC [ 201 ~. The payload
+      # arrives as one burst, so read until the terminator or a quiet gap;
+      # a byte cap would truncate large pastes. \r and \r\n are normalised
+      # to \n because terminals send carriage returns for newlines.
+      def read_paste
+        buf = +''
+        deadline = 0.25
+        while IO.select([$stdin], nil, nil, deadline)
+          c = read_char
+          break if c.nil? || c.empty?
+
+          buf << c
+          deadline = 0.05
+          break if buf.end_with?(PASTE_END)
+        end
+        text = buf.end_with?(PASTE_END) ? buf[0...-PASTE_END.length] : buf
+        Key.new(:paste, text.gsub("\r\n", "\n").tr("\r", "\n"))
       end
 
       # Normalise an SGR mouse report into a named Key with cell coords.

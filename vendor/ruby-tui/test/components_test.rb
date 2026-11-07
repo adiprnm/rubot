@@ -494,3 +494,13 @@ test 'bar chart push keeps the series bounded' do
   10.times { |i| chart.push(i / 10.0) }
   assert_equal 10, chart.values.length
 end
+
+test 'a paste key inserts multi-line text in one change' do
+  edit = TUI::MultiLine.new(max_rows: 4)
+  changes = 0
+  edit.on(TUI::Events::CHANGE) { changes += 1 }
+  edit.layout(TUI::Rect.new(0, 0, 40, 4))
+  edit.handle_key(TUI::Key.new(:paste, "one\ntwo\nthree"))
+  assert_equal "one\ntwo\nthree", edit.value
+  assert_equal 1, changes
+end
