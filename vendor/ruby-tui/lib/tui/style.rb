@@ -98,13 +98,29 @@ module TUI
         codes << '3' if opts[:italic]
         codes << '4' if opts[:underline]
         codes << '7' if opts[:reverse]
-        codes << "38;5;#{opts[:fg]}" if opts[:fg]
-        codes << "48;5;#{opts[:bg]}" if opts[:bg].is_a?(Integer)
+        codes << color_code('38', opts[:fg]) if colour?(opts[:fg])
+        codes << color_code('48', opts[:bg]) if colour?(opts[:bg])
         # `bg: :default` paints the terminal's own background back on, which
         # keeps a filled run from bleeding into a chrome run that follows it
         # (see the border style).
         codes << '49' if opts[:bg] == :default
         codes.empty? ? RESET : "\e[#{codes.join(';')}m"
+      end
+
+      # A colour is either an xterm-256 index (Integer) or a "#rrggbb"
+      # String, which is emitted as truecolor. That lets a theme use the
+      # exact palette of the running terminal colour scheme instead of an
+      # xterm approximation of it.
+      def colour?(value)
+        value.is_a?(Integer) || (value.is_a?(String) && value.match?(/\A#\h{6}\z/))
+      end
+
+      def color_code(prefix, value)
+        if value.is_a?(String) && (m = value.match(/\A#(\h{2})(\h{2})(\h{2})\z/))
+          "#{prefix};2;#{m[1].to_i(16)};#{m[2].to_i(16)};#{m[3].to_i(16)}"
+        else
+          "#{prefix};5;#{value}"
+        end
       end
     end
   end

@@ -23,9 +23,13 @@ require_relative "tui/model_list"
 
 Rubot::TUI::Compat.apply
 
+# The TUI borrows the everforest palette omarchy ships, so the chrome, the
+# markdown text and the diffs sit on the same colours as the terminal.
+::TUI::Theme.install(:everforest)
+
 # The completed-tool marker is a softened green: the bright ":success"
 # green is reserved for explicit confirmations ("✓ Session cleared").
-::TUI::Style.define(:tool_ok, fg: 71)
+::TUI::Style.define(:tool_ok, fg: ::TUI::Theme::EVERFOREST_PALETTE[:good])
 
 module Rubot
   # Terminal channel REPL for rubot, built on ruby-tui

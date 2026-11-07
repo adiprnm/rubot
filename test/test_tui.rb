@@ -513,7 +513,7 @@ module Rubot
       app = repl.instance_variable_get(:@app)
       line = app.render_lines.find { |l| l.include?("Operation canceled by user") }
       refute_nil line, "the cancellation notice shows above the input"
-      assert_includes line, "38;5;203", "the notice is red"
+      assert_includes line, "38;2;230;126;128", "the notice is red"
 
       ev = repl.instance_variable_get(:@events)
       ev << [ :stream_start ]

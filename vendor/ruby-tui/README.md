@@ -293,13 +293,22 @@ TUI::Style.define(:mine, fg: 250, bg: 236)
 canvas.put(x, y, '!', :mine)
 ```
 
-Two themes ship with the library:
+Three themes ship with the library:
 
 * `:dark` (the default) is grey-only: the chrome uses the terminal's grey
   ramp, text fields carry **no colour codes at all** (the value uses the
   terminal's default foreground, the placeholder only goes faint, the block
   cursor only reverses — and while a field is empty the caret is just an
   underline, so the hint stays transparent) and `:accent` is just bold.
+* `:everforest` paints the omarchy *everforest* palette as truecolor hex —
+  warm `#d3c6aa` text on `#2d353b`, blue accent, green / yellow / red
+  statuses — so the UI matches the terminal and editor:
+
+```ruby
+TUI::Theme.install(:everforest)
+TUI::Theme::EVERFOREST_PALETTE[:good]   # => "#a7c080"
+```
+
 * `:plain` goes further and drops every colour code from the chrome, using
   only bold / dim / reverse, so the terminal's own theme decides everything:
 

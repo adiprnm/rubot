@@ -16,20 +16,25 @@ module Rubot
     # fenced code, horizontal rules, ON-dash pipe tables. Inline: `code`,
     # **bold**, __bold__, *italic*, _italic_, ~~strike~~, [text](url).
     module Markdown
+      # Everforest (omarchy theme): headings in green and blue, body text in
+      # the warm foreground, code on the darker background so a block reads
+      # as a panel instead of a bright patch.
+      PALETTE = ::TUI::Theme::EVERFOREST_PALETTE
+
       STYLES = {
-        md_h1:       { fg: 51, bold: true },
-        md_h:        { fg: 141, bold: true },
-        md_bold:     { bold: true, fg: 255 },
-        md_bold_italic: { bold: true, italic: true, fg: 255 },
-        md_italic:   { italic: true, fg: 255 },
-        md_strike:   { fg: 240 },
-        md_code:     { fg: 216, bg: 235 },
-        md_code_blk: { fg: 250, bg: 234 },
-        md_link:     { fg: 39, underline: true },
-        md_rule:     { fg: 238 },
-        md_quote:    { fg: 245 },
-        md_table_border: { fg: 245 },
-        md_table_head:   { fg: 255, bold: true }
+        md_h1:       { fg: PALETTE[:good], bold: true },
+        md_h:        { fg: PALETTE[:accent], bold: true },
+        md_bold:     { bold: true, fg: PALETTE[:text] },
+        md_bold_italic: { bold: true, italic: true, fg: PALETTE[:text] },
+        md_italic:   { italic: true, fg: PALETTE[:text] },
+        md_strike:   { fg: PALETTE[:muted] },
+        md_code:     { fg: PALETTE[:warn], bg: PALETTE[:bg1] },
+        md_code_blk: { fg: PALETTE[:text], bg: PALETTE[:bg_dim] },
+        md_link:     { fg: PALETTE[:accent2], underline: true },
+        md_rule:     { fg: PALETTE[:border] },
+        md_quote:    { fg: PALETTE[:dim] },
+        md_table_border: { fg: PALETTE[:border] },
+        md_table_head:   { fg: PALETTE[:text], bold: true }
       }.freeze
 
       INLINE_RE = /

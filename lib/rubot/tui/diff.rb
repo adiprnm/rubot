@@ -33,23 +33,24 @@ module Rubot
       MAX_LINE  = 500          # characters per rendered line
       GAP_MAX   = 72           # pi-diff caps the gap rule at 72 cells
 
-      # pi-diff's "default" preset: fg accents, tinted line/gutter bands and
-      # the chrome greys. Truecolor so the look is identical, not an xterm
-      # approximation.
+      # Everforest (omarchy theme): git-style green/red accents, tinted
+      # line and gutter bands derived from the everforest background, and
+      # the grey ramp for the chrome. Truecolor so the look is identical,
+      # not an xterm approximation.
       BOLD           = "\e[1m"
-      FG_ADD         = "\e[38;2;120;210;145m"  # #78d291
-      FG_DEL         = "\e[38;2;235;125;125m"  # #eb7d7d
-      FG_DIM         = "\e[38;2;165;165;165m"  # #a5a5a5
-      FG_LNUM        = "\e[38;2;190;190;190m"  # #bebebe
-      FG_RULE        = "\e[38;2;75;75;75m"     # #4b4b4b
-      FG_TEXT        = "\e[38;2;235;235;235m"  # #ebebeb
-      FG_CTX         = "\e[38;2;200;200;200m"  # #c8c8c8
-      BG_ADD         = "\e[48;2;22;38;32m"     # #162620
-      BG_DEL         = "\e[48;2;45;25;25m"     # #2d1919
-      BG_ADD_W       = "\e[48;2;35;75;50m"     # #234b32 (changed words)
-      BG_DEL_W       = "\e[48;2;80;35;35m"     # #502323 (changed words)
-      BG_GUTTER_ADD  = "\e[48;2;18;32;26m"     # #12201a
-      BG_GUTTER_DEL  = "\e[48;2;38;22;22m"     # #261616
+      FG_ADD         = "\e[38;2;167;192;128m"  # #a7c080 green
+      FG_DEL         = "\e[38;2;230;126;128m"  # #e67e80 red
+      FG_DIM         = "\e[38;2;133;146;137m"  # #859289 grey1
+      FG_LNUM        = "\e[38;2;157;169;160m"  # #9da9a0 grey2
+      FG_RULE        = "\e[38;2;79;88;94m"     # #4f585e dark fg
+      FG_TEXT        = "\e[38;2;211;198;170m"  # #d3c6aa foreground
+      FG_CTX         = "\e[38;2;157;169;160m"  # #9da9a0 grey2
+      BG_ADD         = "\e[48;2;51;64;58m"     # #33403a green tint on bg0
+      BG_DEL         = "\e[48;2;61;50;52m"     # #3d3234 red tint on bg0
+      BG_ADD_W       = "\e[48;2;71;99;80m"     # #476350 (changed words)
+      BG_DEL_W       = "\e[48;2;107;65;73m"    # #6b4149 (changed words)
+      BG_GUTTER_ADD  = "\e[48;2;43;51;47m"     # #2b332f
+      BG_GUTTER_DEL  = "\e[48;2;54;43;45m"     # #362b2d
       BOLD_ADD       = "#{BOLD}#{FG_ADD}"
       BOLD_DEL       = "#{BOLD}#{FG_DEL}"
       WORD_MIN_SIM   = 0.15

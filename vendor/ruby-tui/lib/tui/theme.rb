@@ -106,13 +106,77 @@ module TUI
       danger: DARK[:danger], error: DARK[:error]
     }.freeze
 
+    # Everforest (dark) -- the exact palette omarchy ships as its
+    # "everforest" theme (themes/everforest/colors.toml upstream), written
+    # as truecolor hex so the TUI lands on the same colours as the editor
+    # and terminal instead of an xterm approximation.
+    EVERFOREST_PALETTE = {
+      bg:        "#2d353b",
+      bg_dim:    "#232a2e",
+      bg1:       "#343f44",
+      border:    "#4f585e",
+      border_hi: "#859289",
+      track:     "#3d484d",
+      thumb:     "#9da9a0",
+      text:      "#d3c6aa",
+      dim:       "#9da9a0",
+      muted:     "#859289",
+      title:     "#d3c6aa",
+      accent:    "#7fbbb3",
+      accent2:   "#a7c080",
+      good:      "#a7c080",
+      warn:      "#dbbc7f",
+      bad:       "#e67e80",
+      sel_bg:    "#3d484d",
+      sel_fg:    "#d3c6aa"
+    }.freeze
+
+    # Same semantic names as DARK, painted with the everforest palette. The
+    # accent keeps its colour here (blue, then green as a secondary) because
+    # everforest has one worth showing.
+    EVERFOREST = {
+      text:          { fg: EVERFOREST_PALETTE[:text] },
+      muted:         { fg: EVERFOREST_PALETTE[:muted] },
+      dim:           { fg: EVERFOREST_PALETTE[:dim] },
+      title:         { fg: EVERFOREST_PALETTE[:title], bold: true },
+      subtitle:      { fg: EVERFOREST_PALETTE[:dim], bold: true },
+
+      accent:        { fg: EVERFOREST_PALETTE[:accent], bold: true },
+      label:         { fg: EVERFOREST_PALETTE[:muted] },
+      value:         { fg: EVERFOREST_PALETTE[:text] },
+      success:       { fg: EVERFOREST_PALETTE[:good] },
+      warning:       { fg: EVERFOREST_PALETTE[:warn] },
+      danger:        { fg: EVERFOREST_PALETTE[:bad] },
+      error:         { fg: EVERFOREST_PALETTE[:bad], bold: true },
+      hint:          { fg: EVERFOREST_PALETTE[:muted] },
+
+      border:        { fg: EVERFOREST_PALETTE[:border], bg: :default },
+      border_focus:  { fg: EVERFOREST_PALETTE[:border_hi], bg: :default },
+      track:         { fg: EVERFOREST_PALETTE[:track] },
+      grid:          { fg: EVERFOREST_PALETTE[:muted], dim: true },
+      thumb:         { fg: EVERFOREST_PALETTE[:thumb] },
+
+      selection:     { fg: EVERFOREST_PALETTE[:sel_fg], bg: EVERFOREST_PALETTE[:sel_bg], bold: true },
+      selection_dim: { fg: EVERFOREST_PALETTE[:dim], bg: EVERFOREST_PALETTE[:sel_bg] },
+      cursor:        { reverse: true },
+
+      tab_active:    { bold: true },
+      tab_inactive:  { fg: EVERFOREST_PALETTE[:dim] },
+      header:        { fg: EVERFOREST_PALETTE[:muted] },
+
+      field:         {},
+      placeholder:   { dim: true },
+      cursor_placeholder: { underline: true }
+    }.freeze
+
     # Kept at module level, not inside `class << self`: Spinel resolves
     # constants defined in a singleton class as nil, so the lookup below
     # would see THEMES as nil.
-    THEMES = { dark: DARK, plain: PLAIN }.freeze
+    THEMES = { dark: DARK, plain: PLAIN, everforest: EVERFOREST }.freeze
 
     class << self
-      # Install a theme. :dark is the default, :plain uses no colours at all.
+      # Install a theme. :dark is the default, :plain uses no colours at all,
+      # :everforest paints the omarchy "everforest" palette.
       def install(name = :dark)
         name = name.to_sym if name.respond_to?(:to_sym)
         styles = THEMES[name]
