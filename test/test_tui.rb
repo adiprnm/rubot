@@ -56,17 +56,17 @@ module Rubot
       prompt.handle_key(::TUI::Key.printable("h"))
       app = repl.instance_variable_get(:@app)
       view = plain(app.render_lines)
-      status_ix = view.index { |l| l.include?("session default") }
+      status_ix = view.index { |l| l.include?("openai · gpt-test") }
       prompt_ix = view.index { |l| l.include?("h") }
 
       assert prompt_ix && status_ix, "both must render"
       assert_operator status_ix, :>, prompt_ix, "status row sits under the input"
     end
 
-    def test_status_line_puts_session_metrics_left_of_session_info
+    def test_status_line_puts_metrics_left_of_the_model_info
       repl = build_repl
       ev = repl.instance_variable_get(:@events)
-      ev << [ :status_right, "session default · openai · gpt-test" ]
+      ev << [ :status_right, "openai · gpt-test" ]
       ev << [ :status_left, "$0.001 · cache 60% · ctx 8.2%" ]
       repl.send(:pump)
 
@@ -76,23 +76,109 @@ module Rubot
       assert line, "the metrics row renders"
       assert_includes line, "cache 60%"
       assert_includes line, "ctx 8.2%"
-      assert_includes line, "session default", "session info keeps its spot on the right"
-      assert_operator line.index("$0.001"), :<, line.index("session default"),
+      assert_includes line, "openai · gpt-test", "model info keeps its spot on the right"
+      assert_operator line.index("$0.001"), :<, line.index("openai · gpt-test"),
                       "metrics sit on the left: #{line.inspect}"
     end
 
-    def test_status_line_truncates_metrics_before_session_info
+    def test_status_line_hides_the_session_name
+      repl = build_repl
+      repl.send(:push_status_info)
+      repl.send(:pump)
+
+      status = repl.instance_variable_get(:@status)
+      assert_equal "openai · gpt-test", status.instance_variable_get(:@right)
+      refute plain(repl.instance_variable_get(:@app).render_lines).any? { |l| l.include?("session") },
+             "the footer does not name the session"
+    end
+
+    def test_status_line_truncates_metrics_before_model_info
       status = TUI::StatusLine.new
       status.layout(::TUI::Rect.new(0, 0, 30, 1))
       status.left = "$0.001 · cache 60% · ctx 8.2% · extra-wide-metric"
-      status.right = "session default"
+      status.right = "openai · gpt-test"
       canvas = ::TUI::Canvas.new(30, 1)
       status.render(canvas)
 
       row = plain(canvas.lines).first
       assert_operator ::TUI::Text.width(row), :<=, 30, row.inspect
-      assert_includes row, "session default", "session info survives: #{row.inspect}"
+      assert_includes row, "openai · gpt-test", "model info survives: #{row.inspect}"
       assert_includes row, "\u2026", "the cut is marked: #{row.inspect}"
+    end
+
+    def test_workspace_line_sits_between_the_prompt_and_the_usage_footer
+      repl = build_repl
+      line = repl.instance_variable_get(:@workspace_line)
+      ev = repl.instance_variable_get(:@events)
+      ev << [ :status_left, "$0.001 · cache 60% · ctx 8.2%" ]
+      repl.send(:pump)
+
+      lines = plain(repl.instance_variable_get(:@app).render_lines)
+      workspace_ix = lines.index { |l| l.include?(line.label) }
+      prompt_ix = lines.index { |l| l.include?("\u256d") }
+      usage_ix = lines.index { |l| l.include?("$0.001") }
+
+      assert workspace_ix && prompt_ix && usage_ix, "all three rows render: #{lines.inspect}"
+      assert_operator workspace_ix, :>, prompt_ix, "the working directory sits under the prompt box"
+      assert_operator usage_ix, :>, workspace_ix, "the price estimate sits below the working directory"
+    end
+
+    def test_workspace_line_shows_the_launch_directory_without_a_prefix
+      Dir.mktmpdir do |dir|
+        line = TUI::WorkspaceLine.new
+        line.workspace = dir
+        line.layout(::TUI::Rect.new(0, 0, 120, 1))
+        canvas = ::TUI::Canvas.new(120, 1)
+        line.render(canvas)
+
+        row = plain(canvas.lines).first.rstrip
+        assert_equal dir, row
+        refute_includes row, "workspace "
+      end
+    end
+
+    def test_workspace_line_shows_the_git_branch
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, ".git"))
+        File.write(File.join(dir, ".git", "HEAD"), "ref: refs/heads/feature/x\n")
+
+        line = TUI::WorkspaceLine.new
+        line.workspace = dir
+
+        assert_equal "#{dir} @ feature/x", line.label
+      end
+    end
+
+    def test_workspace_line_finds_the_branch_from_a_subdirectory
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, ".git"))
+        File.write(File.join(dir, ".git", "HEAD"), "ref: refs/heads/main\n")
+        sub = File.join(dir, "app", "models")
+        FileUtils.mkdir_p(sub)
+
+        line = TUI::WorkspaceLine.new
+        line.workspace = sub
+
+        assert_equal "#{sub} @ main", line.label
+      end
+    end
+
+    def test_workspace_line_shortens_a_detached_head
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, ".git"))
+        File.write(File.join(dir, ".git", "HEAD"), "#{"a" * 40}\n")
+
+        line = TUI::WorkspaceLine.new
+        line.workspace = dir
+
+        assert_equal "#{dir} @ aaaaaaa", line.label
+      end
+    end
+
+    def test_workspace_line_abbreviates_the_home_directory
+      line = TUI::WorkspaceLine.new
+
+      assert_equal "~/work/rubot", line.send(:abbreviate, File.join(Dir.home, "work", "rubot"))
     end
 
     def test_usage_footer_updates_after_a_turn

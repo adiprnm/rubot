@@ -145,6 +145,13 @@ $ rubot
 🤖 Assistant: [streamed response...]
 ```
 
+The session runs with the directory `rubot` was launched from as its working
+directory. `shell_exec` starts there and relative paths in `file_ops` resolve
+against it. The agent's data workspace (`agents.defaults.workspace`, default
+`~/.rubot/workspace`) still holds `SOUL.md`, `MEMORY.md`, `skills/`, and
+`sessions/`; it is not the shell's working directory unless that is where you
+launched rubot.
+
 ### REPL Commands
 
 Every command's output is set apart in the transcript: one blank line above
@@ -248,10 +255,15 @@ foot, iTerm2) or xterm's modifyOtherKeys — rubot turns both on for the duratio
 of the session. Terminals that cannot distinguish it (Alacritty) send a plain
 `Enter`.
 
-Under the prompt, the status row tracks the running turn's estimated cost,
-cache hit rate, and how much of the model's context window is in use (for
-example `$0.004 · cache 87.3% · ctx 11.6%`), with the session and model on
-the right. Figures refresh after every turn; `/context` has the full report.
+Under the prompt, one dim row shows the directory rubot was launched from,
+followed by the current git branch when that directory (or one of its
+parents) is a work tree (for example `~/Projects/rubot @ main`); `~`
+abbreviates the home directory. Below it, the status row tracks the running
+turn's estimated cost, cache hit rate, and how much of the model's context
+window is in use (for example `$0.004 · cache 87.3% · ctx 11.6%`), with the
+model on the right. Figures refresh after every turn; `/context` has the full
+report. The session name is not shown in the footer — use `/session` to print
+it.
 
 When the agent writes or appends to a file, the TUI renders the diff right
 under the `✓ file_ops write …` row in the same look as the
@@ -1015,7 +1027,8 @@ Rubot comes with 5 built-in tools:
 
 ### `shell_exec`
 Execute shell commands. The LLM can run commands and see their output.
-Dangerous commands like `rm -rf /` are blocked.
+Dangerous commands like `rm -rf /` are blocked. Commands run in the directory
+`rubot` was launched from (the TUI shows it above the usage footer).
 
 New scripts and one-off snippets are written in Ruby (`ruby -e '...'` or a
 `.rb` file). A built-in `Scripting Language` rule in the system prompt says so,

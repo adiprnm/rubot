@@ -14,6 +14,7 @@ require_relative "tui/transcript"
 require_relative "tui/command_menu"
 require_relative "tui/prompt_input"
 require_relative "tui/status_line"
+require_relative "tui/workspace_line"
 require_relative "tui/working_badge"
 require_relative "tui/confirm_prompt"
 require_relative "tui/session_list"
@@ -34,7 +35,8 @@ module Rubot
   #
   #   scrolled conversation log
   #   prompt box (thin bordered box, no placeholder/hints)
-  #   status row (spinner · session/model)
+  #   workspace row (launch directory · git branch)
+  #   status row (usage metrics · model)
   #
   # Keys: enter send (steer the running turn if one is in flight) ·
   # shift+enter newline · tab completes /commands · ↑↓ history ·
@@ -228,6 +230,8 @@ module Rubot
       @tui = true
       @log = Rubot::TUI::LogView.new
       @status = Rubot::TUI::StatusLine.new
+      @workspace_line = Rubot::TUI::WorkspaceLine.new
+      @workspace_line.workspace = Dir.pwd
       @menu = Rubot::TUI::CommandMenu.new(DESCRIPTIONS)
       @prompt = Rubot::TUI::PromptInput.new(@history, COMPLETABLE)
       @confirm_prompt = Rubot::TUI::ConfirmPrompt.new(log: @log)
@@ -266,6 +270,7 @@ module Rubot
       stack.add(@working, size: ::TUI.fixed(3))
       stack.add(@menu, size: ::TUI.auto)         # slash-command palette
       stack.add(@prompt_box, size: ::TUI.auto)   # grows with multiline input
+      stack.add(@workspace_line, size: ::TUI.fixed(1))
       stack.add(@status, size: ::TUI.fixed(1))
 
       @app = ::TUI::App.new(::TUI::Layout::Padding.new(stack, left: 1))
@@ -375,7 +380,7 @@ module Rubot
       @external_editor = configured_editor
       info = agent.startup_info
       @events << [ :status_right,
-                  "session #{agent.session.id} · #{info[:provider]} · #{info[:model]}" ]
+                  "#{info[:provider]} · #{info[:model]}" ]
     rescue StandardError => e
       @events << [ :error_text, "#{e.class}: #{e.message}" ]
     end
@@ -1411,7 +1416,7 @@ module Rubot
       @log.add_entry([ [ "type /help for commands · esc cancels a running turn · type to steer it · pgup/pgdn scrolls", :dim ] ])
       @log.add_entry([ [ "", nil ] ])
       @banner_count = @log.entry_count
-      @status.right = "session #{@session_id} · #{provider} · #{model}" if info[:provider]
+      @status.right = "#{provider} · #{model}" if info[:provider]
     end
 
     # ------------------------------------------------------------------
