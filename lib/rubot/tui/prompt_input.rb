@@ -8,8 +8,8 @@ module Rubot
     # newlines and a cursor row/col) with command-line history (up / down
     # while the buffer is a single line), /command completion (tab cycles
     # the matches) and the slash-command palette (typing "/" lists the
-    # commands, ↑/↓ move the highlight and enter takes the highlighted one
-    # into the buffer). All key sets are consumed here so they never bubble
+    # commands, ↑/↓ move the highlight and enter runs the highlighted one
+    # right away). All key sets are consumed here so they never bubble
     # into global bindings or focus movement.
     class PromptInput < ::TUI::MultiLine
       # An inline session list opened by /resume. While it is set it owns the
@@ -83,11 +83,8 @@ module Rubot
           end
           true
         when :enter
-          if menu_open?
-            super if menu_enter == :submit
-          else
-            super
-          end
+          pick_menu if menu_open?
+          super
           true
         when :escape
           return false unless menu_open?
@@ -113,21 +110,13 @@ module Rubot
 
       private
 
-      # Enter in the palette: put the highlighted command in the box. When
-      # the box already holds exactly that command, Enter runs it instead,
-      # so a fully typed command is never swallowed by the highlight.
-      def menu_enter
-        current = @menu_items[@menu_index]
-        if current == value
-          close_menu
-          :submit
-        else
-          buffer.set(current)
-          @menu_suppressed = true
-          close_menu
-          emit(::TUI::Events::CHANGE, value)
-          :accept
-        end
+      # Enter in the palette: run the highlighted command right away. The
+      # buffer is set to it just long enough for the submit that follows, so
+      # the command never needs a second Enter.
+      def pick_menu
+        buffer.set(@menu_items[@menu_index])
+        close_menu
+        emit(::TUI::Events::CHANGE, value)
       end
 
       def move_menu(delta)

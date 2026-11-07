@@ -524,7 +524,7 @@ module Rubot
       assert_equal TUI::COMPLETABLE.length - 1, input.menu_index, "up wraps to the last row"
     end
 
-    def test_enter_takes_the_highlighted_command_then_runs_it
+    def test_enter_runs_the_highlighted_command
       input = TUI::PromptInput.new([], TUI::COMPLETABLE)
       submits = []
       input.on(:submit) { |v| submits << v }
@@ -532,12 +532,8 @@ module Rubot
       assert_equal %w[/session], input.menu_items
 
       input.handle_key(::TUI::Key.new(:enter))
-      assert_equal "/session", input.value, "enter selects the command into the prompt"
-      refute input.menu_open?, "the list closes once the command is in the box"
-      assert_empty submits, "selecting is not sending"
-
-      input.handle_key(::TUI::Key.new(:enter))
-      assert_equal [ "/session" ], submits
+      assert_equal [ "/session" ], submits, "enter executes the highlighted command"
+      refute input.menu_open?, "the list closes with the command"
     end
 
     def test_enter_runs_a_command_typed_in_full
