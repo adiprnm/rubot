@@ -762,6 +762,122 @@ module Rubot
       refute input.menu_open?, "a slash inside a message is just text"
     end
 
+    # A temporary tree with a nested file, used by the @-mention tests.
+    def with_files
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "lib"))
+        File.write(File.join(dir, "README.md"), "")
+        File.write(File.join(dir, "lib", "app.rb"), "")
+        yield TUI::PromptInput.new([], TUI::COMPLETABLE, files: TUI::FileIndex.new(dir))
+      end
+    end
+
+    def test_at_lists_the_files_of_the_working_directory
+      with_files do |input|
+        assert_empty input.menu_items
+
+        input.handle_key(::TUI::Key.printable("@"))
+
+        assert input.menu_open?, "a bare @ lists the files"
+        assert_equal :file, input.menu_mode
+        assert_equal %w[README.md lib/ lib/app.rb], input.menu_items
+        assert_equal "README.md", input.menu_items[input.menu_index], "the shallowest path leads"
+      end
+    end
+
+    def test_mention_filters_as_the_path_is_typed
+      with_files do |input|
+        "@app".each_char { |c| input.handle_key(::TUI::Key.printable(c)) }
+
+        assert_equal [ "lib/app.rb" ], input.menu_items
+      end
+    end
+
+    def test_arrow_keys_move_the_file_highlight
+      with_files do |input|
+        input.handle_key(::TUI::Key.printable("@"))
+
+        input.handle_key(::TUI::Key.new(:down))
+        assert_equal 1, input.menu_index
+        input.handle_key(::TUI::Key.new(:down))
+        assert_equal 2, input.menu_index
+        input.handle_key(::TUI::Key.new(:up))
+        assert_equal 1, input.menu_index
+      end
+    end
+
+    def test_enter_completes_a_mention_instead_of_submitting
+      with_files do |input|
+        submits = []
+        input.on(:submit) { |v| submits << v }
+        "@READ".each_char { |c| input.handle_key(::TUI::Key.printable(c)) }
+
+        input.handle_key(::TUI::Key.new(:enter))
+
+        assert_equal "@README.md ", input.value, "enter drops the path into the prompt"
+        assert_empty submits, "a mention is text, not a command"
+        refute input.menu_open?, "the trailing space ends the mention"
+      end
+    end
+
+    def test_picking_a_directory_keeps_the_mention_open
+      with_files do |input|
+        "@li".each_char { |c| input.handle_key(::TUI::Key.printable(c)) }
+        input.handle_key(::TUI::Key.new(:enter))
+
+        assert_equal "@lib/", input.value
+        assert input.menu_open?, "the mention stays open to walk into the directory"
+        assert_equal %w[lib/ lib/app.rb], input.menu_items
+      end
+    end
+
+    def test_tab_completes_a_mention
+      with_files do |input|
+        "@app".each_char { |c| input.handle_key(::TUI::Key.printable(c)) }
+        input.handle_key(::TUI::Key.new(:tab))
+
+        assert_equal "@lib/app.rb ", input.value
+      end
+    end
+
+    def test_escape_closes_the_file_menu
+      with_files do |input|
+        input.handle_key(::TUI::Key.printable("@"))
+        assert input.handle_key(::TUI::Key.new(:escape))
+
+        refute input.menu_open?
+        assert_equal "@", input.value
+      end
+    end
+
+    def test_at_inside_a_word_does_not_open_the_menu
+      with_files do |input|
+        "mail a@b".each_char { |c| input.handle_key(::TUI::Key.printable(c)) }
+
+        refute input.menu_open?, "an email address is not a mention"
+      end
+    end
+
+    def test_file_palette_renders_above_the_prompt
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "README.md"), "")
+        repl = build_repl
+        app = repl.instance_variable_get(:@app)
+        prompt = repl.instance_variable_get(:@prompt)
+        prompt.instance_variable_set(:@files, TUI::FileIndex.new(dir))
+        prompt.instance_variable_set(:@files_stale, true)
+
+        prompt.handle_key(::TUI::Key.printable("@"))
+        view = plain(app.render_lines)
+
+        menu_ix = view.index { |l| l.include?("\u276f README.md") }
+        prompt_ix = view.index { |l| l.include?("\u2502 @") }
+        refute_nil menu_ix, "the file palette is drawn: #{view.map(&:strip).inspect}"
+        refute_nil prompt_ix
+        assert_operator menu_ix, :<, prompt_ix, "the palette sits above the input box"
+      end
+    end
+
     def test_command_menu_scrolls_the_highlight_into_view
       items = TUI::COMPLETABLE
       menu = TUI::CommandMenu.new(TUI::COMMANDS)

@@ -4,10 +4,11 @@ require "tui"
 
 module Rubot
   class TUI
-    # The slash-command palette drawn just above the prompt while the buffer
-    # is a bare /command prefix. It is deliberately not focusable: the prompt
-    # keeps the keyboard, and PromptInput reports which row is highlighted,
-    # so ↑/↓ and enter never leave the input box.
+    # The palette drawn just above the prompt: the slash commands while the
+    # buffer is a bare /prefix, the files under the working directory while
+    # the caret sits in an @mention. It is deliberately not focusable: the
+    # prompt keeps the keyboard, and PromptInput reports which row is
+    # highlighted, so ↑/↓ and enter never leave the input box.
     class CommandMenu < ::TUI::Component
       MAX_ROWS = 8
       MARKER = "❯"
@@ -80,7 +81,12 @@ module Rubot
         canvas.fill(@rect.x, y, @rect.w, 1, " ", :selection) if selected
         x = @rect.x + PAD
         name_style = selected ? :selection : :accent
-        canvas.put(x, y, "#{prefix}#{::TUI::Text.pad(name, @name_width)}", name_style)
+        # File paths have no description and can be longer than the palette,
+        # so the name is clipped to the room it has.
+        room = @rect.w - PAD - ::TUI::Text.width(prefix)
+        label = ::TUI::Text.pad(name, @name_width)
+        label = ::TUI::Text.truncate(label, [ room, 1 ].max) if room < ::TUI::Text.width(label)
+        canvas.put(x, y, "#{prefix}#{label}", name_style)
 
         description = @commands[name].to_s
         return if description.empty?
