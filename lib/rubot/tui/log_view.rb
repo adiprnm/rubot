@@ -21,6 +21,13 @@ module Rubot
       # instead of under the marker itself.
       LIST_PREFIX = /\A(\s*(?:[•▏]|[-*+]|\d+[.)])\s+)/.freeze
 
+      # A segment may carry a third element, :fill, which paints its text
+      # cell (" " for a background band, "─" for a rule) from where it
+      # starts to the right edge of the view. It lets a renderer ask for a
+      # full-width row without knowing the width ahead of time, so the band
+      # stays full-width across a resize.
+      FILL = :fill
+
       def initialize
         super
         @entries = []        # [[text, style], ...] per entry
@@ -200,8 +207,18 @@ module Rubot
         (@scroll_y..last).each do |i|
           row = @rect.y + (i - @scroll_y)
           x = @rect.x
-          @lines[i].each do |text, style|
+          @lines[i].each do |text, style, mode|
             next if text.empty?
+
+            if mode == FILL
+              cells = @rect.right - x
+              unit = ::TUI::Text.width(text)
+              if cells.positive? && unit.positive?
+                canvas.put(x, row, text * (cells / unit), style)
+                x += cells
+              end
+              break
+            end
 
             canvas.put(x, row, text, style)
             x += ::TUI::Text.width(text)
@@ -232,7 +249,9 @@ module Rubot
 
         out = +""
         col = @rect.x
-        line.each do |text, _style|
+        line.each do |text, _style, mode|
+          next if mode == FILL
+
           text.to_s.each_char do |ch|
             width = ::TUI::Text.width(ch)
             out << ch if width.positive? && col + width - 1 >= from && col <= to
@@ -277,10 +296,10 @@ module Rubot
         # markdown blocks). Split into hard lines first, so each one can
         # carry its own hanging indent.
         hard_lines = [ [] ]
-        segments.each do |(text, style)|
+        segments.each do |(text, style, mode)|
           text.to_s.split("\n", -1).each_with_index do |part, i|
             hard_lines << [] if i.positive?
-            hard_lines.last << [ part, style ] unless part.empty?
+            hard_lines.last << [ part, style, mode ] unless part.empty?
           end
         end
 
@@ -304,7 +323,14 @@ module Rubot
           at_start = true
         end
 
-        segments.each do |(text, style)|
+        segments.each do |(text, style, mode)|
+          if mode == FILL
+            lines.last << [ text, style, FILL ] unless text.to_s.empty?
+            used = width
+            at_start = false
+            break
+          end
+
           text.to_s.split(/(?<= )|(?= )/).each do |token|
             if token.strip.empty?
               space_w = ::TUI::Text.width(token)
@@ -355,7 +381,7 @@ module Rubot
       end
 
       def line_width(line)
-        line.sum { |(text, _style)| ::TUI::Text.width(text.to_s) }
+        line.sum { |(text, _style, mode)| mode == FILL ? 0 : ::TUI::Text.width(text.to_s) }
       end
 
       def follow_bottom

@@ -146,7 +146,7 @@ module Rubot
       end
     end
 
-    def add(role, content, tool_calls: nil, tool_call_id: nil, reasoning_content: nil)
+    def add(role, content, tool_calls: nil, tool_call_id: nil, reasoning_content: nil, ui_diff: nil)
       msg = {
         "role" => self.class.normalize_utf8(role),
         "content" => self.class.normalize_utf8(content),
@@ -155,6 +155,10 @@ module Rubot
       msg["tool_calls"] = self.class.normalize_utf8(tool_calls) if tool_calls
       msg["tool_call_id"] = self.class.normalize_utf8(tool_call_id) if tool_call_id
       msg["reasoning_content"] = self.class.normalize_utf8(reasoning_content) if reasoning_content
+      # UI-only annotation (the before/after of a file write) so /resume can
+      # redraw the diff. Not sent to the model: conversation_history builds a
+      # fresh hash with only role/content/tool_calls/tool_call_id.
+      msg["ui_diff"] = self.class.normalize_utf8(ui_diff) if ui_diff
       @messages << msg
       trim! if @workspace
       save!

@@ -301,7 +301,7 @@ class TestSessionSummarization < Minitest::Test
   def test_summarize_and_trim_removes_orphaned_tool_messages
     70.times { |i| @session.add("user", "Message #{i}") }
     # Add a tool message at the trimming boundary
-    @session.add("assistant", "Let me check", tool_calls: [{ "id" => "t1" }])
+    @session.add("assistant", "Let me check", tool_calls: [ { "id" => "t1" } ])
     @session.add("tool", "Result", tool_call_id: "t1")
 
     @provider.response = "Summary"
@@ -699,6 +699,18 @@ class TestSessionHistoryWindowing < Minitest::Test
     assert_equal %w[user assistant tool], messages.map { |m| m["role"] }
     assert_equal "result", messages.last["content"]
     assert_empty Rubot::Session.transcript(@workspace, "missing")
+  end
+
+  def test_a_tool_message_keeps_its_ui_diff_across_a_reload
+    session = Rubot::Session.new("with-diff", workspace: @workspace)
+    session.add("tool", "Written 4 characters", tool_call_id: "call_1",
+                ui_diff: { "path" => "notes.md", "before" => "old\n", "after" => "new\n" })
+
+    message = Rubot::Session.transcript(@workspace, "with-diff").last
+
+    assert_equal "call_1", message["tool_call_id"]
+    assert_equal "old\n", message["ui_diff"]["before"]
+    assert_equal "new\n", message["ui_diff"]["after"]
   end
 
   def test_last_prompt_is_the_newest_user_message

@@ -70,6 +70,11 @@ module Rubot
     # skipped calls still get an answer in the transcript.
     CANCELLED_TOOL_RESULT = "ERROR: cancelled by user (/stop); this tool was not executed."
 
+    # Before/after text kept on a write's tool message so the TUI can redraw
+    # its diff when the session is resumed. Skipped for very large files: the
+    # session file should not grow by a megabyte for one write.
+    MAX_UI_DIFF_CHARS = 120_000
+
     # Appended to the answer when a turn is stopped early.
     STOP_NOTICE = "⏹️ Stopped by user."
 
@@ -377,6 +382,8 @@ module Rubot
             # Fire pre-execution callback
             on_tool_call&.call(tool_name, arguments)
 
+            ui_snapshot = file_ui_snapshot(tool_name, arguments)
+
             begin
               tool_result = @tools.execute(tool_name, arguments)
             rescue StandardError => e
@@ -392,8 +399,10 @@ module Rubot
 
             log_debug("Tool result: #{tool_result[0..200]}")
 
-            # Add tool result to session
-            @session.add("tool", tool_result, tool_call_id: tool_call_id)
+            # Add tool result to session. A successful write carries its
+            # before/after text so the TUI can rebuild the diff on /resume.
+            @session.add("tool", tool_result, tool_call_id: tool_call_id,
+                                           ui_diff: file_ui_diff(ui_snapshot, tool_result))
           end
 
           # Continue the loop to get the next response
@@ -1217,6 +1226,37 @@ module Rubot
     # arguments were not valid JSON — which is what a tool call cut off at the
     # output limit looks like — so the caller can refuse to run it on a
     # half-read argument instead of silently executing with an empty hash.
+    # Before-content of a file a file_ops write/append is about to touch.
+    # nil for reads and every other tool.
+    def file_ui_snapshot(tool_name, arguments)
+      return nil unless tool_name == "file_ops" && arguments.is_a?(Hash)
+      return nil unless %w[write append].include?(arguments["operation"].to_s)
+
+      path = arguments["path"].to_s
+      return nil if path.empty?
+
+      expanded = File.expand_path(path)
+      before = File.exist?(expanded) ? File.read(expanded, encoding: "UTF-8") : nil
+      { path: path, expanded: expanded, before: before }
+    rescue StandardError
+      nil
+    end
+
+    # After-content for the TUI diff, or nil when the tool did not write.
+    def file_ui_diff(snapshot, result)
+      return nil unless snapshot
+      return nil unless result.to_s.match?(/\A(?:Written|Appended) \d+ characters/)
+
+      after = File.read(snapshot[:expanded], encoding: "UTF-8")
+      before = snapshot[:before]
+      return nil if before == after
+      return nil if before.to_s.length + after.to_s.length > MAX_UI_DIFF_CHARS
+
+      { "path" => snapshot[:path], "before" => before, "after" => after }
+    rescue StandardError
+      nil
+    end
+
     def parse_tool_call(tc)
       if tc.is_a?(Hash)
         fn = tc["function"]

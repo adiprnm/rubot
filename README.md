@@ -253,22 +253,27 @@ cache hit rate, and how much of the model's context window is in use (for
 example `$0.004 · cache 87.3% · ctx 11.6%`), with the session and model on
 the right. Figures refresh after every turn; `/context` has the full report.
 
-When the agent writes or appends to a file, the TUI renders a git-style diff
-right under the `✓ file_ops write …` row: `diff --git a<path> b<path>` with
-`---`/`+++` lines (`/dev/null` when a file is created or emptied), `@@ -a,n
-+b,m @@` hunks with real line numbers, three lines of context around each
-change (`git`'s own default), and the lines themselves in git's colours —
-hunks cyan, additions green, deletions red. The body is capped at 30 rows
-with a `… +N -M more` row, so a rewrite cannot flood the transcript. The built-in
-`Editing Files` rule in the system prompt (outside
+When the agent writes or appends to a file, the TUI renders the diff right
+under the `✓ file_ops write …` row in the same look as the
+[`pi-claude-code-ui`](https://www.npmjs.com/package/pi-claude-code-ui)
+extension (pi-diff's unified view): a summary line (`+2 -1 • 1 hunk at line
+20`), a dim rule, then one row per line with a coloured `▌` stripe, a tinted
+gutter and line number, a bold `+`/`-`, a `│` divider, and the content on a
+full-width tint. Changed words inside a paired `-`/`+` line get a brighter
+tint, three lines of context surround each change, and distant regions
+collapse into a `── N unmodified lines ──` rule. Long lines are truncated
+with `…` rather than wrapped, and the body is capped at 32 rows with a
+`… (N more diff lines)` row, so a rewrite cannot flood the transcript. The
+built-in `Editing Files` rule in the system prompt (outside
 the configurable prompt, like the `Scripting Language` rule) asks the agent to
 create and edit files through `file_ops` instead of in-place shell edits, and
 not to recite the file's contents in its reply once an edit succeeds — what
 changed is already visible in the interface; destructive shell edits (`sed -i`,
 `rm`, …) still go through the confirmation above. The tool still returns its plain `Written
 … characters` result
-to the model; the diff is a TUI view only, and it is not stored in the session,
-so `/resume` replays the tool rows without it.
+to the model; the diff is a TUI view only. Its before/after text is kept as UI
+metadata on the tool message (never sent to the model), so `/resume` redraws
+the same diff at the new width.
 
 When the agent's next action could destroy data (overwriting an existing
 file, a dangerous shell command), the worker asks first: the question is

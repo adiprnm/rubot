@@ -4,55 +4,75 @@ require "tui"
 
 module Rubot
   class TUI
-    # The edit-diff view for a file the agent just wrote, styled after
-    # pi's pi-claude-code-ui (the pi-diff look): every row carries a colored
-    # ▌ stripe, a tinned gutter with the line number, a bold + or - sign,
-    # a thin │ divider, then the content on a soft tint; gaps between
-    # changed regions collapse into "── N unmodified lines ──" rules. A
-    # summary row ("Updated <path> +A -M · K hunks") leads the block.
-    # TUI-only — the file tool keeps reporting a plain "Written
-    # N characters" result to the model.
+    # The edit-diff view for a file the agent just wrote, drawn exactly like
+    # the pi-claude-code-ui extension (pi-diff's unified view): a dim rule
+    # opens and closes the block, every row carries a coloured ▌ stripe, a
+    # tinted gutter with the line number, a bold + or -, a thin │ divider,
+    # then the content on a full-width tint. Changed words inside a paired
+    # -/+ line get a brighter tint, and gaps between regions collapse into
+    # "── N unmodified lines ──" rules. A summary row ("+A -M • K hunks at
+    # line N") leads the block.
+    #
+    # The palette mirrors pi-diff's "default" preset with truecolor ANSI, so
+    # it lands on any modern terminal. Background bands are emitted as
+    # LogView fill segments, which paint to the right edge at render time —
+    # the band stays full width when the terminal is resized.
     #
     # The diff is line-based (LCS) with the common leading and trailing
     # lines trimmed, so an ordinary edit costs little. Files too large to
     # diff in memory fall back to "all old lines removed, all new lines
-    # added", and the body is capped at `max_rows` rows with an
-    # "… N more diff lines" row so a rewrite cannot flood the transcript.
+    # added". The body is capped at `max_rows` rows with an
+    # "… (N more diff lines)" row so a rewrite cannot flood the transcript.
+    # TUI-only — the file tool keeps reporting a plain "Written N
+    # characters" result to the model.
     module Diff
       CONTEXT   = 3            # unchanged rows kept around each change
-      MAX_ROWS  = 30           # body rows shown before the "more" row
+      MAX_ROWS  = 32           # body rows shown before the "more" row
       MAX_LINES = 5_000        # per side; beyond this the fallback is used
       MAX_CELLS = 1_000_000    # cap on the LCS table (side_a * side_b)
-      MAX_LINE  = 300          # cells per rendered line, before the log wraps
-      MAX_LABEL = 60           # path cells in the summary row
+      MAX_LINE  = 500          # characters per rendered line
+      GAP_MAX   = 72           # pi-diff caps the gap rule at 72 cells
 
-      STYLES = {
-        diff_mark_add: { fg: 114, bold: true },  # ▌ stripe and + sign, green
-        diff_mark_del: { fg: 174, bold: true },  # ▌ stripe and - sign, red
-        diff_num:      { fg: 245, bg: 237 },     # gutter line numbers
-        diff_num_add:  { fg: 114, bg: 237 },
-        diff_num_del:  { fg: 174, bg: 237 },
-        diff_add:      { fg: 114, bg: 235 },     # + content on a green-ish tint
-        diff_del:      { fg: 174, bg: 235 },     # - content on a red-ish tint
-        diff_ctx:      { fg: 245 },              # unchanged content
-        diff_rule:     { fg: 238 },              # │ dividers and ─ rules
-        diff_stat:     { fg: 244 }
-      }.freeze
+      # pi-diff's "default" preset: fg accents, tinted line/gutter bands and
+      # the chrome greys. Truecolor so the look is identical, not an xterm
+      # approximation.
+      BOLD           = "\e[1m"
+      FG_ADD         = "\e[38;2;120;210;145m"  # #78d291
+      FG_DEL         = "\e[38;2;235;125;125m"  # #eb7d7d
+      FG_DIM         = "\e[38;2;165;165;165m"  # #a5a5a5
+      FG_LNUM        = "\e[38;2;190;190;190m"  # #bebebe
+      FG_RULE        = "\e[38;2;75;75;75m"     # #4b4b4b
+      FG_TEXT        = "\e[38;2;235;235;235m"  # #ebebeb
+      FG_CTX         = "\e[38;2;200;200;200m"  # #c8c8c8
+      BG_ADD         = "\e[48;2;22;38;32m"     # #162620
+      BG_DEL         = "\e[48;2;45;25;25m"     # #2d1919
+      BG_ADD_W       = "\e[48;2;35;75;50m"     # #234b32 (changed words)
+      BG_DEL_W       = "\e[48;2;80;35;35m"     # #502323 (changed words)
+      BG_GUTTER_ADD  = "\e[48;2;18;32;26m"     # #12201a
+      BG_GUTTER_DEL  = "\e[48;2;38;22;22m"     # #261616
+      BOLD_ADD       = "#{BOLD}#{FG_ADD}"
+      BOLD_DEL       = "#{BOLD}#{FG_DEL}"
+      WORD_MIN_SIM   = 0.15
 
       class << self
         def registered?
-          !!@registered
+          true
         end
 
+        # Kept so callers that installed the old named styles keep working;
+        # the renderer now emits the pi palette as raw SGR strings.
         def register_styles!
-          STYLES.each { |name, opts| ::TUI::Style.define(name, opts) }
-          @registered = true
+          nil
         end
 
         # before/after are file contents (String, or nil for a file that did
         # not exist). Returns nil when nothing changed or the content cannot
         # be shown, otherwise a list of segment rows for LogView.
-        def rows(before, after, path:, max_rows: MAX_ROWS)
+        #
+        # `width` is the cells available to the block (already minus the
+        # log's scrollbar and the block's indent). When omitted it is read
+        # from the terminal so the rule lines span the view.
+        def rows(before, after, path: nil, max_rows: MAX_ROWS, width: nil)
           return nil if before.nil? && after.nil?
 
           before = before.to_s
@@ -65,7 +85,8 @@ module Rubot
           after_lines = split(after)
           return nil if before_lines == after_lines
 
-          register_styles! unless registered?
+          width = width.to_i
+          width = default_width if width < 20
 
           ops = marked_ops(before_lines, after_lines)
           adds = ops.count { |op| op[:kind] == :add }
@@ -74,18 +95,33 @@ module Rubot
 
           clusters = clusters(ops)
           hunks = clusters.count { |cluster| cluster[:ops] }
+          body = clusters.flat_map { |cluster| cluster_rows(cluster, width, ops) }
 
-          rows = summary_row(ops, path, hunks)
-          body = clusters.flat_map { |cluster| cluster_rows(cluster) }
+          rows = summary_row(ops, adds, dels, hunks)
+          rows << [ [ "─", FG_RULE, ::Rubot::TUI::LogView::FILL ] ]
           if body.length > max_rows
-            hidden = body[max_rows..]
-            body = body[0...max_rows] << [ [ "  … ", :muted ],
-                                           [ "#{hidden.length} more diff lines", :dim ] ]
+            hidden = body.length - max_rows
+            body = body[0...max_rows]
+            rows.concat(body)
+            rows << [ [ "─", FG_RULE, ::Rubot::TUI::LogView::FILL ] ]
+            rows << [ [ "  … (#{hidden} more diff lines)", FG_DIM ] ]
+          else
+            rows.concat(body)
+            rows << [ [ "─", FG_RULE, ::Rubot::TUI::LogView::FILL ] ]
           end
-          rows.concat(body)
+          rows
         end
 
         private
+
+        # The log is inset two cells and indented four more, with one cell
+        # reserved for the scrollbar: a row owns the rest of the terminal.
+        def default_width
+          cols = ::TUI::Term.size[0]
+          [ cols - 7, 20 ].max
+        rescue StandardError
+          80
+        end
 
         def split(text)
           text.gsub("\r\n", "\n").split("\n", -1).tap do |lines|
@@ -148,7 +184,7 @@ module Rubot
           { kind: :ctx, text: text, old: old_no, new: new_no }
         end
 
-        # An LCS walk over two line arrays, as [kind, text].
+        # An LCS walk over two arrays, as [kind, text].
         def lcs_ops(before, after)
           return after.map { |text| [ :add, text ] } if before.empty?
           return before.map { |text| [ :del, text ] } if after.empty?
@@ -238,61 +274,218 @@ module Rubot
           op[:kind] == :ctx && op[:text].to_s.empty?
         end
 
-        def summary_row(ops, path, hunks)
-          adds = ops.count { |op| op[:kind] == :add }
-          dels = ops.count { |op| op[:kind] == :del }
-          label = ::TUI::Text.truncate(path.to_s, MAX_LABEL)
-          sections = [ [ "Updated ", :muted ], [ label, :accent ],
-                       [ "  +#{adds}", :diff_mark_add ], [ "  -#{dels}", :diff_mark_del ] ]
-          if hunks.positive?
-            sections << [ "  · #{hunks} #{hunks == 1 ? 'hunk' : 'hunks'}", :diff_stat ]
-          end
+        # "+A -M • K hunks at line N", the finished pi-diff result line.
+        def summary_row(ops, adds, dels, hunks)
+          sections = []
+          sections << [ "+#{adds}", FG_ADD ] if adds.positive?
+          sections << [ " ", nil ] if adds.positive? && dels.positive?
+          sections << [ "-#{dels}", FG_DEL ] if dels.positive?
+          sections << [ " ", nil ] unless sections.empty?
+          sections << [ "•", FG_DIM ]
+          sections << [ " ", nil ]
+          label = "#{hunks} #{hunks == 1 ? 'hunk' : 'hunks'}"
+          sections << [ label, FG_DIM ]
+
+          line = first_changed_line(ops)
+          sections << [ " at line #{line}", FG_DIM ] if line.positive?
           [ sections ]
         end
 
-        def cluster_rows(cluster)
-          return gap_rule(cluster[:gap]) if cluster[:gap]
+        def first_changed_line(ops)
+          index = ops.each_index.find { |i| ops[i][:kind] != :ctx }
+          return 0 unless index
 
-          width = gutter_width(cluster[:ops])
-          cluster[:ops].map { |op| op_row(op, width) }
+          op = ops[index]
+          return op[:new] if op[:kind] == :add
+
+          added = ops[(index + 1)..].find { |entry| entry[:kind] == :add }
+          return added[:new] if added
+
+          op[:new].to_i.positive? ? op[:new] : op[:old].to_i
+        end
+
+        def cluster_rows(cluster, width, ops)
+          return gap_rule(cluster[:gap], width) if cluster[:gap]
+
+          nw = gutter_width(ops)
+          cw = [ width - (nw + 5), 12 ].max
+          list = cluster[:ops]
+          rows = []
+          i = 0
+
+          while i < list.length
+            op = list[i]
+            if op[:kind] == :ctx
+              rows << ctx_row(op, nw, cw)
+              i += 1
+              next
+            end
+
+            dels = []
+            adds = []
+            while i < list.length && list[i][:kind] == :del
+              dels << list[i]
+              i += 1
+            end
+            while i < list.length && list[i][:kind] == :add
+              adds << list[i]
+              i += 1
+            end
+
+            if dels.length == 1 && adds.length == 1
+              pair = word_pair(prepare(dels[0][:text]), prepare(adds[0][:text]), cw)
+              if pair
+                rows << del_row(dels[0], nw, pair[:old])
+                rows << add_row(adds[0], nw, pair[:new])
+                next
+              end
+            end
+
+            dels.each do |entry|
+              rows << del_row(entry, nw, body_segments(prepare(entry[:text]), cw, BG_DEL, nil))
+            end
+            adds.each do |entry|
+              rows << add_row(entry, nw, body_segments(prepare(entry[:text]), cw, BG_ADD, nil))
+            end
+          end
+
+          rows
         end
 
         # Cells needed by the widest line number on screen (old numbers for
-        # deletions, new numbers for additions and context).
+        # deletions, new numbers for additions and context). pi-diff floors
+        # this at two digits.
         def gutter_width(ops)
           widest = ops.map do |op|
             op[:kind] == :add ? op[:new] : (op[:kind] == :del ? op[:old] : op[:new])
           end.max || 0
-          [ widest.to_s.length, 3 ].max
+          [ widest.to_s.length, 2 ].max
         end
 
-        # One visual row: ▌stripe, gutter number, sign cell, │ divider,
-        # content. Deletions number with the old file, additions and context
-        # with the new one — the way pi-diff's unified view does.
-        def op_row(op, width)
-          no = op[:kind] == :del ? op[:old] : op[:new]
-          number = " #{no.to_s.rjust(width)} "
-          text = ::TUI::Text.truncate(op[:text].to_s, MAX_LINE)
+        def prepare(text)
+          ::TUI::Text.truncate(text.to_s.gsub("\t", "  "), MAX_LINE)
+        end
 
-          case op[:kind]
-          when :add
-            [ [ "▌", :diff_mark_add ], [ number, :diff_num_add ], [ "+ ", :diff_mark_add ],
-              [ "│ ", :diff_rule ], [ text, :diff_add ] ]
-          when :del
-            [ [ "▌", :diff_mark_del ], [ number, :diff_num_del ], [ "- ", :diff_mark_del ],
-              [ "│ ", :diff_rule ], [ text, :diff_del ] ]
-          else
-            [ [ "  ", nil ], [ number, :diff_num ], [ "  ", nil ],
-              [ "│ ", :diff_rule ], [ text, :diff_ctx ] ]
+        def add_row(op, nw, body)
+          gutter_row("▌", FG_ADD, op[:new], nw, FG_ADD, "+ ", BOLD_ADD,
+                     BG_GUTTER_ADD, body, BG_ADD)
+        end
+
+        def del_row(op, nw, body)
+          gutter_row("▌", FG_DEL, op[:old], nw, FG_DEL, "- ", BOLD_DEL,
+                     BG_GUTTER_DEL, body, BG_DEL)
+        end
+
+        def ctx_row(op, nw, cw)
+          body = body_segments(prepare(op[:text]), cw, nil, nil, fg: FG_CTX)
+          gutter_row(" ", nil, op[:new], nw, FG_LNUM, "  ", FG_DIM, nil, body, nil)
+        end
+
+        # A full row: stripe, tinted gutter, divider, then the body segments
+        # and a fill segment that paints the band to the right edge.
+        def gutter_row(stripe, stripe_style, number, nw, num_fg, sign, sign_style, gutter_bg, body, fill_bg)
+          row = []
+          row << [ stripe, stripe_style ]
+          row << [ number.to_s.rjust(nw), "#{num_fg}#{gutter_bg}" ]
+          row << [ sign, "#{sign_style}#{gutter_bg}" ]
+          row << [ "│ ", FG_RULE ]
+          row.concat(body)
+          row << [ " ", fill_bg, ::Rubot::TUI::LogView::FILL ] if fill_bg
+          row
+        end
+
+        # The content band, cut to `cw` cells with an ellipsis when it does
+        # not fit. `ranges` are the changed-word spans (character offsets)
+        # that get the brighter highlight tint.
+        def body_segments(text, cw, base_bg, hl_bg, fg: FG_TEXT, ranges: nil)
+          ranges ||= []
+          truncated = ::TUI::Text.width(text) > cw
+          limit = truncated ? [ cw - 1, 0 ].max : cw
+
+          out = []
+          buffer = +""
+          current = nil
+          visible = 0
+
+          text.each_char do |ch|
+            w = ::TUI::Text.width(ch)
+            break if visible + w > limit
+
+            bg = if hl_bg && in_ranges?(ranges, visible)
+              hl_bg
+            else
+              base_bg
+            end
+            style = "#{fg}#{bg}"
+            if !buffer.empty? && style != current
+              out << [ buffer, current ]
+              buffer = +""
+            end
+            current = style
+            buffer << ch
+            visible += w
           end
+          out << [ buffer, current ] unless buffer.empty?
+          out << [ "…", "#{fg}#{base_bg}" ] if truncated
+          out
         end
 
-        # "──── 12 unmodified lines ────", centred into a fixed 56 cells.
-        def gap_rule(gap)
-          label = "#{gap} unmodified #{"line#{gap == 1 ? '' : 's'}"}"
-          room = 56 - label.length - 2
-          left = (room / 2.0).floor
-          [ [ [ "─" * left + "  #{label}  " + "─" * (room - left), :diff_rule ] ] ]
+        def in_ranges?(ranges, pos)
+          ranges.any? { |(from, to)| pos >= from && pos < to }
+        end
+
+        # "──── N unmodified lines ────" capped at 72 cells, like pi-diff.
+        def gap_rule(gap, width)
+          label = gap && gap.positive? ? " #{gap} unmodified lines " : "···"
+          total = [ [ width, GAP_MAX ].min, label.length + 2 ].max
+          pad = [ total - label.length - 2, 0 ].max
+          left = pad / 2
+          right = pad - left
+          [ [ [ "#{'─' * left}#{label}#{'─' * right}", FG_DIM ] ] ]
+        end
+
+        # Word-level diff for a single -/+ pair: changed spans get the
+        # brighter tint. Returns nil when the lines are too different (then
+        # the whole line keeps the plain line tint).
+        def word_pair(old_text, new_text, cw)
+          old_tokens = word_tokens(old_text)
+          new_tokens = word_tokens(new_text)
+          return nil if old_tokens.length * new_tokens.length > 40_000
+
+          max_len = [ old_text.length, new_text.length ].max
+          return nil if max_len.zero?
+
+          old_ranges = []
+          new_ranges = []
+          old_pos = 0
+          new_pos = 0
+          same = 0
+
+          lcs_ops(old_tokens, new_tokens).each do |kind, token|
+            case kind
+            when :ctx
+              same += token.length
+              old_pos += token.length
+              new_pos += token.length
+            when :del
+              old_ranges << [ old_pos, old_pos + token.length ]
+              old_pos += token.length
+            else
+              new_ranges << [ new_pos, new_pos + token.length ]
+              new_pos += token.length
+            end
+          end
+
+          return nil if same.to_f / max_len < WORD_MIN_SIM
+
+          {
+            old: body_segments(old_text, cw, BG_DEL, BG_DEL_W, ranges: old_ranges),
+            new: body_segments(new_text, cw, BG_ADD, BG_ADD_W, ranges: new_ranges)
+          }
+        end
+
+        def word_tokens(text)
+          text.scan(/\s+|[[:alnum:]_]+|[^\s[:alnum:]_]+/)
         end
       end
     end

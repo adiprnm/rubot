@@ -4,6 +4,7 @@ require "json"
 require "tui"
 
 require_relative "markdown"
+require_relative "diff"
 
 module Rubot
   class TUI
@@ -85,8 +86,10 @@ module Rubot
 
       def run(messages)
         turn_open = false
+        messages = normalize(messages)
+        collect_ui_diffs(messages)
 
-        normalize(messages).each do |msg|
+        messages.each do |msg|
           case msg["role"].to_s
           when "user"
             content = msg["content"].to_s
@@ -130,7 +133,35 @@ module Rubot
             self.class.tool_summary(name, args, max: self.class.summary_limit(name, @width))
           end
           add(self.class.tool_done(name, summary, skill), keep_leading: true, indent: 2)
+          add_ui_diff(@ui_diffs[call_id(call)]) if @ui_diffs
         end
+      end
+
+      # Tool messages carry the before/after of a successful write (see
+      # Agent#file_ui_diff). Keyed by tool_call_id so a diff is drawn under
+      # the exact row that produced it, in the same block the live TUI uses.
+      def collect_ui_diffs(messages)
+        @ui_diffs = {}
+        messages.each do |msg|
+          next unless msg["role"] == "tool" && msg["ui_diff"].is_a?(Hash)
+
+          id = msg["tool_call_id"].to_s
+          @ui_diffs[id] = msg["ui_diff"] unless id.empty?
+        end
+      end
+
+      def add_ui_diff(spec)
+        return unless spec && @width.positive?
+
+        width = [ @width - 4, 20 ].max
+        rows = Rubot::TUI::Diff.rows(spec["before"], spec["after"], path: spec["path"], width: width)
+        rows&.each { |segments| add(segments, keep_leading: true, indent: 4) }
+      end
+
+      def call_id(call)
+        return "" unless call.is_a?(Hash)
+
+        (call["id"] || call[:id]).to_s
       end
 
       # Drop the instructions rubot sends itself (continuations, re-asks) and

@@ -752,7 +752,7 @@ module Rubot
 
         texts = entry_texts(repl)
         tool_ix = texts.index { |text| text.include?("file_ops") }
-        diff_ix = texts.index { |text| text.start_with?("Updated ") }
+        diff_ix = texts.index { |text| text.match?(/\A[+-]\d/) }
 
         assert tool_ix, "the tool row still renders: #{texts.inspect}"
         assert diff_ix, "the pi-diff block follows the write: #{texts.inspect}"
@@ -762,18 +762,22 @@ module Rubot
         assert_equal 4, indents[diff_ix], "the diff hangs under the tool row"
 
         git = texts[(diff_ix)..]
-        assert(git.any? { |row| row.include?("Updated #{path}") && row.include?("+1") && row.include?("-1") })
+        assert(git.first.include?("+1") && git.first.include?("-1") && git.first.include?("1 hunk"),
+               "the summary keeps pi-diff's counts: #{git.first.inspect}")
         assert(git.any? { |row| row.include?("│ one") })
         assert(git.any? { |row| row.include?("│ two") && row.include?("- ") })
         assert(git.any? { |row| row.include?("│ TWO") && row.include?("+ ") })
+        assert_equal "─", git[1], "a full-width rule opens the block"
+        assert_operator git.count("─"), :>=, 2, "and one closes it"
 
         entries = repl.instance_variable_get(:@log).instance_variable_get(:@entries)
         deleted = entries.find { |entry| entry.map(&:first).join.include?("│ two") }
-        assert_includes deleted, [ "▌", :diff_mark_del ], "deletions carry the red stripe"
-        assert_includes deleted, [ "- ", :diff_mark_del ], "the sign cell marks the removal"
+        assert_includes deleted, [ "▌", TUI::Diff::FG_DEL ], "deletions carry the red stripe"
+        assert(deleted.any? { |(text, style)| text == "- " && style.include?(TUI::Diff::FG_DEL) },
+               "the sign cell marks the removal")
         assert_includes deleted.map { |(t, _)| t }.join, "2", "the gutter shows the old line number"
         added = entries.find { |entry| entry.map(&:first).join.include?("│ TWO") }
-        assert_includes added, [ "▌", :diff_mark_add ], "additions carry the green stripe"
+        assert_includes added, [ "▌", TUI::Diff::FG_ADD ], "additions carry the green stripe"
       end
     end
 
@@ -784,7 +788,7 @@ module Rubot
         repl = run_file_tool(build_repl, operation: "append", path: path,
                              after: "first\nsecond\n")
 
-        git = entry_texts(repl).drop_while { |text| !text.start_with?("Updated ") }
+        git = entry_texts(repl).drop_while { |text| !text.match?(/\A[+-]\d/) }
         assert git.any?, "append gets a diff too"
         assert(git.any? { |row| row.include?("│ first") })
         assert(git.any? { |row| row.include?("│ second") && row.include?("+ ") })
@@ -797,7 +801,7 @@ module Rubot
         File.write(path, "same\n")
         repl = run_file_tool(build_repl, operation: "write", path: path, after: "same\n")
 
-        refute entry_texts(repl).any? { |text| text.start_with?("Updated ") },
+        refute entry_texts(repl).any? { |text| text.match?(/\A[+-]\d/) },
                "no change, no diff"
       end
     end
@@ -814,12 +818,12 @@ module Rubot
       before = (1..40).map { |i| "line #{i}" }.join("\n")
       after = before.sub("line 20", "line twenty")
 
-      git = git_texts(TUI::Diff.rows(before, after, path: "long.txt"))
+      git = git_texts(TUI::Diff.rows(before, after, path: "long.txt", width: 80))
 
-      assert_includes git.first, "Updated long.txt"
       assert_includes git.first, "+1"
       assert_includes git.first, "-1"
       assert_includes git.first, "1 hunk"
+      assert_includes git.first, "at line 20"
       assert(git.any? { |row| row.include?("│ line 17") })
       assert(git.any? { |row| row.include?("│ line 18") })
       assert(git.any? { |row| row.include?("- │ line 20") && row.include?("▌") },
@@ -836,7 +840,7 @@ module Rubot
       before = (1..40).map { |i| "line #{i}" }.join("\n")
       after = before.sub("line 20", "line twenty").sub("line 30", "line thirty")
 
-      git = git_texts(TUI::Diff.rows(before, after, path: "long.txt"))
+      git = git_texts(TUI::Diff.rows(before, after, path: "long.txt", width: 80))
 
       assert_includes git.first, "2 hunks"
       assert(git.any? { |row| row.include?("unmodified lines") && row.include?("─") },
@@ -847,31 +851,102 @@ module Rubot
     end
 
     def test_new_files_number_the_new_lines_from_one
-      git = git_texts(TUI::Diff.rows(nil, "alpha\nbeta\n", path: "fresh.md"))
+      git = git_texts(TUI::Diff.rows(nil, "alpha\nbeta\n", path: "fresh.md", width: 80))
 
-      assert(git.any? { |row| row.include?("Updated fresh.md") && row.include?("+2") },
-             "the summary names the file and the count")
+      assert(git.first.include?("+2") && git.first.include?("1 hunk"),
+             "the summary carries the count: #{git.first.inspect}")
       assert(git.any? { |row| row.include?("+ │ alpha") }, "a new file is all additions")
       assert(git.any? { |row| row.start_with?("▌") && row.include?("│ alpha") && row.include?("+ ") },
              "the row keeps the add stripe")
-      assert_operator git.length, :==, 3, "summary + 2 lines"
+      assert_operator git.length, :==, 5, "summary + opening rule + 2 lines + closing rule"
     end
 
     def test_a_large_rewrite_is_capped_with_a_more_row
       before = (1..1000).map { |i| "old #{i}" }.join("\n")
       after = (1..1000).map { |i| "new #{i}" }.join("\n")
 
-      rows = TUI::Diff.rows(before, after, path: "big.txt")
+      rows = TUI::Diff.rows(before, after, path: "big.txt", width: 80)
       git = git_texts(rows)
 
-      assert_equal 1 + TUI::Diff::MAX_ROWS + 1, rows.length,
-                   "summary + capped body + the more row"
-      assert_includes git, "  … 1970 more diff lines"
+      assert_equal 2 + TUI::Diff::MAX_ROWS + 2, rows.length,
+                   "summary + opening rule + capped body + closing rule + the more row"
+      assert_includes git, "  … (1968 more diff lines)"
     end
 
     def test_diff_is_nil_for_binary_and_identical_content
       assert_nil TUI::Diff.rows("a\0b", "a\0c", path: "bin")
       assert_nil TUI::Diff.rows("same\n", "same\n", path: "same.md")
+    end
+
+    def test_long_diff_lines_are_truncated_to_the_view_width
+      rows = TUI::Diff.rows("a" * 300, "b" * 300, path: "long.txt", width: 60)
+      body = rows.select { |segments| segments.first[0] == "▌" }
+
+      assert_equal 2, body.length, "one deletion and one addition"
+      assert(body.all? { |segments| segments.any? { |(text, _)| text.end_with?("…") } },
+             "the content is cut with an ellipsis, not wrapped: #{body.inspect}")
+    end
+
+    def test_diff_bands_fill_the_full_width
+      rows = TUI::Diff.rows("one\n", "two\n", path: "f.rb", width: 60)
+      bands = rows.select { |segments| segments.first[0] == "▌" }
+
+      assert_equal 2, bands.length
+      bands.each do |segments|
+        fill = segments.last
+        assert_equal " ", fill[0]
+        assert_equal TUI::LogView::FILL, fill[2], "the band asks LogView to paint to the edge"
+        assert_includes [ TUI::Diff::BG_ADD, TUI::Diff::BG_DEL ], fill[1]
+      end
+    end
+
+    def test_resumed_writes_replay_their_diff
+      call = {
+        "id" => "call_1",
+        "type" => "function",
+        "function" => {
+          "name" => "file_ops",
+          "arguments" => JSON.generate({ "operation" => "write", "path" => "notes.md",
+                                          "content" => "one\nTWO\nthree\n" })
+        }
+      }
+      messages = [
+        { "role" => "user", "content" => "edit it" },
+        { "role" => "assistant", "content" => "", "tool_calls" => [ call ] },
+        { "role" => "tool", "tool_call_id" => "call_1",
+          "content" => "Written 14 characters",
+          "ui_diff" => { "path" => "notes.md", "before" => "one\ntwo\nthree\n",
+                         "after" => "one\nTWO\nthree\n" } },
+        { "role" => "assistant", "content" => "done" }
+      ]
+
+      entries = TUI::Transcript.entries(messages, width: 73)
+      texts = entries.map { |entry| entry[:segments].map(&:first).join }
+
+      diff_ix = texts.index { |text| text.match?(/\A[+-]\d/) }
+      assert diff_ix, "the diff is rebuilt under the tool row: #{texts.inspect}"
+      assert(texts.any? { |text| text.include?("│ two") && text.include?("- ") })
+      assert(texts.any? { |text| text.include?("│ TWO") && text.include?("+ ") })
+      assert_equal 4, entries[diff_ix + 1][:indent], "the replayed diff uses the live indent"
+      assert_equal "─", texts[diff_ix + 1], "with its opening rule"
+    end
+
+    def test_resume_without_a_saved_diff_keeps_the_tool_row_only
+      messages = [
+        { "role" => "user", "content" => "edit it" },
+        { "role" => "assistant", "content" => "", "tool_calls" => [
+          { "id" => "call_1", "type" => "function",
+            "function" => { "name" => "file_ops",
+                            "arguments" => JSON.generate({ "operation" => "write",
+                                                           "path" => "notes.md" }) } }
+        ] },
+        { "role" => "tool", "tool_call_id" => "call_1", "content" => "Written 1 characters" }
+      ]
+
+      texts = TUI::Transcript.entries(messages, width: 73)
+                    .map { |entry| entry[:segments].map(&:first).join }
+
+      refute(texts.any? { |text| text.match?(/\A[+-]\d/) }, "no metadata, no diff")
     end
 
     # --- dangerous-action confirmation ---------------------------------

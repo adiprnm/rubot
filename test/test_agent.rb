@@ -1420,3 +1420,112 @@ class TestAgentSteering < Minitest::Test
     refute @agent.steering_pending?
   end
 end
+
+# The TUI redraws a write's diff on /resume from before/after text stored on
+# the tool message. It must never reach the provider request.
+class TestAgentUiDiff < Minitest::Test
+  class WriteProvider
+    def initialize(path, operation: "write", content: "one\ntwo\n")
+      @path = path
+      @operation = operation
+      @content = content
+      @calls = 0
+    end
+
+    def name
+      "openai"
+    end
+
+    def chat(_messages, tools: nil)
+      @calls += 1
+      return { "content" => "done" } if @calls > 1
+
+      {
+        "content" => "",
+        "tool_calls" => [
+          {
+            "id" => "call_1",
+            "type" => "function",
+            "function" => {
+              "name" => "file_ops",
+              "arguments" => JSON.generate({
+                "operation" => @operation,
+                "path" => @path,
+                "content" => @content
+              })
+            }
+          }
+        ]
+      }
+    end
+    alias chat_stream chat
+  end
+
+  def run_write(workspace, path, provider)
+    config_path = File.join(File.dirname(workspace), "config.yml")
+    File.write(config_path, {
+      "agents" => { "defaults" => { "workspace" => workspace } },
+      "models" => [
+        { "name" => "model", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" }
+      ]
+    }.to_yaml)
+    agent = Rubot::Agent.new(
+      config: Rubot::Config.new(config_path),
+      provider: provider,
+      session_id: "ui-diff"
+    )
+    agent.process("edit it", stream: false)
+    agent
+  end
+
+  def test_a_successful_write_records_before_and_after_on_the_tool_message
+    Dir.mktmpdir do |dir|
+      workspace = File.join(dir, "workspace")
+      FileUtils.mkdir_p(workspace)
+      path = File.join(workspace, "notes.md")
+      File.write(path, "one\n")
+
+      agent = run_write(workspace, path, WriteProvider.new(path))
+      tool = agent.session.messages.find { |msg| msg["role"] == "tool" }
+
+      assert tool, "the tool row is in the session"
+      diff = tool["ui_diff"]
+      assert diff, "the write carries its UI diff"
+      assert_equal path, diff["path"]
+      assert_equal "one\n", diff["before"]
+      assert_equal "one\ntwo\n", diff["after"]
+      refute(agent.session.conversation_history.any? { |msg| msg.key?("ui_diff") },
+             "the annotation is stripped from the model history")
+    end
+  end
+
+  def test_an_append_records_the_concatenated_after
+    Dir.mktmpdir do |dir|
+      workspace = File.join(dir, "workspace")
+      FileUtils.mkdir_p(workspace)
+      path = File.join(workspace, "log.md")
+      File.write(path, "first\n")
+
+      agent = run_write(workspace, path, WriteProvider.new(path, operation: "append", content: "second\n"))
+      tool = agent.session.messages.find { |msg| msg["role"] == "tool" }
+
+      assert_equal "first\n", tool["ui_diff"]["before"]
+      assert_equal "first\nsecond\n", tool["ui_diff"]["after"]
+    end
+  end
+
+  def test_a_write_the_tool_rejects_has_no_ui_diff
+    Dir.mktmpdir do |dir|
+      workspace = File.join(dir, "workspace")
+      FileUtils.mkdir_p(workspace)
+      path = File.join(workspace, "MEMORY.md")
+      File.write(path, "do not touch\n")
+
+      agent = run_write(workspace, path, WriteProvider.new(path))
+      tool = agent.session.messages.find { |msg| msg["role"] == "tool" }
+
+      assert_match(/ERROR/, tool["content"])
+      refute tool.key?("ui_diff"), "a failed write is not replayed as a diff"
+    end
+  end
+end
