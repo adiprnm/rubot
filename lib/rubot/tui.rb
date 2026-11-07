@@ -624,6 +624,10 @@ module Rubot
     rescue Interrupt
       agent&.cancel! if agent.respond_to?(:cancel!)
       @events << [ :error_text, "⏹️ cancelled" ]
+    rescue Rubot::RateLimitError => e
+      # Already retried with backoff by the provider, so this is the final
+      # word: say what happened and what to do, without a stack trace.
+      @events << [ :error_text, "⏳ #{e.message}" ]
     rescue StandardError => e
       @events << [ :error_text, "#{e.class}: #{e.message}" ]
     ensure

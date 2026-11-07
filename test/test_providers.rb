@@ -354,7 +354,9 @@ class TestProviders < Minitest::Test
     config = make_retry_config
     provider = RetryTestProvider.new(config, [:rate_limit, "success"])
 
-    result = provider.send(:with_retry) { provider.chat([]) }
+    result = provider.stub(:sleep, nil) do
+      provider.send(:with_retry) { provider.chat([]) }
+    end
     assert_equal "success", result
     assert_equal 2, provider.call_count
   end
@@ -363,10 +365,83 @@ class TestProviders < Minitest::Test
     config = make_retry_config
     provider = RetryTestProvider.new(config, [:rate_limit, :rate_limit, :rate_limit, :rate_limit])
 
-    assert_raises(Rubot::RateLimitError) do
-      provider.send(:with_retry, max_retries: 3) { provider.chat([]) }
+    error = assert_raises(Rubot::RateLimitError) do
+      provider.stub(:sleep, nil) do
+        provider.send(:with_retry, max_retries: 3) { provider.chat([]) }
+      end
     end
     assert_equal 4, provider.call_count # initial + 3 retries
+    assert_equal 4, error.attempts
+    assert_includes error.message, "4 attempts"
+  end
+
+  # The retry loop must wait between attempts, otherwise a throttled provider
+  # is hammered with the same request and the turn still fails.
+  def test_with_retry_waits_with_backoff_between_rate_limit_attempts
+    config = make_retry_config
+    provider = RetryTestProvider.new(
+      config,
+      [:rate_limit, :rate_limit, :rate_limit, :rate_limit, :rate_limit, "success"]
+    )
+
+    waits = []
+    provider.stub(:sleep, ->(seconds) { waits << seconds }) do
+      result = provider.send(:with_retry) { provider.chat([]) }
+      assert_equal "success", result
+    end
+
+    assert_equal 5, waits.size
+    waits.each_cons(2) { |prev, curr| assert curr > prev, "backoff should grow: #{waits.inspect}" }
+    assert waits.all? { |wait| wait <= Rubot::Provider::MAX_BACKOFF }, waits.inspect
+  end
+
+  def test_with_retry_honours_retry_after_but_caps_it
+    config = make_retry_config
+    waits = []
+
+    failing = Class.new(Rubot::Provider) do
+      def initialize(config, retry_after, waits)
+        super(config)
+        @retry_after = retry_after
+        @waits = waits
+        @calls = 0
+      end
+
+      def chat(_messages, tools: nil)
+        @calls += 1
+        raise Rubot::RateLimitError.new(@retry_after) if @calls == 1
+
+        "ok"
+      end
+    end.new(config, 7, waits)
+
+    failing.stub(:sleep, ->(seconds) { waits << seconds }) do
+      assert_equal "ok", failing.send(:with_retry) { failing.chat([]) }
+    end
+    assert_equal [ 7 ], waits
+
+    waits.clear
+    too_long = Class.new(Rubot::Provider) do
+      attr_reader :calls
+
+      def initialize(config, waits)
+        super(config)
+        @waits = waits
+        @calls = 0
+      end
+
+      def chat(_messages, tools: nil)
+        @calls += 1
+        raise Rubot::RateLimitError.new(3600) if @calls == 1
+
+        "ok"
+      end
+    end.new(config, waits)
+
+    too_long.stub(:sleep, ->(seconds) { waits << seconds }) do
+      assert_equal "ok", too_long.send(:with_retry) { too_long.chat([]) }
+    end
+    assert_equal [ Rubot::Provider::MAX_BACKOFF ], waits
   end
 
   def test_with_retry_passes_through_other_errors
@@ -449,6 +524,33 @@ class TestProviders < Minitest::Test
     assert_in_delta 1.0, t1, 0.5
     assert_in_delta 2.0, t2, 0.5
     assert_in_delta 4.0, t3, 0.5
+  end
+
+  def test_exponential_backoff_is_capped
+    config = make_retry_config
+    provider = RetryTestProvider.new(config, [])
+
+    assert_equal Rubot::Provider::MAX_BACKOFF, provider.send(:exponential_backoff, 20)
+  end
+
+  def test_rate_limit_error_message_is_user_facing
+    err = Rubot::RateLimitError.new(12, attempts: 6)
+
+    assert_includes err.message, "6 attempts"
+    assert_includes err.message, "12s"
+    assert_includes err.message, "switch to another model"
+  end
+
+  def test_parse_retry_after_accepts_http_date
+    config = make_retry_config
+    provider = RetryTestProvider.new(config, [])
+
+    date = (Time.now + 12).httpdate
+    mock_resp = Struct.new(:[]).new
+    mock_resp.define_singleton_method(:[]) { |key| { "Retry-After" => date }[key] }
+
+    seconds = provider.send(:parse_retry_after, mock_resp)
+    assert_includes 11..12, seconds
   end
 
   def test_parse_retry_after_returns_integer

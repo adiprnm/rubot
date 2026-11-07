@@ -217,7 +217,9 @@ module Rubot
     # @param message [String] The original message that caused the error
     # @return [String] A user-friendly error message
     def handle_error(error, message = nil)
-      msg = if timeout_error?(error)
+      msg = if rate_limit_error?(error)
+        "⏳ Rate limited by the provider. Already retried automatically, please try again in a moment."
+      elsif timeout_error?(error)
         "⏱️ The model provider did not respond in time. Please try again."
       else
         "❌ Sorry, an error occurred: #{error.message}"
@@ -226,6 +228,14 @@ module Rubot
       warn "[#{@name}] Error processing message: #{error.class}: #{error.message}"
       warn error.backtrace.first(5).join("\n") if Rubot.debug?
       msg
+    end
+
+    # A 429 from the provider surfaces as RateLimitError in-process and, in
+    # actor mode, as that same class once SessionHandle translates the event.
+    def rate_limit_error?(error)
+      return true if error.is_a?(Rubot::RateLimitError)
+
+      error.message.to_s.match?(/\b429\b|Rate limited/i)
     end
 
     # Timeouts surface as Net::*Timeout in-process, but as an ActorError

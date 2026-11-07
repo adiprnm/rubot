@@ -10,6 +10,14 @@ module Rubot
     # so command handlers can be written once for both legacy (in-process
     # Agent) and actor modes.
     class SessionHandle
+      # Errors the actor reports by name keep their class on this side of the
+      # Ractor boundary, so callers can tell "the provider throttled us" from
+      # an unexpected failure instead of matching on a message string.
+      PASSTHROUGH_ERRORS = {
+        "Rubot::RateLimitError" => Rubot::RateLimitError,
+        "Rubot::Cancelled" => Rubot::Cancelled
+      }.freeze
+
       attr_reader :session_id
 
       def initialize(ractor, session_id, stop_port = nil)
@@ -102,13 +110,32 @@ module Rubot
             response = event[1].to_s
             break
           when :error
-            raise ActorError, "#{event[1]}: #{event[2]}\n#{Array(event[3]).join("\n")}"
+            raise translate_error(event[1], event[2], event[3])
           end
         end
 
         response
       ensure
         events&.close
+      end
+
+      # Rebuild the error the session actor caught. The actor can only send
+      # strings, so known classes are mapped back explicitly; everything else
+      # becomes an ActorError. Backtraces from inside the Ractor are kept for
+      # RUBOT_DEBUG=1 only: a rate limit is not a bug, and a stack trace in
+      # the chat is noise.
+      def translate_error(name, message, trace)
+        klass = PASSTHROUGH_ERRORS[name.to_s]
+        text = message.to_s
+        if klass == Rubot::RateLimitError
+          return Rubot::RateLimitError.new(nil, message: text)
+        end
+        return klass.new(text) if klass
+
+        frames = Array(trace)
+        text = "#{name}: #{text}" unless name.to_s.empty?
+        text = "#{text}\n#{frames.join("\n")}" if Rubot.debug? && !frames.empty?
+        ActorError.new(text)
       end
 
       def process_cron(text)

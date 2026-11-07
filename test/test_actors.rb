@@ -529,6 +529,60 @@ class TestActors < Minitest::Test
     ractor&.send({ type: :shutdown })
     ractor&.join
   end
+
+  # A 429 is not a bug, so it must reach the caller as a RateLimitError with a
+  # readable message instead of an ActorError carrying a stack trace from
+  # inside the session Ractor.
+  def test_session_handle_keeps_rate_limit_error_class
+    ractor = Ractor.new do
+      loop do
+        msg = Ractor.receive
+        case msg[:type]
+        when :message
+          msg[:events] << [ :error, "Rubot::RateLimitError",
+                            "Rate limited by the provider (429 Too Many Requests) after 6 attempts.",
+                            [ "lib/rubot/providers/openai.rb:175" ] ]
+        when :shutdown
+          break
+        end
+      end
+    end
+
+    handle = Rubot::Actors::SessionHandle.new(ractor, "fake-rate-limit")
+    error = assert_raises(Rubot::RateLimitError) do
+      Timeout.timeout(5) { handle.process("hi") }
+    end
+
+    assert_includes error.message, "429"
+    refute_includes error.message, "openai.rb:175" unless Rubot.debug?
+  ensure
+    ractor&.send({ type: :shutdown })
+    ractor&.join
+  end
+
+  def test_session_handle_wraps_unknown_errors_as_actor_error
+    ractor = Ractor.new do
+      loop do
+        msg = Ractor.receive
+        case msg[:type]
+        when :message
+          msg[:events] << [ :error, "RuntimeError", "boom", [ "lib/rubot/agent.rb:1" ] ]
+        when :shutdown
+          break
+        end
+      end
+    end
+
+    handle = Rubot::Actors::SessionHandle.new(ractor, "fake-unknown-error")
+    error = assert_raises(Rubot::Actors::ActorError) do
+      Timeout.timeout(5) { handle.process("hi") }
+    end
+
+    assert_includes error.message, "RuntimeError: boom"
+  ensure
+    ractor&.send({ type: :shutdown })
+    ractor&.join
+  end
 end
 
 class TestActorModelPresets < Minitest::Test

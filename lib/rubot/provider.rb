@@ -2,6 +2,7 @@
 
 require "json"
 require "net/http"
+require "time"
 require_relative "cancellation"
 
 module Rubot
@@ -43,12 +44,28 @@ module Rubot
   end
 
   # Raised when a provider returns HTTP 429 Too Many Requests.
+  #
+  # The message is written for the user, not for a log: it names the status
+  # code, how many attempts were already spent on it, and what to do next. It
+  # crosses the session actor boundary as-is, so it must stand on its own.
   class RateLimitError < StandardError
-    attr_reader :retry_after
+    attr_reader :retry_after, :attempts
 
-    def initialize(retry_after = nil)
+    def initialize(retry_after = nil, attempts: nil, message: nil)
       @retry_after = retry_after
-      super("Rate limited (429 Too Many Requests)")
+      @attempts = attempts
+      super(message || build_message)
+    end
+
+    private
+
+    def build_message
+      text = +"Rate limited by the provider (429 Too Many Requests)"
+      text << " after #{@attempts} attempt#{@attempts == 1 ? '' : 's'}" if @attempts && @attempts > 1
+      text << ". "
+      text << (@retry_after ? "The provider asked to wait #{@retry_after}s" : "The provider is throttling requests")
+      text << "; try again in a moment or switch to another model."
+      text
     end
   end
 
@@ -203,6 +220,14 @@ module Rubot
       @last_usage
     end
 
+    # 429s are short-lived throttles that clear on their own, so they are
+    # retried more patiently than network errors: 1s, 2s, 4s, 8s, 16s. A
+    # Retry-After header from the provider wins, but every wait is capped so a
+    # provider asking for an hour cannot freeze the turn.
+    RATE_LIMIT_RETRIES = 5
+    NETWORK_RETRIES = 2
+    MAX_BACKOFF = 30 # seconds
+
     # Wrap a block that performs an HTTP request. Retries on 429 with
     # exponential backoff (respects Retry-After header if present), and on
     # transient network errors (timeouts, connection resets, ...).
@@ -210,17 +235,17 @@ module Rubot
     # retryable - optional callable; when it returns false the error is
     #             re-raised instead of retried. Streaming providers use this
     #             to avoid replaying a response that was already delivered.
-    def with_retry(max_retries: 3, max_network_retries: 2, retryable: nil)
+    def with_retry(max_retries: RATE_LIMIT_RETRIES, max_network_retries: NETWORK_RETRIES, retryable: nil)
       attempts = 0
       network_attempts = 0
       begin
         yield
       rescue RateLimitError => e
         attempts += 1
-        raise if attempts > max_retries
-        raise if retryable && !retryable.call
+        raise rate_limit_failure(e, attempts) if attempts > max_retries
+        raise rate_limit_failure(e, attempts) if retryable && !retryable.call
 
-        wait_time = e.retry_after || exponential_backoff(attempts)
+        wait_time = rate_limit_wait(e, attempts)
         log_debug("Rate limited (429). Retrying in #{wait_time}s (attempt #{attempts}/#{max_retries})")
         sleep wait_time
         retry
@@ -237,20 +262,42 @@ module Rubot
       end
     end
 
+    # How long to wait before the next attempt: the provider's Retry-After
+    # when it sent one, otherwise capped exponential backoff.
+    def rate_limit_wait(error, attempt)
+      [ error.retry_after || exponential_backoff(attempt), MAX_BACKOFF ].min
+    end
+
+    # The error handed to the caller once the retries are spent. It keeps the
+    # attempt count so the message can say how hard we tried instead of
+    # looking like a first-try failure.
+    def rate_limit_failure(error, attempts)
+      RateLimitError.new(error.retry_after, attempts: attempts)
+    end
+
     # Parse the Retry-After header from a response. Returns seconds as
-    # Integer, or nil if not present / not parseable.
+    # Integer (either the bare seconds form or an HTTP-date), or nil if not
+    # present / not parseable.
     def parse_retry_after(response)
       header = response["Retry-After"]
       return nil unless header
-      val = header.to_i
-      val > 0 ? val : nil
+
+      text = header.to_s.strip
+      seconds = text.to_i
+      return seconds if seconds.positive?
+
+      delay = (Time.httpdate(text) - Time.now).ceil
+      delay.positive? ? delay : nil
+    rescue ArgumentError
+      nil
     end
 
-    # Exponential backoff with small jitter: 1s, 2s, 4s, ...
-    def exponential_backoff(attempt)
+    # Exponential backoff with small jitter: 1s, 2s, 4s, ... capped so a
+    # long retry streak does not stall the turn for minutes.
+    def exponential_backoff(attempt, cap: MAX_BACKOFF)
       base = 2**(attempt - 1)
       jitter = rand * 0.5
-      (base + jitter).round(2)
+      [ base + jitter, cap ].min.round(2)
     end
 
     def log_debug(msg)
