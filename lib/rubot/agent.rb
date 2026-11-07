@@ -75,6 +75,10 @@ module Rubot
     # session file should not grow by a megabyte for one write.
     MAX_UI_DIFF_CHARS = 120_000
 
+    # Cap on the original task statement injected into the system prompt. A
+    # huge pasted request should not crowd out the transcript on every round.
+    MAX_TASK_CHARS = 6_000
+
     # Appended to the answer when a turn is stopped early.
     STOP_NOTICE = "⏹️ Stopped by user."
 
@@ -93,7 +97,8 @@ module Rubot
       @steering = []
       @steering_mutex = Mutex.new
       @persona = Persona.from(persona)
-      @session = Session.new(session_id, workspace: config.workspace)
+      @session = Session.new(session_id, workspace: config.workspace,
+                                         max_messages: config.session_max_messages)
       apply_initial_preset!
       @provider = provider || build_provider(preset: @active_preset)
 
@@ -117,10 +122,15 @@ module Rubot
         warn "[safety] Safety guard ENABLED (mode: #{mode}, workspace: #{@safety_guard.workspace})"
       end
 
-      @soul = Soul.new(workspace: config.workspace)
-      @memory = Memory.new(workspace: config.workspace)
-      @agents_file = AgentsFile.new(workspace: config.workspace)
-      @skill_registry = SkillRegistry.new(workspace: config.workspace)
+      # Identity, memory, rules and skills come from the configured workspace,
+      # even when the channel re-roots the working directory (the TUI takes the
+      # directory it was launched from). Otherwise launching in a project would
+      # silently drop all of them.
+      assets = config.assets_workspace
+      @soul = Soul.new(workspace: assets)
+      @memory = Memory.new(workspace: assets)
+      @agents_file = AgentsFile.new(workspace: assets)
+      @skill_registry = SkillRegistry.new(workspace: assets)
       config.ensure_workspace
 
       # Register the memory tool so the bot can manage its own memory
@@ -349,13 +359,18 @@ module Rubot
             # Use the tool call ID for tracking
             tool_call_id = tc.is_a?(Hash) ? (tc["id"] || tool_name) : tool_name
 
-            # A truncated answer can end in the middle of the arguments. Running
-            # the tool with the snippet that survived would act on a half-read
-            # path or command, so the model is told to re-issue it instead.
-            if truncated && !arguments_ok
-              tool_error = "ERROR: this tool call was cut off before its arguments " \
-                           "finished (the answer hit the output limit). Re-issue it " \
-                           "with complete arguments."
+            # Invalid arguments would run the tool on a half-read path or
+            # command (a truncated answer ends mid-JSON), so the model is told
+            # to re-issue the call instead of executing an empty hash.
+            unless arguments_ok
+              tool_error = if truncated
+                "ERROR: this tool call was cut off before its arguments " \
+                  "finished (the answer hit the output limit). Re-issue it " \
+                  "with complete arguments."
+              else
+                "ERROR: the arguments for #{tool_name} were not a valid JSON " \
+                  "object. Re-issue the call with one complete JSON object."
+              end
               on_tool_result&.call(tool_name, tool_error)
               @session.add("tool", tool_error, tool_call_id: tool_call_id)
               next
@@ -688,7 +703,8 @@ module Rubot
     # persona or the configured default preset.
     def switch_session(session_id)
       return @session if @session.id == session_id
-      @session = Session.new(session_id, workspace: @config.workspace)
+      @session = Session.new(session_id, workspace: @config.workspace,
+                                         max_messages: @config.session_max_messages)
       apply_initial_preset!
       @session
     end
@@ -829,8 +845,14 @@ module Rubot
     FILE_EDIT_RULE = <<~PROMPT.strip.freeze
       # Editing Files
 
-      Create and edit files with the file tool (`file_ops`): `read` the file
-      first, then `write` the full new content (or `append` to add to it).
+      Change an existing file with the file tool's `edit` operation: read the
+      part you need, then replace an exact `old_string` with `new_string`. Use
+      enough surrounding lines for `old_string` to be unique. Use `write` only
+      when creating a file or genuinely rewriting all of it, and `append` to
+      add to the end.
+
+      Read with `offset`/`limit` when a file is long; the reply says which lines
+      came back, so continue from there instead of re-reading the whole file.
 
       Avoid shell commands that edit files in place (`sed -i`, `perl -i`,
       stdout redirection into a file, `tee`). Files changed through the file
@@ -889,12 +911,21 @@ module Rubot
       # not injected a second time here — that duplicated ~200 tokens per
       # request for no extra information.
 
-      # 3c. Conversation Summary (from session summarization)
+      # 3c. The instruction that started this session. Stored outside the
+      # transcript so the hard message trim and compaction cannot delete the
+      # goal of a long, multi-step task.
+      task = @session&.task_statement
+      unless task.nil?
+        shown = task.length > MAX_TASK_CHARS ? "#{task[0...MAX_TASK_CHARS]}\n... (task truncated)" : task
+        parts << "# Task\n\nThe user's original request for this session:\n\n#{shown}"
+      end
+
+      # 3d. Conversation Summary (from session summarization)
       if @session&.summary_text
         parts << "# Previous Conversation Summary\n\n#{@session.summary_text}"
       end
 
-      # 3d. Forced skill — injected directly to skip LLM tool-call overhead
+      # 3e. Forced skill — injected directly to skip LLM tool-call overhead
       forced = resolve_forced_skill
       if forced
         parts << "# Active Skill: #{forced[:name]}\n\nYou MUST follow the instructions below for this response:\n\n#{forced[:content]}"
@@ -1230,7 +1261,7 @@ module Rubot
     # nil for reads and every other tool.
     def file_ui_snapshot(tool_name, arguments)
       return nil unless tool_name == "file_ops" && arguments.is_a?(Hash)
-      return nil unless %w[write append].include?(arguments["operation"].to_s)
+      return nil unless %w[write append edit].include?(arguments["operation"].to_s)
 
       path = arguments["path"].to_s
       return nil if path.empty?
@@ -1245,7 +1276,7 @@ module Rubot
     # After-content for the TUI diff, or nil when the tool did not write.
     def file_ui_diff(snapshot, result)
       return nil unless snapshot
-      return nil unless result.to_s.match?(/\A(?:Written|Appended) \d+ characters/)
+      return nil unless result.to_s.match?(/\A(?:Written|Appended|Edited) /)
 
       after = File.read(snapshot[:expanded], encoding: "UTF-8")
       before = snapshot[:before]
@@ -1269,8 +1300,10 @@ module Rubot
       end
 
       arguments = args_str.is_a?(String) ? JSON.parse(args_str) : args_str
+      return [ name, {}, false ] unless arguments.is_a?(Hash)
+
       [ name, arguments, true ]
-    rescue JSON::ParserError
+    rescue JSON::ParserError, TypeError
       [ name, {}, false ]
     end
 
@@ -1594,7 +1627,10 @@ module Rubot
       return if @session.message_count <= @config.compact_keep_recent_messages
 
       window = context_window_tokens
-      return unless window.to_i.positive?
+      # An unknown model used to disable compaction entirely, which left an
+      # unbounded transcript and a silently trimmed request. Fall back to a
+      # conservative window so there is always a bound.
+      window = Config::DEFAULT_CONTEXT_WINDOW unless window.to_i.positive?
 
       threshold = window * (@config.compact_threshold_percent / 100.0)
       cap = @config.compact_threshold_tokens

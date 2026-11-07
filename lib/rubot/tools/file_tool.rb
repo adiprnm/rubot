@@ -7,7 +7,8 @@ require_relative "../tool"
 module Rubot
   module Tools
     class FileTool < Tool
-      MAX_READ = 20_000  # characters
+      MAX_READ = 20_000  # characters returned by one read
+      MAX_READ_LINES = 2_000 # lines returned when offset/limit are used
       MAX_LIST = 100     # entries
 
       attr_accessor :safety_guard
@@ -22,13 +23,20 @@ module Rubot
 
       def description
         desc = <<~DESC.strip
-          Perform file operations: read, write, append, list directory, or check file info.
-          Operations: read, write, append, list, info
-          - read: Read file contents
-          - write: Write content to a file (overwrites)
+          Read files, make targeted edits, create files, list directories, and
+          inspect paths.
+          Operations: read, edit, write, append, list, info
+          - read:  Read a file. Pass `offset` (1-based line) and `limit` (lines)
+                   to read part of a long file; the reply says which lines were
+                   returned so you can continue from there.
+          - edit:  Replace `old_string` with `new_string`. `old_string` must
+                   appear exactly once unless `replace_all` is true. This is the
+                   preferred way to change an existing file — it does not
+                   rewrite the parts you did not touch.
+          - write: Write content to a file (overwrites the whole file)
           - append: Append content to a file
-          - list: List directory contents
-          - info: Get file/directory information
+          - list:  List directory contents
+          - info:  Get file/directory information
         DESC
         if @safety_guard&.restrict_to_workspace
           ws = @safety_guard.workspace
@@ -44,7 +52,7 @@ module Rubot
           "properties" => {
             "operation" => {
               "type" => "string",
-              "enum" => %w[read write append list info],
+              "enum" => %w[read edit write append list info],
               "description" => "The file operation to perform"
             },
             "path" => {
@@ -54,6 +62,26 @@ module Rubot
             "content" => {
               "type" => "string",
               "description" => "Content to write or append (for write/append operations)"
+            },
+            "old_string" => {
+              "type" => "string",
+              "description" => "Exact text to replace (for the edit operation). Include enough surrounding lines to be unique."
+            },
+            "new_string" => {
+              "type" => "string",
+              "description" => "Replacement text (for the edit operation). Use an empty string to delete the matched text."
+            },
+            "replace_all" => {
+              "type" => "boolean",
+              "description" => "Replace every occurrence instead of requiring exactly one (edit operation)"
+            },
+            "offset" => {
+              "type" => "integer",
+              "description" => "First line to read, 1-based (read operation, optional)"
+            },
+            "limit" => {
+              "type" => "integer",
+              "description" => "How many lines to read (read operation, optional)"
             }
           },
           "required" => [ "operation", "path" ]
@@ -66,12 +94,14 @@ module Rubot
         content = arguments["content"]
 
         case operation
-        when "read"    then read_file(path)
+        when "read"    then read_file(path, offset: arguments["offset"], limit: arguments["limit"])
+        when "edit"    then edit_file(path, arguments["old_string"], arguments["new_string"],
+                                       replace_all: arguments["replace_all"])
         when "write"   then write_file(path, content)
         when "append"  then append_file(path, content)
         when "list"    then list_dir(path)
         when "info"    then file_info(path)
-        else "ERROR: Unknown operation '#{operation}'. Use: read, write, append, list, info"
+        else "ERROR: Unknown operation '#{operation.inspect}'. Use: read, edit, write, append, list, info"
         end
       rescue StandardError => e
         "ERROR: #{e.class}: #{e.message}"
@@ -122,18 +152,79 @@ module Rubot
         guard.check_path(path, operation: operation)
       end
 
-      def read_file(path)
+      def read_file(path, offset: nil, limit: nil)
         check_path(path, operation: :read)
         p = safe_path(path)
         raise "File not found: #{path}" unless File.exist?(p)
         raise "Not a file: #{path}" unless File.file?(p)
 
         content = File.read(p, encoding: "UTF-8")
-        if content.length > MAX_READ
-          content[0...MAX_READ] + "\n... (file truncated, #{content.length} total chars)"
-        else
-          content
+
+        if offset.nil? && limit.nil?
+          return content if content.length <= MAX_READ
+
+          return content[0...MAX_READ] +
+                 "\n... (file truncated at #{MAX_READ} of #{content.length} chars; " \
+                 "call read again with offset/limit to see the rest)"
         end
+
+        lines = content.lines
+        total = lines.size
+        start = offset.to_i
+        start = 1 if start < 1
+        count = limit.to_i
+        count = MAX_READ_LINES if count < 1
+        count = MAX_READ_LINES if count > MAX_READ_LINES
+
+        slice = lines[(start - 1), count] || []
+        return "(no lines: file has #{total} line(s), offset #{start} is past the end)" if slice.empty?
+
+        body = slice.join
+        if body.length > MAX_READ
+          body = body[0...MAX_READ] + "\n... (this range was truncated at #{MAX_READ} chars)"
+        end
+
+        last = start + slice.size - 1
+        "#{body}\n... (lines #{start}-#{last} of #{total})"
+      end
+
+      # Replace an exact block of text. Far safer and cheaper than rewriting a
+      # whole file, which is what a multi-file change used to require.
+      def edit_file(path, old_string, new_string, replace_all: false)
+        check_path(path, operation: :write)
+        raise "Cannot edit MEMORY.md — use the memory tool instead." if memory_file?(path)
+
+        old_text = old_string.to_s
+        raise "No old_string provided (the exact text to replace)" if old_text.empty?
+
+        p = safe_path(path)
+        raise "File not found: #{path}" unless File.exist?(p)
+        raise "Not a file: #{path}" unless File.file?(p)
+
+        content = File.read(p, encoding: "UTF-8")
+        pattern = Regexp.new(Regexp.escape(old_text), Regexp::MULTILINE)
+        occurrences = content.scan(pattern).size
+
+        if occurrences.zero?
+          hint = old_text.include?("\\") ? " The old_string contains backslashes; pass the literal text." : ""
+          raise "old_string not found in #{p}. Read the file again and copy the exact text, " \
+                "including indentation.#{hint}"
+        end
+
+        if occurrences > 1 && !replace_all
+          raise "old_string appears #{occurrences} times in #{p}. Include more surrounding " \
+                "lines so it is unique, or pass replace_all: true to change every occurrence."
+        end
+
+        updated = if replace_all
+          content.gsub(pattern) { new_string.to_s }
+        else
+          content.sub(pattern) { new_string.to_s }
+        end
+
+        File.write(p, updated, encoding: "UTF-8")
+        "Edited #{p}: replaced #{occurrences} occurrence(s), " \
+          "#{old_text.length} -> #{new_string.to_s.length} chars"
       end
 
       def write_file(path, content)

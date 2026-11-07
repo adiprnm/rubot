@@ -18,10 +18,15 @@ module Rubot
     # Old constant name, kept so existing callers keep working.
     DEFAULT_MAX_TOOL_ITERATIONS = DEFAULT_MAX_ROUNDS
     DEFAULT_AUTO_COMPACT = true
-    DEFAULT_COMPACT_THRESHOLD_PERCENT = 80.0
+    DEFAULT_COMPACT_THRESHOLD_PERCENT = 60.0
     DEFAULT_COMPACT_KEEP_RECENT = 6
     DEFAULT_TOOL_RESULT_KEEP = 3
     DEFAULT_TOOL_RESULT_MAX_CHARS = 2_000
+    # Messages kept in the session file before the oldest are dropped.
+    DEFAULT_SESSION_MAX_MESSAGES = 400
+    # Used for the compaction threshold when the model's real window cannot be
+    # resolved, so an unknown model still gets a bound instead of no compaction.
+    DEFAULT_CONTEXT_WINDOW = 128_000
     # Memory extraction used to run on every user message, one extra provider
     # request per turn. Batching it over a few turns keeps the same coverage
     # for a fraction of the cost (0 disables extraction).
@@ -382,6 +387,34 @@ module Rubot
       ws.start_with?("~") ? File.expand_path(ws) : ws
     end
 
+    # A copy of this config whose agent workspace is `path`, leaving the
+    # loaded file untouched. The TUI uses it to take the directory it was
+    # launched from as its workspace instead of the configured default.
+    #
+    # `assets_workspace` keeps pointing at the configured workspace, so the
+    # SOUL.md, MEMORY.md, AGENTS.md and skills/ that were set up there are
+    # still loaded while code work happens in the project directory.
+    def with_workspace(path)
+      original = workspace
+      copy = self.class.from_data(snapshot, config_path: config_path)
+      agents = copy.data["agents"]
+      agents = copy.data["agents"] = {} unless agents.is_a?(Hash)
+      defaults = agents["defaults"]
+      defaults = agents["defaults"] = {} unless defaults.is_a?(Hash)
+      defaults["assets_workspace"] ||= original
+      defaults["workspace"] = File.expand_path(path)
+      copy
+    end
+
+    # Where SOUL.md, MEMORY.md, AGENTS.md and skills/ are read from. Normally
+    # the workspace itself; a channel that re-roots the workspace (the TUI
+    # takes the launch directory) leaves this at the configured workspace so
+    # the agent keeps its identity and memory.
+    def assets_workspace
+      raw = agent_defaults["assets_workspace"]
+      raw && !raw.to_s.strip.empty? ? File.expand_path(raw.to_s) : workspace
+    end
+
     def restrict_to_workspace
       val = agent_defaults["restrict_to_workspace"]
       # Default to true for security (matches PicoClaw default)
@@ -411,10 +444,11 @@ module Rubot
     #   agents:
     #     defaults:
     #       history:
-    #         limit: 50        # messages sent to the provider (0 = max_rounds)
-    #         max_tokens: 24000 # optional token budget for that history
-    #         tool_result_keep: 3       # newest tool outputs kept in full
-    #         tool_result_max_chars: 2000 # older tool outputs are cut to this
+    #         limit: 0         # messages sent (0 = no count cap; the window
+    #                          # and compaction are the bound)
+    #         max_tokens: 0    # optional token budget for that history
+    #         tool_result_keep: 10        # newest tool outputs kept in full
+    #         tool_result_max_chars: 6000 # older ones are cut to this
     #
     # Flat aliases (`history_limit`, `history_max_tokens`, ...) are accepted.
     def history
@@ -423,9 +457,18 @@ module Rubot
     end
 
     def history_limit
-      raw = history["limit"] || agent_defaults["history_limit"]
+      raw = if history.key?("limit")
+        history["limit"]
+      else
+        agent_defaults["history_limit"]
+      end
+      # Unset (or 0) means "no message-count cap": the context window and
+      # compaction are the only bounds. Capping by count alone silently drops
+      # the beginning of a long task while the window still has room.
+      return 0 if raw.nil?
+
       value = raw.to_i
-      value.positive? ? value : max_rounds
+      value.positive? ? value : 0
     end
 
     # Approximate token budget for the history block. 0 disables the cap, so
@@ -460,8 +503,9 @@ module Rubot
     #     defaults:
     #       compaction:
     #         auto: true              # summarize old turns automatically
-    #         threshold_percent: 80   # ...when the context is 80% full
-    #         keep_recent_messages: 6 # turns kept verbatim after compaction
+    #         threshold_percent: 60   # ...when the context is 60% full
+    #         keep_recent_messages: 10 # turns kept verbatim after compaction
+    #         max_messages: 400      # messages kept in the session file
     #
     # Flat aliases (`auto_compact`, `compact_threshold_percent`,
     # `compact_keep_recent_messages`) are accepted for convenience.
@@ -505,6 +549,15 @@ module Rubot
             agent_defaults["compact_keep_recent_messages"]
       value = raw.to_i
       value.positive? ? value : DEFAULT_COMPACT_KEEP_RECENT
+    end
+
+    # How many messages live in the session file before the oldest are dropped.
+    # Purely a file-size guard: the task statement is stored separately, so
+    # trimming cannot delete the user's goal.
+    def session_max_messages
+      raw = compaction["max_messages"] || agent_defaults["session_max_messages"]
+      value = raw.to_i
+      value.positive? ? value : DEFAULT_SESSION_MAX_MESSAGES
     end
 
     # Absolute token ceiling for compaction, independent of the model's

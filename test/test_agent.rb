@@ -358,7 +358,7 @@ class TestAgentProgressNarration < Minitest::Test
   def test_system_prompt_asks_for_file_tool_edits_instead_of_shell
     prompt = @agent.build_system_prompt
     assert_includes prompt, "Editing Files"
-    assert_includes prompt, "Create and edit files with the file tool"
+    assert_includes prompt, "`edit` operation"
     assert_includes prompt, "Avoid shell commands that edit files in place"
   end
 
@@ -1285,6 +1285,29 @@ class TestAgentHistoryTrimming < Minitest::Test
 
     assert_equal "1" * 50 + Rubot::Agent::TRUNCATED_TOOL_RESULT_NOTICE, tools[0]["content"]
     assert_equal "2" * 200, tools[1]["content"]
+  end
+
+  # A turn no longer drops messages just because there are many of them: the
+  # context window and compaction are the bound. The old 50-message cap made
+  # the model forget everything past ~25 tool calls.
+  def test_no_message_count_cap_by_default
+    @agent.session.add("user", "start")
+    60.times { |i| @agent.session.add("assistant", "step #{i}") }
+
+    messages = @agent.send(:build_messages)
+    assert_equal 62, messages.size
+    assert_equal "start", messages[1]["content"]
+  end
+
+  # The task statement lives outside the transcript, so trimming and
+  # compaction cannot lose it. It is re-stated in the system prompt each round.
+  def test_the_task_statement_is_always_in_the_system_prompt
+    @agent.session.add("user", "Refactor auth across five files")
+    40.times { |i| @agent.session.add("assistant", "step #{i}") }
+
+    prompt = @agent.send(:build_system_prompt)
+    assert_includes prompt, "# Task"
+    assert_includes prompt, "Refactor auth across five files"
   end
 
   def test_stored_tool_output_is_not_modified

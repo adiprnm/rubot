@@ -24,7 +24,8 @@ class TestTools < Minitest::Test
     assert_includes names, "web_fetch"
     assert_includes names, "cron"
     assert_includes names, "send_file"
-    assert_equal 5, @registry.count
+    assert_includes names, "search"
+    assert_equal 6, @registry.count
   end
 
   def test_registry_get_tool
@@ -397,13 +398,13 @@ class TestTools < Minitest::Test
     end.new
 
     @registry.register(custom)
-    assert_equal 6, @registry.count
+    assert_equal 7, @registry.count
     assert_equal "done: {}", @registry.execute("custom_tool", {})
   end
 
   def test_registry_provider_definitions
     defs = @registry.to_provider_definitions("openai")
-    assert_equal 5, defs.size
+    assert_equal 6, defs.size
     assert defs.all? { |d| d["type"] == "function" }
     assert defs.all? { |d| d["function"]["name"] }
     assert defs.all? { |d| d["function"]["description"] }
@@ -531,6 +532,180 @@ class TestTools < Minitest::Test
     assert_includes result, "No content provided"
   end
 
+  # --- Reading part of a long file ------------------------------------
+
+  def test_file_read_offset_and_limit_returns_a_slice_and_says_where_it_ends
+    filepath = File.join(@tmpdir, "long.txt")
+    File.write(filepath, (1..50).map { |i| "line #{i}\n" }.join)
+
+    result = @registry.execute("file_ops", {
+      "operation" => "read", "path" => filepath, "offset" => 10, "limit" => 5
+    })
+
+    assert_includes result, "line 10"
+    assert_includes result, "line 14"
+    refute_includes result, "line 9\n"
+    refute_includes result, "line 15"
+    assert_includes result, "lines 10-14 of 50"
+  end
+
+  def test_file_read_with_an_offset_past_the_end_says_so
+    filepath = File.join(@tmpdir, "short.txt")
+    File.write(filepath, "only\n")
+
+    result = @registry.execute("file_ops", {
+      "operation" => "read", "path" => filepath, "offset" => 10
+    })
+
+    assert_includes result, "past the end"
+  end
+
+  def test_a_truncated_read_points_at_offset
+    filepath = File.join(@tmpdir, "big.txt")
+    File.write(filepath, "x" * (Rubot::Tools::FileTool::MAX_READ + 100))
+
+    result = @registry.execute("file_ops", { "operation" => "read", "path" => filepath })
+
+    assert_includes result, "offset/limit"
+  end
+
+  # --- Precise edits ---------------------------------------------------
+
+  def test_file_edit_replaces_a_unique_block
+    filepath = File.join(@tmpdir, "edit.rb")
+    File.write(filepath, "def a\n  1\nend\n\ndef b\n  2\nend\n")
+
+    result = @registry.execute("file_ops", {
+      "operation" => "edit", "path" => filepath,
+      "old_string" => "def b\n  2\nend", "new_string" => "def b\n  3\nend"
+    })
+
+    assert_includes result, "Edited"
+    assert_equal "def a\n  1\nend\n\ndef b\n  3\nend\n", File.read(filepath)
+  end
+
+  def test_file_edit_refuses_an_ambiguous_match
+    filepath = File.join(@tmpdir, "ambiguous.rb")
+    File.write(filepath, "x = 1\nx = 1\n")
+
+    result = @registry.execute("file_ops", {
+      "operation" => "edit", "path" => filepath,
+      "old_string" => "x = 1", "new_string" => "x = 2"
+    })
+
+    assert_includes result, "appears 2 times"
+    assert_equal "x = 1\nx = 1\n", File.read(filepath),
+                 "an ambiguous edit must not touch the file"
+  end
+
+  def test_file_edit_replace_all
+    filepath = File.join(@tmpdir, "all.rb")
+    File.write(filepath, "x = 1\nx = 1\n")
+
+    result = @registry.execute("file_ops", {
+      "operation" => "edit", "path" => filepath,
+      "old_string" => "x = 1", "new_string" => "x = 2", "replace_all" => true
+    })
+
+    assert_includes result, "2 occurrence"
+    assert_equal "x = 2\nx = 2\n", File.read(filepath)
+  end
+
+  def test_file_edit_reports_a_missing_match
+    filepath = File.join(@tmpdir, "missing.rb")
+    File.write(filepath, "hello\n")
+
+    result = @registry.execute("file_ops", {
+      "operation" => "edit", "path" => filepath,
+      "old_string" => "not here", "new_string" => "x"
+    })
+
+    assert_includes result, "not found"
+    assert_equal "hello\n", File.read(filepath)
+  end
+
+  def test_file_edit_is_not_treated_as_an_overwrite
+    filepath = File.join(@tmpdir, "safe_edit.rb")
+    File.write(filepath, "a\n")
+    tool = @registry.get("file_ops")
+
+    refute tool.dangerous_action?({ "operation" => "edit", "path" => filepath })
+  end
+
+  # --- Search tool -----------------------------------------------------
+
+  def test_search_content_returns_path_line_and_text
+    FileUtils.mkdir_p(File.join(@tmpdir, "src"))
+    File.write(File.join(@tmpdir, "src", "a.rb"), "class Foo\n  def bar; end\nend\n")
+    File.write(File.join(@tmpdir, "src", "b.rb"), "class Baz\nend\n")
+
+    result = @registry.execute("search", {
+      "pattern" => "def \\w+", "path" => @tmpdir
+    })
+
+    assert_includes result, "src/a.rb:2:"
+    assert_includes result, "def bar"
+    refute_includes result, "Baz"
+  end
+
+  def test_search_content_is_case_insensitive_on_request
+    File.write(File.join(@tmpdir, "case.txt"), "Hello World\n")
+
+    result = @registry.execute("search", {
+      "pattern" => "hello", "path" => @tmpdir, "ignore_case" => true
+    })
+
+    assert_includes result, "case.txt:1:"
+  end
+
+  def test_search_files_matches_a_glob
+    FileUtils.mkdir_p(File.join(@tmpdir, "lib"))
+    File.write(File.join(@tmpdir, "lib", "one.rb"), "")
+    File.write(File.join(@tmpdir, "lib", "two.txt"), "")
+
+    result = @registry.execute("search", {
+      "operation" => "files", "pattern" => "**/*.rb", "path" => @tmpdir
+    })
+
+    assert_includes result, "lib/one.rb"
+    refute_includes result, "lib/two.txt"
+  end
+
+  def test_search_skips_git_and_node_modules
+    FileUtils.mkdir_p(File.join(@tmpdir, "node_modules", "pkg"))
+    File.write(File.join(@tmpdir, "node_modules", "pkg", "index.js"), "needle\n")
+    File.write(File.join(@tmpdir, "app.js"), "needle\n")
+
+    result = @registry.execute("search", { "pattern" => "needle", "path" => @tmpdir })
+
+    assert_includes result, "app.js"
+    refute_includes result, "node_modules"
+  end
+
+  def test_search_reports_no_matches
+    File.write(File.join(@tmpdir, "none.txt"), "abc\n")
+
+    result = @registry.execute("search", { "pattern" => "zzz", "path" => @tmpdir })
+
+    assert_includes result, "No matches"
+  end
+
+  def test_search_reports_an_invalid_regex
+    result = @registry.execute("search", { "pattern" => "([", "path" => @tmpdir })
+
+    assert_includes result, "invalid regular expression"
+  end
+
+  def test_search_caps_the_number_of_results
+    File.write(File.join(@tmpdir, "many.txt"), (1..40).map { |i| "hit #{i}\n" }.join)
+
+    result = @registry.execute("search", {
+      "pattern" => "hit", "path" => @tmpdir, "max_results" => 5
+    })
+
+    assert_equal 5, result.lines.count { |l| l.include?("many.txt:") }
+  end
+
   # --- Tool base class ---
 
   def test_tool_name_not_implemented
@@ -590,6 +765,30 @@ class TestTools < Minitest::Test
     shell_tool = @registry.get("shell_exec")
     refute shell_tool.dangerous_action?({ "command" => "" })
     refute shell_tool.dangerous_action?({ "command" => nil })
+  end
+
+  # Quoted text is an argument, not a command. Before this, a commit message or
+  # an `echo` that mentioned "rm" asked the user for a destructive-action
+  # confirmation and stalled the turn.
+  def test_shell_quoted_text_does_not_look_destructive
+    shell_tool = @registry.get("shell_exec")
+
+    refute shell_tool.dangerous_action?({ "command" => "git commit -m \"rm the old helper\"" })
+    refute shell_tool.dangerous_action?({ "command" => "echo \"rm -rf build is the next step\"" })
+    assert shell_tool.dangerous_action?({ "command" => "rm -rf build" })
+    assert shell_tool.dangerous_action?({ "command" => "cd app && rm -rf build" })
+    assert shell_tool.dangerous_action?({ "command" => "bash -c \"rm -rf build\"" })
+  end
+
+  # A long log is useful at both ends: the command that started it and the
+  # failure at the end.
+  def test_shell_keeps_the_head_and_the_tail_of_a_long_output
+    cmd = "ruby -e 'puts (1..30000).map { |i| \"line #{'#{i}'}\" }'"
+    result = @registry.execute("shell_exec", { "command" => cmd })
+
+    assert_includes result, "line 1"
+    assert_includes result, "line 30000"
+    assert_includes result, "characters omitted"
   end
 
   def test_file_tool_dangerous_overwrite_existing_file

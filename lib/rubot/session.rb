@@ -27,14 +27,24 @@ module Rubot
     # User messages waiting to be extracted into MEMORY.md. Bounded so a long
     # stretch between extractions cannot grow the session file without limit.
     MAX_MEMORY_BACKLOG = 20
+    # Hard cap on the transcript stored on disk. The request itself is bounded
+    # by the context window and compaction; this only keeps a session file from
+    # growing forever. 400 messages is roughly 50 tool-call rounds.
+    DEFAULT_MAX_MESSAGES = 400
 
     attr_reader :id, :messages, :workspace, :usage, :last_usage, :cost
+    attr_reader :task
     attr_accessor :summary, :forced_skill, :model_override, :model_preset
 
-    def initialize(id = "default", workspace: nil)
+    def initialize(id = "default", workspace: nil, max_messages: DEFAULT_MAX_MESSAGES)
       @id = id
       @messages = []
       @workspace = workspace
+      @max_messages = max_messages.to_i.positive? ? max_messages.to_i : DEFAULT_MAX_MESSAGES
+      # The user's original instruction for this session. Kept outside the
+      # message list so neither the hard trim nor compaction can delete the
+      # goal of a long task; it is injected into the system prompt.
+      @task = nil
       @summary = nil
       @forced_skill = nil
       @model_override = nil
@@ -159,10 +169,21 @@ module Rubot
       # redraw the diff. Not sent to the model: conversation_history builds a
       # fresh hash with only role/content/tool_calls/tool_call_id.
       msg["ui_diff"] = self.class.normalize_utf8(ui_diff) if ui_diff
+      # The first user message is the task statement. Remember it before the
+      # transcript can be trimmed, so a long turn cannot lose its own goal.
+      @task = msg["content"].to_s.strip if role.to_s == "user" && @task.nil?
       @messages << msg
       trim! if @workspace
       save!
       msg
+    end
+
+    # The instruction that started this session, or nil for an empty session.
+    # It survives compaction and the hard message trim because it is stored
+    # beside the transcript, not in it.
+    def task_statement
+      text = @task.to_s.strip
+      text.empty? ? nil : text
     end
 
     def conversation_history(reasoning_tail: nil)
@@ -195,7 +216,8 @@ module Rubot
     def safe_history(limit: nil, max_tokens: nil, reasoning_tail: nil)
       history = conversation_history(reasoning_tail: reasoning_tail)
 
-      if limit && history.size > limit
+      limit = limit.to_i
+      if limit.positive? && history.size > limit
         trim_index = history.size - limit
 
         # If the first kept message is a tool result, its parent assistant was
@@ -329,6 +351,7 @@ module Rubot
       @messages = []
       @forced_skill = nil
       @summary = nil
+      @task = nil
       @model_override = nil
       @model_preset = nil
       @usage = Usage.zero
@@ -561,6 +584,7 @@ module Rubot
         "updated_at" => Time.now.iso8601,
         "messages" => @messages
       }
+      data["task"] = @task if @task
       data["summary"] = @summary if @summary
       data["forced_skill"] = @forced_skill if @forced_skill
       data["model_override"] = @model_override if @model_override
@@ -701,6 +725,12 @@ module Rubot
 
       data = JSON.parse(raw)
       @messages = self.class.normalize_utf8(data["messages"] || [])
+      @task = data["task"] if data["task"]
+      # Sessions written before the task field existed: recover the first user
+      # message if the transcript still starts with one.
+      if @task.nil? && @messages.first && @messages.first["role"] == "user"
+        @task = @messages.first["content"].to_s.strip
+      end
       @summary = data["summary"] if data["summary"]
       @forced_skill = data["forced_skill"] if data["forced_skill"]
       @model_override = data["model_override"] if data["model_override"]
@@ -718,11 +748,12 @@ module Rubot
     end
 
     def trim!
-      # Keep only the last N messages to avoid context overflow
+      # Keep only the last N messages so the session file cannot grow forever.
+      # This is a last resort: the request is bounded by the context window and
+      # compaction, and the task statement lives outside @messages.
       return unless @workspace
-      # We'll use the config's history_limit later, for now keep last 100
-      limit = 100
-      return unless @messages.size > limit
+      limit = @max_messages
+      return unless limit.positive? && @messages.size > limit
 
       trim_index = @messages.size - limit
 

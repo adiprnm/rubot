@@ -7,7 +7,10 @@ require_relative "../tool"
 module Rubot
   module Tools
     class Shell < Tool
-      MAX_OUTPUT = 10_000 # characters
+      # Characters returned for one command. A test suite or build log is
+      # usually most useful at the end, so a long result keeps both ends.
+      MAX_OUTPUT = 20_000
+      HEAD_OUTPUT = 6_000
 
       attr_accessor :safety_guard
 
@@ -24,9 +27,10 @@ module Rubot
           Execute a shell command and return its output.
           Use this for running system commands, scripts, git operations, etc.
           The command will be executed in the current working directory.
-          Write any new helper script in Ruby and run it with `ruby`; do not
-          introduce Python for new work.
-          Output is limited to #{MAX_OUTPUT} characters.
+          Write any new helper script in Ruby and run it with `ruby -e '...'`
+          or by writing a .rb file; do not introduce Python for new work.
+          Output is limited to #{MAX_OUTPUT} characters (the beginning and the
+          end are kept when it is longer).
         DESC
         if @safety_guard&.restrict_to_workspace
           desc + "\nCommands are restricted to the workspace directory."
@@ -66,7 +70,13 @@ module Rubot
         output += "\nSTDERR: #{stderr}" if stderr && !stderr.empty?
 
         output = output.strip
-        output = output[0...MAX_OUTPUT] + "\n... (output truncated)" if output.length > MAX_OUTPUT
+        if output.length > MAX_OUTPUT
+          tail_size = MAX_OUTPUT - HEAD_OUTPUT
+          omitted = output.length - MAX_OUTPUT
+          output = output[0...HEAD_OUTPUT] +
+                   "\n... (#{omitted} characters omitted; narrow the command with grep/head/tail) ...\n" +
+                   output[-tail_size..]
+        end
 
         exit_status = status.exitstatus
         "[Exit code: #{exit_status}]\n#{output}"
@@ -80,6 +90,12 @@ module Rubot
       def dangerous_action?(arguments)
         cmd = arguments["command"]
         return false if cmd.nil? || cmd.strip.empty?
+
+        # Match against the command with plain quoted text removed, so
+        # `echo "rm -rf build"` or a commit message does not ask for
+        # confirmation while `rm -rf build` still does. A shell invoked with
+        # -c runs its string as code, so there the quotes are kept.
+        cmd = strip_quoted(cmd) unless cmd =~ /\b(?:ba|z|k)?sh\s+-c\b/
 
         # Destructive patterns that could cause data loss
         dangerous_patterns = [
@@ -112,6 +128,30 @@ module Rubot
       end
 
       private
+
+      # Remove the contents of '...' and "..." pairs. Used only to decide
+      # whether a command needs confirmation, so dropping the text is enough.
+      def strip_quoted(text)
+        out = +""
+        quote = nil
+        escaped = false
+        text.each_char do |ch|
+          if quote
+            if escaped
+              escaped = false
+            elsif ch == "\\"
+              escaped = true
+            elsif ch == quote
+              quote = nil
+            end
+          elsif ch == "'" || ch == "\""
+            quote = ch
+          else
+            out << ch
+          end
+        end
+        out
+      end
 
       # Run the command in its own process group so /stop can kill it and
       # anything it started, not just the shell wrapper. The cancellation

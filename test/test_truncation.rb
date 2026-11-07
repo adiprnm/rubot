@@ -305,6 +305,26 @@ class TestAgentTruncationHandling < Minitest::Test
     assert_equal "Sudah gue ulang.", answer
   end
 
+  # A model that leaks its XML-ish tool syntax into the arguments JSON used to
+  # reach the tool with an empty hash and burn a round on a confusing error.
+  def test_a_tool_call_whose_arguments_are_not_an_object_is_not_executed
+    agent = build_agent([
+      {
+        "content" => "",
+        "finish_reason" => "stop",
+        "tool_calls" => [ tool_call(arguments: "[]") ]
+      },
+      { "content" => "Sudah gue ulang.", "finish_reason" => "stop" }
+    ])
+
+    answer = agent.process("baca folder", stream: false)
+
+    tool_messages = agent.session.safe_history(limit: 50).select { |m| m["role"] == "tool" }
+    assert_equal 1, tool_messages.size
+    assert_includes tool_messages.first["content"], "not a valid JSON object"
+    assert_equal "Sudah gue ulang.", answer
+  end
+
   def test_silent_turn_is_asked_again_instead_of_dumping_tool_output
     agent = build_agent([
       { "content" => "", "finish_reason" => "stop", "tool_calls" => [ tool_call ] },

@@ -185,6 +185,48 @@ class TestConfig < Minitest::Test
     assert File.directory?(File.join(@tmpdir, "my_workspace"))
   end
 
+  def test_with_workspace_returns_a_copy_without_touching_the_original
+    config = isolated_config(@tmpdir)
+    original = config.workspace
+
+    copy = config.with_workspace("/tmp/project")
+
+    assert_equal "/tmp/project", copy.workspace
+    assert_equal original, config.workspace, "the loaded config is not mutated"
+  end
+
+  def test_with_workspace_keeps_the_configured_workspace_as_the_assets_workspace
+    config = Rubot::Config.from_data({
+      "agents" => { "defaults" => { "workspace" => "/tmp/home-workspace" } }
+    })
+
+    copy = config.with_workspace("/tmp/project")
+
+    assert_equal "/tmp/project", copy.workspace
+    assert_equal "/tmp/home-workspace", copy.assets_workspace,
+                 "SOUL.md, MEMORY.md, AGENTS.md and skills must stay put"
+    assert_equal "/tmp/home-workspace", config.assets_workspace,
+                 "the original config must not be modified"
+  end
+
+  def test_an_explicit_assets_workspace_is_respected
+    config = Rubot::Config.from_data({
+      "agents" => { "defaults" => { "workspace" => "/tmp/project",
+                                    "assets_workspace" => "/tmp/shared-assets" } }
+    })
+
+    assert_equal "/tmp/shared-assets", config.assets_workspace
+  end
+
+  def test_with_workspace_creates_agent_defaults_when_missing
+    File.write(@config_path, { "provider" => "openai" }.to_yaml)
+    config = Rubot::Config.new(@config_path)
+
+    copy = config.with_workspace("/tmp/project")
+
+    assert_equal "/tmp/project", copy.workspace
+  end
+
   def test_model_entry_by_name_finds_model
     File.write(@config_path, {
       "models" => [
@@ -419,7 +461,7 @@ class TestConfigCompaction < Minitest::Test
     config = Rubot::Config.new("/nonexistent/config.yml")
 
     assert config.auto_compact?
-    assert_in_delta 80.0, config.compact_threshold_percent
+    assert_in_delta 60.0, config.compact_threshold_percent
     assert_equal 6, config.compact_keep_recent_messages
   end
 
@@ -458,7 +500,7 @@ class TestConfigCompaction < Minitest::Test
   def test_invalid_threshold_falls_back_to_the_default
     config = write_config("compaction" => { "threshold_percent" => 0 })
 
-    assert_in_delta 80.0, config.compact_threshold_percent
+    assert_in_delta 60.0, config.compact_threshold_percent
   end
 
   def test_absolute_threshold_tokens
@@ -494,7 +536,8 @@ class TestConfigHistory < Minitest::Test
   def test_defaults
     config = write_config({})
 
-    assert_equal Rubot::Config::DEFAULT_MAX_ROUNDS, config.history_limit
+    assert_equal 0, config.history_limit,
+                 "unset history.limit must not cap the request by message count"
     assert_equal 0, config.history_max_tokens
     assert_equal 3, config.tool_result_keep
     assert_equal 2_000, config.tool_result_max_chars
@@ -536,7 +579,7 @@ class TestConfigHistory < Minitest::Test
                      "tool_result_keep" => -1, "tool_result_max_chars" => 0 }
     )
 
-    assert_equal Rubot::Config::DEFAULT_MAX_ROUNDS, config.history_limit
+    assert_equal 0, config.history_limit
     assert_equal 0, config.history_max_tokens
     assert_equal 0, config.tool_result_keep
     assert_equal 0, config.tool_result_max_chars

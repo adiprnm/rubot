@@ -12,27 +12,40 @@ agents:
     temperature: 0.7
     system_prompt: "You are Rubot, a helpful AI assistant running in the terminal.\nBe concise and helpful."
     # Maximum agent rounds per user message. One round can run several
-    # tools; re-asks and continuations also count. Default 50.
-    max_rounds: 50
+    # tools; re-asks and continuations also count. A multi-file coding task
+    # routinely needs more than 50. Default 120.
+    max_rounds: 120
     # Context compaction. When the conversation reaches `threshold_percent` of
     # the model's context window, older turns are summarized into the running
     # summary and the most recent `keep_recent_messages` are kept verbatim.
     # Use `/compact` to trigger it manually at any time.
     compaction:
       auto: true
-      threshold_percent: 80   # 0.8 is also accepted
-      keep_recent_messages: 6
+      threshold_percent: 60   # 0.6 is also accepted
+      keep_recent_messages: 10
       # Optional absolute ceiling, in estimated tokens. Useful with a large
-      # context window (e.g. 1M tokens), where 80% is unreachable in practice.
-      # 0 disables it; the lower of this and threshold_percent wins.
-      threshold_tokens: 0
+      # context window (e.g. 1M tokens), where a percentage alone is
+      # unreachable in practice. 0 disables it; the lower of this and
+      # threshold_percent wins. Keep this above `history.max_tokens`, or the
+      # request gets trimmed before anything is ever summarized.
+      threshold_tokens: 120_000
+      # Messages kept in the session file before the oldest are dropped. This
+      # is only a file-size guard: the user's original request is stored
+      # separately and re-stated in the system prompt, so it is never lost.
+      max_messages: 400
     # What is sent to the provider from the transcript. Reasoning from past
     # turns is never re-sent; only the turn being executed keeps it.
     history:
-      limit: 50               # messages per request (default: max_rounds)
-      max_tokens: 0           # optional token budget for that history
-      tool_result_keep: 3     # newest tool outputs sent in full
-      tool_result_max_chars: 2000  # older tool outputs are cut to this
+      # 0 means no message-count cap: the context window and compaction bound
+      # the request. A small cap silently drops the beginning of a long task
+      # while the model's window still has room.
+      limit: 0
+      # Optional token budget for the history block; 0 means no cap. If you
+      # set this, keep it above `compaction.threshold_tokens` so compaction
+      # summarizes before the request starts losing messages.
+      max_tokens: 0
+      tool_result_keep: 10    # newest tool outputs sent in full
+      tool_result_max_chars: 6000  # older tool outputs are cut to this
     # Safety guard — restrict agent access to the workspace directory.
     # When true, file operations and command execution are confined to `workspace`.
     # Set to false to disable sandboxing (not recommended).
@@ -91,7 +104,9 @@ tools:
   shell_exec:
     enabled: true          # Execute shell commands
   file_ops:
-    enabled: true          # Read/write/list files
+    enabled: true          # Read/edit/write/list files
+  search:
+    enabled: true          # Find files and matching lines (grep/glob)
   web_fetch:
     enabled: true          # Search and fetch web content
   cron:

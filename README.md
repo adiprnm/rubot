@@ -22,7 +22,10 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 📋 **AGENTS.md** — YAML frontmatter config + markdown behavior rules
 - 🧠 **MEMORY.md** — persistent memory the bot can read and update across sessions
 - ⏰ **Cron scheduling** — schedule reminders, recurring tasks, and timed alerts
-- 🔒 **Safety guard** — dangerous command filtering (PicoClaw-style sandboxing)
+- 🔒 **Safety guard** — dangerous command filtering (PicoClaw-style sandboxing), without blocking the documented `ruby -e` workflow
+- ✏️ **Precise edits** — `file_ops edit` replaces one exact block instead of rewriting the whole file, and `read` takes `offset`/`limit` so a long file can be read in pieces
+- 🔎 **Search tool** — `search` finds files (`**/*.rb`) or matching lines (`path:line: text`) inside a repo, skipping `.git`, `node_modules` and build output
+- 🎯 **Task anchor** — the user's original request is stored on the session and re-stated in the system prompt, so trimming or compaction cannot make a long task forget its goal
 - 🎯 **Skills system** — pluggable skill definitions via SKILL.md files in the workspace; loading one shows up in the TUI transcript as its own `✦ skill <name>` row, and flips to `✓` once read
 - 📡 **Multi-channel** — REPL and Telegram, with a pluggable channel architecture
 - 📎 **Inbound attachments** — screenshots and files sent to Telegram are saved to the workspace, with dimensions and size added to the prompt
@@ -145,12 +148,17 @@ $ rubot
 🤖 Assistant: [streamed response...]
 ```
 
-The session runs with the directory `rubot` was launched from as its working
-directory. `shell_exec` starts there and relative paths in `file_ops` resolve
-against it. The agent's data workspace (`agents.defaults.workspace`, default
-`~/.rubot/workspace`) still holds `SOUL.md`, `MEMORY.md`, `skills/`, and
-`sessions/`; it is not the shell's working directory unless that is where you
-launched rubot.
+The TUI uses the directory `rubot` was launched from as its working directory.
+`shell_exec` starts there, relative paths in `file_ops` resolve against it, and
+sessions, cron jobs and the safety guard follow the project you are standing in
+— the TUI ignores `agents.defaults.workspace` from `config.yml` for those.
+
+Identity and knowledge are different: `SOUL.md`, `MEMORY.md`, `AGENTS.md` and
+`skills/` are still read from the configured workspace, so launching the TUI
+inside a project does not throw away the assistant you set up. Point
+`agents.defaults.assets_workspace` at another directory to keep them somewhere
+else. Other channels (Telegram) and one-shot `-m` runs use the configured
+workspace for everything.
 
 ### REPL Commands
 
@@ -282,9 +290,8 @@ the configurable prompt, like the `Scripting Language` rule) asks the agent to
 create and edit files through `file_ops` instead of in-place shell edits, and
 not to recite the file's contents in its reply once an edit succeeds — what
 changed is already visible in the interface; destructive shell edits (`sed -i`,
-`rm`, …) still go through the confirmation above. The tool still returns its plain `Written
-… characters` result
-to the model; the diff is a TUI view only. Its before/after text is kept as UI
+`rm`, …) still go through the confirmation above. The tool still returns its plain `Written/Appended/Edited …`
+result to the model; the diff is a TUI view only. Its before/after text is kept as UI
 metadata on the tool message (never sent to the model), so `/resume` redraws
 the same diff at the new width.
 
@@ -350,11 +357,12 @@ agents:
     max_tokens: 4096
     temperature: 0.7
     system_prompt: "You are Rubot, a helpful AI assistant."
-    max_rounds: 50
+    max_rounds: 120
     compaction:
       auto: true
-      threshold_percent: 80
-      keep_recent_messages: 6
+      threshold_percent: 60
+      threshold_tokens: 120000
+      keep_recent_messages: 10
     memory:
       extract_every: 3       # batch memory extraction (0 disables it)
       consolidate: true      # dedupe and cap MEMORY.md sections
@@ -378,13 +386,11 @@ models:
     api_base: http://localhost:11434
 
 tools:
-  exec:
+  shell_exec:
     enabled: true
-  read_file:
+  file_ops:
     enabled: true
-  write_file:
-    enabled: true
-  list_dir:
+  search:
     enabled: true
   web_fetch:
     enabled: true
@@ -393,7 +399,7 @@ tools:
 ### Agent rounds
 
 `agents.defaults.max_rounds` caps how many loop rounds one user message may
-use (default 50). A round is one trip through the agent loop: running the tools
+use (default 120). A round is one trip through the agent loop: running the tools
 the model asked for, re-asking after an empty reply, or asking for the rest of a
 cut-off answer. One round can run several tools, so this is not a tool-call
 limit. When the limit is reached the turn stops with a notice and the user can
@@ -550,8 +556,9 @@ agents:
   defaults:
     compaction:
       auto: true               # default: true
-      threshold_percent: 80    # default: 80 (0.8 is also accepted)
+      threshold_percent: 60    # default: 60 (0.6 is also accepted)
       keep_recent_messages: 6  # default: 6
+      max_messages: 400        # messages kept in the session file
 ```
 
 A value of `100` disables auto-compaction by making the threshold unreachable
@@ -574,8 +581,19 @@ absolute ceiling; the lower of the two triggers compaction:
 agents:
   defaults:
     compaction:
-      threshold_tokens: 60000  # 0 = disabled (default)
+      threshold_tokens: 120000  # 0 = disabled (default)
 ```
+
+Keep `threshold_tokens` **above** `history.max_tokens` (and do not set a small
+`history.limit`). If the request is trimmed by count or by token budget before
+the compaction threshold is reached, the model loses the beginning of the task
+without a summary replacing it — the worst of both worlds. `history.limit` and
+`history.max_tokens` default to `0` (no cap) precisely so compaction is the
+only bound.
+
+The user's original request is stored on the session separately from the
+transcript and re-stated in the system prompt as `# Task`. The hard message
+trim and compaction can drop old turns, but never the goal of the task.
 
 #### Request size
 
@@ -596,10 +614,10 @@ does not re-send its entire transcript on each round:
 agents:
   defaults:
     history:
-      limit: 50                    # default: max_rounds
-      max_tokens: 24000            # 0 = only the message limit applies
-      tool_result_keep: 3          # newest tool outputs kept in full
-      tool_result_max_chars: 2000  # older ones are cut to this
+      limit: 0                     # 0 = no message-count cap (default)
+      max_tokens: 0                # 0 = no token cap (default)
+      tool_result_keep: 10         # newest tool outputs kept in full
+      tool_result_max_chars: 6000  # older ones are cut to this
 ```
 
 Telegram commands:
@@ -1024,12 +1042,13 @@ command refreshes it.
 
 ## Tools
 
-Rubot comes with 5 built-in tools:
+Rubot comes with 6 built-in tools:
 
 ### `shell_exec`
 Execute shell commands. The LLM can run commands and see their output.
 Dangerous commands like `rm -rf /` are blocked. Commands run in the directory
-`rubot` was launched from (the TUI shows it above the usage footer).
+`rubot` was launched from (the TUI uses that directory as its workspace and
+shows it above the usage footer).
 
 New scripts and one-off snippets are written in Ruby (`ruby -e '...'` or a
 `.rb` file). A built-in `Scripting Language` rule in the system prompt says so,
@@ -1038,7 +1057,33 @@ it. Python that already exists in a repo or skill (`tools/*.py`) is still run
 as-is; only *new* code has to be Ruby.
 
 ### `file_ops`
-File operations: read, write, append, list directories, get file info.
+File operations: read, edit, write, append, list directories, get file info.
+
+| Operation | Description |
+|-----------|-------------|
+| `read` | Read a file. `offset` (1-based line) and `limit` (lines) read part of a long file; the reply says which lines came back. A truncated read points at `offset`. |
+| `edit` | Replace an exact `old_string` with `new_string`. It must match exactly once, or the edit is refused with the match count; `replace_all: true` changes every occurrence. This is the preferred way to change an existing file — it does not rewrite the parts you did not touch. |
+| `write` | Write a whole file (overwrites; asks for confirmation when the file exists) |
+| `append` | Add to the end of a file |
+| `list` | List a directory |
+| `info` | Size, permissions and timestamps |
+
+`edit` is what makes a multi-file change practical: the model reads the few
+lines it needs and replaces just those, instead of re-reading a long file and
+paying for a full rewrite in output tokens (with a truncated read making the
+rewrite unsafe).
+
+### `search`
+Find files and matching lines under a directory, without shelling out.
+
+| Operation | Description |
+|-----------|-------------|
+| `content` (default) | Grep a regular expression; returns `path:line: text` |
+| `files` | Match paths against a glob such as `**/*.rb` |
+
+`path`, `glob`, `ignore_case` and `max_results` (default 50, max 100) narrow a
+search. `.git`, `node_modules`, `tmp`, `vendor/bundle`, build output and binary
+files are skipped, so a search in a real repository does not drown in noise.
 
 ### `web_fetch`
 Fetch content from URLs via HTTP GET.

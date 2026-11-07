@@ -416,13 +416,71 @@ class TestSessionSummarization < Minitest::Test
   end
 
   def test_hard_message_trim_invalidates_the_context_anchor
-    session = Rubot::Session.new("context-trim", workspace: @workspace)
-    100.times { session.add("user", "Message") }
+    session = Rubot::Session.new("context-trim", workspace: @workspace, max_messages: 10)
+    10.times { session.add("user", "Message") }
     session.record_usage({ "prompt_tokens" => 5_000, "completion_tokens" => 100 })
 
     session.add("user", "one more message past the cap")
 
     refute session.context_anchored?
+  end
+
+  # --- Task statement ---------------------------------------------------
+
+  def test_the_first_user_message_is_kept_as_the_task
+    session = Rubot::Session.new("task-1", workspace: nil)
+    session.add("user", "Refactor the auth flow")
+    session.add("user", "also rename the helper")
+
+    assert_equal "Refactor the auth flow", session.task_statement
+    assert_equal "Refactor the auth flow", session.messages.first["content"]
+  end
+
+  def test_the_task_survives_the_hard_message_trim
+    session = Rubot::Session.new("task-2", workspace: @workspace, max_messages: 6)
+    session.add("user", "Refactor the auth flow")
+    10.times { |i| session.add("assistant", "step #{i}") }
+
+    assert_operator session.message_count, :<=, 6
+    refute_includes session.messages.map { |m| m["content"] }, "Refactor the auth flow"
+    assert_equal "Refactor the auth flow", session.task_statement
+  end
+
+  def test_the_task_is_persisted_and_loaded
+    session = Rubot::Session.new("task-3", workspace: @workspace, max_messages: 3)
+    session.add("user", "Ship the search tool")
+    6.times { |i| session.add("assistant", "step #{i}") }
+
+    reloaded = Rubot::Session.new("task-3", workspace: @workspace)
+    assert_equal "Ship the search tool", reloaded.task_statement
+  end
+
+  def test_a_session_file_without_a_task_field_recovers_it_from_the_transcript
+    dir = File.join(@workspace, "sessions")
+    FileUtils.mkdir_p(dir)
+    File.write(File.join(dir, "legacy-task.json"), {
+      "messages" => [ { "role" => "user", "content" => "Old prompt" },
+                      { "role" => "assistant", "content" => "ok" } ]
+    }.to_json)
+
+    session = Rubot::Session.new("legacy-task", workspace: @workspace)
+    assert_equal "Old prompt", session.task_statement
+  end
+
+  def test_clear_drops_the_task
+    session = Rubot::Session.new("task-4", workspace: nil)
+    session.add("user", "Do the thing")
+    session.clear!
+
+    assert_nil session.task_statement
+  end
+
+  def test_an_empty_history_limit_means_no_count_cap
+    session = Rubot::Session.new("limit-0", workspace: nil)
+    120.times { |i| session.add("user", "m#{i}") }
+
+    history = session.safe_history(limit: 0)
+    assert_equal 120, history.size
   end
 
   def test_cost_is_priced_per_request_with_the_rates_in_effect

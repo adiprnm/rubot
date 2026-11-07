@@ -21,6 +21,14 @@ module Rubot
     # checking anchor-dependent dangerous patterns.
     STRIP_PREFIXES = %w[env sudo nice time nohup stdbuf ionice].freeze
 
+    # Inline code that runs inside an interpreter: `ruby -e`, `python -c`, ...
+    # The guard cannot inspect what such a string does, so under the workspace
+    # sandbox it is refused (write a script file instead, whose path is
+    # checked). Unrestricted mode allows it: the agent is told to use
+    # `ruby -e` for one-off helpers, and there is no sandbox to bypass.
+    INLINE_CODE_PATTERN =
+      /\b(python3?|ruby|perl|lua|node|php)\s+(-c|-e)\b/
+
     # System binary directories that a literal `PATH=` assignment may contain.
     # Anything else (a writable directory, a variable, a glob) is still treated
     # as environment manipulation and blocked.
@@ -81,8 +89,11 @@ module Rubot
       /\bcurl\b.*\|\s*(?:sudo\s+)?(?:python3?|ruby|perl|node|php)\b/,
       /\bwget\b.*-O-.*\|\s*(?:sudo\s+)?(?:python3?|ruby|perl|node|php)\b/,
       /\bwget\b.*-qO-.*\|\s*(?:sudo\s+)?(?:python3?|ruby|perl|node|php)\b/,
-      # Interpreted language inline execution
-      /\b(python3?|ruby|perl|lua|node|php)\s+(-c|-e)\b/,
+      # Interpreted language inline execution. `python -c` / `ruby -e` are not
+      # blocked on their own: the agent is told to write helper scripts in Ruby
+      # and run them with `ruby -e`, so matching the flag alone blocked the
+      # documented workflow (and a heredoc containing the word "exec" along with
+      # it). Remote code is covered by the "pipe to interpreter" patterns above.
       /\b(python3?|ruby|perl)\s+-i\s*$/,  # interactive mode can be abused
       # Encoded payload decoders piped to shells
       /\bbase64\b.*(-d|--decode).*\|\s*(?:sudo\s+)?(?:sh|bash|zsh)\b/,
@@ -330,6 +341,8 @@ module Rubot
         next false if fragment.empty?
 
         stripped = strip_prefixes(fragment)
+
+        next true if @restrict_to_workspace && INLINE_CODE_PATTERN.match?(stripped)
 
         DANGEROUS_PATTERNS.any? { |pattern| fragment =~ pattern } ||
           DANGEROUS_PATTERNS.any? { |pattern| stripped =~ pattern }

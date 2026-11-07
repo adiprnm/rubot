@@ -729,7 +729,10 @@ class TestSafetyGuard < Minitest::Test
   # --- VULN-1: Interpreted language inline execution ---
 
   def test_dangerous_command_python_inline
-    guard = Rubot::SafetyGuard.new
+    # Inline interpreter code is refused while the workspace sandbox is on:
+    # the guard cannot see what the string does, so it must be a script file
+    # whose path it can check.
+    guard = Rubot::SafetyGuard.new(workspace: @workspace, restrict_to_workspace: true)
     assert guard.dangerous_command?("python3 -c 'import os; os.system(\"rm -rf /\")'"),
            "python3 -c should be blocked"
     assert guard.dangerous_command?("python -c 'import os; os.system(\"cat /etc/shadow\")'"),
@@ -744,6 +747,17 @@ class TestSafetyGuard < Minitest::Test
            "php -c should be blocked"
     assert guard.dangerous_command?("lua -e 'os.execute(\"rm -rf /\")'"),
            "lua -e should be blocked"
+  end
+
+  # The system prompt tells the agent to use `ruby -e` for one-off helpers.
+  # Blocking the flag alone made the documented workflow impossible in the
+  # default (unrestricted) mode.
+  def test_ruby_inline_is_allowed_when_the_workspace_is_not_restricted
+    guard = Rubot::SafetyGuard.new(workspace: @workspace, restrict_to_workspace: false)
+
+    refute guard.dangerous_command?("ruby -e 'puts 1 + 1'"),
+           "ruby -e must not be blocked outside the sandbox"
+    refute guard.dangerous_command?("ruby -e 'File.read(\"x\").lines.each { |l| puts l }'")
   end
 
   def test_safe_python_file_execution_allowed
