@@ -11,7 +11,8 @@
 #    still clearing stale cells from previous frames.
 # 2. Term::SEQUENCES misses the shift+enter sequences sent by kitty/WezTerm/
 #    iTerm2 (keyboard protocol) and xterm (modifyOtherKeys), which the prompt
-#    needs to insert a newline instead of submitting.
+#    needs to insert a newline instead of submitting, and the ctrl+arrow
+#    sequences that move the prompt caret from word to word.
 # 3. Term.session pushes the keyboard protocol *before* switching to the
 #    alternate screen. Terminals keep a separate flag stack per screen, so
 #    that push is discarded the moment the alternate screen is entered and
@@ -44,7 +45,13 @@ module Rubot
         "\e[27;3;13~" => :shift_enter,
         # escape-prefixed enter as sent by terminals without the protocols above
         "\e\r"     => :shift_enter,
-        "\e\n"     => :shift_enter
+        "\e\n"     => :shift_enter,
+        # ctrl+arrow: xterm/kitty/iTerm2 use "CSI 1;5D", a few terminals
+        # omit the leading "1;" and send "CSI 5D".
+        "\e[1;5D" => :ctrl_left,
+        "\e[1;5C" => :ctrl_right,
+        "\e[5D"   => :ctrl_left,
+        "\e[5C"   => :ctrl_right
       }.freeze
 
       # The keyboard protocol sends keys that have no legacy encoding as
@@ -54,6 +61,10 @@ module Rubot
       CSI_U    = /\A\e\[(\d+)(?:;(\d+))?u\z/
       MOD_ALT  = 2
       MOD_CTRL = 4
+
+      # Kitty's private key codes for the arrow keys when the protocol
+      # reports them as CSI-u instead of their legacy CSI form.
+      ARROW_CODES = { 57350 => :left, 57351 => :right, 57352 => :up, 57353 => :down }.freeze
 
       # Table lookup with a CSI u fallback. Kept as a Hash subclass so the
       # vendored Term#read_escape needs no patching.
@@ -75,6 +86,9 @@ module Rubot
           return :shift_enter if code == 13 && (mods & MOD_ALT).positive?
           return :escape if code == 27 && mods.zero?
           return :"ctrl_#{code.chr}" if (mods & MOD_CTRL).positive? && code.between?(97, 122)
+
+          arrow = ARROW_CODES[code]
+          return :"ctrl_#{arrow}" if arrow && (mods & MOD_CTRL).positive?
 
           nil
         end

@@ -1298,6 +1298,17 @@ module Rubot
       assert_equal :enter, ::TUI::Term::SEQUENCES.fetch("\r", :enter)
     end
 
+    def test_ctrl_arrow_sequences_are_understood
+      table = ::TUI::Term::SEQUENCES
+
+      assert_equal :ctrl_left, table["\e[1;5D"], "xterm/kitty/iTerm2 ctrl+left"
+      assert_equal :ctrl_right, table["\e[1;5C"], "xterm/kitty/iTerm2 ctrl+right"
+      assert_equal :ctrl_left, table["\e[5D"], "terminals that omit the leading 1;"
+      assert_equal :ctrl_right, table["\e[5C"]
+      assert_equal :ctrl_left, table["\e[57350;5u"], "kitty CSI-u arrow code"
+      assert_equal :ctrl_right, table["\e[57351;5u"]
+    end
+
     def test_keys_the_keyboard_protocol_disambiguates
       table = ::TUI::Term::SEQUENCES
 
@@ -1578,6 +1589,33 @@ module Rubot
       row = canvas.row(0)
       assert_includes row, ::TUI::Style::RESET + ::TUI::Style.resolve(:text),
                       "reverse video must not bleed into the text after the cursor: #{row.inspect}"
+    end
+
+    def test_prompt_ctrl_arrows_move_between_words
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      "one two three".each_char { |c| input.handle_key(::TUI::Key.printable(c)) }
+
+      input.handle_key(::TUI::Key.new(:ctrl_left))
+      assert_equal [ 0, 8 ], [ input.buffer.row, input.buffer.col ], "start of the last word"
+
+      input.handle_key(::TUI::Key.new(:ctrl_left))
+      assert_equal [ 0, 4 ], [ input.buffer.row, input.buffer.col ], "start of the previous word"
+
+      input.handle_key(::TUI::Key.new(:ctrl_right))
+      assert_equal [ 0, 7 ], [ input.buffer.row, input.buffer.col ], "end of the next word"
+
+      input.handle_key(::TUI::Key.new(:ctrl_right))
+      assert_equal [ 0, 13 ], [ input.buffer.row, input.buffer.col ], "end of the line"
+    end
+
+    def test_word_navigation_crosses_hard_newlines
+      buffer = ::TUI::TextBuffer.new("one\ntwo", multiline: true)
+
+      buffer.word_left
+      assert_equal [ 1, 0 ], [ buffer.row, buffer.col ], "start of the word on this line"
+
+      buffer.word_left
+      assert_equal [ 0, 0 ], [ buffer.row, buffer.col ], "ctrl+left crosses onto the previous line"
     end
 
     def test_canvas_resets_style_between_runs

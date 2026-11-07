@@ -149,6 +149,44 @@ module TUI
       self
     end
 
+    # Move to the start of the word before the cursor. Whitespace is the
+    # separator; an empty line before this one is stepped over.
+    def word_left
+      loop do
+        if @col.positive?
+          line = current_line
+          @col -= 1 while @col.positive? && line[@col - 1] =~ /\s/
+          @col -= 1 while @col.positive? && line[@col - 1] !~ /\s/
+          break
+        elsif @row.positive?
+          @row -= 1
+          @col = current_line.length
+        else
+          break
+        end
+      end
+      self
+    end
+
+    # Move to the end of the word after the cursor, stepping onto the next
+    # line when the cursor is already at the end of this one.
+    def word_right
+      loop do
+        line = current_line
+        if @col < line.length
+          @col += 1 while @col < line.length && line[@col] =~ /\s/
+          @col += 1 while @col < line.length && line[@col] !~ /\s/
+          break
+        elsif @row < @lines.length - 1
+          @row += 1
+          @col = 0
+        else
+          break
+        end
+      end
+      self
+    end
+
     def home
       @col = 0
       self

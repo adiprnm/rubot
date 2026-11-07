@@ -225,6 +225,7 @@ unreachable still shows the last known list.
 | `Enter` | Send the prompt, take the highlighted `/command`, or steer the turn that is running |
 | `Shift+Enter`, `Alt+Enter` | Insert a newline |
 | `Up` / `Down` | Move between lines once the input has more than one, otherwise recall history; while the command list is open, pick an entry |
+| `Ctrl+Left` / `Ctrl+Right` | Move the caret one word left or right |
 | `Tab` | Complete a `/command` |
 | `Ctrl+G` | Edit the prompt in `$EDITOR`, then take it back into the input |
 | `Esc` | Cancel the running turn, clear a selection |

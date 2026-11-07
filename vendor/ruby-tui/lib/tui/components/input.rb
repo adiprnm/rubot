@@ -78,6 +78,8 @@ module TUI
       when :delete    then @buffer.delete; changed
       when :left      then @buffer.left
       when :right     then @buffer.right
+      when :ctrl_left  then @buffer.word_left
+      when :ctrl_right then @buffer.word_right
       when :home      then @buffer.home
       when :end       then @buffer.end_of_line
       when :enter     then emit(Events::SUBMIT, value)

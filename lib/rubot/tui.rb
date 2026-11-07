@@ -40,6 +40,7 @@ module Rubot
   #
   # Keys: enter send (steer the running turn if one is in flight) ·
   # shift+enter newline · tab completes /commands · ↑↓ history ·
+  # ctrl+←/→ jumps between words ·
   # typing / opens the command list (↑↓ picks one, enter takes it) · ctrl+g
   # edits the prompt in $EDITOR · page-up/page-down scroll · esc cancels the
   # running turn · ctrl-c quits.
@@ -102,6 +103,7 @@ module Rubot
       "ctrl+g"      => "Edit the prompt in $EDITOR, then take it back",
       "tab"         => "Complete a /command",
       "↑ / ↓"       => "Pick a /command, move between lines, or browse history",
+      "ctrl+← / →"  => "Move the caret one word left or right",
       "esc"         => "Cancel the running turn, clear a selection, dismiss the list",
       "pgup/pgdn"   => "Scroll the conversation",
       "ctrl-c"      => "Quit rubot"
