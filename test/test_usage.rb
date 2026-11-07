@@ -261,8 +261,14 @@ class TestUsage < Minitest::Test
     assert_equal "$1.235", Rubot::UsageReport.price(report)
   end
 
-  def test_usage_report_footer_is_blank_before_the_first_request
-    assert_equal "", Rubot::UsageReport.footer({ requests: 0, prompt_tokens: 0 })
+  def test_usage_report_footer_is_populated_before_the_first_request
+    report = {
+      requests: 0, prompt_tokens: 0, cache_hit_rate: 0.0,
+      context_used: 3_100, context_window: 128_000, context_percent: 2.4,
+      cost: { "total" => 0.0 }
+    }
+
+    assert_equal "$0.000 · cache — · ctx 2.4%", Rubot::UsageReport.footer(report)
   end
 
   def test_usage_report_footer_says_what_is_missing

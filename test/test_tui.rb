@@ -16,6 +16,13 @@ module Rubot
         { provider: "openai", model: "gpt-test", tools: 3 }
       end
 
+      # A launch has spent nothing yet but already carries a system prompt.
+      def agent.usage_report
+        { requests: 0, prompt_tokens: 0, cache_hit_rate: 0.0,
+          context_used: 3_100, context_window: 128_000, context_percent: 2.4,
+          cost: { "total" => 0.0 } }
+      end
+
       agent
     end
 
@@ -61,6 +68,19 @@ module Rubot
 
       assert prompt_ix && status_ix, "both must render"
       assert_operator status_ix, :>, prompt_ix, "status row sits under the input"
+    end
+
+    def test_status_row_shows_metrics_before_the_first_turn
+      repl = build_repl
+      repl.send(:push_status_info)
+      repl.send(:pump)
+
+      row = plain(repl.instance_variable_get(:@app).render_lines).find { |l| l.include?("cache") }
+
+      assert row, "the metrics row is part of the launch view"
+      assert_includes row, "$0.000", row.inspect
+      assert_includes row, "cache —", row.inspect
+      assert_includes row, "ctx 2.4%", row.inspect
     end
 
     def test_status_line_puts_metrics_left_of_the_model_info

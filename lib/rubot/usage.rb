@@ -267,11 +267,10 @@ module Rubot
     #
     #   $0.001 · cache 60% · ctx 8.2%
     #
-    # Returns "" while the session has no accounted request, so the footer
-    # stays out of the way before the first turn.
+    # Always renders all three parts. A launch has nothing spent yet, and a
+    # blank status row reads as a missing feature rather than as a zero, so a
+    # fresh session shows `$0.000 · cache — · ctx 2.4%` instead.
     def footer(report)
-      return "" if report[:requests].to_i.zero?
-
       [ price(report), cache(report), context(report) ].join(" · ")
     end
 
@@ -281,6 +280,8 @@ module Rubot
     end
 
     def cache(report)
+      # No request yet: a hit rate would be a claim about nothing.
+      return "cache —" if report[:requests].to_i.zero?
       return "cache n/a" if report[:prompt_tokens].to_i.zero?
 
       pct = format("%.1f", report[:cache_hit_rate].to_f * 100).sub(/\.0\z/, "")

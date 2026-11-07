@@ -56,6 +56,10 @@ module Rubot
   class TUI
     HISTORY_FILE = File.expand_path("~/.rubot/history")
 
+    # Shown in the metrics half of the status row between launch and the first
+    # priced report from the worker.
+    COST_PLACEHOLDER = "cost — · cache — · ctx —"
+
     COMMANDS = {
       "/help"     => "Show this help message",
       "/new"      => "Clear conversation and start a new session",
@@ -383,6 +387,10 @@ module Rubot
       info = agent.startup_info
       @events << [ :status_right,
                   "#{info[:provider]} · #{info[:model]}" ]
+      # The metrics row is part of the launch view, not a reward for the first
+      # turn: a fresh session has cost $0, no cache yet, and a system prompt
+      # already eating some of the window, and saying so is the point.
+      @events << [ :status_left, usage_footer ]
     rescue StandardError => e
       @events << [ :error_text, "#{e.class}: #{e.message}" ]
     end
@@ -396,9 +404,8 @@ module Rubot
       ""
     end
 
-    # Publish fresh footer metrics from the worker thread. Not called on
-    # startup: a fresh session has nothing to price, and usage_report would
-    # warm the pricing catalog (a possible network fetch) for nothing.
+    # Publish fresh footer metrics from the worker thread. Also runs at launch
+    # (via #push_status_info) so the row is populated before the first turn.
     def refresh_usage
       @events << [ :status_left, usage_footer ]
     end
@@ -941,7 +948,7 @@ module Rubot
         agent.clear_session
         @events << [ :reset_turn_totals ]
         say("Session cleared.", :ok)
-        @events << [ :status_left, "" ]
+        refresh_usage
       when "/new"
         # Silent restart: wipe the screen and start a fresh session.
         @command_owns_blank = true
@@ -1419,6 +1426,10 @@ module Rubot
       @log.add_entry([ [ "", nil ] ])
       @banner_count = @log.entry_count
       @status.right = "#{provider} · #{model}" if info[:provider]
+      # The worker fills this in as soon as it has priced the launch (it may
+      # read the pricing catalog first); until then the row says what it is
+      # waiting for instead of showing an empty half.
+      @status.left = COST_PLACEHOLDER
     end
 
     # ------------------------------------------------------------------

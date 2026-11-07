@@ -270,7 +270,10 @@ parents) is a work tree (for example `~/Projects/rubot @ main`); `~`
 abbreviates the home directory. Below it, the status row tracks the running
 turn's estimated cost, cache hit rate, and how much of the model's context
 window is in use (for example `$0.004 · cache 87.3% · ctx 11.6%`), with the
-model on the right. Figures refresh after every turn; `/context` has the full
+model on the right. The row is populated at launch, before the first turn: a
+fresh session reads `$0.000 · cache — · ctx 4.3%`, since the system prompt
+already occupies part of the window. Figures refresh after every turn and
+after `/clear`, `/new`, `/session` and `/use-model`; `/context` has the full
 report. The session name is not shown in the footer — use `/session` to print
 it.
 
