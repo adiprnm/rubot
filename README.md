@@ -13,6 +13,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 💬 **Interactive REPL** — with streaming, command history, tab completion, and a slash-command palette
 - ⌨️ **Multiline prompt** — Shift+Enter inserts a newline and the input box grows with the text, word-wrapping long lines
 - 📝 **External editor** — Ctrl+G opens the half-typed prompt in `$EDITOR` and takes the edited text straight back into the input box
+- 🧾 **File diffs** — a file the agent writes or appends to shows a compact diff under the tool row in the TUI
 - 📝 **Session management** — persistent conversation history, a new session per TUI launch, and `/resume` to browse and reopen any saved session
 - 🧬 **SOUL.md** — personality and identity file for persistent character
 - 🎛️ **Model presets** — named model configurations with a primary default, switchable per session and manageable from Telegram
@@ -251,6 +252,35 @@ Under the prompt, the status row tracks the running turn's estimated cost,
 cache hit rate, and how much of the model's context window is in use (for
 example `$0.004 · cache 87.3% · ctx 11.6%`), with the session and model on
 the right. Figures refresh after every turn; `/context` has the full report.
+
+When the agent writes or appends to a file, the TUI renders a git-style diff
+right under the `✓ file_ops write …` row: `diff --git a<path> b<path>` with
+`---`/`+++` lines (`/dev/null` when a file is created or emptied), `@@ -a,n
++b,m @@` hunks with real line numbers, three lines of context around each
+change (`git`'s own default), and the lines themselves in git's colours —
+hunks cyan, additions green, deletions red. The body is capped at 30 rows
+with a `… +N -M more` row, so a rewrite cannot flood the transcript. The built-in
+`Editing Files` rule in the system prompt (outside
+the configurable prompt, like the `Scripting Language` rule) asks the agent to
+create and edit files through `file_ops` instead of in-place shell edits, and
+not to recite the file's contents in its reply once an edit succeeds — what
+changed is already visible in the interface; destructive shell edits (`sed -i`,
+`rm`, …) still go through the confirmation above. The tool still returns its plain `Written
+… characters` result
+to the model; the diff is a TUI view only, and it is not stored in the session,
+so `/resume` replays the tool rows without it.
+
+When the agent's next action could destroy data (overwriting an existing
+file, a dangerous shell command), the worker asks first: the question is
+written into the transcript right above the input — no floating modal — as `⚠
+<description>` rows above two choice chips, `› ✓ Allow   ✗ Reject`.`←/→` move
+the highlight (it starts on `Reject`, so a blind `Enter` never allows),
+`Enter` commits the highlighted choice and `Esc` rejects; anything else is
+swallowed. The mouse stays with the log, so the path or command can be
+drag-selected and copied while the question is up. The turn is blocked until
+it is answered, and once it is, the exchange is taken back out of the
+transcript — only one blank row keeps the spacing — because the tool rows and
+the answer that follow are the record.
 
 `Ctrl+G` hands the prompt to an external editor for a long or multi-paragraph
 message, then reads it back into the input box. The editor is `external_editor`

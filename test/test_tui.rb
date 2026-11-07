@@ -714,6 +714,282 @@ module Rubot
                     "tool rows adjacent"
     end
 
+    # --- file diffs ----------------------------------------------------
+
+    # Run one turn whose tool writes `after` into `path`, the way the agent
+    # loop does it: on_tool_call fires before the write, on_tool_result after.
+    def run_file_tool(repl, operation:, path:, after:)
+      agent = repl.instance_variable_get(:@agent)
+      agent.define_singleton_method(:process) do |_message, on_tool_call: nil, on_tool_result: nil, **_opts, &_blk|
+        on_tool_call&.call("file_ops", { "operation" => operation, "path" => path })
+        File.write(path, after)
+        on_tool_result&.call("file_ops", "ok")
+        "done"
+      end
+      agent.define_singleton_method(:flush_learning) { nil }
+      agent.define_singleton_method(:usage_report) { nil }
+
+      repl.send(:process_message, "edit it")
+      repl.send(:pump)
+      repl
+    end
+
+    def entry_texts(repl)
+      repl.instance_variable_get(:@log).instance_variable_get(:@entries)
+          .map { |entry| entry.map(&:first).join }
+    end
+
+    def git_texts(rows)
+      rows.map { |segments| segments.map(&:first).join }
+    end
+
+    def test_write_shows_a_pi_diff_under_the_tool_row
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "notes.md")
+        File.write(path, "one\ntwo\nthree\n")
+        repl = run_file_tool(build_repl, operation: "write", path: path,
+                             after: "one\nTWO\nthree\n")
+
+        texts = entry_texts(repl)
+        tool_ix = texts.index { |text| text.include?("file_ops") }
+        diff_ix = texts.index { |text| text.start_with?("Updated ") }
+
+        assert tool_ix, "the tool row still renders: #{texts.inspect}"
+        assert diff_ix, "the pi-diff block follows the write: #{texts.inspect}"
+        assert_equal tool_ix + 1, diff_ix, "the diff sits right under the tool row"
+
+        indents = repl.instance_variable_get(:@log).instance_variable_get(:@indents)
+        assert_equal 4, indents[diff_ix], "the diff hangs under the tool row"
+
+        git = texts[(diff_ix)..]
+        assert(git.any? { |row| row.include?("Updated #{path}") && row.include?("+1") && row.include?("-1") })
+        assert(git.any? { |row| row.include?("│ one") })
+        assert(git.any? { |row| row.include?("│ two") && row.include?("- ") })
+        assert(git.any? { |row| row.include?("│ TWO") && row.include?("+ ") })
+
+        entries = repl.instance_variable_get(:@log).instance_variable_get(:@entries)
+        deleted = entries.find { |entry| entry.map(&:first).join.include?("│ two") }
+        assert_includes deleted, [ "▌", :diff_mark_del ], "deletions carry the red stripe"
+        assert_includes deleted, [ "- ", :diff_mark_del ], "the sign cell marks the removal"
+        assert_includes deleted.map { |(t, _)| t }.join, "2", "the gutter shows the old line number"
+        added = entries.find { |entry| entry.map(&:first).join.include?("│ TWO") }
+        assert_includes added, [ "▌", :diff_mark_add ], "additions carry the green stripe"
+      end
+    end
+
+    def test_append_shows_a_pi_diff_too
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "log.md")
+        File.write(path, "first\n")
+        repl = run_file_tool(build_repl, operation: "append", path: path,
+                             after: "first\nsecond\n")
+
+        git = entry_texts(repl).drop_while { |text| !text.start_with?("Updated ") }
+        assert git.any?, "append gets a diff too"
+        assert(git.any? { |row| row.include?("│ first") })
+        assert(git.any? { |row| row.include?("│ second") && row.include?("+ ") })
+      end
+    end
+
+    def test_a_write_that_changes_nothing_shows_no_diff
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "same.md")
+        File.write(path, "same\n")
+        repl = run_file_tool(build_repl, operation: "write", path: path, after: "same\n")
+
+        refute entry_texts(repl).any? { |text| text.start_with?("Updated ") },
+               "no change, no diff"
+      end
+    end
+
+    def test_reads_never_get_a_diff
+      repl = build_repl
+      snapshot = repl.send(:file_snapshot, "file_ops", { "operation" => "read", "path" => __FILE__ })
+
+      assert_nil snapshot, "a read has nothing to diff"
+      assert_nil repl.send(:file_snapshot, "shell_exec", { "command" => "true" })
+    end
+
+    def test_pi_diff_keeps_three_context_lines_and_numbers_the_rows
+      before = (1..40).map { |i| "line #{i}" }.join("\n")
+      after = before.sub("line 20", "line twenty")
+
+      git = git_texts(TUI::Diff.rows(before, after, path: "long.txt"))
+
+      assert_includes git.first, "Updated long.txt"
+      assert_includes git.first, "+1"
+      assert_includes git.first, "-1"
+      assert_includes git.first, "1 hunk"
+      assert(git.any? { |row| row.include?("│ line 17") })
+      assert(git.any? { |row| row.include?("│ line 18") })
+      assert(git.any? { |row| row.include?("- │ line 20") && row.include?("▌") },
+             "the deletion is striped and numbered: #{git.inspect}")
+      assert(git.any? { |row| row.include?("+ │ line twenty") })
+      assert(git.any? { |row| row.include?("│ line 21") })
+      assert(git.any? { |row| row.include?("│ line 23") })
+      refute(git.any? { |row| row.include?("│ line 16") }, "context beyond the hunk is not shown")
+      refute(git.any? { |row| row.include?("│ line 40") })
+      refute git.any? { |row| row.include?("unmodified lines") }, "one hunk has no gap"
+    end
+
+    def test_pi_diff_collapses_distant_regions_into_a_gap_rule
+      before = (1..40).map { |i| "line #{i}" }.join("\n")
+      after = before.sub("line 20", "line twenty").sub("line 30", "line thirty")
+
+      git = git_texts(TUI::Diff.rows(before, after, path: "long.txt"))
+
+      assert_includes git.first, "2 hunks"
+      assert(git.any? { |row| row.include?("unmodified lines") && row.include?("─") },
+             "gaps render as a rule")
+            gap_row = git.find { |row| row.include?("unmodified lines") }
+      assert gap_row && gap_row.include?("3 unmodified lines"), "the skipped run is counted: #{gap_row.inspect}"
+      refute_includes git, "│ line 25", "hidden gap lines are not echoed"
+    end
+
+    def test_new_files_number_the_new_lines_from_one
+      git = git_texts(TUI::Diff.rows(nil, "alpha\nbeta\n", path: "fresh.md"))
+
+      assert(git.any? { |row| row.include?("Updated fresh.md") && row.include?("+2") },
+             "the summary names the file and the count")
+      assert(git.any? { |row| row.include?("+ │ alpha") }, "a new file is all additions")
+      assert(git.any? { |row| row.start_with?("▌") && row.include?("│ alpha") && row.include?("+ ") },
+             "the row keeps the add stripe")
+      assert_operator git.length, :==, 3, "summary + 2 lines"
+    end
+
+    def test_a_large_rewrite_is_capped_with_a_more_row
+      before = (1..1000).map { |i| "old #{i}" }.join("\n")
+      after = (1..1000).map { |i| "new #{i}" }.join("\n")
+
+      rows = TUI::Diff.rows(before, after, path: "big.txt")
+      git = git_texts(rows)
+
+      assert_equal 1 + TUI::Diff::MAX_ROWS + 1, rows.length,
+                   "summary + capped body + the more row"
+      assert_includes git, "  … 1970 more diff lines"
+    end
+
+    def test_diff_is_nil_for_binary_and_identical_content
+      assert_nil TUI::Diff.rows("a\0b", "a\0c", path: "bin")
+      assert_nil TUI::Diff.rows("same\n", "same\n", path: "same.md")
+    end
+
+    # --- dangerous-action confirmation ---------------------------------
+
+    # A write to an existing file is a dangerous action: the worker must ask
+    # through the prompt instead of blocking forever on an answer nothing
+    # could give.
+    def test_dangerous_action_asks_through_the_prompt_and_allows
+      repl = build_repl
+      callback = repl.send(:confirm_callback)
+      answer = nil
+      worker = Thread.new do
+        answer = callback.call("file_ops", { "operation" => "write", "path" => "/tmp/notes.md" })
+      end
+
+      event = repl.instance_variable_get(:@events).pop
+      assert_equal :confirm, event[0], "the ask is published to the App thread"
+      assert_equal "file_ops", event[1]
+      list = repl.instance_variable_get(:@confirm_prompt)
+      log = repl.instance_variable_get(:@log)
+      before = log.entry_count
+      repl.send(:apply_event, event)
+
+      texts = log.instance_variable_get(:@entries).map { |entry| entry.map(&:first).join }
+      assert texts.any? { |t| t.include?("⚠ write /tmp/notes.md") },
+             "the question is in the transcript: #{texts.inspect}"
+      assert_same list, repl.instance_variable_get(:@prompt).list
+
+      # ← moves the highlight onto Allow, enter commits it.
+      list.handle_key(::TUI::Key.new(:left))
+      list.handle_key(::TUI::Key.new(:enter))
+
+      assert worker.join(2), "answering the prompt releases the worker"
+      assert_equal true, answer, "the highlighted choice commits"
+      assert_nil repl.instance_variable_get(:@prompt).list, "the keyboard is back"
+
+      # The exchange is collapsed back out: nothing of it remains but one
+      # blank row where it used to be.
+      after = log.instance_variable_get(:@entries).map { |entry| entry.map(&:first).join }
+      assert_equal before, after.length - 1, "everything except one blank is taken out"
+      refute after.any? { |t| t.include?("⚠") || t.include?("Allow") || t.include?("✓ allowed") },
+             "the ask is not kept in the record: #{after.inspect}"
+    end
+
+    def test_the_highlight_starts_on_reject_and_enter_then_denies
+      replit = build_repl
+      answer = nil
+      worker = Thread.new do
+        answer = replit.send(:confirm_callback)
+                     .call("file_ops", { "operation" => "write", "path" => "/tmp/a" })
+      end
+      replit.send(:apply_event, replit.instance_variable_get(:@events).pop)
+
+      list = replit.instance_variable_get(:@confirm_prompt)
+
+      list.handle_key(::TUI::Key.new(:enter))
+      assert worker.join(2)
+      assert_equal false, answer, "a blind enter rejects, it never allows"
+    end
+
+    def test_right_arrow_moves_to_reject_and_esc_rejects
+      replit = build_repl
+      answer = nil
+      worker = Thread.new do
+        answer = replit.send(:confirm_callback)
+                     .call("shell_exec", { "command" => "rm -rf build" })
+      end
+      replit.send(:apply_event, replit.instance_variable_get(:@events).pop)
+
+      list = replit.instance_variable_get(:@confirm_prompt)
+      list.handle_key(::TUI::Key.new(:right))
+      list.handle_key(::TUI::Key.new(:enter))
+      assert worker.join(2)
+      assert_equal false, answer
+    end
+
+    def test_each_confirmation_gets_its_own_answer_queue
+      repl = build_repl
+      callback = repl.send(:confirm_callback)
+
+      first = Thread.new { callback.call("file_ops", { "operation" => "write", "path" => "/tmp/a" }) }
+      first_event = repl.instance_variable_get(:@events).pop
+      repl.send(:apply_event, first_event)
+      repl.instance_variable_get(:@confirm_prompt).handle_key(::TUI::Key.new(:left))
+      repl.instance_variable_get(:@confirm_prompt).handle_key(::TUI::Key.new(:enter))
+      assert first.join(2)
+
+      second = Thread.new { callback.call("file_ops", { "operation" => "write", "path" => "/tmp/b" }) }
+      second_event = repl.instance_variable_get(:@events).pop
+      refute_equal first_event[3], second_event[3], "an old answer cannot leak into the next ask"
+      repl.send(:apply_event, second_event)
+      repl.instance_variable_get(:@confirm_prompt).handle_key(::TUI::Key.new(:escape))
+      assert second.join(2)
+      assert_equal false, second.value
+    end
+
+    # While the question is up the mouse stays with the log, so the path or
+    # command can be drag-selected and copied before answering.
+    def test_selection_keys_reach_the_log_while_the_confirmation_is_up
+      list = Rubot::TUI::ConfirmPrompt.new(log: Rubot::TUI::LogView.new)
+      list.ask("file_ops", { "operation" => "write", "path" => "/tmp/x" }, answered: Queue.new)
+
+      refute list.handle_key(::TUI::Key.new(:mouse_press)), "mouse keys pass through to the log bindings"
+      refute list.handle_key(::TUI::Key.new(:page_up)), "scrolling passes through too"
+    end
+
+    # A stray keystroke during the ask is swallowed, never smuggled into the
+    # prompt buffer and never read as an answer.
+    def test_stray_keys_are_swallowed_while_the_confirmation_is_up
+      list = Rubot::TUI::ConfirmPrompt.new(log: Rubot::TUI::LogView.new)
+      answered = Queue.new
+      list.ask("file_ops", { "operation" => "write", "path" => "/tmp/x" }, answered: answered)
+
+      assert list.handle_key(::TUI::Key.printable("n")), "unchosen keys are eaten"
+      assert_empty answered, "typewriting never answers"
+      assert list.active?
+    end
+
     def test_log_view_wraps_long_entries
       view = TUI::LogView.new
       view.layout(::TUI::Rect.new(0, 0, 20, 10))
@@ -1474,7 +1750,7 @@ module Rubot
         session_list = repl.instance_variable_get(:@session_list)
         assert_equal %w[work], session_list.entries.map { |entry| entry[:id] }
         assert_same session_list, prompt.list, "the list owns the keyboard"
-        refute repl.instance_variable_get(:@overlay).shown?, "nothing floats"
+        refute repl.instance_variable_get(:@overlay), "nothing floats"
 
         view = plain(app.render_lines)
         command_ix = view.index { |line| line.include?("❯ /resume") }

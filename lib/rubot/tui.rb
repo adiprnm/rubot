@@ -9,12 +9,13 @@ require_relative "opencode_usage"
 require_relative "tui/compat"
 require_relative "tui/log_view"
 require_relative "tui/markdown"
+require_relative "tui/diff"
 require_relative "tui/transcript"
 require_relative "tui/command_menu"
 require_relative "tui/prompt_input"
 require_relative "tui/status_line"
 require_relative "tui/working_badge"
-require_relative "tui/confirm_dialog"
+require_relative "tui/confirm_prompt"
 require_relative "tui/session_list"
 require_relative "tui/model_list"
 
@@ -137,7 +138,6 @@ module Rubot
       # Queues bridging worker/agent threads into the App thread. Component
       # state is only ever mutated on the App thread (pump + key handlers).
       @events = Queue.new    # worker & channel threads -> UI
-      @confirm = Queue.new   # confirm dialog -> worker
       @mailbox = Queue.new   # submitted lines -> worker
 
       @worker = nil
@@ -230,7 +230,8 @@ module Rubot
       @status = Rubot::TUI::StatusLine.new
       @menu = Rubot::TUI::CommandMenu.new(DESCRIPTIONS)
       @prompt = Rubot::TUI::PromptInput.new(@history, COMPLETABLE)
-      @dialog = Rubot::TUI::ConfirmDialog.new
+      @confirm_prompt = Rubot::TUI::ConfirmPrompt.new(log: @log)
+      @confirm_prompt.on_answer { |_value| @prompt.list = nil }
       @working = Rubot::TUI::WorkingBadge.new
       @session_list = Rubot::TUI::SessionList.new(
         log: @log,
@@ -267,9 +268,7 @@ module Rubot
       stack.add(@prompt_box, size: ::TUI.auto)   # grows with multiline input
       stack.add(@status, size: ::TUI.fixed(1))
 
-      @overlay = ::TUI::Layout::Overlay.new(::TUI::Layout::Padding.new(stack, left: 1))
-      @overlay.add(@dialog)
-      @app = ::TUI::App.new(@overlay)
+      @app = ::TUI::App.new(::TUI::Layout::Padding.new(stack, left: 1))
 
       wire_bindings
     end
@@ -475,12 +474,12 @@ module Rubot
         index = @log.add_entry(tool_call_segments(event[1], summary, skill), keep_leading: true, indent: 2)
         @tool_entries[event[1].to_s] = [ index, summary, skill ]
       when :tool_done
-        # The ⚒ line flips to ✓ in place — one line per tool call.
+        # The ⚒ line flips to ✓ in place — one line per tool call. A file
+        # the call wrote gains its diff rows right below the finished row.
         prev = @tool_entries.delete(event[1].to_s)
-        set_tool_done(prev ? prev[0] : @log.add_entry([ [ "✓ ", :tool_ok ], [ event[1].to_s, :muted ] ], indent: 2),
-                      event[1].to_s,
-                      prev && prev[1],
-                      prev && prev[2])
+        index = prev ? prev[0] : @log.add_entry([ [ "✓ ", :tool_ok ], [ event[1].to_s, :muted ] ], indent: 2)
+        set_tool_done(index, event[1].to_s, prev && prev[1], prev && prev[2])
+        add_file_diff(event[2])
       when :confirm then show_confirm(event)
       when :session_list then show_session_list(event[1])
       when :model_list then show_model_list(event[1], event[2], event[3])
@@ -499,6 +498,14 @@ module Rubot
 
     def set_tool_done(index, name, summary, skill = nil)
       @log.set_entry(index, Rubot::TUI::Transcript.tool_done(name, summary, skill))
+    end
+
+    # A file the tool just wrote gets its change diff under the tool row,
+    # one indented block. The rows arrive already styled from TUI::Diff.
+    def add_file_diff(rows)
+      return if rows.nil? || rows.empty?
+
+      rows.each { |segments| @log.add_entry(segments, keep_leading: true, indent: 4) }
     end
 
     # Returns the skill name when this tool call reads a skill's SKILL.md,
@@ -592,10 +599,21 @@ module Rubot
       @events << [ :stream_start ]
       response = +""
       stopped = false
+      # Before-content of each file a tool is about to write, keyed by tool
+      # name and dropped as soon as its result comes back. Gated on @tui:
+      # the plain REPL drains no events, so a diff there would be work with
+      # nowhere to go.
+      file_changes = {}
       agent.process(message,
                     on_confirm: on_confirm,
-                    on_tool_call: ->(name, args) { @events << [ :tool_call, name, args ] },
-                    on_tool_result: ->(name, _result) { @events << [ :tool_done, name ] },
+                    on_tool_call: lambda do |name, args|
+                      file_changes[name.to_s] = file_snapshot(name, args) if @tui
+                      @events << [ :tool_call, name, args ]
+                    end,
+                    on_tool_result: lambda do |name, _result|
+                      diff = @tui ? file_diff(file_changes.delete(name.to_s)) : nil
+                      @events << [ :tool_done, name, diff ]
+                    end,
                     on_stopped: -> { stopped = true },
                     stream: @stream) do |chunk|
         @events << [ :chunk, chunk.to_s ]
@@ -618,9 +636,48 @@ module Rubot
     end
 
     # Allow a dangerous tool, blocking the worker until the dialog is
-    # answered. Fail closed (deny) if the channel dies mid-dialog.
+    # answered. The dialog lives on the App thread, so the request is
+    # published as an event and the worker waits on its own answer queue: a
+    # stale answer from an earlier confirmation can never be reused. Fail
+    # closed (deny) if the channel dies mid-dialog.
     def confirm_callback
-      proc { |_tool_name, _args| @confirm.pop }
+      proc do |tool_name, args|
+        answered = Queue.new
+        @events << [ :confirm, tool_name, args, answered ]
+        answered.pop
+      end
+    end
+
+    # The content of a file before a write/append tool call touches it, so
+    # the TUI can diff it afterwards. Reads and other tools return nil. Runs
+    # on the worker thread, before the tool executes.
+    def file_snapshot(name, args)
+      return nil unless name.to_s == "file_ops" && args.is_a?(Hash)
+      return nil unless %w[write append].include?(args["operation"].to_s)
+
+      path = args["path"].to_s
+      return nil if path.empty?
+
+      expanded = File.expand_path(path)
+      before = File.exist?(expanded) ? File.read(expanded, encoding: "UTF-8") : nil
+      { path: path, expanded: expanded, before: before }
+    rescue StandardError
+      nil
+    end
+
+    # The diff rows for a snapshot taken before the tool ran, read back from
+    # disk afterwards. nil when the file did not change (or cannot be read).
+    # Runs on the worker thread, after the tool executes.
+    def file_diff(snapshot)
+      return nil unless snapshot
+
+      expanded = snapshot[:expanded]
+      return nil unless File.exist?(expanded)
+
+      after = File.read(expanded, encoding: "UTF-8")
+      Rubot::TUI::Diff.rows(snapshot[:before], after, path: snapshot[:path])
+    rescue StandardError
+      nil
     end
 
     def stdin_confirm_callback
@@ -670,16 +727,14 @@ module Rubot
       Rubot::TUI::Transcript.summary_limit(tool_name, @log.content_width)
     end
 
+    # /resume-style: the confirmation writes its question into the log and
+    # keeps the keyboard until answered (y allows, enter/esc deny), the way
+    # ConfirmDialog did — but as transcript rows above the prompt instead of
+    # a floating modal, so the text stays selectable with the mouse.
     def show_confirm(event)
       _, tool_name, args, answered = event
-      @dialog.show(tool_name, args)
-      @dialog.on_answer do |value|
-        @overlay.hide
-        answered << value
-        @app.focus(@prompt)
-      end
-      @overlay.show(@dialog)
-      @app.focus(@dialog)
+      @confirm_prompt.ask(tool_name, args, answered: answered)
+      @prompt.list = @confirm_prompt
     end
 
     # /resume writes the list into the transcript and hands the prompt over

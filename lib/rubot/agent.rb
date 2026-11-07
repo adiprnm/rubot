@@ -815,6 +815,30 @@ module Rubot
       sentence as a chat message while you work.
     PROMPT
 
+    # Editing files through the file tool, not shell. Kept here (not in the
+    # configurable prompt) so a per-topic persona cannot drop it.
+    FILE_EDIT_RULE = <<~PROMPT.strip.freeze
+      # Editing Files
+
+      Create and edit files with the file tool (`file_ops`): `read` the file
+      first, then `write` the full new content (or `append` to add to it).
+
+      Avoid shell commands that edit files in place (`sed -i`, `perl -i`,
+      stdout redirection into a file, `tee`). Files changed through the file
+      tool are shown to the user as a before/after diff and confirmed —
+      in-place shell edits bypass that review. Shell is for what the file
+      tool cannot do: searching (`grep`), renaming, moving, copying, and
+      running what already exists.
+
+      When an edit succeeds, report it briefly — which file you updated and
+      what changed in one sentence — and stop there. Do not reconstruct the
+      change in your reply in any form: no file contents, no +/- diff lines,
+      no before/after comparison, no canned code excerpt. The terminal
+      already renders the exact git-style diff under the tool row; repeating
+      it just floods the chat. Only quote the few lines you are actually
+      discussing.
+    PROMPT
+
     # Build the full system prompt from all sources
     def build_system_prompt
       @skill_registry.reload!
@@ -832,6 +856,9 @@ module Rubot
 
       # 1c. Progress narration (channels show this to the user as messages)
       parts << NARRATION_RULE
+
+      # 1d. File edits go through the file tool (diff view + confirmation)
+      parts << FILE_EDIT_RULE
 
       # 2. SOUL.md (personality and identity)
       if @soul.enabled?

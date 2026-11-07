@@ -354,6 +354,22 @@ class TestAgentProgressNarration < Minitest::Test
     assert_includes prompt, "Write every script, helper, and one-off snippet in Ruby"
     assert_includes prompt, "Do not write new Python"
   end
+
+  def test_system_prompt_asks_for_file_tool_edits_instead_of_shell
+    prompt = @agent.build_system_prompt
+    assert_includes prompt, "Editing Files"
+    assert_includes prompt, "Create and edit files with the file tool"
+    assert_includes prompt, "Avoid shell commands that edit files in place"
+  end
+
+  # The agent must not paste the edited file's contents — or pseudo-diff
+  # line summaries — into its reply; the TUI renders the real diff itself.
+  def test_system_prompt_tells_the_agent_not_to_recite_edited_files
+    prompt = @agent.build_system_prompt
+    assert_includes prompt, "Do not reconstruct the"
+    assert_includes prompt, "no +/- diff lines"
+    assert_includes prompt, "report it briefly"
+  end
 end
 
 class TestAgentPersona < Minitest::Test
