@@ -23,9 +23,9 @@ module Rubot
 
       def description
         desc = <<~DESC.strip
-          Read files, make targeted edits, create files, list directories, and
-          inspect paths.
-          Operations: read, edit, write, append, list, info
+          Read files, make targeted edits, create and delete files, list
+          directories, and inspect paths.
+          Operations: read, edit, write, append, delete, list, info
           - read:  Read a file. Pass `offset` (1-based line) and `limit` (lines)
                    to read part of a long file; the reply says which lines were
                    returned so you can continue from there.
@@ -35,6 +35,8 @@ module Rubot
                    rewrite the parts you did not touch.
           - write: Write content to a file (overwrites the whole file)
           - append: Append content to a file
+          - delete: Delete one file (directories are refused; delete their
+                   files one by one)
           - list:  List directory contents
           - info:  Get file/directory information
         DESC
@@ -52,7 +54,7 @@ module Rubot
           "properties" => {
             "operation" => {
               "type" => "string",
-              "enum" => %w[read edit write append list info],
+              "enum" => %w[read edit write append delete list info],
               "description" => "The file operation to perform (default: read)"
             },
             "path" => {
@@ -103,9 +105,10 @@ module Rubot
                                        replace_all: arguments["replace_all"])
         when "write"   then write_file(path, content)
         when "append"  then append_file(path, content)
+        when "delete"  then delete_file(path)
         when "list"    then list_dir(path)
         when "info"    then file_info(path)
-        else "ERROR: Unknown operation '#{operation.inspect}'. Use: read, edit, write, append, list, info"
+        else "ERROR: Unknown operation '#{operation.inspect}'. Use: read, edit, write, append, delete, list, info"
         end
       rescue StandardError => e
         "ERROR: #{e.class}: #{e.message}"
@@ -115,8 +118,10 @@ module Rubot
       # write on an existing file = data loss (overwriting).
       # write on a new file = safe (creating).
       # append = safe (never destroys existing data).
+      # delete on an existing file = data loss, so it is confirmed too.
       def dangerous_action?(arguments)
-        return false unless arguments["operation"] == "write"
+        operation = arguments["operation"].to_s
+        return false unless %w[write delete].include?(operation)
 
         path = arguments["path"]
         return false if path.nil?
@@ -250,6 +255,20 @@ module Rubot
         FileUtils.mkdir_p(File.dirname(p))
         File.open(p, "a", encoding: "UTF-8") { |f| f.write(content) }
         "Appended #{content.length} characters to #{p}"
+      end
+
+      # Removing a whole file. Directories are refused so a stray call cannot
+      # take a tree with it; the caller deletes their files one by one.
+      def delete_file(path)
+        check_path(path, operation: :write)
+        raise "Cannot delete MEMORY.md — use the memory tool instead. Memory cannot be reset." if memory_file?(path)
+        p = safe_path(path)
+        raise "File not found: #{path}" unless File.exist?(p)
+        raise "Refusing to delete a directory: #{path} — delete its files one by one" if File.directory?(p)
+
+        size = File.size(p)
+        File.delete(p)
+        "Deleted #{p} (#{size} bytes)"
       end
 
       def list_dir(path)

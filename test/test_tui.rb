@@ -899,7 +899,8 @@ module Rubot
       agent = repl.instance_variable_get(:@agent)
       agent.define_singleton_method(:process) do |_message, on_tool_call: nil, on_tool_result: nil, **_opts, &_blk|
         on_tool_call&.call("file_ops", { "operation" => operation, "path" => path })
-        File.write(path, after)
+        # nil after means the call removed the file, as `delete` does.
+        after.nil? ? FileUtils.rm_f(path) : File.write(path, after)
         on_tool_result&.call("file_ops", "ok")
         "done"
       end
@@ -969,6 +970,47 @@ module Rubot
         assert git.any?, "append gets a diff too"
         assert(git.any? { |row| row.include?("│ first") })
         assert(git.any? { |row| row.include?("│ second") && row.include?("+ ") })
+      end
+    end
+
+    def test_an_edit_shows_a_pi_diff_too
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "notes.md")
+        File.write(path, "one\ntwo\nthree\n")
+        repl = run_file_tool(build_repl, operation: "edit", path: path,
+                             after: "one\nTWO\nthree\n")
+
+        git = entry_texts(repl).drop_while { |text| !text.match?(/\A[+-]\d/) }
+        assert git.any?, "an edit gets a diff like a write: #{entry_texts(repl).inspect}"
+        assert(git.any? { |row| row.include?("│ two") && row.include?("- ") })
+        assert(git.any? { |row| row.include?("│ TWO") && row.include?("+ ") })
+      end
+    end
+
+    def test_a_delete_shows_every_line_it_removed
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "gone.md")
+        File.write(path, "one\ntwo\n")
+        repl = run_file_tool(build_repl, operation: "delete", path: path, after: nil)
+
+        git = entry_texts(repl).drop_while { |text| !text.match?(/\A[+-]\d/) }
+        assert git.any?, "a delete gets a diff: #{entry_texts(repl).inspect}"
+        assert_includes git.first, "-2", "both lines count as removals"
+        assert(git.any? { |row| row.include?("│ one") && row.include?("- ") })
+        assert(git.any? { |row| row.include?("│ two") && row.include?("- ") })
+        refute(git.any? { |row| row.include?("+ ") }, "nothing was added")
+      end
+    end
+
+    def test_a_delete_that_did_not_happen_shows_no_diff
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "kept.md")
+        File.write(path, "still here\n")
+        # The tool refused, so the file never went away: nothing to show.
+        repl = run_file_tool(build_repl, operation: "delete", path: path, after: "still here\n")
+
+        refute entry_texts(repl).any? { |text| text.match?(/\A[+-]\d/) },
+               "a refused delete changes nothing"
       end
     end
 

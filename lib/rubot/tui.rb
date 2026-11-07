@@ -679,12 +679,14 @@ module Rubot
       end
     end
 
-    # The content of a file before a write/append tool call touches it, so
-    # the TUI can diff it afterwards. Reads and other tools return nil. Runs
-    # on the worker thread, before the tool executes.
+    # The content of a file before a file tool call touches it, so the TUI can
+    # diff it afterwards. Reads and other tools return nil. Every operation
+    # that changes a file is here — write (create or overwrite), append, edit
+    # and delete — so no change reaches the screen without its diff. Runs on
+    # the worker thread, before the tool executes.
     def file_snapshot(name, args)
       return nil unless name.to_s == "file_ops" && args.is_a?(Hash)
-      return nil unless %w[write append].include?(args["operation"].to_s)
+      return nil unless %w[write append edit delete].include?(args["operation"].to_s)
 
       path = args["path"].to_s
       return nil if path.empty?
@@ -697,15 +699,15 @@ module Rubot
     end
 
     # The diff rows for a snapshot taken before the tool ran, read back from
-    # disk afterwards. nil when the file did not change (or cannot be read).
-    # Runs on the worker thread, after the tool executes.
+    # disk afterwards. nil when the file did not change. A file that is gone
+    # afterwards was deleted, so its after-content is nil and every line it
+    # had renders as a removal. Runs on the worker thread, after the tool
+    # executes.
     def file_diff(snapshot)
       return nil unless snapshot
 
       expanded = snapshot[:expanded]
-      return nil unless File.exist?(expanded)
-
-      after = File.read(expanded, encoding: "UTF-8")
+      after = File.exist?(expanded) ? File.read(expanded, encoding: "UTF-8") : nil
       Rubot::TUI::Diff.rows(snapshot[:before], after, path: snapshot[:path])
     rescue StandardError
       nil

@@ -802,6 +802,42 @@ class TestTools < Minitest::Test
     assert_includes result, "characters omitted"
   end
 
+  def test_file_delete_removes_the_file
+    filepath = File.join(@tmpdir, "doomed.txt")
+    File.write(filepath, "bye")
+
+    result = @registry.execute("file_ops", { "operation" => "delete", "path" => filepath })
+
+    assert_includes result, "Deleted"
+    refute File.exist?(filepath), "the file is gone"
+  end
+
+  def test_file_delete_refuses_a_directory
+    dir = File.join(@tmpdir, "tree")
+    FileUtils.mkdir_p(dir)
+
+    result = @registry.execute("file_ops", { "operation" => "delete", "path" => dir })
+
+    assert_includes result, "Refusing to delete a directory"
+    assert Dir.exist?(dir), "the directory survives"
+  end
+
+  def test_file_delete_reports_a_missing_file
+    result = @registry.execute("file_ops",
+                               { "operation" => "delete", "path" => File.join(@tmpdir, "nope.txt") })
+
+    assert_includes result, "File not found"
+  end
+
+  def test_file_tool_dangerous_delete_is_data_loss
+    file_tool = @registry.get("file_ops")
+    filepath = File.join(@tmpdir, "doomed.txt")
+    File.write(filepath, "bye")
+
+    assert file_tool.dangerous_action?({ "operation" => "delete", "path" => filepath }),
+           "deleting a file is confirmed like an overwrite"
+  end
+
   def test_file_tool_dangerous_overwrite_existing_file
     file_tool = @registry.get("file_ops")
     filepath = File.join(@tmpdir, "existing.txt")

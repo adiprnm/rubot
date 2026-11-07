@@ -877,9 +877,11 @@ module Rubot
       Avoid shell commands that edit files in place (`sed -i`, `perl -i`,
       stdout redirection into a file, `tee`). Files changed through the file
       tool are shown to the user as a before/after diff and confirmed —
-      in-place shell edits bypass that review. Shell is for what the file
-      tool cannot do: searching (`grep`), renaming, moving, copying, and
-      running what already exists.
+      in-place shell edits bypass that review. Deleting a file goes through
+      the file tool as well (`operation: delete`): its diff shows every line
+      that went away, while `rm` would remove the file with nothing on screen.
+      Shell is for what the file tool cannot do: searching (`grep`), renaming,
+      moving, copying, and running what already exists.
 
       When an edit succeeds, report it briefly — which file you updated and
       what changed in one sentence — and stop there. Do not reconstruct the
@@ -1289,11 +1291,11 @@ module Rubot
     # arguments were not valid JSON — which is what a tool call cut off at the
     # output limit looks like — so the caller can refuse to run it on a
     # half-read argument instead of silently executing with an empty hash.
-    # Before-content of a file a file_ops write/append is about to touch.
-    # nil for reads and every other tool.
+    # Before-content of a file a file_ops write/append/edit/delete is about to
+    # touch. nil for reads and every other tool.
     def file_ui_snapshot(tool_name, arguments)
       return nil unless tool_name == "file_ops" && arguments.is_a?(Hash)
-      return nil unless %w[write append edit].include?(arguments["operation"].to_s)
+      return nil unless %w[write append edit delete].include?(arguments["operation"].to_s)
 
       path = arguments["path"].to_s
       return nil if path.empty?
@@ -1306,11 +1308,13 @@ module Rubot
     end
 
     # After-content for the TUI diff, or nil when the tool did not write.
+    # A delete leaves no file behind: its after-content is nil, so every line
+    # the file had replays as a removal instead of disappearing from view.
     def file_ui_diff(snapshot, result)
       return nil unless snapshot
-      return nil unless result.to_s.match?(/\A(?:Written|Appended|Edited) /)
+      return nil unless result.to_s.match?(/\A(?:Written|Appended|Edited|Deleted) /)
 
-      after = File.read(snapshot[:expanded], encoding: "UTF-8")
+      after = File.exist?(snapshot[:expanded]) ? File.read(snapshot[:expanded], encoding: "UTF-8") : nil
       before = snapshot[:before]
       return nil if before == after
       return nil if before.to_s.length + after.to_s.length > MAX_UI_DIFF_CHARS

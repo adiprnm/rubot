@@ -13,7 +13,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 💬 **Interactive REPL** — with streaming, command history, tab completion, and a slash-command palette
 - ⌨️ **Multiline prompt** — Shift+Enter inserts a newline and the input box grows with the text, word-wrapping long lines
 - 📝 **External editor** — Ctrl+G opens the half-typed prompt in `$EDITOR` and takes the edited text straight back into the input box
-- 🧾 **File diffs** — a file the agent writes or appends to shows a compact diff under the tool row in the TUI
+- 🧾 **File diffs** — every file the agent writes, edits or deletes shows a compact diff under the tool row in the TUI
 - 📝 **Session management** — persistent conversation history, a new session per TUI launch, and `/resume` to browse and reopen any saved session
 - 🧬 **SOUL.md** — personality and identity file for persistent character
 - 🎛️ **Model presets** — named model configurations with a primary default, switchable per session and manageable from Telegram
@@ -277,8 +277,8 @@ after `/clear`, `/new`, `/session` and `/use-model`; `/context` has the full
 report. The session name is not shown in the footer — use `/session` to print
 it.
 
-When the agent writes or appends to a file, the TUI renders the diff right
-under the `✓ file_ops write …` row in the same look as the
+When the agent creates, edits, appends to or deletes a file, the TUI renders
+the diff right under the `✓ file_ops write …` row in the same look as the
 [`pi-claude-code-ui`](https://www.npmjs.com/package/pi-claude-code-ui)
 extension (pi-diff's unified view): a summary line (`+2 -1 • 1 hunk at line
 20`), a dim rule, then one row per line with a coloured `▌` stripe, a tinted
@@ -290,10 +290,12 @@ with `…` rather than wrapped, and the body is capped at 32 rows with a
 `… (N more diff lines)` row, so a rewrite cannot flood the transcript. The
 built-in `Editing Files` rule in the system prompt (outside
 the configurable prompt, like the `Scripting Language` rule) asks the agent to
-create and edit files through `file_ops` instead of in-place shell edits, and
-not to recite the file's contents in its reply once an edit succeeds — what
-changed is already visible in the interface; destructive shell edits (`sed -i`,
-`rm`, …) still go through the confirmation above. The tool still returns its plain `Written/Appended/Edited …`
+create, edit and delete files through `file_ops` instead of in-place shell
+edits, and not to recite the file's contents in its reply once an edit
+succeeds — what changed is already visible in the interface; destructive shell
+edits (`sed -i`, `rm`, …) still go through the confirmation above. A delete
+replays every line it removed: the file has no after-content, so the whole
+block is red. The tool still returns its plain `Written/Appended/Edited/Deleted …`
 result to the model; the diff is a TUI view only. Its before/after text is kept as UI
 metadata on the tool message (never sent to the model), so `/resume` redraws
 the same diff at the new width.
@@ -1060,7 +1062,7 @@ it. Python that already exists in a repo or skill (`tools/*.py`) is still run
 as-is; only *new* code has to be Ruby.
 
 ### `file_ops`
-File operations: read, edit, write, append, list directories, get file info.
+File operations: read, edit, write, append, delete, list directories, get file info.
 
 | Operation | Description |
 |-----------|-------------|
@@ -1068,6 +1070,7 @@ File operations: read, edit, write, append, list directories, get file info.
 | `edit` | Replace an exact `old_string` with `new_string`. It must match exactly once, or the edit is refused with the match count; `replace_all: true` changes every occurrence. This is the preferred way to change an existing file — it does not rewrite the parts you did not touch. |
 | `write` | Write a whole file (overwrites; asks for confirmation when the file exists) |
 | `append` | Add to the end of a file |
+| `delete` | Delete one file (asks for confirmation; directories are refused) |
 | `list` | List a directory |
 | `info` | Size, permissions and timestamps |
 

@@ -1537,6 +1537,25 @@ class TestAgentUiDiff < Minitest::Test
     end
   end
 
+  def test_a_delete_records_an_empty_after_so_the_removal_replays
+    Dir.mktmpdir do |dir|
+      workspace = File.join(dir, "workspace")
+      FileUtils.mkdir_p(workspace)
+      path = File.join(workspace, "gone.md")
+      File.write(path, "one\ntwo\n")
+
+      agent = run_write(workspace, path, WriteProvider.new(path, operation: "delete", content: nil))
+      tool = agent.session.messages.find { |msg| msg["role"] == "tool" }
+
+      assert_match(/\ADeleted /, tool["content"])
+      diff = tool["ui_diff"]
+      assert diff, "the delete carries its UI diff"
+      assert_equal "one\ntwo\n", diff["before"]
+      assert_nil diff["after"], "nothing is left to show as the new content"
+      refute File.exist?(path), "the file is gone"
+    end
+  end
+
   def test_a_write_the_tool_rejects_has_no_ui_diff
     Dir.mktmpdir do |dir|
       workspace = File.join(dir, "workspace")
