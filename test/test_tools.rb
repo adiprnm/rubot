@@ -534,6 +534,17 @@ class TestTools < Minitest::Test
 
   # --- Reading part of a long file ------------------------------------
 
+  # Models regularly drop the operation for the common case. Rejecting the
+  # call cost a whole provider round (60-190s in a live session).
+  def test_file_read_is_the_default_operation
+    filepath = File.join(@tmpdir, "default-read.txt")
+    File.write(filepath, "read me\n")
+
+    result = @registry.execute("file_ops", { "path" => filepath })
+
+    assert_includes result, "read me"
+  end
+
   def test_file_read_offset_and_limit_returns_a_slice_and_says_where_it_ends
     filepath = File.join(@tmpdir, "long.txt")
     File.write(filepath, (1..50).map { |i| "line #{i}\n" }.join)

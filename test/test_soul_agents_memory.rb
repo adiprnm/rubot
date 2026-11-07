@@ -108,6 +108,52 @@ class TestAgentsFile < Minitest::Test
   end
 end
 
+class TestAgentAssetsWorkspace < Minitest::Test
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @assets = File.join(@tmpdir, "assets")
+    @project = File.join(@tmpdir, "project")
+    FileUtils.mkdir_p(@assets)
+    FileUtils.mkdir_p(@project)
+    File.write(File.join(@assets, "AGENTS.md"), "---\n---\n\n# Agent Rules\n\n- global rule\n")
+    File.write(File.join(@assets, "MEMORY.md"), "# Memory\n\n- global fact\n")
+    @config = Rubot::Config.from_data({
+      "agents" => { "defaults" => { "workspace" => @project, "assets_workspace" => @assets } },
+      "models" => [ { "name" => "m", "model" => "openai/test", "api_key" => "sk-test" } ],
+      "provider" => "openai"
+    })
+  end
+
+  def teardown
+    FileUtils.rm_rf(@tmpdir)
+  end
+
+  def build_agent
+    Rubot::Agent.new(config: @config, session_id: "assets", tools: Rubot::Tools::Registry.new)
+  end
+
+  def test_identity_and_memory_come_from_the_assets_workspace
+    agent = build_agent
+
+    assert_includes agent.memory.to_s, "global fact"
+  end
+
+  def test_the_global_agents_file_applies_when_the_project_has_none
+    agent = build_agent
+
+    assert_includes agent.agents_file.rules, "global rule"
+  end
+
+  def test_a_project_agents_file_wins_over_the_global_one
+    File.write(File.join(@project, "AGENTS.md"), "---\n---\n\n# Agent Rules\n\n- project rule\n")
+
+    agent = build_agent
+
+    assert_includes agent.agents_file.rules, "project rule"
+    refute_includes agent.agents_file.rules, "global rule"
+  end
+end
+
 class TestMemory < Minitest::Test
   def setup
     @tmpdir = Dir.mktmpdir

@@ -129,7 +129,10 @@ module Rubot
       assets = config.assets_workspace
       @soul = Soul.new(workspace: assets)
       @memory = Memory.new(workspace: assets)
-      @agents_file = AgentsFile.new(workspace: assets)
+      # AGENTS.md is project rules, so a file in the working directory wins;
+      # the configured workspace's copy is the fallback (and is what the
+      # Telegram bot always uses, since its workspace is that directory).
+      @agents_file = AgentsFile.new(workspace: agents_workspace(config, assets))
       @skill_registry = SkillRegistry.new(workspace: assets)
       config.ensure_workspace
 
@@ -961,6 +964,18 @@ module Rubot
     end
 
     private
+
+    # Directory holding the AGENTS.md this agent follows. The project's own
+    # file is preferred over the global one in the configured workspace, so
+    # running the TUI inside a repo picks up that repo's rules.
+    def agents_workspace(config, assets)
+      project = config.workspace
+      if project && File.exist?(File.join(project, "AGENTS.md"))
+        project
+      else
+        assets
+      end
+    end
 
     # Resolution order for the preset a session starts with:
     #   1. preset saved on the session (/model <preset>)

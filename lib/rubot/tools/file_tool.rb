@@ -53,7 +53,7 @@ module Rubot
             "operation" => {
               "type" => "string",
               "enum" => %w[read edit write append list info],
-              "description" => "The file operation to perform"
+              "description" => "The file operation to perform (default: read)"
             },
             "path" => {
               "type" => "string",
@@ -89,7 +89,11 @@ module Rubot
       end
 
       def execute(arguments)
-        operation = arguments["operation"]
+        # A call with only a path means read: models routinely leave the
+        # operation out for the most common case, and rejecting it burned a
+        # full provider round every time.
+        operation = arguments["operation"].to_s
+        operation = "read" if operation.empty? && !arguments["path"].to_s.empty?
         path = arguments["path"]
         content = arguments["content"]
 
