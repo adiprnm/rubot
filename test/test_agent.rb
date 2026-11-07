@@ -1552,3 +1552,134 @@ class TestAgentUiDiff < Minitest::Test
     end
   end
 end
+
+class TestAgentLiveUsage < Minitest::Test
+  # Two provider calls carrying usage: the first asks for a tool, the second
+  # answers. The second prompt is bigger, exactly like a real tool loop, so a
+  # live footer has something to show before the turn ends.
+  class MeteredProvider
+    attr_reader :calls
+
+    def initialize
+      @calls = 0
+    end
+
+    def name
+      "test"
+    end
+
+    def chat(_messages, tools: nil)
+      @calls += 1
+      if @calls == 1
+        {
+          "content" => "",
+          "tool_calls" => [
+            {
+              "id" => "call_1",
+              "type" => "function",
+              "function" => {
+                "name" => "file",
+                "arguments" => JSON.generate({ "operation" => "list", "path" => "." })
+              }
+            }
+          ],
+          "usage" => {
+            "prompt_tokens" => 1_000,
+            "completion_tokens" => 100,
+            "prompt_tokens_details" => { "cached_tokens" => 800 }
+          }
+        }
+      else
+        {
+          "content" => "done",
+          "usage" => {
+            "prompt_tokens" => 2_000,
+            "completion_tokens" => 50,
+            "prompt_tokens_details" => { "cached_tokens" => 1_600 }
+          }
+        }
+      end
+    end
+
+    def chat_stream(messages, tools: nil)
+      chat(messages, tools: tools)
+    end
+  end
+
+  def setup
+    @tmpdir = Dir.mktmpdir
+    workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(workspace)
+    config_path = File.join(@tmpdir, "config.yml")
+
+    File.write(config_path, {
+      "agents" => { "defaults" => { "workspace" => workspace, "max_rounds" => 4 } },
+      "models" => [
+        {
+          "name" => "test",
+          "model" => "openai/gpt-4o-mini",
+          "api_key" => "sk-test",
+          "pricing" => { "input" => 1.0, "output" => 2.0, "cached_input" => 0.25 }
+        }
+      ]
+    }.to_yaml)
+
+    @agent = Rubot::Agent.new(
+      config: Rubot::Config.new(config_path),
+      provider: MeteredProvider.new,
+      session_id: "live-usage"
+    )
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+  end
+
+  def collect_reports
+    reports = []
+    @agent.process("hello", stream: false, on_usage: ->(report) { reports << report })
+    reports
+  end
+
+  def test_usage_is_published_before_the_turn_finishes
+    reports = collect_reports
+
+    refute_empty reports
+    assert_equal 1, reports.first[:requests], "first report should cover the first request"
+    assert_equal 2, reports.last[:requests], "last report should cover both requests"
+  end
+
+  def test_cache_hit_rate_follows_the_latest_request
+    reports = collect_reports
+
+    assert_in_delta 0.8, reports.first[:cache_hit_rate], 0.01
+    assert_in_delta 0.8, reports.last[:cache_hit_rate], 0.01
+  end
+
+  def test_cost_grows_while_the_turn_is_running
+    reports = collect_reports
+
+    first = reports.first[:cost]["total"]
+    last = reports.last[:cost]["total"]
+
+    assert_operator first, :>, 0.0
+    assert_operator last, :>, first
+  end
+
+  def test_context_estimate_moves_with_the_transcript
+    reports = collect_reports
+
+    assert_operator reports.last[:context_used], :>, reports.first[:context_used]
+  end
+
+  def test_reports_are_plain_data_for_a_ractor
+    reports = collect_reports
+
+    reports.each do |report|
+      assert_kind_of Hash, report
+      assert_kind_of Symbol, report.keys.first
+      assert_kind_of String, report[:model]
+      assert_kind_of Integer, report[:requests]
+    end
+  end
+end

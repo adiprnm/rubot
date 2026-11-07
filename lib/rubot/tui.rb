@@ -410,6 +410,18 @@ module Rubot
       @events << [ :status_left, usage_footer ]
     end
 
+    # Live figures the agent pushes while a turn is running: cost, cache hit
+    # rate and context share move as soon as each request lands. The report
+    # arrives as plain data, so this path never calls back into the agent (in
+    # actor mode that call would wait for a Ractor busy with this same turn).
+    def live_usage(report)
+      return unless report.is_a?(Hash)
+
+      @events << [ :status_left, Rubot::UsageReport.footer(report) ]
+    rescue StandardError => e
+      warn "[tui] live usage failed: #{e.class}: #{e.message}" if Rubot.debug?
+    end
+
     # ------------------------------------------------------------------
     # Event pump (runs on the App thread, once per tick)
     # ------------------------------------------------------------------
@@ -629,6 +641,7 @@ module Rubot
                       @events << [ :tool_done, name, diff ]
                     end,
                     on_stopped: -> { stopped = true },
+                    on_usage: ->(report) { live_usage(report) },
                     stream: @stream) do |chunk|
         @events << [ :chunk, chunk.to_s ]
         response << chunk.to_s

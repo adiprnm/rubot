@@ -113,6 +113,9 @@ module Rubot
           on_tool_call: ->(name, args) { events << [ :tool_started, name, args ] },
           on_tool_result: ->(name, result) { events << [ :tool_finished, name, result ] },
           on_progress: ->(round, tool_count) { events << [ :progress, round, tool_count ] },
+          # Live cost/cache/context, computed inside the Ractor so the caller
+          # never has to ask a busy actor for it.
+          on_usage: ->(report) { events << [ :usage, report ] },
           on_steer: ->(text) { events << [ :steered, text ] },
           on_stopped: -> { events << [ :stopped ] },
           on_confirm: lambda do |name, args|

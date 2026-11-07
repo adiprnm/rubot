@@ -193,6 +193,9 @@ module Rubot
     #   on_tool_call:     Called before each tool executes. Yields (tool_name, arguments).
     #   on_tool_result:   Called after each tool executes. Yields (tool_name, result).
     #   on_progress:      Called after each full round. Yields (round_count, tool_count).
+    #   on_usage:         Called with fresh usage report data as soon as a request's
+    #                     tokens are recorded and after every round's tool results,
+    #                     so a channel can update cost/cache/context mid-turn.
     #   on_confirm:       Called before dangerous actions that could cause data loss.
     #                     Yields (tool_name, arguments). Return truthy to proceed, falsy to skip.
     #   on_assistant_text: Called with the model's own words whenever it replies
@@ -205,7 +208,8 @@ module Rubot
     #   on_steer:         Called with a message the user queued while the turn
     #                     was running, at the moment it is handed to the model.
     def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil,
-                on_assistant_text: nil, on_steer: nil, on_stopped: nil, stream: true, &on_chunk)
+                on_assistant_text: nil, on_steer: nil, on_stopped: nil, on_usage: nil,
+                stream: true, &on_chunk)
       # Fire any due cron jobs and collect their results
       cron_results = fire_due_cron_jobs
       warn "[cron] fire_due_cron_jobs returned #{cron_results.size} result(s)" if Rubot.debug?
@@ -303,6 +307,10 @@ module Rubot
         end
 
         record_usage(result)
+        # The moment this request's tokens land, cost, cache and context have
+        # moved. Publishing here, not at the end of the turn, is what lets a
+        # channel show live figures while the turn is still running.
+        emit_usage(on_usage)
 
         # Parse result — both streaming and non-streaming now return Hash
         if result.is_a?(Hash)
@@ -433,6 +441,9 @@ module Rubot
           # Fire progress callback after each round. The tool count is captured
           # before `tool_calls` is cleared so consumers get the real number.
           on_progress&.call(rounds, tool_count)
+          # The tool results just added to the transcript are part of the next
+          # request, so the context figure moves before the provider does.
+          emit_usage(on_usage)
 
           break if stopped
         elsif response.to_s.strip.empty? && !reasked
@@ -761,13 +772,16 @@ module Rubot
     # Token accounting and cost estimate for the current session.
     # Returns plain data (symbol keys, numbers, strings) so it can cross a
     # Ractor boundary from a SessionActor.
-    def usage_report
+    #
+    # `network: false` is the mid-turn path: figures that are already known,
+    # without a models.dev lookup a running turn must not wait on.
+    def usage_report(network: true)
       preset = @active_preset || {}
       model_id = preset["model"] || @session_model || @config.model
       provider_name = preset["provider"] || @provider.name
 
       window = resolve_context_window(model_id, provider_name, preset)
-      rates, price_source = resolve_rates(model_id, provider_name, preset)
+      rates, price_source = resolve_rates(model_id, provider_name, preset, network: network)
       context = context_usage
       usage = @session.usage
       last = @session.last_usage
@@ -796,7 +810,10 @@ module Rubot
         # does not re-price earlier turns. Legacy session files have no stored
         # cost; price their totals with the current rates instead. A total that
         # missed a request (no rates yet on the first turn) is re-priced too.
-        cost: (@session.cost && !@session.cost_partial?) ? @session.cost : Usage.cost(usage, rates),
+        # The session's cost hash is mutated in place on every request, so a
+        # report hands out a copy: a caller that keeps an earlier figure (the
+        # live footer does) must not see it change underneath.
+        cost: (@session.cost && !@session.cost_partial?) ? @session.cost.dup : Usage.cost(usage, rates),
         price_source: price_source
       }
     end
@@ -1340,6 +1357,17 @@ module Rubot
       end
     rescue StandardError => e
       warn "[usage] Failed to record usage: #{e.class}: #{e.message}" if @config.debug?
+    end
+
+    # Publish live figures to a caller that wants them mid-turn. Failing to
+    # produce a footer must never cost the user their answer, so every error
+    # here is swallowed after a debug note.
+    def emit_usage(callback)
+      return unless callback
+
+      callback.call(usage_report(network: false))
+    rescue StandardError => e
+      warn "[usage] Failed to publish live usage: #{e.class}: #{e.message}" if @config.debug?
     end
 
     # Rate lookup for the model this agent is currently talking to. The turn

@@ -250,6 +250,47 @@ module Rubot
              "the footer carries the turn's usage: #{view.last(3).inspect}"
     end
 
+    LAYERED_REPORTS = [
+      { requests: 1, prompt_tokens: 1_000, cache_hit_rate: 0.9,
+        context_used: 5_000, context_window: 128_000, context_percent: 3.9,
+        cost: { "total" => 0.004 } },
+      { requests: 2, prompt_tokens: 2_000, cache_hit_rate: 0.8,
+        context_used: 9_000, context_window: 128_000, context_percent: 7.0,
+        cost: { "total" => 0.009 } }
+    ].freeze
+
+    # The footer is not a post-mortem: each request's figures have to reach the
+    # status row while the turn is still running, not only when it ends.
+    def test_usage_footer_tracks_each_request_mid_turn
+      repl = build_repl
+      agent = repl.instance_variable_get(:@agent)
+      queue = repl.instance_variable_get(:@events)
+      footers = []
+
+      agent.define_singleton_method(:process) do |_msg, on_usage: nil, **_opts, &_blk|
+        LAYERED_REPORTS.each do |report|
+          on_usage&.call(report)
+          # Read before the turn ends: whatever is already queued is what the
+          # status row will show next tick.
+          footer = nil
+          until queue.empty?
+            event = queue.pop(true)
+            next unless event[0] == :status_left
+
+            footer = event[1]
+            break
+          end
+          footers << footer
+        end
+        "ok"
+      end
+      agent.define_singleton_method(:flush_learning) { nil }
+
+      repl.send(:process_message, "hi")
+
+      assert_equal [ "$0.004 · cache 90% · ctx 3.9%", "$0.009 · cache 80% · ctx 7.0%" ], footers
+    end
+
     def test_command_output_gets_one_blank_line_above_and_below_and_left_padding
       repl = build_repl
       agent = repl.instance_variable_get(:@agent)
