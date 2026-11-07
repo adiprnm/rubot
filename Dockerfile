@@ -112,7 +112,11 @@ RUN set -eux; \
 WORKDIR /app
 
 # Runtime gems only. webrick is required for Telegram webhook mode.
-COPY Gemfile ./
+# vendor/ carries ruby-tui, a path gem: bundler needs it at install time, and
+# the installed spec points back at it at runtime, so it has to stay in the
+# image.
+COPY Gemfile Gemfile.lock ./
+COPY vendor ./vendor
 RUN bundle install && rm -rf /usr/local/bundle/cache
 
 COPY bin ./bin
@@ -126,5 +130,5 @@ USER ${UID}:${GID}
 # Default to the interactive REPL. Override the command for other modes:
 #   docker compose run --rm rubot -C telegram
 #   docker compose run --rm rubot -m "hello"
-ENTRYPOINT ["ruby", "bin/rubot"]
+ENTRYPOINT ["bundle", "exec", "ruby", "bin/rubot"]
 CMD ["-C", "repl"]
