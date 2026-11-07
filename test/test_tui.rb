@@ -1702,6 +1702,20 @@ module Rubot
       assert_equal Channels::TuiChannel, Channels::Registry::CHANNEL_MAP["repl"]
     end
 
+    def test_tui_channel_takes_the_launch_directory_as_its_workspace
+      Dir.mktmpdir do |dir|
+        config = isolated_config(dir).with_workspace(File.join(dir, "configured"))
+        config.data["tools"] = false
+        channel = Channels::TuiChannel.new(app_config: config)
+        begin
+          assert_equal File.realpath(Dir.pwd), File.realpath(channel.pool.workspace),
+                       "files must be looked up in the cwd, not the configured workspace"
+        ensure
+          channel.stop
+        end
+      end
+    end
+
     # Drag-to-select and wheel scrolling both ride on SGR mouse reports.
     # A compat patch once replaced the gem's parser with a wheel-only one,
     # turning press/drag into :unknown keys and silently killing selection.

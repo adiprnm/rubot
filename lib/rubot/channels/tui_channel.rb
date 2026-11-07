@@ -9,7 +9,12 @@ module Rubot
     # consistent and extensible.
     class TuiChannel < Channel
       def initialize(agent: nil, pool: nil, app_config: nil, channel_config: {})
-        super
+        # The terminal channel treats the directory it was launched from as
+        # its workspace: sessions, SOUL.md, MEMORY.md, skills, cron jobs and
+        # the safety guard all follow the project you are standing in, not
+        # the workspace configured in config.yml.
+        app_config = app_config.with_workspace(Dir.pwd) if app_config && pool.nil? && agent.nil?
+        super(agent: agent, pool: pool, app_config: app_config, channel_config: channel_config)
         @stream = channel_config.fetch("stream", true)
       end
 
