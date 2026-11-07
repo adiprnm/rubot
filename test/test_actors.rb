@@ -15,6 +15,7 @@ class TestActors < Minitest::Test
     @server = nil
     @server_thread = nil
     @requests = 0
+    @bodies = []
     @requests_mutex = Mutex.new
   end
 
@@ -44,6 +45,7 @@ class TestActors < Minitest::Test
   def start_sse_server(delay: 0)
     @sse_delay = delay
     @requests = 0
+    @bodies = []
     @server = TCPServer.new("127.0.0.1", 0)
     @port = @server.addr[1]
 
@@ -69,7 +71,10 @@ class TestActors < Minitest::Test
     body ||= +""
     body << client.read(length - body.bytesize) if body.bytesize < length
 
-    @requests_mutex.synchronize { @requests += 1 }
+    @requests_mutex.synchronize do
+      @requests += 1
+      @bodies << body
+    end
 
     sleep @sse_delay if @sse_delay&.positive?
 
@@ -109,6 +114,10 @@ class TestActors < Minitest::Test
 
   def request_count
     @requests_mutex.synchronize { @requests }
+  end
+
+  def request_bodies
+    @requests_mutex.synchronize { @bodies.dup }
   end
 
   # Regression: last_user_message reads Agent::CONTINUE_PROMPT and friends from
@@ -194,6 +203,35 @@ class TestActors < Minitest::Test
       assert runner.join(10), "the turn must end after /stop"
       assert_equal Rubot::Agent::STOP_NOTICE, response
       assert_equal 1, handle.session.message_count, "only the user message was kept"
+    ensure
+      pool.shutdown
+    end
+  end
+
+  def test_steer_reaches_a_busy_turn_and_gets_its_own_round
+    api_base = start_sse_server(delay: 0.3)
+    config = write_config(api_base: api_base)
+    pool = Rubot::Actors::SessionPool.new(config: config)
+
+    begin
+      handle = pool.for("steer-test")
+      steered = []
+      runner = Thread.new do
+        handle.process("hi", on_steer: ->(text) { steered << text })
+      end
+
+      sleep 0.15
+      # A fresh handle for the same session must reach the busy actor; a
+      # normal request would only be read after the turn it steers.
+      assert pool.for("steer-test").steer("focus on the logs"),
+             "the steer must reach the session actor"
+
+      assert runner.join(10), "the turn must finish"
+      assert_equal [ "focus on the logs" ], steered, "the steer is reported when delivered"
+      assert_equal 2, request_count, "the steer opens a second round"
+      assert_includes request_bodies.last, "focus on the logs"
+      assert_equal 4, handle.session.message_count,
+                   "user, the first answer, the steered user turn, the final answer"
     ensure
       pool.shutdown
     end

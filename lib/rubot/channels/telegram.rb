@@ -618,7 +618,7 @@ module Rubot
           handle_compact_command
         when "/help"
           bot_name = @config.fetch("bot_name", "Rubot")
-          [ :skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help.\n\nBuilt-in commands:\n/start - Start the bot\n/new - Clear chat and start a new session\n/stop - Stop the task that is running\n/compact - Summarize older messages to free context\n/help - Show this help message\n/info - Show agent info\n/model - Show current model preset\n/model <preset> - Switch preset for this session\n/models - List model presets\n/preset - Manage model presets\n/preset set <name> <model> - Create/update a preset\n/preset default <name> - Preset for new sessions\n/preset models - List models supported by the provider\n/use_model <preset> - Alias for /model <preset>\n/persona - Setup persona for this forum topic\n/persona show - Show this topic's persona\n/persona reset - Remove this topic's persona\n/cancel - Cancel the persona setup\n/skills - List available skills\n/memory - Show persistent memory\n/soul - Show bot personality\n/agents - Show agent rules\n/cron - List scheduled cron jobs\n/context - Context usage, cache hit rate, and estimated cost\n/usage - OpenCode Go subscription usage\n/cron delete <id> - Delete a cron job\n/use <skill> - Force a skill for the next message\n/unuse - Clear the forced skill" ]
+          [ :skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help. While a task is still running, a plain message steers it instead of waiting behind it.\n\nBuilt-in commands:\n/start - Start the bot\n/new - Clear chat and start a new session\n/stop - Stop the task that is running\n/compact - Summarize older messages to free context\n/help - Show this help message\n/info - Show agent info\n/model - Show current model preset\n/model <preset> - Switch preset for this session\n/models - List model presets\n/preset - Manage model presets\n/preset set <name> <model> - Create/update a preset\n/preset default <name> - Preset for new sessions\n/preset models - List models supported by the provider\n/use_model <preset> - Alias for /model <preset>\n/persona - Setup persona for this forum topic\n/persona show - Show this topic's persona\n/persona reset - Remove this topic's persona\n/cancel - Cancel the persona setup\n/skills - List available skills\n/memory - Show persistent memory\n/soul - Show bot personality\n/agents - Show agent rules\n/cron - List scheduled cron jobs\n/context - Context usage, cache hit rate, and estimated cost\n/usage - OpenCode Go subscription usage\n/cron delete <id> - Delete a cron job\n/use <skill> - Force a skill for the next message\n/unuse - Clear the forced skill" ]
         when "/info"
           handle_info_command
         when "/context"
@@ -993,8 +993,22 @@ module Rubot
           return
         end
 
-        notes = attachments.map { |attachment| receive_attachment(attachment, session_id, chat_id) }
+        # A plain-text message that arrives while this session is still
+        # working steers the running turn instead of waiting behind it, the
+        # same way typing mid-turn does in the TUI. Commands are handled
+        # above, and media keeps its own turn: it is downloaded and described,
+        # which a steer has no room for.
         reply_note = reply_context(message, session_id, chat_id)
+        if attachments.empty? && !body.start_with?("/") && session_running?(session_id)
+          steer_text = [ body, reply_note ].compact.reject(&:empty?).join("\n\n")
+          if steer_session(session_id, steer_text)
+            warn "[telegram] Steering the running turn: #{username}: #{body[0..120]}" if Rubot.debug?
+            send_message(chat_id, "↳ Diteruskan ke tugas yang sedang berjalan.", thread_id)
+            return
+          end
+        end
+
+        notes = attachments.map { |attachment| receive_attachment(attachment, session_id, chat_id) }
         prompt = [ body, reply_note, *notes ].compact.reject(&:empty?).join("\n\n")
 
         # Track last active chat for cron message delivery

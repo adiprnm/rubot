@@ -48,13 +48,20 @@ module Rubot
         ) do |args, boot|
           stop_port = Ractor::Port.new
           cancellation = Rubot::Cancellation.new
+          # The watcher starts before the agent exists so a stop or a steer
+          # can land during construction instead of queueing behind it.
+          agent = nil
 
           watcher = Thread.new do
             loop do
               signal = stop_port.receive
               break if signal == :shutdown
 
-              cancellation.cancel!
+              if signal.is_a?(Array) && signal[0] == :steer
+                agent&.steer(signal[1])
+              else
+                cancellation.cancel!
+              end
             end
           rescue Ractor::ClosedError
             nil
@@ -106,6 +113,7 @@ module Rubot
           on_tool_call: ->(name, args) { events << [ :tool_started, name, args ] },
           on_tool_result: ->(name, result) { events << [ :tool_finished, name, result ] },
           on_progress: ->(round, tool_count) { events << [ :progress, round, tool_count ] },
+          on_steer: ->(text) { events << [ :steered, text ] },
           on_stopped: -> { events << [ :stopped ] },
           on_confirm: lambda do |name, args|
             id = SecureRandom.hex(6)

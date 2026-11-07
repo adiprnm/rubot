@@ -177,6 +177,20 @@ module Rubot
       !@running_mutex.synchronize { @running_handles[sid] }.nil?
     end
 
+    # Hand text to the turn already running in a session, without blocking the
+    # caller and without queueing behind that turn. Returns false when nothing
+    # is running or the handle cannot steer, so the caller can process the
+    # message normally instead of losing it.
+    def steer_session(session_id, text)
+      sid = (session_id || "default").to_s
+      handle = @running_mutex.synchronize { @running_handles[sid] }
+      return false unless handle&.respond_to?(:steer)
+
+      handle.steer(text)
+    rescue StandardError
+      false
+    end
+
     # Returns the per-request handle for the current thread, or the shared
     # agent/default session handle outside process_message.
     def request_agent

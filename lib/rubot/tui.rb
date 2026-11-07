@@ -34,7 +34,8 @@ module Rubot
   #   prompt box (thin bordered box, no placeholder/hints)
   #   status row (spinner · session/model)
   #
-  # Keys: enter send · shift+enter newline · tab completes /commands · ↑↓ history ·
+  # Keys: enter send (steer the running turn if one is in flight) ·
+  # shift+enter newline · tab completes /commands · ↑↓ history ·
   # typing / opens the command list (↑↓ picks one, enter takes it) · ctrl+g
   # edits the prompt in $EDITOR · page-up/page-down scroll · esc cancels the
   # running turn · ctrl-c quits.
@@ -92,6 +93,7 @@ module Rubot
     # the arrows need no explanation, the rest do.
     KEYS = {
       "enter"       => "Send the prompt, or take the highlighted /command",
+      "enter (running)" => "Steer the turn that is running instead of waiting",
       "shift+enter" => "Insert a newline (the box grows)",
       "ctrl+g"      => "Edit the prompt in $EDITOR, then take it back",
       "tab"         => "Complete a /command",
@@ -307,6 +309,16 @@ module Rubot
         next if line.empty?
 
         record_history(line)
+
+        # A message typed while a turn is running steers it instead of
+        # waiting behind it: the agent hands it to the model between rounds,
+        # after the tool calls of the round in flight. Commands keep the old
+        # path — a command is not something the model can act on.
+        if @busy && !line.start_with?("/") && steer_running_turn(line)
+          @events << [ :steer, line ]
+          next
+        end
+
         # Echo the prompt on screen, ahead of the assistant entry that
         # arrives with :stream_start.
         publish [ [ "❯ ", :accent ], [ line, :text ] ]
@@ -395,6 +407,7 @@ module Rubot
     def apply_event(event)
       case event[0]
       when :entry then @log.add_entry(event[1])
+      when :steer then add_steer_echo(event[1])
       when :command_output then add_command_output(event[1])
       when :clear_log
         clear_log_keep_banner
@@ -489,6 +502,26 @@ module Rubot
       @stopping = false
       @live_text = +""
       @live_entry = @log.add_entry([ [ "", :text ] ], keep_leading: true, indent: 2)
+    end
+
+    # Echo a steer mid-transcript. The answer streaming above it is closed
+    # first, so what the model writes after the steer appears below it instead
+    # of being appended to the fragment the steer interrupted. One blank row
+    # above and below sets it apart, without doubling a blank that is already
+    # the separator there.
+    def add_steer_echo(line)
+      close_live_entry
+      @log.add_entry([ [ "", nil ] ]) unless @log.last_blank?
+      @log.add_entry([ [ "↳ ", :accent ], [ line, :text ], [ "  steered", :dim ] ])
+      @log.add_entry([ [ "", nil ] ])
+    end
+
+    # Finish the answer that is streaming, dropping the entry outright when no
+    # token ever arrived, so the steer is not preceded by an empty row.
+    def close_live_entry
+      @log.remove_last if @live_entry && @live_text.to_s.strip.empty?
+      @live_entry = nil
+      @live_text = +""
     end
 
     def append_live(chunk)
@@ -738,6 +771,19 @@ module Rubot
       agent&.cancel! if agent.respond_to?(:cancel!)
     rescue StandardError
       nil
+    end
+
+    # Hand a line typed during a running turn to the agent, which delivers it
+    # between rounds. In actor mode the agent lives in another Ractor, so this
+    # goes through a non-blocking signal (a request would queue behind the turn
+    # it is meant to steer). Returns false when the turn cannot be steered, so
+    # the caller can send the line the normal way instead of losing it.
+    def steer_running_turn(line)
+      return false unless agent.respond_to?(:steer)
+
+      agent.steer(line)
+    rescue StandardError
+      false
     end
 
     # ------------------------------------------------------------------
@@ -1151,7 +1197,7 @@ module Rubot
 
       @log.add_entry([ [ Rubot::NAME, :title ] ])
       @log.add_entry([ [ "provider #{provider} · model #{model} · #{tools}", :dim ] ])
-      @log.add_entry([ [ "type /help for commands · esc cancels a running turn · pgup/pgdn scrolls", :dim ] ])
+      @log.add_entry([ [ "type /help for commands · esc cancels a running turn · type to steer it · pgup/pgdn scrolls", :dim ] ])
       @log.add_entry([ [ "", nil ] ])
       @banner_count = @log.entry_count
       @status.right = "session #{@session_id} · #{provider} · #{model}" if info[:provider]

@@ -82,6 +82,11 @@ module Rubot
     def initialize(config:, provider: nil, session_id: "default", tools: nil, persona: nil)
       @config = config
       @cancellation = Cancellation.new
+      # Text the user typed while a turn was already running (TUI steering).
+      # The turn consumes it between rounds; a mutex keeps the reader thread
+      # from tearing the list that the turn thread is draining.
+      @steering = []
+      @steering_mutex = Mutex.new
       @persona = Persona.from(persona)
       @session = Session.new(session_id, workspace: config.workspace)
       apply_initial_preset!
@@ -179,8 +184,10 @@ module Rubot
     #                     Yields (text).
     #   on_stopped:       Called once when the turn ended because the user
     #                     stopped it, before the stop notice is appended.
+    #   on_steer:         Called with a message the user queued while the turn
+    #                     was running, at the moment it is handed to the model.
     def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil,
-                on_assistant_text: nil, on_stopped: nil, stream: true, &on_chunk)
+                on_assistant_text: nil, on_steer: nil, on_stopped: nil, stream: true, &on_chunk)
       # Fire any due cron jobs and collect their results
       cron_results = fire_due_cron_jobs
       warn "[cron] fire_due_cron_jobs returned #{cron_results.size} result(s)" if Rubot.debug?
@@ -193,6 +200,15 @@ module Rubot
       # Reasoning from earlier turns is dropped from the request; only what is
       # produced inside this turn is kept, because a tool loop needs it.
       @turn_start_index = @session.messages.size
+
+      # A steer that arrived just as the previous turn was ending still
+      # belongs to the user: it enters ahead of this message instead of
+      # being replayed in the middle of the new turn.
+      stray = take_steering
+      while stray
+        @session.add("user", stray)
+        stray = take_steering
+      end
 
       # Add user message to session
       @session.add("user", message)
@@ -220,6 +236,15 @@ module Rubot
         if rounds >= limit
           limit_hit = true
           break
+        end
+
+        # Steering: text the user typed while this turn was running. It is
+        # delivered after the previous round's tool calls and before this
+        # round's provider call, so it can redirect work already in flight.
+        steer = take_steering
+        if steer
+          @session.add("user", steer)
+          on_steer&.call(steer)
         end
 
         # Stop before starting another round (another provider call or more
@@ -401,6 +426,19 @@ module Rubot
           rounds += 1
           finish_reason = nil
         else
+          # No tool calls — but the user may have steered the turn while this
+          # answer was streaming. The answer stands as its own message and
+          # the steer gets the next round.
+          if steering_pending?
+            answer << response
+            answer << "\n\n" unless response.to_s.strip.empty?
+            @session.add("assistant", response, reasoning_content: reasoning_content)
+            response = ""
+            reasoning_content = nil
+            rounds += 1
+            next
+          end
+
           # No tool calls, we're done
           answer << response
           break
@@ -479,6 +517,28 @@ module Rubot
     # execution. Safe to call from another thread; idle agents ignore it.
     def cancel!
       @cancellation.cancel!
+    end
+
+    # Queue text for the turn that is already running, without blocking the
+    # caller. It is delivered between rounds: after the current round's tool
+    # calls, before the next provider call. Returns false when the message is
+    # blank, so a caller can keep it in the prompt instead of losing it.
+    def steer(message)
+      text = message.to_s.strip
+      return false if text.empty?
+
+      @steering_mutex.synchronize { @steering << text }
+      true
+    end
+
+    # Oldest queued steering message, consumed exactly once. Safe to call from
+    # any thread.
+    def take_steering
+      @steering_mutex.synchronize { @steering.shift }
+    end
+
+    def steering_pending?
+      @steering_mutex.synchronize { !@steering.empty? }
     end
 
     def cancelled?

@@ -384,6 +384,84 @@ module Rubot
       assert view.any? { |l| l.include?("\u276f hi") }, "prompt should echo with a marker: #{view.map(&:strip).inspect}"
     end
 
+    def test_submit_while_a_turn_runs_steers_it_instead_of_queueing
+      repl = build_repl
+      agent = repl.instance_variable_get(:@agent)
+      steered = []
+      agent.define_singleton_method(:steer) do |text|
+        steered << text
+        true
+      end
+      repl.instance_variable_set(:@busy, true)
+      app = repl.instance_variable_get(:@app)
+      prompt = repl.instance_variable_get(:@prompt)
+      mailbox = repl.instance_variable_get(:@mailbox)
+
+      "change course".each_char { |c| prompt.handle_key(::TUI::Key.printable(c)) }
+      prompt.handle_key(::TUI::Key.new(:enter))
+      app.send(:run_timers)
+
+      assert_equal [ "change course" ], steered, "the line goes to the running turn"
+      assert mailbox.empty?, "a steered line does not wait in the mailbox"
+      view = plain(app.render_lines)
+      steer_ix = view.index { |l| l.include?("\u21b3 change course") }
+      assert steer_ix, "the steer is echoed with its own marker: #{view.map(&:strip).inspect}"
+      assert_includes view[steer_ix], "steered", "the echo says it steered the turn"
+      assert_equal "", view[steer_ix - 1].strip, "one blank row above the steer"
+      assert_equal "", view[steer_ix + 1].strip, "one blank row below the steer"
+      refute_equal "", view[steer_ix - 2].strip, "no double blank above"
+    end
+
+    def test_a_steer_splits_the_streaming_answer_around_it
+      repl = build_repl
+      agent = repl.instance_variable_get(:@agent)
+      agent.define_singleton_method(:steer) { |_text| true }
+      app = repl.instance_variable_get(:@app)
+      events = repl.instance_variable_get(:@events)
+      prompt = repl.instance_variable_get(:@prompt)
+
+      events << [ :stream_start ]
+      events << [ :chunk, "before the steer" ]
+      repl.send(:pump)
+
+      "use /tmp instead".each_char { |c| prompt.handle_key(::TUI::Key.printable(c)) }
+      prompt.handle_key(::TUI::Key.new(:enter))
+      app.send(:run_timers)
+
+      events << [ :chunk, "after the steer" ]
+      repl.send(:pump)
+
+      view = plain(app.render_lines)
+      before_ix = view.index { |l| l.include?("before the steer") }
+      steer_ix = view.index { |l| l.include?("\u21b3 use /tmp instead") }
+      after_ix = view.index { |l| l.include?("after the steer") }
+
+      assert before_ix && steer_ix && after_ix, "all three rows render: #{view.map(&:strip).inspect}"
+      assert_operator before_ix, :<, steer_ix
+      assert_operator steer_ix, :<, after_ix,
+                      "the answer after the steer starts below it, not above"
+      refute_includes view[before_ix], "after the steer"
+    end
+
+    def test_commands_typed_while_a_turn_runs_still_queue
+      repl = build_repl
+      agent = repl.instance_variable_get(:@agent)
+      steered = []
+      agent.define_singleton_method(:steer) do |text|
+        steered << text
+        true
+      end
+      repl.instance_variable_set(:@busy, true)
+      prompt = repl.instance_variable_get(:@prompt)
+      mailbox = repl.instance_variable_get(:@mailbox)
+
+      prompt.value = "/help"
+      prompt.handle_key(::TUI::Key.new(:enter))
+
+      assert_empty steered, "a command is not something the model can act on"
+      assert_equal "/help", mailbox.pop
+    end
+
     def test_prompt_input_enter_emits_submit
       # Regression: ::TUI::Events::SUBMIT once shadowed by Rubot::TUI's namespace.
       input = TUI::PromptInput.new([], TUI::COMPLETABLE)

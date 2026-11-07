@@ -1274,3 +1274,121 @@ class TestAgentHistoryTrimming < Minitest::Test
     assert_equal "1" * 200, @agent.session.messages[1]["content"]
   end
 end
+
+# Feature: steering. Text typed while a turn is already running is queued and
+# handed to the model between rounds instead of waiting for the turn to end.
+class TestAgentSteering < Minitest::Test
+  # Records the messages of every provider call and answers with a distinct
+  # text per round, so a test can see exactly what the model was sent.
+  class ScriptedProvider
+    attr_reader :rounds
+    attr_accessor :on_round
+
+    def initialize(tool_first: false)
+      @rounds = []
+      @on_round = nil
+      @tool_first = tool_first
+    end
+
+    def chat(messages, tools: nil)
+      @rounds << messages.map { |m| [ m["role"], m["content"] ] }
+      @on_round&.call(@rounds.size)
+
+      if @tool_first && @rounds.size == 1
+        {
+          "content" => "",
+          "tool_calls" => [
+            {
+              "id" => "call_1",
+              "type" => "function",
+              "function" => { "name" => "no_such_tool", "arguments" => "{}" }
+            }
+          ]
+        }
+      else
+        { "content" => "answer #{@rounds.size}" }
+      end
+    end
+
+    def chat_stream(messages, tools: nil, &on_chunk)
+      result = chat(messages, tools: tools)
+      on_chunk&.call(result["content"])
+      result
+    end
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if @tmpdir && File.directory?(@tmpdir)
+  end
+
+  def build_agent(provider)
+    @tmpdir = Dir.mktmpdir
+    workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(workspace)
+    config_path = File.join(@tmpdir, "config.yml")
+    File.write(config_path, {
+      "agents" => { "defaults" => { "workspace" => workspace } },
+      "models" => [ { "name" => "test", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ]
+    }.to_yaml)
+
+    @agent = Rubot::Agent.new(
+      config: Rubot::Config.new(config_path),
+      provider: provider,
+      session_id: "steering",
+      tools: Rubot::Tools::Registry.new
+    )
+  end
+
+  def test_a_steer_typed_while_the_answer_streams_gets_its_own_round
+    provider = ScriptedProvider.new
+    provider.on_round = ->(round) { @agent.steer("focus on the tests") if round == 1 }
+    build_agent(provider)
+
+    steered = []
+    response = @agent.process("do the task", stream: false, on_steer: ->(text) { steered << text })
+
+    assert_equal [ "focus on the tests" ], steered, "the steer is reported when delivered"
+    assert_equal 2, provider.rounds.size, "the steer opens a second provider call"
+    assert_equal [ "user", "focus on the tests" ], provider.rounds[1].last
+    assert_includes response, "answer 1", "the pre-steer answer is kept"
+    assert_includes response, "answer 2", "the steered answer is kept"
+    assert_equal %w[user assistant user assistant],
+                 @agent.session.messages.map { |m| m["role"] },
+                 "the steer is its own user turn in the transcript"
+  end
+
+  def test_a_steer_arriving_during_a_tool_round_is_sent_with_the_next_call
+    provider = ScriptedProvider.new(tool_first: true)
+    build_agent(provider)
+
+    steered = []
+    @agent.process(
+      "do the task",
+      stream: false,
+      on_tool_call: ->(_name, _args) { @agent.steer("check the logs instead") },
+      on_steer: ->(text) { steered << text }
+    )
+
+    assert_equal [ "check the logs instead" ], steered
+    assert_equal 2, provider.rounds.size
+    assert_equal [ "user", "check the logs instead" ], provider.rounds[1].last
+  end
+
+  def test_a_leftover_steer_enters_ahead_of_the_next_message
+    provider = ScriptedProvider.new
+    build_agent(provider)
+    @agent.steer("and keep it short")
+
+    @agent.process("next task", stream: false)
+
+    assert_equal [ [ "user", "and keep it short" ], [ "user", "next task" ] ],
+                 provider.rounds.first.last(2)
+  end
+
+  def test_steer_rejects_blank_text
+    build_agent(ScriptedProvider.new)
+
+    refute @agent.steer("   ")
+    refute @agent.steering_pending?
+  end
+end

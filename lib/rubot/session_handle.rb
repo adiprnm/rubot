@@ -36,6 +36,20 @@ module Rubot
         false
       end
 
+      # Queue a message for the turn already running in the session actor,
+      # without blocking. Like #cancel!, this bypasses the request queue:
+      # the actor only reads requests once the turn has finished. The message
+      # is delivered between rounds by the agent itself.
+      def steer(text)
+        return false unless @stop_port
+        return false if text.to_s.strip.empty?
+
+        @stop_port << [ :steer, text.to_s ]
+        true
+      rescue Ractor::ClosedError
+        false
+      end
+
       # Synchronous request/reply to the session Ractor.
       def call(op, **payload)
         port = Ractor::Port.new
@@ -48,7 +62,7 @@ module Rubot
       end
 
       def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil,
-                  on_assistant_text: nil, on_stopped: nil, stream: true, &on_chunk)
+                  on_assistant_text: nil, on_steer: nil, on_stopped: nil, stream: true, &on_chunk)
         events = Ractor::Port.new
         control = nil
 
@@ -71,6 +85,8 @@ module Rubot
             on_tool_result&.call(event[1], event[2])
           when :progress
             on_progress&.call(event[1], event[2])
+          when :steered
+            on_steer&.call(event[1])
           when :stopped
             on_stopped&.call
           when :confirm

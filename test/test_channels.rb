@@ -170,6 +170,26 @@ module Rubot
       assert_equal 5, results.size
     end
 
+    def test_steer_session_forwards_to_the_running_handle
+      channel = DummyChannel.new(agent: @agent)
+      steered = []
+      handle = Object.new
+      handle.define_singleton_method(:steer) do |text|
+        steered << text
+        true
+      end
+      channel.send(:track_running_session, "steer-session", handle)
+
+      assert channel.steer_session("steer-session", "pakai folder lain")
+      assert_equal [ "pakai folder lain" ], steered
+    end
+
+    def test_steer_session_is_false_when_nothing_runs
+      channel = DummyChannel.new(agent: @agent)
+
+      refute channel.steer_session("steer-session", "pakai folder lain")
+    end
+
     def test_request_agent_returns_per_session_clone
       channel = DummyChannel.new(agent: @agent)
       captured = nil
@@ -794,6 +814,124 @@ module Rubot
 
     def download_attachment(_attachment, session_id)
       @downloads.shift || File.join(attachments_root, sanitize_component(session_id), "shot.png")
+    end
+  end
+
+  # Stands in for a running session handle in steering tests: records the text
+  # the channel hands to the turn already in flight.
+  class SteeringHandle
+    attr_reader :steered
+
+    def initialize
+      @steered = []
+    end
+
+    def steer(text)
+      @steered << text
+      true
+    end
+  end
+
+  # A second message while a turn is running steers that turn (delivered
+  # between rounds) instead of queueing behind it.
+  class TestTelegramSteering < Minitest::Test
+    def setup
+      @tmpdir = Dir.mktmpdir
+      @config = isolated_config(@tmpdir, name: "test_steering")
+      @agent = Rubot::Agent.new(config: @config, session_id: "test_steering",
+                                tools: Rubot::Tools::Registry.new)
+      @tg = StubbedTelegram.new(
+        agent: @agent,
+        channel_config: { "token" => "fake", "typing_indicator" => false }
+      )
+    end
+
+    def teardown
+      FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+    end
+
+    def text_update(text, thread_id: nil)
+      message = {
+        "chat" => { "id" => 42, "type" => "private" },
+        "from" => { "id" => 42, "username" => "tester" },
+        "text" => text
+      }
+      message["message_thread_id"] = thread_id if thread_id
+      { "update_id" => 1, "message" => message }
+    end
+
+    def test_a_message_while_the_session_runs_steers_the_turn
+      handle = SteeringHandle.new
+      @tg.send(:track_running_session, "tg_42", handle)
+
+      @tg.send(:process_update, text_update("pakai folder lain"))
+
+      assert_equal [ "pakai folder lain" ], handle.steered
+      assert_empty @tg.prompts, "a steered message does not start its own turn"
+      assert_includes @tg.sent.last[1], "Diteruskan ke tugas yang sedang berjalan."
+    end
+
+    def test_a_steered_message_in_a_topic_uses_the_topic_session
+      handle = SteeringHandle.new
+      @tg.send(:track_running_session, "tg_42_7", handle)
+
+      @tg.send(:process_update, text_update("pakai folder lain", thread_id: 7))
+
+      assert_equal [ "pakai folder lain" ], handle.steered
+      assert_empty @tg.prompts
+    end
+
+    def test_a_command_while_the_session_runs_is_not_steered
+      handle = SteeringHandle.new
+      @tg.send(:track_running_session, "tg_42", handle)
+
+      @tg.send(:process_update, text_update("/help"))
+
+      assert_empty handle.steered
+      assert_equal [ [ "/help", "tg_42" ] ], @tg.prompts
+    end
+
+    def test_a_reply_quote_rides_along_with_the_steer
+      handle = SteeringHandle.new
+      @tg.send(:track_running_session, "tg_42", handle)
+
+      update = text_update("yang ini maksudnya?")
+      update["message"]["reply_to_message"] = {
+        "message_id" => 9,
+        "from" => { "id" => 7, "username" => "alice" },
+        "text" => "harga naik 12% bulan ini"
+      }
+      @tg.send(:process_update, update)
+
+      steer = handle.steered.first
+      assert steer.start_with?("yang ini maksudnya?"), steer
+      assert_includes steer, "harga naik 12% bulan ini"
+    end
+
+    def test_a_media_message_while_the_session_runs_queues_its_own_turn
+      handle = SteeringHandle.new
+      @tg.send(:track_running_session, "tg_42", handle)
+      image = File.join(@config.workspace, "attachments", "tg_42", "shot.png")
+      FileUtils.mkdir_p(File.dirname(image))
+      File.binwrite(image, png_bytes(1200, 800))
+      @tg.downloads << image
+
+      update = text_update("")
+      update["message"].delete("text")
+      update["message"]["caption"] = "lihat ini"
+      update["message"]["photo"] = [
+        { "file_id" => "small", "file_unique_id" => "u1", "file_size" => 1_000 },
+        { "file_id" => "large", "file_unique_id" => "u2", "file_size" => 90_000 }
+      ]
+      @tg.send(:process_update, update)
+
+      assert_empty handle.steered, "media is not steered"
+      assert_equal 1, @tg.prompts.size, "it queues as its own turn instead"
+    end
+
+    def png_bytes(width, height)
+      ihdr = [ width, height, 8, 2, 0, 0, 0 ].pack("N2C5")
+      "\x89PNG\r\n\x1A\n".b + [ 13 ].pack("N") + "IHDR" + ihdr + [ 0 ].pack("N")
     end
   end
 

@@ -25,6 +25,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 📡 **Multi-channel** — REPL and Telegram, with a pluggable channel architecture
 - 📎 **Inbound attachments** — screenshots and files sent to Telegram are saved to the workspace, with dimensions and size added to the prompt
 - 🔈 **Progress narration** — the model explains what it is doing between tool calls ("Let me check the structure first."), sent as normal chat messages
+- 🧭 **Steering** — type while a turn is running (TUI, or a plain message in Telegram) and it reaches the model between rounds, without stopping the turn
 - ⏹️ **`/stop`** — stops the running turn instantly, mid-answer or mid-command: an open provider stream is closed, not drained, and the shell command it started is killed
 - 🗜️ **Context compaction** — `/compact` summarizes older turns, and auto-compaction kicks in at a configurable share of the context window
 - 🪶 **Lean requests** — past reasoning is never re-sent, old tool output is shortened, and an optional token budget bounds the history block
@@ -189,7 +190,7 @@ directly.
 
 | Key | Action |
 |-----|--------|
-| `Enter` | Send the prompt, or take the highlighted `/command` |
+| `Enter` | Send the prompt, take the highlighted `/command`, or steer the turn that is running |
 | `Shift+Enter`, `Alt+Enter` | Insert a newline |
 | `Up` / `Down` | Move between lines once the input has more than one, otherwise recall history; while the command list is open, pick an entry |
 | `Tab` | Complete a `/command` |
@@ -204,6 +205,16 @@ box, with each command's description on the right. Keep typing to filter it,
 use `Up`/`Down` to move the highlight, and press `Enter` to put the highlighted
 command in the prompt (a fully typed command runs on `Enter` instead). `Esc`
 dismisses the list, and a space closes it once you start typing an argument.
+
+While a turn is running, `Enter` steers it instead of queueing behind it: the
+line is echoed on its own row, set apart by a blank row above and below, and
+handed to the model after the tool calls of the round in flight, before its
+next request. That is how a direction is corrected
+mid-turn — "use the other directory", "skip the tests" — without cancelling
+the work already done. Each steer becomes its own user turn, so it stays in
+the session and is replayed on `/resume`. Commands typed while a turn is
+running still queue and run once it finishes; `Esc` (or `/stop`) stops the
+turn as before.
 
 The prompt grows with its content: hard newlines and long lines that wrap both
 add rows, up to six. `Shift+Enter` needs a terminal that reports the key
@@ -532,6 +543,12 @@ Telegram commands:
 | `/usage` | Show OpenCode Go subscription usage |
 | `/stop` | Stop the running task instantly, mid-answer or mid-command, and any command it started |
 | `/compact` | Summarize older messages to free context |
+
+While a turn is still running, a plain message steers it instead of waiting in
+the queue: the bot acknowledges with `↳ Diteruskan ke tugas yang sedang
+berjalan.` and the text reaches the model after the current round's tool calls,
+before its next request. Commands still work mid-turn (`/stop` stops it), and a
+message carrying an attachment starts its own turn instead of steering.
 
 ### Providers
 
