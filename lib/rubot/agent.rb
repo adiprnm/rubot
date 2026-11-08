@@ -230,8 +230,12 @@ module Rubot
     #                     stopped it, before the stop notice is appended.
     #   on_steer:         Called with a message the user queued while the turn
     #                     was running, at the moment it is handed to the model.
+    #   on_reasoning:     Called with each fragment of the model's thinking as
+    #                     it streams in, before the answer starts. Channels use
+    #                     it to show a live "thinking" block; nothing is called
+    #                     for a model that does not stream its reasoning.
     def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil,
-                on_assistant_text: nil, on_steer: nil, on_stopped: nil, on_usage: nil,
+                on_assistant_text: nil, on_reasoning: nil, on_steer: nil, on_stopped: nil, on_usage: nil,
                 stream: true, &on_chunk)
       # Fire any due cron jobs and collect their results
       cron_results = fire_due_cron_jobs
@@ -323,7 +327,10 @@ module Rubot
           if block_given? && stream
             live_chars = 0
             live_emitted_at = 0.0
-            @provider.chat_stream(messages, tools: tool_definitions) do |chunk, tool_data|
+            @provider.chat_stream(messages, tools: tool_definitions) do |chunk, tool_data, reasoning|
+              # Thinking arrives before (and between) answer chunks; the answer
+              # itself is never delayed by it.
+              on_reasoning&.call(reasoning) if reasoning && !reasoning.empty?
               response += chunk if chunk
               if chunk && !chunk.empty?
                 # The answer is arriving, so the output side of the cost and

@@ -209,6 +209,10 @@ module Rubot
 
                     if delta["reasoning_content"]
                       reasoning_content += delta["reasoning_content"]
+                      # The caller renders the model's thinking as it arrives,
+                      # so it is handed out on its own channel instead of
+                      # being folded into the answer.
+                      yield nil, nil, delta["reasoning_content"] if on_chunk
                     end
 
                     if delta["tool_calls"]

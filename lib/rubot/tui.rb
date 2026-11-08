@@ -125,7 +125,8 @@ module Rubot
     }.freeze
 
     SPIN = %w[⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏].freeze
-    MARK = { ok: "✓", warn: "!", err: "✗", info: "·", tool: "⚒", skill: "✦", cron: "⏰", note: "◆" }.freeze
+    MARK = { ok: "✓", warn: "!", err: "✗", info: "·", tool: "⚒", skill: "✦", cron: "⏰", note: "◆",
+             think: "◌" }.freeze
     TURN_MARK = "✻"
 
     # Hanging indent for rows after the first of an echoed prompt or steer: the
@@ -137,6 +138,12 @@ module Rubot
     # single quiet row; the clock is for the call that makes the reader wonder
     # whether it hung.
     SLOW_TOOL_SECONDS = 3.0
+
+    # A thinking block only earns a line in the transcript when the model
+    # thought for longer than this. Under the threshold the pause was not
+    # worth recording, so the block is dropped without a trace instead of
+    # collapsing to "Thought for 1s".
+    THINKING_SECONDS = 3.0
 
     # Skills are loaded by reading their SKILL.md through the file tool (see
     # SkillRegistry#to_system_prompt). The TUI spots that path so a skill load
@@ -158,6 +165,10 @@ module Rubot
       @stopping = false
       @live_entry = nil
       @live_text = +""
+      @thinking_entry = nil
+      @thinking_started_at = nil
+      @thinking_shown = nil
+      @thinking_blank = false
       @banner_count = 0
       @turn_started_at = nil
       @turn_total_seconds = 0.0
@@ -433,6 +444,7 @@ module Rubot
 
       @app.every(0.1) do
         pump
+        refresh_thinking
         refresh_slow_tools
         @working.tick(@busy ? (@stopping ? :cancel : :work) : nil)
       end
@@ -588,7 +600,9 @@ module Rubot
       when :clear_log
         clear_log_keep_banner
       when :replay_transcript then replay_transcript(event[1])
-      when :error_text then @log.add_entry([ [ MARK[:err] + " ", :error ], [ event[1].to_s, :error ] ])
+      when :error_text
+        close_thinking
+        @log.add_entry([ [ MARK[:err] + " ", :error ], [ event[1].to_s, :error ] ])
       when :status_right then @status.right = event[1]
       when :status_badge then @status.badge = event[1]
       when :status_left then @status.left = event[1]
@@ -604,9 +618,25 @@ module Rubot
         @stopping = false
         @live_text = +""
         @live_entry = nil
-      when :chunk then append_live(event[1])
+        # A block from the previous turn cannot survive into this one: it was
+        # already closed by :stream_end, this only clears the state.
+        @thinking_entry = nil
+        @thinking_started_at = nil
+        @thinking_shown = nil
+        @thinking_blank = false
+      when :thinking then append_thinking(event[1])
+      when :chunk
+        # The answer has started, so the model is done thinking. The block
+        # collapses here rather than at the end of the turn: a long answer
+        # must not keep a clock running over a thought that already stopped.
+        # An empty chunk is not an answer: gateways open the stream with one
+        # (`content: ""`) *before* the reasoning starts, and closing on it
+        # would fold the block away before a single thought was shown.
+        close_thinking unless event[1].to_s.empty?
+        append_live(event[1])
       # Clearance also resets any tool-line bookkeeping.
       when :stream_end
+        close_thinking
         # The turn is over; the next /context asks the agent for the settled
         # figures instead of rendering this one's last snapshot.
         @live_report = nil
@@ -627,13 +657,18 @@ module Rubot
           @log.add_entry([ [ "", nil ] ]) unless @log.last_blank?
           @working.notice = "Operation canceled by user"
         else
-          @log.add_entry([ [ "", nil ] ])
+          # The separator before the footer, unless the row above already is
+          # one: a kept thinking block brings its own blank, and two in a row
+          # would push the footer away from what it summarises.
+          @log.add_entry([ [ "", nil ] ]) unless @log.last_blank?
           add_turn_summary
         end
       when :reset_turn_totals then reset_turn_totals
       when :assistant_text
         @log.add_entry([ [ MARK[:note] + " ", :muted ] ] + Markdown.to_segments(event[1]), keep_leading: true, indent: 2)
       when :tool_call
+        # Thinking is over once the model has decided what to run.
+        close_thinking
         # The answer never continues inside the entry that preceded the
         # tool. A phantom continuation live entry (start of the turn's next
         # call) is dropped outright rather than leaving stray blanks, so
@@ -747,6 +782,7 @@ module Rubot
     # the separator there. Continuation rows hang by the marker's width, so a
     # steer that wraps or spans lines stays under its own text.
     def add_steer_echo(line)
+      close_thinking
       close_live_entry
       @log.add_entry([ [ "", nil ] ]) unless @log.last_blank?
       @log.add_entry([ [ "↳ ", :accent ], [ line, :text ], [ "  steered", :dim ] ],
@@ -763,14 +799,110 @@ module Rubot
     end
 
     def append_live(chunk)
+      text = chunk.to_s
+      # An empty fragment carries no answer: the row it would create stays a
+      # blank line until real text arrives.
+      return if text.empty?
+
       if @live_entry.nil?
         # Continuation after tool output starts a fresh spaced answer.
         @log.add_entry([ [ "", nil ] ]) unless @log.last_blank?
         start_live_entry
       end
 
-      @live_text << chunk.to_s
+      @live_text << text
       @log.set_entry(@live_entry, Markdown.to_segments(@live_text), keep_leading: true, indent: 2)
+    end
+
+    # The model's thinking, while it is still thinking. Only the state of the
+    # wait is ever shown — never the thought itself: the transcript records
+    # that the model was thinking, not what it was thinking about.
+    #
+    # The block is created by the first reasoning fragment that arrives, so a
+    # turn that never thinks leaves no empty row behind, and later fragments
+    # only feed the clock, not a body.
+    def append_thinking(_delta)
+      if @thinking_entry.nil?
+        # A thought that arrives after the answer started belongs to a new
+        # round: the fragment above is finished, so the answer continues below
+        # the block instead of being split in half by it.
+        close_live_entry if @live_entry
+        @thinking_started_at = monotonic_now
+        @thinking_shown = thinking_label
+        # Remembered so a block that ends up dropped can take its own blank
+        # row with it. Without this bookkeeping the row had to be probed for
+        # with last_blank? at close time, which was both wrong (a blank that
+        # was already there looks the same) and late (the tool row opened in
+        # between makes the block no longer last).
+        @thinking_blank = !@log.last_blank?
+        @log.add_entry([ [ "", nil ] ]) if @thinking_blank
+        @thinking_entry = @log.add_entry(thinking_segments(@thinking_shown),
+                                        keep_leading: true, indent: 2)
+      else
+        # Only the clock is kept current; the fragment itself is discarded.
+        refresh_thinking
+      end
+    end
+
+    # Finish the thinking block. A wait worth noticing collapses to one line,
+    # "Thought for 12s"; a quick one is dropped outright, blank row included,
+    # so the transcript only records pauses the reader could feel.
+    def close_thinking
+      return if @thinking_entry.nil?
+
+      index = @thinking_entry
+      elapsed = monotonic_now - @thinking_started_at
+      own_blank = @thinking_blank
+      @thinking_entry = nil
+      @thinking_shown = nil
+      @thinking_blank = false
+      @thinking_started_at = nil
+
+      if elapsed > THINKING_SECONDS
+        @log.set_entry(index, [ [ MARK[:think] + " ", :muted ],
+                                [ "Thought for #{format_duration(elapsed)}", :dim ] ],
+                       keep_leading: true, indent: 2)
+        # A kept block is set off by a blank row on both sides: its own remark
+        # on the turn, not a line of whatever it sits between. The block is
+        # still the last entry here — every caller closes it before opening the
+        # row that follows — so this blank lands directly beneath it.
+        @log.add_entry([ [ "", nil ] ])
+      else
+        # A thought too short to mention leaves no row at all, and no blank
+        # either: the spacer above it goes back with it.
+        @log.remove_entry(index)
+        @log.remove_entry(index - 1) if own_blank && blank_entry?(@log.entry_at(index - 1))
+      end
+    end
+
+    # The live block: a header that grows an elapsed counter once the wait is
+    # long enough to notice. Nothing of the thought itself is drawn.
+    def thinking_segments(elapsed = nil)
+      header = [ [ MARK[:think] + " ", :accent ], [ "Thinking…", :muted ] ]
+      header << [ " · #{format_duration(elapsed)}", :dim ] if elapsed
+      header
+    end
+
+    # A block still open past the threshold shows how long it has been
+    # thinking. Rewritten only when the label changes, once a second rather
+    # than on every tick.
+    def refresh_thinking
+      return if @thinking_entry.nil? || @thinking_started_at.nil?
+
+      label = thinking_label
+      return if @thinking_shown == label
+
+      @thinking_shown = label
+      @log.set_entry(@thinking_entry, thinking_segments(label), keep_leading: true, indent: 2)
+    end
+
+    # The elapsed label for the live block, or nil while the wait is still
+    # short enough that a clock would only be noise.
+    def thinking_label
+      return nil if @thinking_started_at.nil?
+
+      elapsed = monotonic_now - @thinking_started_at
+      elapsed > THINKING_SECONDS ? format_duration(elapsed) : nil
     end
 
     # Footer after a turn: how long the model took, plus the running total
@@ -829,6 +961,7 @@ module Rubot
                       @events << [ :tool_done, name, file_diff(ui_diff), result ]
                     end,
                     on_stopped: -> { stopped = true },
+                    on_reasoning: proc { |delta| @events << [ :thinking, delta.to_s ] },
                     on_usage: ->(report) { live_usage(report) },
                     stream: @stream) do |chunk|
         @events << [ :chunk, chunk.to_s ]
@@ -963,6 +1096,11 @@ module Rubot
     def clear_log_keep_banner
       @log.clear(keep: @banner_count)
       @live_entry = nil
+      # The live rows point at indexes into the log that no longer exist.
+      @thinking_entry = nil
+      @thinking_started_at = nil
+      @thinking_shown = nil
+      @thinking_blank = false
       @tool_entries.clear
       @working.notice = nil
       reset_turn_totals

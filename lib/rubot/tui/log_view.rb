@@ -93,6 +93,13 @@ module Rubot
         @entries[-1].all? { |(text, _style)| text.empty? }
       end
 
+      # The segments of one entry, nil when the index is out of range.
+      def entry_at(index)
+        return nil if index.nil? || index.negative?
+
+        @entries[index]
+      end
+
       def remove_last
         return if @entries.empty?
 
@@ -103,6 +110,24 @@ module Rubot
         @tails.pop
         @nowraps.pop
         @entry_lines.pop
+        refresh_lines
+        follow_bottom if @follow
+        self
+      end
+
+      # Drop an entry that is not the last one, for a row the view opened and
+      # now has to take back after output landed below it. Removing the last
+      # entry is a pop (see #remove_last); this is the general form.
+      def remove_entry(index)
+        return unless @entries[index]
+
+        @entries.delete_at(index)
+        @keep_leading.delete_at(index)
+        @indents.delete_at(index)
+        @hangs.delete_at(index)
+        @tails.delete_at(index)
+        @nowraps.delete_at(index)
+        @entry_lines.delete_at(index)
         refresh_lines
         follow_bottom if @follow
         self

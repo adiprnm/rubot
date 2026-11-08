@@ -589,6 +589,50 @@ class TestProviders < Minitest::Test
     assert_nil provider.send(:parse_retry_after, mock_resp)
   end
 
+  # Reasoning is streamed on its own channel: the answer must never be mixed
+  # with the model's thinking, and the thinking must not be lost either.
+  def test_a_streamed_answer_is_kept_apart_from_the_reasoning
+    require "socket"
+
+    server = TCPServer.new("127.0.0.1", 0)
+    port = server.addr[1]
+    config = make_config("api_base" => "http://127.0.0.1:#{port}/v1")
+    provider = Rubot::Providers::OpenAI.new(config.provider_settings)
+
+    server_thread = Thread.new do
+      client = server.accept
+      begin
+        while (line = client.gets)
+          break if line == "\r\n"
+        end
+        client.write("HTTP/1.1 200 OK\r\n")
+        client.write("Content-Type: text/event-stream\r\n")
+        client.write("\r\n")
+        client.write("data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"let me think\"}}]}\n\n")
+        client.write("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"}}]}\n\n")
+        client.write("data: [DONE]\n\n")
+        client.flush
+      ensure
+        client.close
+      end
+    end
+
+    chunks = []
+    thoughts = []
+    result = provider.chat_stream([ { "role" => "user", "content" => "hi" } ]) do |chunk, _tool_data, reasoning|
+      chunks << chunk if chunk
+      thoughts << reasoning if reasoning
+    end
+
+    assert_equal [ "hello" ], chunks, "only the answer reaches the answer channel"
+    assert_equal [ "let me think" ], thoughts, "the thinking reaches its own channel"
+    assert_equal "hello", result["content"]
+    assert_equal "let me think", result["reasoning_content"]
+  ensure
+    server_thread&.kill
+    server&.close
+  end
+
   # A blocked provider read must not be waited out: closing the session from
   # the cancellation token is what makes esc instant while the model is still
   # thinking (before the first token) or in the middle of an answer.

@@ -1912,3 +1912,68 @@ class TestAgentAutoMode < Minitest::Test
     assert reloaded.auto_approve?
   end
 end
+
+# Reasoning is streamed to the channel before the answer, on a callback of its
+# own: the TUI draws it as a live thinking block, and the answer must not be
+# polluted with it.
+class TestAgentReasoning < Minitest::Test
+  class ThinkingProvider
+    def chat(_messages, tools: nil)
+      { "content" => "answer", "reasoning_content" => "let me think" }
+    end
+
+    def chat_stream(_messages, tools: nil)
+      yield nil, nil, "let me "
+      yield nil, nil, "think"
+      yield "answer", nil
+      { "content" => "answer", "reasoning_content" => "let me think" }
+    end
+  end
+
+  # A model that thinks but never streams it (or does not think at all) must
+  # not make the channel invent fragments.
+  class SilentProvider
+    def chat(_messages, tools: nil)
+      { "content" => "answer" }
+    end
+
+    def chat_stream(_messages, tools: nil)
+      yield "answer", nil
+      { "content" => "answer" }
+    end
+  end
+
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @config = isolated_config(@tmpdir, name: "reasoning")
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+  end
+
+  def build_agent(provider)
+    Rubot::Agent.new(config: @config, provider: provider, session_id: "reasoning")
+  end
+
+  def test_reasoning_fragments_reach_the_channel_apart_from_the_answer
+    thoughts = []
+    chunks = []
+
+    response = build_agent(ThinkingProvider.new).process("go", on_reasoning: ->(text) { thoughts << text }) do |chunk|
+      chunks << chunk
+    end
+
+    assert_equal [ "let me ", "think" ], thoughts
+    assert_equal [ "answer" ], chunks
+    assert_equal "answer", response
+  end
+
+  def test_a_model_without_reasoning_calls_nothing
+    thoughts = []
+
+    build_agent(SilentProvider.new).process("go", on_reasoning: ->(text) { thoughts << text })
+
+    assert_empty thoughts
+  end
+end

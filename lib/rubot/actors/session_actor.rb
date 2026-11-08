@@ -138,6 +138,7 @@ module Rubot
 
         callbacks = {
           on_assistant_text: ->(text) { events << [ :assistant_text, text ] },
+          on_reasoning: ->(text) { events << [ :thinking, text ] },
           on_tool_call: ->(name, args, snapshot) { events << [ :tool_started, name, args, snapshot ] },
           on_tool_result: ->(name, result, ui_diff) { events << [ :tool_finished, name, result, ui_diff ] },
           on_progress: ->(round, tool_count) { events << [ :progress, round, tool_count ] },
