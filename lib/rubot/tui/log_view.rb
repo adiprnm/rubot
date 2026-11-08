@@ -299,6 +299,24 @@ module Rubot
         self
       end
 
+      # True while the newest row is on screen. The floating jump button
+      # hangs on this: it only exists once the user has scrolled away from
+      # the bottom, and disappears the moment the log follows again.
+      def bottom_visible?
+        return true unless @rect
+
+        @scroll_y >= [ @lines.size - @rect.h, 0 ].max
+      end
+
+      # Follow the newest output again, from wherever the view was left.
+      # The rows under the highlight move, so the selection goes with them.
+      def scroll_to_bottom
+        @scroll_y = @rect ? [ @lines.size - @rect.h, 0 ].max : 0
+        @follow = true
+        clear_selection
+        self
+      end
+
       def measure(_max_w, _max_h)
         # Only matters for auto sizing; the REPL stacks it with flex(1).
         [ 10, 3 ]

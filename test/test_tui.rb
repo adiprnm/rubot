@@ -2801,6 +2801,90 @@ module Rubot
       refute log.scrollbar_dragging?, "the release let go of the bar"
     end
 
+    # The floating pill: out of the way while the newest row is on screen,
+    # drawn in the log's last row once the user scrolls away — centred on the
+    # screen, right above the working line and the prompt.
+    def test_jump_button_appears_only_when_the_newest_row_is_off_screen
+      log = TUI::LogView.new
+      pane = TUI::LogPane.new(log)
+      pane.layout(::TUI::Rect.new(0, 0, 40, 8))
+      40.times { |i| log.add_entry([ [ "row #{i}", :text ] ]) }
+      canvas = ::TUI::Canvas.new(40, 8)
+
+      pane.render(canvas)
+      refute pane.button.visible?, "the bottom is on screen: nothing to jump to"
+
+      log.scroll_by(-10)
+      pane.render(canvas)
+
+      assert pane.button.visible?
+      rect = pane.button.rect
+      assert_equal pane.rect.bottom, rect.bottom, "it floats in the log's last row"
+      left = rect.x - pane.rect.x
+      right = pane.rect.x + pane.rect.w - 1 - rect.right
+      assert_operator (left - right).abs, :<=, 1, "it sits in the middle of the pane"
+      assert_includes plain(canvas.lines)[rect.y], "jump to bottom"
+      assert_equal log.rect.h, pane.rect.h, "the pill takes no row of its own"
+    end
+
+    # The gutter and the log's inset are on the left only, so a pill centred
+    # inside the pane would sit right of the middle of the terminal: it is
+    # centred on the screen instead.
+    def test_jump_button_is_centred_on_the_screen_not_the_pane
+      repl = build_repl
+      log = repl.instance_variable_get(:@log)
+      jump = repl.instance_variable_get(:@jump)
+      pane = repl.instance_variable_get(:@pane)
+      app = repl.instance_variable_get(:@app)
+      80.times { |i| log.add_entry([ [ "row #{i}", :text ] ]) }
+      canvas = app.render_frame
+      log.scroll_by(-10)
+      canvas = app.render_frame
+
+      assert jump.visible?
+      assert_operator pane.rect.x, :>, 0, "the gutter pushes the pane right"
+      left = jump.rect.x
+      right = canvas.w - 1 - jump.rect.right
+      assert_operator (left - right).abs, :<=, 1,
+                      "the pill is centred on the terminal: #{left} left, #{right} right"
+    end
+
+    # A log that fits has nowhere to jump to, and the pill must not leave an
+    # invisible click target over the last row either.
+    def test_jump_button_stays_out_of_a_log_that_fits
+      log = TUI::LogView.new
+      pane = TUI::LogPane.new(log)
+      pane.layout(::TUI::Rect.new(0, 0, 40, 8))
+      log.add_entry([ [ "only row", :text ] ])
+      pane.render(::TUI::Canvas.new(40, 8))
+
+      refute pane.button.visible?
+      refute pane.button.hit?(pane.rect.right - 1, pane.rect.bottom)
+    end
+
+    # A click on the pill jumps back to the newest row instead of starting a
+    # selection, and the release after it must not fire a copy.
+    def test_clicking_the_jump_button_returns_to_the_bottom
+      repl = build_repl
+      log = repl.instance_variable_get(:@log)
+      jump = repl.instance_variable_get(:@jump)
+      app = repl.instance_variable_get(:@app)
+      60.times { |i| log.add_entry([ [ "row #{i}", :text ] ]) }
+      app.render_frame
+      log.scroll_by(-10)
+      app.render_frame
+      refute log.bottom_visible?
+
+      assert jump.visible?, "the pill is up while the newest row is off screen"
+      x = jump.rect.x + 1
+      y = jump.rect.y
+      app.send(:dispatch, ::TUI::Key.new(:mouse_press).at(x, y, button: 0))
+      app.send(:dispatch, ::TUI::Key.new(:mouse_release).at(x, y, button: 0))
+
+      assert log.bottom_visible?, "the pill took the log back to the bottom"
+      refute log.selection?, "the pill is not a selection"
+    end
+
     # A terminal keeps its selection after the mouse is released; so does
     # the log. The copy still happens on release.
     def test_release_keeps_the_highlight_and_copies

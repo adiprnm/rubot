@@ -9,6 +9,8 @@ require_relative "opencode_usage"
 require_relative "clipboard_image"
 require_relative "tui/compat"
 require_relative "tui/log_view"
+require_relative "tui/jump_bottom"
+require_relative "tui/log_pane"
 require_relative "tui/markdown"
 require_relative "tui/diff"
 require_relative "tui/transcript"
@@ -299,6 +301,10 @@ module Rubot
     def build_ui
       @tui = true
       @log = Rubot::TUI::LogView.new
+      # The log plus the "jump to bottom" pill that floats over its last row
+      # while the newest row is off screen. It takes no row of its own.
+      @pane = Rubot::TUI::LogPane.new(@log)
+      @jump = @pane.button
       @status = Rubot::TUI::StatusLine.new
       @workspace_line = Rubot::TUI::WorkspaceLine.new
       @workspace_line.workspace = Dir.pwd
@@ -336,7 +342,7 @@ module Rubot
       # The window gutter plus the log's own one-column inset put every
       # conversation row exactly two characters in.
       stack = ::TUI::Layout::Stack.new(direction: :vertical)
-      stack.add(::TUI::Layout::Padding.new(@log, left: 1), size: ::TUI.flex(1))
+      stack.add(::TUI::Layout::Padding.new(@pane, left: 1), size: ::TUI.flex(1))
       stack.add(@working, size: ::TUI.fixed(3))
       stack.add(@menu, size: ::TUI.auto)         # slash-command palette
       stack.add(@prompt_box, size: ::TUI.auto)   # grows with multiline input
@@ -364,7 +370,11 @@ module Rubot
         # A fresh press always clears a grab, so a release the terminal
         # never delivered cannot leave the log stuck to the cursor.
         @log.end_scrollbar_drag
-        if @log.scrollbar_at?(key.mouse_x, key.mouse_y)
+        # The pill floats over the log's last row, so it is hit-tested before
+        # the log: a click on it jumps back to the newest row.
+        if @jump.hit?(key.mouse_x, key.mouse_y)
+          @log.scroll_to_bottom
+        elsif @log.scrollbar_at?(key.mouse_x, key.mouse_y)
           @log.begin_scrollbar_drag(key.mouse_x, key.mouse_y)
         else
           @log.begin_selection(key.mouse_x, key.mouse_y)
