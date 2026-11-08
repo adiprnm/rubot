@@ -210,7 +210,10 @@ module TUI
 
       def read_escape
         buf = +ESC
-        deadline = 0.03
+        # 50 ms is the usual budget for telling a lone Escape apart from the
+        # start of a sequence: below it a real Escape still feels instant,
+        # and a report that arrives in pieces has time to start.
+        deadline = 0.05
         # An SGR mouse report is at most "ESC [ < " + button + three digits
         # each for column and row + modifiers + final byte, so 24 bytes is
         # enough to never truncate one (a smaller cap drops the final byte on
@@ -220,7 +223,14 @@ module TUI
           break if c.nil? || c.empty?
           buf << c
           break if buf.bytesize > 2 && c =~ /[A-Za-z~]/
-          deadline = 0.005
+          # 5 ms is plenty between the bytes of a report a local terminal
+          # writes in one go. A report can also arrive in pieces -- a
+          # multiplexer, an ssh link, an app that is busy painting -- and
+          # giving up on it hands the rest of the bytes to the next read:
+          # a wheel notch then surfaces as a bare Escape (which apps bind to
+          # cancel) followed by garbage. While the bytes so far are still the
+          # start of a CSI sequence, keep waiting.
+          deadline = incomplete_csi?(buf) ? 0.1 : 0.005
         end
         return Key.new(:escape) if buf.bytesize == 1
         return read_paste if buf == PASTE_START
@@ -232,6 +242,17 @@ module TUI
         return mouse_key(Regexp.last_match) if mouse
 
         Key.new(SEQUENCES[buf] || :unknown)
+      end
+
+      # Bytes read so far are the beginning of a control sequence (an SGR
+      # mouse report, a modified key) whose final byte has not arrived yet.
+      # A lone Escape, or bytes that can no longer become a sequence, do not
+      # match: those end the read straight away, so the Escape key stays
+      # responsive.
+      def incomplete_csi?(buf)
+        return false if buf.bytesize < 2
+
+        buf.match?(/\A\e\[[<0-9;:?>=]*\z/)
       end
 
       # Bracketed paste: ESC [ 200 ~ payload ESC [ 201 ~. The payload

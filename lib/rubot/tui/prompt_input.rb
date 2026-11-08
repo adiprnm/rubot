@@ -203,6 +203,12 @@ module Rubot
 
           close_menu
           true
+        when :page_up, :page_down
+          # The box stops growing at MultiLine::MAX_ROWS rows, so a draft
+          # taller than that is paged by the caret. Anything shorter leaves
+          # the key to the log: /help promises pgup/pgdn scrolls the
+          # conversation.
+          draft_overflows? ? super : false
         when :tab
           file_menu? ? pick_mention : complete
           true
@@ -358,6 +364,12 @@ module Rubot
 
       def multiline?
         buffer.lines.size > 1
+      end
+
+      # The prompt shows at most @max_rows rows, so a longer draft is taller
+      # than the box and needs its own paging.
+      def draft_overflows?
+        buffer.lines.size > @max_rows
       end
 
       def history_prev

@@ -2524,6 +2524,71 @@ module Rubot
       assert_equal 4, press.mouse_y
     end
 
+    # A report can arrive in pieces -- a multiplexer, an ssh link, an app
+    # that is busy painting. The reader used to give up 30 ms after the ESC
+    # and hand the rest of the bytes back as keys, so a wheel notch surfaced
+    # as a bare Escape: the running turn was cancelled instead of the log
+    # scrolling.
+    def test_fragmented_mouse_report_is_not_read_as_escape
+      require "pty"
+      reader, writer = PTY.open
+      previous = $stdin
+      $stdin = reader
+
+      writer.write("\e")
+      sleep 0.04
+      writer.write("[<64;10;10M")
+
+      assert_equal :wheel_up, ::TUI::Term.read_key(0.5)&.name
+    ensure
+      $stdin = previous
+      reader&.close
+      writer&.close
+    end
+
+    # Wheel and page keys both move the conversation. The prompt used to eat
+    # page_up/page_down to move its own caret, so the log never moved however
+    # the terminal delivered the key.
+    def test_wheel_and_page_keys_scroll_the_conversation
+      repl = build_repl
+      log = repl.instance_variable_get(:@log)
+      app = repl.instance_variable_get(:@app)
+      prompt = repl.instance_variable_get(:@prompt)
+      80.times { |i| log.add_entry([ [ "row #{i}", :text ] ]) }
+      app.render_frame
+
+      bottom = log.instance_variable_get(:@scroll_y)
+      app.send(:dispatch, ::TUI::Key.new(:wheel_up))
+      assert_equal bottom - 3, log.instance_variable_get(:@scroll_y), "one wheel notch"
+
+      app.send(:dispatch, ::TUI::Key.new(:page_up))
+      assert_equal bottom - 13, log.instance_variable_get(:@scroll_y), "page_up"
+
+      app.send(:dispatch, ::TUI::Key.new(:page_down))
+      assert_equal bottom - 3, log.instance_variable_get(:@scroll_y), "page_down"
+
+      assert_empty prompt.value, "scrolling must not type into the prompt"
+    end
+
+    # A draft taller than the box is the one case where the keys belong to
+    # the prompt: the caret moves through the text instead of the log.
+    def test_page_keys_page_a_draft_taller_than_the_prompt_box
+      repl = build_repl
+      log = repl.instance_variable_get(:@log)
+      app = repl.instance_variable_get(:@app)
+      prompt = repl.instance_variable_get(:@prompt)
+      80.times { |i| log.add_entry([ [ "row #{i}", :text ] ]) }
+      prompt.value = (1..12).map { |i| "line #{i}" }.join("\n")
+      app.render_frame
+
+      before = log.instance_variable_get(:@scroll_y)
+      row = prompt.buffer.row
+      app.send(:dispatch, ::TUI::Key.new(:page_up))
+
+      assert_equal before, log.instance_variable_get(:@scroll_y), "the log stays put"
+      assert_operator prompt.buffer.row, :<, row, "the caret moved up the draft"
+    end
+
     def test_selection_flow_highlights_and_copies
       view = TUI::LogView.new
       view.layout(::TUI::Rect.new(0, 0, 40, 10))
