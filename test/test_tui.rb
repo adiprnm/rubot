@@ -714,6 +714,30 @@ module Rubot
       refute_equal "", view[steer_ix - 2].strip, "no double blank above"
     end
 
+    # A steer that spans lines or wraps keeps its later rows under the text of
+    # the first one: the "↳ " marker opens the entry, and every row after it
+    # hangs by the marker's width, the same way a prompt echo does.
+    def test_steer_echo_continuation_rows_hang_under_the_marker
+      repl = build_repl
+      repl.send(:add_steer_echo,
+                "first line of the steer\n" + "second line that runs long enough to soft-wrap at any sane width " * 2)
+
+      log = repl.instance_variable_get(:@log)
+      log.layout(::TUI::Rect.new(0, 0, 60, 24))
+      rows = log.instance_variable_get(:@lines).map do |line|
+        line.map { |(text, _style)| text }.join
+      end
+      start = rows.index { |row| row.start_with?("\u21b3 ") }
+      assert start, "the steer echo renders: #{rows.inspect}"
+      rows = rows.drop(start).take_while { |row| !row.empty? }
+
+      assert_equal "\u21b3 first line of the steer", rows[0], "the marker opens the first row"
+      assert_operator rows.size, :>, 2, "the second line must soft-wrap: #{rows.inspect}"
+      rows.drop(1).each do |row|
+        assert_equal "  ", row[0, 2], "every later row hangs by two cells: #{row.inspect}"
+      end
+    end
+
     def test_a_steer_splits_the_streaming_answer_around_it
       repl = build_repl
       agent = repl.instance_variable_get(:@agent)

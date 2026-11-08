@@ -127,6 +127,11 @@ module Rubot
     MARK = { ok: "✓", warn: "!", err: "✗", info: "·", tool: "⚒", skill: "✦", cron: "⏰", note: "◆" }.freeze
     TURN_MARK = "✻"
 
+    # Hanging indent for rows after the first of an echoed prompt or steer: the
+    # "❯ " and "↳ " markers are two cells wide, so continuation rows (a soft
+    # wrap or a typed newline) start where the text of the first row does.
+    ECHO_HANG = 2
+
     # Skills are loaded by reading their SKILL.md through the file tool (see
     # SkillRegistry#to_system_prompt). The TUI spots that path so a skill load
     # gets its own transcript row instead of hiding inside a file_ops row.
@@ -375,7 +380,7 @@ module Rubot
 
         # Echo the prompt on screen, ahead of the assistant entry that
         # arrives with :stream_start.
-        publish prompt_echo(line), keep_leading: true, hang: 2
+        publish prompt_echo(line), keep_leading: true, hang: ECHO_HANG
         @mailbox << line
       end
 
@@ -609,11 +614,13 @@ module Rubot
     # first, so what the model writes after the steer appears below it instead
     # of being appended to the fragment the steer interrupted. One blank row
     # above and below sets it apart, without doubling a blank that is already
-    # the separator there.
+    # the separator there. Continuation rows hang by the marker's width, so a
+    # steer that wraps or spans lines stays under its own text.
     def add_steer_echo(line)
       close_live_entry
       @log.add_entry([ [ "", nil ] ]) unless @log.last_blank?
-      @log.add_entry([ [ "↳ ", :accent ], [ line, :text ], [ "  steered", :dim ] ])
+      @log.add_entry([ [ "↳ ", :accent ], [ line, :text ], [ "  steered", :dim ] ],
+                     keep_leading: true, hang: ECHO_HANG)
       @log.add_entry([ [ "", nil ] ])
     end
 
