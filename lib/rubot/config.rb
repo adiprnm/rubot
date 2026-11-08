@@ -3,6 +3,7 @@
 require "yaml"
 require "fileutils"
 require "pathname"
+require "digest"
 require_relative "provider"
 
 module Rubot
@@ -428,6 +429,29 @@ module Rubot
       File.join(File.dirname(config_path), "sessions")
     end
 
+    # --- Memory -----------------------------------------------------------
+    #
+    # Memory has two layers. The global file sits next to config.yml and
+    # holds what is true everywhere (who the user is, how they want the bot to
+    # behave). The workspace file holds what belongs to one project, and is
+    # keyed by the workspace path so the TUI — which re-roots the workspace to
+    # the directory it was launched from — keeps a separate memory per project.
+    def global_memory_path
+      File.join(File.dirname(config_path), "MEMORY.md")
+    end
+
+    def memory_dir
+      File.join(File.dirname(config_path), "memory")
+    end
+
+    # Path of the workspace memory file for `path` (default: this config's
+    # workspace). The name is readable and carries a short digest of the full
+    # path, so two projects with the same basename cannot collide.
+    def workspace_memory_path(path = workspace)
+      full = File.expand_path(path.to_s)
+      File.join(memory_dir, "#{memory_slug(full)}.md")
+    end
+
     # Where SOUL.md, MEMORY.md, AGENTS.md and skills/ are read from. Normally
     # the workspace itself; a channel that re-roots the workspace (the TUI
     # takes the launch directory) leaves this at the configured workspace so
@@ -680,6 +704,16 @@ module Rubot
     end
 
     private
+
+    # A filesystem-safe, human-readable name for a workspace path, suffixed
+    # with a short digest so that two different paths that slugify the same
+    # ("~/a/b c" and "~/a/b-c") still get their own file.
+    def memory_slug(path)
+      readable = path.sub(%r{\A/+}, "").gsub(/[^A-Za-z0-9._-]+/, "-").gsub(/-{2,}/, "-").sub(/-\z/, "")
+      readable = readable[0, 60].sub(/-\z/, "")
+      readable = "workspace" if readable.empty?
+      "#{readable}-#{Digest::SHA1.hexdigest(path)[0, 8]}"
+    end
 
     def normalize_model_preset(name, raw)
       raw = raw.each_with_object({}) { |(key, value), acc| acc[key.to_s] = value }

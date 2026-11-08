@@ -1095,8 +1095,14 @@ module Rubot
         end
       when "/memory"
         if agent.memory.enabled?
-          say("Memory (MEMORY.md):", :info)
-          say_text(agent.memory.read, :text)
+          memory = agent.memory
+          if memory.respond_to?(:global_path)
+            say("Memory — global: #{memory.global_path}", :info)
+            say("Memory — this workspace: #{memory.workspace_path}", :info)
+          else
+            say("Memory (MEMORY.md):", :info)
+          end
+          say_text(memory.read, :text)
         else
           say("Memory not available (no workspace configured).", :warn)
         end

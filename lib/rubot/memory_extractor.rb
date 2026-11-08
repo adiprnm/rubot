@@ -13,6 +13,15 @@ module Rubot
     # Messages shorter than this are considered trivial (skip extraction)
     MIN_MESSAGE_LENGTH = 15
 
+    # Facts and preferences describe the user, so they are worth keeping in
+    # every project; context describes the project being worked on and would be
+    # noise anywhere else.
+    SCOPE_BY_SECTION = {
+      "Facts" => "global",
+      "Preferences" => "global",
+      "Context" => "workspace"
+    }.freeze
+
     # Skip messages that are just acknowledgments or single words
     TRIVIAL_PATTERNS = [
       /\A\s*(yes|no|yeah|nah|ok|okay|sure|thanks|thank you|cool|nice|great|awesome|got it|right|wrong|nope|maybe|i see|hmm|wow)\s*\z/i,
@@ -91,7 +100,7 @@ module Rubot
         section_name = section.capitalize
         facts.each do |fact|
           next if duplicate?(section_name, fact)
-          @memory.append(section_name, fact)
+          @memory.append(section_name, fact, scope: SCOPE_BY_SECTION.fetch(section_name, "workspace"))
           stored << { section: section_name, fact: fact }
         end
       end

@@ -154,12 +154,14 @@ The TUI uses the directory `rubot` was launched from as its working directory.
 sessions, cron jobs and the safety guard follow the project you are standing in
 — the TUI ignores `agents.defaults.workspace` from `config.yml` for those.
 
-Identity and knowledge are different: `SOUL.md`, `MEMORY.md`, `AGENTS.md` and
-`skills/` are still read from the configured workspace, so launching the TUI
-inside a project does not throw away the assistant you set up. Point
+Identity and knowledge are different: `SOUL.md`, `AGENTS.md` and `skills/` are
+still read from the configured workspace, so launching the TUI inside a project
+does not throw away the assistant you set up. Point
 `agents.defaults.assets_workspace` at another directory to keep them somewhere
-else. Other channels (Telegram) and one-shot `-m` runs use the configured
-workspace for everything.
+else. Memory works the other way round: `~/.rubot/MEMORY.md` is shared by
+everything, and each project gets its own file under `~/.rubot/memory/`. Other
+channels (Telegram) and one-shot `-m` runs use the configured workspace for
+everything.
 
 ### REPL Commands
 
@@ -188,7 +190,7 @@ back out, and the blank line stays.
 | `/usage` | Show OpenCode Go subscription usage |
 | `/tools` | List available tools |
 | `/soul` | Show the bot's soul (SOUL.md) |
-| `/memory` | Show persistent memory (MEMORY.md) |
+| `/memory` | Show persistent memory (global + this workspace) |
 | `/agents` | Show agent rules (AGENTS.md) |
 | `/cron` | List scheduled cron jobs |
 | `/cron delete <id>` | Delete a cron job |
@@ -1008,8 +1010,22 @@ tools:
 
 ### MEMORY.md — Persistent Memory
 
-A Markdown file that the bot reads on every session and can update via
-the built-in `memory` tool. Organized into sections:
+Memory has two layers, and both are injected into the prompt as one merged
+document:
+
+| Layer | File | What belongs there |
+| --- | --- | --- |
+| Global | `~/.rubot/MEMORY.md` (next to `config.yml`) | who you are, how you want the bot to behave — true in every project |
+| Workspace | `~/.rubot/memory/<slug>.md` | what this project is about; keyed by the absolute path of the workspace |
+
+The workspace file deliberately does **not** live inside the project: memory is
+the bot's, and dropping a `MEMORY.md` into every repository you open would
+pollute your `git status`. The `memory` tool takes `scope: "global"` or
+`scope: "workspace"` (default), and automatic extraction files **Facts** and
+**Preferences** globally while **Context** goes to the workspace. Learned
+corrections are global.
+
+Both files are organized into sections:
 
 - **Facts** — Things the bot should remember about you
 - **Preferences** — Your communication style and preferences

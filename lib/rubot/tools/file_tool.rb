@@ -368,9 +368,14 @@ module Rubot
       # Check if a path targets the memory file.
       # Prevents the bot from bypassing the memory tool to directly
       # overwrite or delete MEMORY.md.
+      # Memory is managed through the memory tool only, never by editing the
+      # file directly. That covers the global MEMORY.md / MEMORY_ARCHIVE.md and
+      # the per-workspace <slug>.md / <slug>_ARCHIVE.md in the memory directory.
       def memory_file?(path)
         basename = File.basename(path).downcase
-        basename == "memory.md"
+        return true if basename == "memory.md" || basename == "memory_archive.md"
+
+        basename.end_with?("_archive.md") && File.basename(File.dirname(path)) == "memory"
       end
     end
   end

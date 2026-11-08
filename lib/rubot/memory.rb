@@ -37,6 +37,15 @@ module Rubot
 
     ARCHIVE_FILE = "MEMORY_ARCHIVE.md"
 
+    # The archive of a memory file: MEMORY.md -> MEMORY_ARCHIVE.md, and
+    # <slug>.md -> <slug>_ARCHIVE.md so that the per-workspace memory files
+    # sharing one directory do not append into the same archive.
+    def self.archive_path_for(file_path)
+      base = File.basename(file_path.to_s, ".md")
+      name = base.casecmp?("MEMORY") ? ARCHIVE_FILE : "#{base}_ARCHIVE.md"
+      File.join(File.dirname(file_path.to_s), name)
+    end
+
     # Words that carry no meaning when comparing two bullets. Indonesian
     # function words are included because memory mixes both languages.
     COMPARE_STOPWORDS = %w[
@@ -79,10 +88,22 @@ module Rubot
       ## Learned Corrections
     MEMORY
 
-    def initialize(workspace: nil)
+    # Either `workspace:` (the file is <workspace>/MEMORY.md, the historical
+    # layout) or `path:` (an explicit file, which is how the global memory
+    # and the per-workspace memory of MemoryBank are addressed).
+    #
+    # `create: false` leaves a missing file alone instead of creating it with
+    # the default template, so merely visiting a directory does not litter the
+    # memory directory with empty files.
+    def initialize(workspace: nil, path: nil, create: true)
       @workspace = workspace
-      @file_path = workspace ? File.join(workspace, "MEMORY.md") : nil
+      @file_path = path || (workspace ? File.join(workspace, "MEMORY.md") : nil)
+      @create = create
       @content = load_content
+    end
+
+    def exists?
+      !@file_path.nil? && File.exist?(@file_path)
     end
 
     # Returns the memory content for injection into system prompt
@@ -113,7 +134,10 @@ module Rubot
     # `max_items` caps the section: the oldest entries beyond it are dropped
     # (and archived when a workspace is available). Callers that write a
     # bounded log — the feedback learner, for example — should set it.
-    def append(section, line, max_items: nil)
+    # `scope` is accepted so a single-file Memory and a MemoryBank can be used
+    # interchangeably by the memory tool, extractor and feedback learner; one
+    # file has exactly one layer, so there is nothing to choose between.
+    def append(section, line, max_items: nil, scope: nil)
       with_file_lock do |file|
         @content ||= load_content
         return unless @content
@@ -148,7 +172,7 @@ module Rubot
     end
 
     # Update or create a section with new content (full replace of section)
-    def update_section(section, content_lines)
+    def update_section(section, content_lines, scope: nil)
       with_file_lock do |file|
         @content ||= load_content
         return unless @content
@@ -184,6 +208,9 @@ module Rubot
     # Returns { removed:, size: } or nil when nothing changed.
     def consolidate!(limits: SECTION_LIMITS)
       return nil unless @file_path
+      # A layer that has never been written to has nothing to consolidate, and
+      # consolidating it would create the file as a side effect.
+      return nil if !@create && !exists?
 
       with_file_lock do |file|
         @content ||= load_content
@@ -210,6 +237,9 @@ module Rubot
       File.open(@file_path, File::RDWR | File::CREAT, 0o644) do |file|
         file.flock(File::LOCK_EX)
         @content = file.read
+        # A write against a file that does not exist yet (or is empty) starts
+        # from the default template, so a fresh memory file keeps its sections.
+        @content = DEFAULT_MEMORY if @content.empty?
         begin
           yield file
         ensure
@@ -236,7 +266,7 @@ module Rubot
 
       if File.exist?(@file_path)
         File.read(@file_path)
-      else
+      elsif @create
         # Create default memory file
         FileUtils.mkdir_p(File.dirname(@file_path))
         File.write(@file_path, DEFAULT_MEMORY)
@@ -384,7 +414,7 @@ module Rubot
     def archive_lines(entries)
       return if entries.nil? || entries.empty? || !@file_path
 
-      path = File.join(File.dirname(@file_path), ARCHIVE_FILE)
+      path = self.class.archive_path_for(@file_path)
       FileUtils.mkdir_p(File.dirname(path))
       stamp = Time.now.strftime("%Y-%m-%d")
 

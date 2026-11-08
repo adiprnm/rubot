@@ -116,12 +116,14 @@ class TestAgentAssetsWorkspace < Minitest::Test
     FileUtils.mkdir_p(@assets)
     FileUtils.mkdir_p(@project)
     File.write(File.join(@assets, "AGENTS.md"), "---\n---\n\n# Agent Rules\n\n- global rule\n")
-    File.write(File.join(@assets, "MEMORY.md"), "# Memory\n\n- global fact\n")
+    # Memory is global (next to config.yml) plus per workspace, not part of
+    # the assets workspace any more.
+    File.write(File.join(@tmpdir, "MEMORY.md"), "# Memory\n\n## Facts\n\n- global fact\n")
     @config = Rubot::Config.from_data({
       "agents" => { "defaults" => { "workspace" => @project, "assets_workspace" => @assets } },
       "models" => [ { "name" => "m", "model" => "openai/test", "api_key" => "sk-test" } ],
       "provider" => "openai"
-    })
+    }, config_path: File.join(@tmpdir, "config.yml"))
   end
 
   def teardown
@@ -132,10 +134,21 @@ class TestAgentAssetsWorkspace < Minitest::Test
     Rubot::Agent.new(config: @config, session_id: "assets", tools: Rubot::Tools::Registry.new)
   end
 
-  def test_identity_and_memory_come_from_the_assets_workspace
+  def test_global_memory_comes_from_the_config_directory
     agent = build_agent
 
     assert_includes agent.memory.to_s, "global fact"
+  end
+
+  def test_workspace_memory_is_kept_out_of_the_project_directory
+    agent = build_agent
+    agent.memory.append("Context", "this repo builds a Jekyll site")
+
+    files = Dir[File.join(@tmpdir, "memory", "*.md")]
+    assert_equal 1, files.size, "expected one workspace memory file, got #{files.inspect}"
+    assert_includes File.read(files.first), "this repo builds a Jekyll site"
+    refute File.exist?(File.join(@project, "MEMORY.md")), "memory must not land in the project"
+    assert_includes agent.memory.to_s, "this repo builds a Jekyll site"
   end
 
   def test_the_global_agents_file_applies_when_the_project_has_none

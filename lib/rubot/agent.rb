@@ -138,7 +138,7 @@ module Rubot
       # silently drop all of them.
       assets = config.assets_workspace
       @soul = Soul.new(workspace: assets)
-      @memory = Memory.new(workspace: assets)
+      @memory = build_memory(config)
       # AGENTS.md is project rules, so a file in the working directory wins;
       # the configured workspace's copy is the fallback (and is what the
       # Telegram bot always uses, since its workspace is that directory).
@@ -1040,9 +1040,9 @@ module Rubot
         parts << "# Persona\n\n#{persona_prompt}"
       end
 
-      # 3. MEMORY.md (persistent context)
+      # 3. Memory: global (~/.rubot/MEMORY.md) merged with this workspace's.
       if @memory.enabled?
-        parts << "# Memory\n\n#{@memory}"
+        parts << @memory.to_s
       end
 
       # 3b. Learned Corrections already live in MEMORY.md above, so they are
@@ -1110,6 +1110,20 @@ module Rubot
 
     def session_cwd_for(cfg)
       cfg.respond_to?(:sessions_cwd) ? cfg.sessions_cwd : nil
+    end
+
+    # Global memory next to config.yml plus the memory of the workspace this
+    # agent works in. Configs that predate the split (tests, plain data
+    # configs) fall back to the single file in the assets workspace.
+    def build_memory(cfg)
+      unless cfg.respond_to?(:global_memory_path) && cfg.respond_to?(:workspace_memory_path)
+        return Memory.new(workspace: cfg.assets_workspace)
+      end
+
+      MemoryBank.new(
+        global_path: cfg.global_memory_path,
+        workspace_path: cfg.workspace_memory_path(cfg.workspace)
+      )
     end
 
     # Directory holding the AGENTS.md this agent follows. The project's own

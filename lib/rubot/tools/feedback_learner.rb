@@ -128,7 +128,9 @@ module Rubot
         correction_line = "User asked: '#{original_request}' → Bot response was wrong/inadequate. User feedback: '#{user_correction}'"
         return false if duplicate_correction?(user_correction)
 
-        @memory.append("Learned Corrections", correction_line, max_items: MAX_CORRECTIONS)
+        # Corrections are about how the bot should behave, which does not
+        # depend on the project, so they go to the global layer.
+        @memory.append("Learned Corrections", correction_line, max_items: MAX_CORRECTIONS, scope: "global")
         true
       rescue StandardError => e
         warn "[feedback_learner] Failed to store correction: #{e.class}: #{e.message}" if Rubot.debug?
