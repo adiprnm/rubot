@@ -232,11 +232,30 @@ module Rubot
     end
 
     def start_fresh_session
-      switch_session(Rubot::Session.fresh_id(session_workspace))
+      switch_session(Rubot::Session.fresh_id(dir: sessions_dir))
     end
 
-    def session_workspace
-      @pool ? @pool.workspace : agent.config.workspace
+    # Sessions live in one place for every project (Config#sessions_dir); what
+    # separates them is the directory each one was launched from. In actor mode
+    # the pool carries both, otherwise they come from the agent's config.
+    def sessions_dir
+      if @pool
+        @pool.sessions_dir
+      else
+        cfg = @agent && @agent.config
+        cfg.respond_to?(:sessions_dir) ? cfg.sessions_dir : Rubot::Session.sessions_dir(cfg&.workspace)
+      end
+    rescue StandardError
+      nil
+    end
+
+    def sessions_cwd
+      if @pool
+        @pool.sessions_cwd
+      else
+        cfg = @agent && @agent.config
+        cfg.respond_to?(:sessions_cwd) ? cfg.sessions_cwd : nil
+      end
     rescue StandardError
       nil
     end
@@ -1116,9 +1135,15 @@ module Rubot
     end
 
     def handle_resume(query)
-      sessions = Rubot::Session.index(agent.config.workspace)
+      text = query.to_s.strip
+      # /resume all ignores the launch directory: every conversation that was
+      # started from some project. Sessions with no recorded origin (Telegram
+      # chats, files written before the cwd field existed) are never listed.
+      every = text.casecmp?("all")
+      text = "" if every
+      sessions = resume_entries(all: every)
 
-      if query.nil? || query.strip.empty?
+      if text.empty?
         # Interactively, /resume writes the list into the log; only a plain (piped) REPL
         # has to print the list and take the number on the next line.
         if @tui && !sessions.empty?
@@ -1130,9 +1155,12 @@ module Rubot
         return
       end
 
-      entry = find_session(sessions, query)
+      entry = find_session(sessions, text)
+      # A hidden session (another project, no origin) is still reachable by id
+      # when it is named exactly.
+      entry ||= Rubot::Session.find(nil, text, dir: sessions_dir)
       unless entry
-        say("Session '#{query}' not found.", :err)
+        say("Session '#{text}' not found.", :err)
         say_text("Type /resume to see saved sessions.")
         return
       end
@@ -1140,10 +1168,34 @@ module Rubot
       resume_session(entry)
     end
 
+    # Saved conversations the user can resume, newest first. Everything is
+    # stored in one directory; the launch directory decides what shows up.
+    def resume_entries(all: false)
+      entries = Rubot::Session.index(nil, cwd: :all, dir: sessions_dir)
+      entries = entries.reject { |entry| entry[:cwd].to_s.empty? }
+      return entries if all
+
+      cwd = sessions_cwd.to_s
+      return entries if cwd.empty?
+
+      entries.select { |entry| entry[:cwd] == cwd }
+    end
+
+    # How many saved conversations belong to other directories. Shown as a hint
+    # so a project that has never been used does not look empty.
+    def other_dir_sessions
+      all = Rubot::Session.index(nil, cwd: :all, dir: sessions_dir)
+      all.count { |entry| !entry[:cwd].to_s.empty? && entry[:cwd].to_s != sessions_cwd.to_s }
+    rescue StandardError
+      0
+    end
+
     def list_sessions(sessions)
       if sessions.empty?
         say("No saved sessions yet.", :info)
         say_text("Conversations are saved as they happen; /resume brings one back later.")
+        others = other_dir_sessions
+        say_text("#{others} conversation(s) from other directories · /resume all") if others.positive?
         return
       end
 
@@ -1158,6 +1210,8 @@ module Rubot
       end
       blank
       say_text("Resume one with /resume <number> or /resume <id>.")
+      others = other_dir_sessions
+      say_text("#{others} more from other directories · /resume all") if others.positive?
     end
 
     # Only ids that are actually on disk resolve, which also keeps a crafted
@@ -1172,7 +1226,7 @@ module Rubot
 
     def resume_session(entry)
       switch_session(entry[:id])
-      messages = Rubot::Session.transcript(agent.config.workspace, entry[:id])
+      messages = Rubot::Session.transcript(nil, entry[:id], dir: sessions_dir)
 
       # The App thread owns the log, so the whole restored transcript is
       # handed over as one event and laid out there with the live renderer.

@@ -687,14 +687,65 @@ class TestSessionHistoryWindowing < Minitest::Test
   # Saved-session index (/resume)
   # ------------------------------------------------------------------
 
-  def write_session(id, updated_at:, messages:)
+  def write_session(id, updated_at:, messages:, cwd: nil)
     dir = File.join(@workspace, "sessions")
     FileUtils.mkdir_p(dir)
-    File.write(File.join(dir, "#{id}.json"), JSON.pretty_generate(
+    payload = {
       "id" => id,
       "updated_at" => updated_at,
       "messages" => messages
-    ))
+    }
+    payload["cwd"] = cwd if cwd
+    File.write(File.join(dir, "#{id}.json"), JSON.pretty_generate(payload))
+  end
+
+  def test_index_filters_on_an_exact_launch_directory
+    messages = [ { "role" => "user", "content" => "hi" } ]
+    write_session("here", updated_at: "2026-01-01T10:00:00+07:00", messages: messages, cwd: "/work/app")
+    write_session("sub", updated_at: "2026-01-02T10:00:00+07:00", messages: messages, cwd: "/work/app/lib")
+    write_session("elsewhere", updated_at: "2026-01-03T10:00:00+07:00", messages: messages, cwd: "/work/other")
+    write_session("telegram", updated_at: "2026-01-04T10:00:00+07:00", messages: messages)
+
+    here = Rubot::Session.index(@workspace, cwd: "/work/app")
+
+    assert_equal %w[here], here.map { |entry| entry[:id] }, "prefix directories are not the same project"
+    assert_equal 4, Rubot::Session.index(@workspace).size, "no filter lists everything"
+    assert_equal %w[elsewhere sub here], Rubot::Session.index(@workspace, cwd: :all)
+                                               .reject { |e| e[:cwd].nil? }
+                                               .map { |e| e[:id] }
+  end
+
+  def test_a_session_records_and_reloads_its_launch_directory
+    session = Rubot::Session.new("tagged", workspace: @workspace, cwd: "/work/app")
+    session.add("user", "hello")
+    session.save!
+
+    assert_equal "/work/app", Rubot::Session.new("tagged", workspace: @workspace).cwd
+    assert_equal "/work/app", Rubot::Session.describe(File.join(@workspace, "sessions", "tagged.json"))[:cwd]
+    assert_nil Rubot::Session.new("untagged", workspace: @workspace).cwd
+  end
+
+  def test_sessions_dir_overrides_where_files_land
+    central = File.join(@tmpdir, "central")
+    session = Rubot::Session.new("central-1", workspace: @workspace, sessions_dir: central,
+                                              cwd: "/work/app")
+    session.add("user", "hello")
+    session.save!
+
+    assert File.exist?(File.join(central, "central-1.json"))
+    refute File.exist?(File.join(@workspace, "sessions", "central-1.json"))
+    assert_equal %w[central-1], Rubot::Session.index(nil, dir: central, cwd: "/work/app")
+                               .map { |entry| entry[:id] }
+    assert_equal "hello", Rubot::Session.transcript(nil, "central-1", dir: central).first["content"]
+  end
+
+  def test_fresh_id_avoids_collisions_in_the_given_directory
+    central = File.join(@tmpdir, "central")
+    FileUtils.mkdir_p(central)
+    stamp = "20260101-120000"
+    File.write(File.join(central, "default-#{stamp}.json"), "{}")
+
+    assert_equal "default-#{stamp}-2", Rubot::Session.fresh_id(dir: central, stamp: stamp)
   end
 
   def test_index_lists_sessions_newest_first_and_skips_empty_ones

@@ -33,13 +33,21 @@ module Rubot
     DEFAULT_MAX_MESSAGES = 400
 
     attr_reader :id, :messages, :workspace, :usage, :last_usage, :cost
-    attr_reader :task
+    attr_reader :task, :cwd
     attr_accessor :summary, :forced_skill, :model_override, :model_preset
 
-    def initialize(id = "default", workspace: nil, max_messages: DEFAULT_MAX_MESSAGES)
+    def initialize(id = "default", workspace: nil, sessions_dir: nil, cwd: nil,
+                   max_messages: DEFAULT_MAX_MESSAGES)
       @id = id
       @messages = []
       @workspace = workspace
+      # Where the JSON file goes. Defaults to <workspace>/sessions so callers
+      # that only know a workspace keep working; the TUI passes the central
+      # directory explicitly (Config#sessions_dir).
+      @sessions_dir = sessions_dir || self.class.sessions_dir(workspace)
+      # Directory this session was launched from, used to filter /resume.
+      # nil means "no origin" (Telegram, one-shot runs, legacy files).
+      @cwd = cwd
       @max_messages = max_messages.to_i.positive? ? max_messages.to_i : DEFAULT_MAX_MESSAGES
       # The user's original instruction for this session. Kept outside the
       # message list so neither the hard trim nor compaction can delete the
@@ -447,8 +455,8 @@ module Rubot
     end
 
     def file_path
-      return nil unless @workspace
-      File.join(@workspace, "sessions", "#{@id}.json")
+      return nil unless @sessions_dir
+      File.join(@sessions_dir, "#{@id}.json")
     end
 
     # Directory holding one JSON file per session.
@@ -460,9 +468,9 @@ module Rubot
     # conversation on every launch. The file itself is not created until the
     # session has a message (see #save!), so quitting an untouched launch
     # leaves nothing behind.
-    def self.fresh_id(workspace, prefix: "default", stamp: nil)
+    def self.fresh_id(workspace = nil, prefix: "default", stamp: nil, dir: nil)
       base = "#{prefix}-#{stamp || Time.now.strftime("%Y%m%d-%H%M%S")}"
-      dir = sessions_dir(workspace)
+      dir ||= sessions_dir(workspace)
       return base unless dir
 
       candidate = base
@@ -474,23 +482,30 @@ module Rubot
       candidate
     end
 
-    # Plain-data summaries of the sessions saved in `workspace`, newest
-    # first. Sessions without messages (and unreadable files) are left out:
-    # /resume only offers something that can actually be continued.
-    def self.index(workspace)
-      dir = sessions_dir(workspace)
+    # Plain-data summaries of the sessions saved in `workspace` (or in `dir`,
+    # which names the sessions directory directly), newest first.
+    #
+    # `cwd:` narrows the list to the conversations started from one directory.
+    # It defaults to :all; pass a path to get an exact match, which also drops
+    # every session without a recorded origin (Telegram chats, legacy files).
+    # Sessions without messages (and unreadable files) are left out: /resume
+    # only offers something that can actually be continued.
+    def self.index(workspace = nil, cwd: :all, dir: nil)
+      dir ||= sessions_dir(workspace)
       return [] unless dir && Dir.exist?(dir)
 
-      Dir.glob(File.join(dir, "*.json"))
-        .filter_map { |path| describe(path) }
+      entries = Dir.glob(File.join(dir, "*.json")).filter_map { |path| describe(path) }
+      entries = entries.select { |entry| entry[:cwd] == cwd } unless cwd == :all
+
+      entries
         .sort_by { |entry| entry[:timestamp] }
         .reverse
         .map { |entry| entry.except(:timestamp) }
     end
 
     # Summary of one saved session, or nil when there is nothing to resume.
-    def self.find(workspace, id)
-      dir = sessions_dir(workspace)
+    def self.find(workspace, id, dir: nil)
+      dir ||= sessions_dir(workspace)
       return nil unless dir
 
       describe(File.join(dir, "#{id}.json"))&.except(:timestamp)
@@ -498,8 +513,8 @@ module Rubot
 
     # Full message list of a saved session, used by /resume to restore the
     # transcript exactly as it was.
-    def self.transcript(workspace, id)
-      dir = sessions_dir(workspace)
+    def self.transcript(workspace, id, dir: nil)
+      dir ||= sessions_dir(workspace)
       return [] unless dir
 
       path = File.join(dir, "#{id}.json")
@@ -531,6 +546,7 @@ module Rubot
         messages: messages.size,
         updated_at: updated.iso8601,
         timestamp: updated.to_f,
+        cwd: data["cwd"].to_s.strip.empty? ? nil : data["cwd"].to_s,
         last_prompt: last_prompt(messages)
       }
     rescue JSON::ParserError, SystemCallError, EncodingError
@@ -584,6 +600,7 @@ module Rubot
         "updated_at" => Time.now.iso8601,
         "messages" => @messages
       }
+      data["cwd"] = @cwd if @cwd
       data["task"] = @task if @task
       data["summary"] = @summary if @summary
       data["forced_skill"] = @forced_skill if @forced_skill
@@ -725,6 +742,7 @@ module Rubot
 
       data = JSON.parse(raw)
       @messages = self.class.normalize_utf8(data["messages"] || [])
+      @cwd = data["cwd"].to_s.strip.empty? ? nil : data["cwd"].to_s if data.key?("cwd")
       @task = data["task"] if data["task"]
       # Sessions written before the task field existed: recover the first user
       # message if the transcript still starts with one.

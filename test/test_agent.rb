@@ -43,7 +43,7 @@ class TestAgentSessionSwitching < Minitest::Test
 
   def test_switch_session_applies_model_override_from_saved_session
     # Set up session "code-topic" with model override
-    code_session = Rubot::Session.new("code-topic", workspace: @workspace)
+    code_session = Rubot::Session.new("code-topic", workspace: @workspace, sessions_dir: @config.sessions_dir)
     code_session.model_override = "model-b"
     code_session.add("user", "hello")
     code_session.send(:save!)
@@ -63,7 +63,7 @@ class TestAgentSessionSwitching < Minitest::Test
 
   def test_switch_session_without_model_override_keeps_default
     # Create a session with no model override
-    session = Rubot::Session.new("finance-topic", workspace: @workspace)
+    session = Rubot::Session.new("finance-topic", workspace: @workspace, sessions_dir: @config.sessions_dir)
     session.add("user", "hello")
 
     @agent.switch_session("finance-topic")
@@ -82,12 +82,12 @@ class TestAgentSessionSwitching < Minitest::Test
 
   def test_each_session_has_independent_model_override
     # Set up two sessions with different model overrides
-    session_a = Rubot::Session.new("session-a", workspace: @workspace)
+    session_a = Rubot::Session.new("session-a", workspace: @workspace, sessions_dir: @config.sessions_dir)
     session_a.model_override = "model-a"
     session_a.add("user", "hi")
     session_a.send(:save!)
 
-    session_b = Rubot::Session.new("session-b", workspace: @workspace)
+    session_b = Rubot::Session.new("session-b", workspace: @workspace, sessions_dir: @config.sessions_dir)
     session_b.model_override = "model-b"
     session_b.add("user", "hi")
     session_b.send(:save!)
@@ -111,9 +111,11 @@ class TestAgentSessionSwitching < Minitest::Test
   end
 
   def test_session_file_path_is_correct
-    session = Rubot::Session.new("my-topic", workspace: @workspace)
-    expected = File.join(@workspace, "sessions", "my-topic.json")
+    session = Rubot::Session.new("my-topic", workspace: @workspace, sessions_dir: @config.sessions_dir)
+    expected = File.join(@config.sessions_dir, "my-topic.json")
     assert_equal expected, session.file_path
+    refute_includes expected, File.join(@workspace, "sessions"),
+                    "sessions live next to config.yml, not inside the workspace"
   end
 end
 
@@ -700,7 +702,7 @@ class TestAgentModelPresets < Minitest::Test
   end
 
   def test_saved_session_preset_is_restored
-    session = Rubot::Session.new("saved-preset", workspace: @workspace)
+    session = Rubot::Session.new("saved-preset", workspace: @workspace, sessions_dir: @config.sessions_dir)
     session.model_preset = "deep"
     session.add("user", "hello")
     session.send(:save!)

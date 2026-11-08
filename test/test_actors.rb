@@ -106,7 +106,7 @@ class TestActors < Minitest::Test
       assert_equal [ "Hello", " world" ], chunks
       assert_equal "actor-test", handle.session.id
       assert_equal 2, handle.session.message_count
-      assert File.exist?(File.join(@workspace, "sessions", "actor-test.json"))
+      assert File.exist?(File.join(config.sessions_dir, "actor-test.json"))
     ensure
       pool.shutdown
     end
@@ -142,7 +142,7 @@ class TestActors < Minitest::Test
       handle.flush_learning
 
       assert_equal 4, request_count, "the batched extraction request must be sent"
-      session = JSON.parse(File.read(File.join(@workspace, "sessions", "learning-ractor.json")))
+      session = JSON.parse(File.read(File.join(config.sessions_dir, "learning-ractor.json")))
       assert_empty Array(session["memory_backlog"]), "the batch must be consumed by extraction"
     ensure
       pool.shutdown

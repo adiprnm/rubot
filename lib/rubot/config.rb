@@ -403,7 +403,29 @@ module Rubot
       defaults = agents["defaults"] = {} unless defaults.is_a?(Hash)
       defaults["assets_workspace"] ||= original
       defaults["workspace"] = File.expand_path(path)
+      # The directory the TUI was launched from. Sessions are stored centrally
+      # (see #sessions_dir), so this marker is what lets /resume show only the
+      # conversations that belong to the project the user is standing in.
+      defaults["sessions_cwd"] ||= File.expand_path(path)
       copy
+    end
+
+    # The directory the current session was started from, or nil when the
+    # channel has no notion of one (Telegram). Read from the config file data,
+    # never from the live working directory, so a resumed session keeps the
+    # origin it was created with.
+    def sessions_cwd
+      raw = agent_defaults["sessions_cwd"]
+      raw && !raw.to_s.strip.empty? ? File.expand_path(raw.to_s) : nil
+    end
+
+    # Where session files live. Next to config.yml (~/.rubot/sessions by
+    # default), not in the workspace: sessions belong to the bot, and the TUI
+    # re-roots the workspace to whatever project it is launched from. Keeping
+    # them one level up also means a custom config directory takes its sessions
+    # with it.
+    def sessions_dir
+      File.join(File.dirname(config_path), "sessions")
     end
 
     # Where SOUL.md, MEMORY.md, AGENTS.md and skills/ are read from. Normally

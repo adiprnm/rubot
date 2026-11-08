@@ -12,12 +12,16 @@ module Rubot
     # The pool is intentionally not Ractor-shareable: it is owned by the
     # main Ractor (where channels run). Use #for to obtain a SessionHandle.
     class SessionPool
-      attr_reader :cron, :cron_events, :workspace, :models
+      attr_reader :cron, :cron_events, :workspace, :models, :sessions_dir, :sessions_cwd
 
       def initialize(config:, delivery: nil)
         @config_data = config.snapshot
         @config_path = config.config_path
         @workspace = config.workspace
+        # One central sessions directory, plus the launch directory each
+        # session is tagged with (see Config#sessions_dir / #sessions_cwd).
+        @sessions_dir = config.sessions_dir
+        @sessions_cwd = config.sessions_cwd
         @models = Array(config.models)
         @mutex = Mutex.new
         @actors = {}
@@ -64,6 +68,8 @@ module Rubot
           @config_data = config.snapshot
           @config_path = config.config_path
           @workspace = config.workspace
+          @sessions_dir = config.sessions_dir
+          @sessions_cwd = config.sessions_cwd
           @models = Array(config.models)
           @persona_store = build_persona_store(config)
         end

@@ -358,6 +358,54 @@ module Rubot
       end
     end
 
+    def test_resume_lists_only_sessions_from_the_launch_directory
+      Dir.mktmpdir do |dir|
+        workspace = File.join(dir, "workspace")
+        other = File.join(dir, "other-project")
+        saved_session(workspace, "mine", "work on this project")
+        saved_session(workspace, "theirs", "work on another project", cwd: other)
+        saved_session(workspace, "chat", "telegram chatter", cwd: nil)
+
+        repl = build_resume_repl(workspace)
+
+        assert_equal %w[mine], repl.send(:resume_entries).map { |entry| entry[:id] }
+        assert_equal %w[theirs mine], repl.send(:resume_entries, all: true).map { |entry| entry[:id] },
+                     "all ignores the directory but still hides sessions with no origin"
+      end
+    end
+
+    def test_resume_keeps_other_directories_reachable_by_id
+      Dir.mktmpdir do |dir|
+        workspace = File.join(dir, "workspace")
+        other = File.join(dir, "other-project")
+        saved_session(workspace, "theirs", "work on another project", cwd: other)
+
+        repl = build_resume_repl(workspace)
+
+        assert_empty repl.send(:resume_entries)
+
+        repl.send(:handle_command, "/resume all")
+        assert_equal %w[theirs], repl.send(:resume_entries, all: true).map { |entry| entry[:id] }
+
+        out, _err = capture_io { repl.send(:handle_command, "/resume theirs") }
+        refute_includes out, "not found"
+      end
+    end
+
+    def test_the_plain_list_mentions_conversations_from_other_directories
+      Dir.mktmpdir do |dir|
+        workspace = File.join(dir, "workspace")
+        saved_session(workspace, "theirs", "work on another project", cwd: File.join(dir, "other-project"))
+
+        repl = build_resume_repl(workspace)
+        repl.instance_variable_set(:@tui, false)
+
+        out, _err = capture_io { repl.send(:handle_command, "/resume") }
+
+        assert_includes out, "1 conversation(s) from other directories · /resume all"
+      end
+    end
+
     def test_clear_wipes_the_usage_footer
       repl = build_repl
       agent = repl.instance_variable_get(:@agent)
@@ -2260,10 +2308,14 @@ module Rubot
     end
 
     class ResumeConfigView
-      attr_reader :workspace
+      attr_reader :workspace, :sessions_dir, :sessions_cwd
 
       def initialize(workspace)
         @workspace = workspace
+        # Central storage plus the directory sessions are tagged with; the real
+        # Config keeps them apart, the fake keeps both inside the tmpdir.
+        @sessions_dir = File.join(workspace, "sessions")
+        @sessions_cwd = workspace
       end
     end
 
@@ -2296,18 +2348,23 @@ module Rubot
       end
     end
 
-    def saved_session(workspace, id, content, updated_at: Time.now.iso8601, messages: nil)
+    def saved_session(workspace, id, content, updated_at: Time.now.iso8601, messages: nil, cwd: :default)
       dir = File.join(workspace, "sessions")
       FileUtils.mkdir_p(dir)
       messages ||= [
         { "role" => "user", "content" => content },
         { "role" => "assistant", "content" => "answer to #{content}" }
       ]
-      File.write(File.join(dir, "#{id}.json"), JSON.pretty_generate(
+      payload = {
         "id" => id,
         "updated_at" => updated_at,
         "messages" => messages
-      ))
+      }
+      # Sessions are tagged with the directory they were launched from; :default
+      # means "this workspace", nil means "no origin at all".
+      tag = cwd == :default ? workspace : cwd
+      payload["cwd"] = tag if tag
+      File.write(File.join(dir, "#{id}.json"), JSON.pretty_generate(payload))
     end
 
     def build_resume_repl(workspace)

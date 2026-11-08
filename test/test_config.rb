@@ -227,6 +227,39 @@ class TestConfig < Minitest::Test
     assert_equal "/tmp/project", copy.workspace
   end
 
+  def test_sessions_live_next_to_the_config_file_not_in_the_workspace
+    config = Rubot::Config.from_data({
+      "agents" => { "defaults" => { "workspace" => "/tmp/home-workspace" } }
+    }, config_path: File.join(@tmpdir, "config.yml"))
+
+    copy = config.with_workspace("/tmp/project")
+
+    assert_equal File.join(@tmpdir, "sessions"), copy.sessions_dir,
+                 "one central sessions directory, outside the workspace"
+    assert_equal "/tmp/project", copy.sessions_cwd
+    assert_nil config.sessions_cwd, "the original config is untouched"
+    refute_includes copy.sessions_dir, "workspace"
+  end
+
+  def test_sessions_dir_ignores_an_explicit_assets_workspace
+    config = Rubot::Config.from_data({
+      "agents" => { "defaults" => { "workspace" => "/tmp/project",
+                                    "assets_workspace" => "/tmp/shared-assets" } }
+    }, config_path: File.join(@tmpdir, "config.yml"))
+
+    assert_equal File.join(@tmpdir, "sessions"), config.sessions_dir
+  end
+
+  def test_a_channel_without_a_launch_directory_has_no_session_cwd
+    config = Rubot::Config.from_data(
+      { "agents" => { "defaults" => { "workspace" => "/tmp/bot" } } },
+      config_path: File.join(@tmpdir, "config.yml")
+    )
+
+    assert_nil config.sessions_cwd, "Telegram has no directory to filter on"
+    assert_equal File.join(@tmpdir, "sessions"), config.sessions_dir
+  end
+
   def test_model_entry_by_name_finds_model
     File.write(@config_path, {
       "models" => [

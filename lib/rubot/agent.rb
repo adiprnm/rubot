@@ -106,6 +106,8 @@ module Rubot
       # launches; the setter writes it back.
       @auto_approve = config.respond_to?(:auto_approve) ? config.auto_approve : false
       @session = Session.new(session_id, workspace: config.workspace,
+                                         sessions_dir: session_dir_for(config),
+                                         cwd: session_cwd_for(config),
                                          max_messages: config.session_max_messages)
       apply_initial_preset!
       @provider = provider || build_provider(preset: @active_preset)
@@ -774,6 +776,8 @@ module Rubot
     def switch_session(session_id)
       return @session if @session.id == session_id
       @session = Session.new(session_id, workspace: @config.workspace,
+                                         sessions_dir: session_dir_for(@config),
+                                         cwd: session_cwd_for(@config),
                                          max_messages: @config.session_max_messages)
       apply_initial_preset!
       @session
@@ -1095,6 +1099,18 @@ module Rubot
     end
 
     private
+
+    # Where this agent's session files go, and the directory they are marked as
+    # coming from. Both come from the config so a channel can re-root them: the
+    # TUI keeps one central sessions directory while recording the project it
+    # was launched in, and /resume filters on that recorded directory.
+    def session_dir_for(cfg)
+      cfg.respond_to?(:sessions_dir) ? cfg.sessions_dir : Session.sessions_dir(cfg.workspace)
+    end
+
+    def session_cwd_for(cfg)
+      cfg.respond_to?(:sessions_cwd) ? cfg.sessions_cwd : nil
+    end
 
     # Directory holding the AGENTS.md this agent follows. The project's own
     # file is preferred over the global one in the configured workspace, so

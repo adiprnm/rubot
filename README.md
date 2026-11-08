@@ -14,7 +14,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - ⌨️ **Multiline prompt** — Shift+Enter inserts a newline and the input box grows with the text, word-wrapping long lines
 - 📝 **External editor** — Ctrl+G opens the half-typed prompt in `$EDITOR` and takes the edited text straight back into the input box
 - 🧾 **File diffs** — every file the agent writes, edits or deletes shows a compact diff under the tool row in the TUI
-- 📝 **Session management** — persistent conversation history, a new session per TUI launch, and `/resume` to browse and reopen any saved session
+- 📝 **Session management** — persistent conversation history in one central directory, a new session per TUI launch, and `/resume` to browse and reopen the saved sessions started from the directory you are in
 - 🧬 **SOUL.md** — personality and identity file for persistent character
 - 🎛️ **Model presets** — named model configurations with a primary default, switchable per session and manageable from Telegram
 - 🎚️ **Model picker** — `/models` lists every model the provider supports and switches the active session to the one you pick
@@ -177,6 +177,7 @@ back out, and the blank line stays.
 | `/compact` | Summarize older messages to free context |
 | `/session [name]` | Show or switch session |
 | `/resume` | Show saved sessions under the command; `↑`/`↓` + `Enter` resumes one (plain REPL: numbered list) |
+| `/resume all` | List saved sessions from every directory, not just the current one |
 | `/resume <n\|id>` | Reopen a saved session by number or id |
 | `/info` | Show agent info (includes soul/memory status) |
 | `/models` | List the models the provider supports; type to search, `↑`/`↓` + `Enter` switches the active session to one (plain REPL: printed list) |
@@ -193,7 +194,16 @@ back out, and the blank line stays.
 | `/stream on\|off` | Toggle streaming |
 | `/quit` | Exit |
 
-Sessions live as JSON files under `<workspace>/sessions/`. Every TUI launch
+Sessions live as JSON files in one central directory next to `config.yml` —
+`~/.rubot/sessions/` by default, never inside the workspace and never in the
+project you happen to launch from. Each file records the directory
+its session was started in (`cwd`), and `/resume` shows only the conversations
+that were started from the current directory (exact match, not a prefix, so
+`app` and `app/lib` are different projects). A hint at the end of the list
+counts the ones from elsewhere, and `/resume all` lists every tagged session;
+`/resume <id>` still opens any of them by id. Sessions with no directory of
+their own — Telegram chats, and files written before the field existed — are
+never listed. Every TUI launch
 starts a new conversation under a timestamped id — the previous one keeps its
 own id and stays resumable, so nothing is lost. A session file is only written
 once it has at least one message: closing a launch before saying anything
