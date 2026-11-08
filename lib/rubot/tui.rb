@@ -344,18 +344,37 @@ module Rubot
       @app.on_key(:wheel_down) { @log.scroll_by(3) }
 
       # Drag with the left button to select; on release the text is copied
-      # through OSC 52 (terminal clipboard).
+      # through OSC 52 (terminal clipboard). A press on the scrollbar column
+      # grabs the bar instead: from there the drag scrolls the log until the
+      # button comes up, wherever the cursor goes.
       @app.on_key(:mouse_press) do |key|
         next unless key.mouse_button.zero?
 
-        @log.begin_selection(key.mouse_x, key.mouse_y)
+        # A fresh press always clears a grab, so a release the terminal
+        # never delivered cannot leave the log stuck to the cursor.
+        @log.end_scrollbar_drag
+        if @log.scrollbar_at?(key.mouse_x, key.mouse_y)
+          @log.begin_scrollbar_drag(key.mouse_x, key.mouse_y)
+        else
+          @log.begin_selection(key.mouse_x, key.mouse_y)
+        end
       end
       @app.on_key(:mouse_drag) do |key|
+        # Checked before the button, so a terminal that reports motion with
+        # no button held (mode 1003) cannot drop the grab halfway through.
+        if @log.scrollbar_dragging?
+          @log.drag_scrollbar(key.mouse_y)
+          next
+        end
         next unless key.mouse_button.zero?
 
         @log.extend_selection(key.mouse_x, key.mouse_y)
       end
       @app.on_key(:mouse_release) do |key|
+        if @log.scrollbar_dragging?
+          @log.end_scrollbar_drag
+          next
+        end
         next unless key.mouse_button.zero?
 
         copy_selection
@@ -367,6 +386,7 @@ module Rubot
       # fetched and saved here before it can reach the prompt.
       @app.on_key(:ctrl_v) { paste_clipboard }
       @app.on_key(:escape) do
+        @log.end_scrollbar_drag
         @log.clear_selection
         cancel_turn
       end

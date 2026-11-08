@@ -47,6 +47,8 @@ module Rubot
         @wrap_w = 0
         @scroll_y = 0
         @follow = true
+        @dragging_bar = nil
+        @bar_grab = 0
       end
 
       # Append an entry. `segments` is a list of [text, style] pairs.
@@ -189,6 +191,59 @@ module Rubot
         (top_y + 1...bottom_y).each { |y| spans << [ y, @rect.x, @rect.right ] }
         spans << [ bottom_y, @rect.x, bottom_x ]
         spans
+      end
+
+      # --- scrollbar (drag the bar with the mouse to scroll) -------------
+
+      # The bar is drawn only when the content outgrows the page; below that
+      # there is nothing to grab, so a press on the last column still
+      # selects text like any other cell.
+      def scrollbar_visible?
+        return false unless @rect
+
+        @lines.size > @rect.h
+      end
+
+      def scrollbar_at?(x, y)
+        return false unless scrollbar_visible?
+        return false unless x == @rect.right
+
+        y >= @rect.y && y <= @rect.bottom
+      end
+
+      # Grabbing the bar turns the drag into a scroll instead of a selection.
+      # A press on the thumb keeps the grab point under the cursor; a press
+      # on the track next to it centres the thumb there and jumps, which is
+      # what a click on a scrollbar is expected to do.
+      def begin_scrollbar_drag(x, y)
+        return self unless scrollbar_at?(x, y)
+
+        _page_h, bar_h, = scrollbar_metrics
+        grab = y - (@rect.y + scrollbar_thumb_top)
+        grab = bar_h / 2 unless grab.between?(0, bar_h - 1)
+
+        @dragging_bar = true
+        @bar_grab = grab
+        @sel = nil
+        scroll_to_bar(y - grab)
+        self
+      end
+
+      def scrollbar_dragging?
+        !!@dragging_bar
+      end
+
+      def drag_scrollbar(y)
+        return self unless @dragging_bar
+
+        scroll_to_bar(y - @bar_grab)
+        self
+      end
+
+      def end_scrollbar_drag
+        @dragging_bar = nil
+        @bar_grab = nil
+        self
       end
 
       # Drop entries; used by /new (the screen is wiped silently). `keep`
@@ -447,9 +502,13 @@ module Rubot
         used = lead_indent
         at_start = true
 
+        # A soft-wrapped row starts under the hanging indent, so the cells
+        # the prefix takes are already spoken for: counting from `hang`
+        # instead made every continuation row overflow by the marker width
+        # and lose its last characters off the right edge.
         new_row = lambda do
           lines << prefix.dup
-          used = hang
+          used = wrap_indent
           at_start = true
         end
 
@@ -475,7 +534,9 @@ module Rubot
             token_w = ::TUI::Text.width(token)
             new_row.call if used + token_w > width && used.positive?
 
-            if token_w > width
+            # Compare against what is left on the current row, not against
+            # the full width: a prefixed row has that much less to give.
+            if token_w > width - line_width(lines.last)
               used = push_hard_broken(lines, token, style, width, prefix)
             else
               lines.last << [ token, style ]
@@ -522,16 +583,45 @@ module Rubot
       end
 
       def draw_scrollbar(canvas)
-        content_h = @lines.size
-        page_h = [ @rect.h, 1 ].max
-        bar_h = [ page_h * page_h / content_h, 1 ].max
-        max_scroll = [ content_h - page_h, 1 ].max
-        y0 = (@scroll_y * (page_h - bar_h) / max_scroll).round
+        _page_h, bar_h, = scrollbar_metrics
+        y0 = scrollbar_thumb_top
+        # Brighter while held, so the grab has feedback on screen.
+        style = @dragging_bar ? :thumb : :muted
         (@rect.y + y0..[ @rect.y + y0 + bar_h - 1, @rect.bottom ].min).each do |y|
           # The bar owns the rect's last column. Text is wrapped one cell
           # narrower (see #text_width), so this is the only cell it can take.
-          canvas.put(@rect.right, y, "▐", :muted)
+          canvas.put(@rect.right, y, "▐", style)
         end
+      end
+
+      # Page height, thumb height, thumb travel and the largest scroll
+      # offset, in one place: the bar is drawn, hit-tested and dragged from
+      # these numbers, so a press on the thumb never jumps under the cursor.
+      def scrollbar_metrics
+        content_h = @lines.size
+        page_h = [ @rect.h, 1 ].max
+        bar_h = [ page_h * page_h / content_h, 1 ].max
+        [ page_h, bar_h, [ page_h - bar_h, 0 ].max, [ content_h - page_h, 0 ].max ]
+      end
+
+      # Rows from the top of the view to the top of the thumb.
+      def scrollbar_thumb_top
+        _page_h, _bar_h, travel, max_scroll = scrollbar_metrics
+        return 0 if travel.zero? || max_scroll.zero?
+
+        (@scroll_y * travel / max_scroll).round
+      end
+
+      # Inverse of #scrollbar_thumb_top: scroll so the thumb sits at
+      # `thumb_top` rows below the top of the view.
+      def scroll_to_bar(thumb_top)
+        _page_h, _bar_h, travel, max_scroll = scrollbar_metrics
+        offset = thumb_top.clamp(0, travel)
+        @scroll_y = travel.zero? ? 0 : (offset.to_f * max_scroll / travel).round
+        @follow = @scroll_y >= max_scroll
+        # The rows under the highlight just moved.
+        clear_selection
+        self
       end
     end
   end

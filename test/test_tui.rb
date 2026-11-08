@@ -1903,6 +1903,24 @@ module Rubot
       end
     end
 
+    # A continuation row of a list item starts under the marker indent, so
+    # the cells that indent takes are not free for text. Counting the row
+    # from zero made every wrapped item overflow by the marker width and
+    # lose its last characters off the right edge.
+    def test_wrapped_list_item_rows_do_not_overflow_the_marker_indent
+      view = TUI::LogView.new
+      view.layout(::TUI::Rect.new(0, 0, 24, 14))
+      view.add_entry(TUI::Markdown.to_segments("- alpha beta gamma delta epsilon zeta eta theta iota\n"),
+                     keep_leading: true, indent: 2)
+
+      rows = view.instance_variable_get(:@lines)
+      assert_operator rows.size, :>, 2, "the item must wrap twice: #{rows.inspect}"
+      rows.each do |row|
+        assert_operator row.sum { |(text, _style)| ::TUI::Text.width(text.to_s) }, :<=, view.content_width,
+                        "wrapped item row overflows by the marker width: #{row.inspect}"
+      end
+    end
+
     # A wrapped list item should continue under the item's text, not under
     # the bullet.
     def test_wrapped_list_items_hang_under_the_item_text
@@ -2670,6 +2688,119 @@ module Rubot
       assert_equal "row 3", view.selection_text
     end
 
+    # Dragging on the scrollbar column scrolls the log; it must not be read
+    # as a text selection, which is what a press on any other cell starts.
+    def test_scrollbar_drag_scrolls_instead_of_selecting
+      view = TUI::LogView.new
+      view.layout(::TUI::Rect.new(0, 0, 20, 5))
+      40.times { |i| view.add_entry([ [ "row #{i}", :text ] ]) }
+      view.render(::TUI::Canvas.new(20, 5))
+
+      assert view.scrollbar_at?(19, 0), "the last column is the bar"
+      refute view.scrollbar_at?(18, 0), "one cell left of it is text"
+
+      view.begin_scrollbar_drag(19, 0)
+      refute view.selection?, "grabbing the bar starts no selection"
+
+      view.drag_scrollbar(4)
+      assert_equal 35, scroll_y(view), "dragged to the bottom"
+
+      view.drag_scrollbar(0)
+      assert_equal 0, scroll_y(view), "and back to the top"
+    end
+    # The grab point stays under the cursor, so the bar follows the drag
+    # instead of jumping to wherever the pointer happens to be.
+    def test_scrollbar_keeps_the_grab_point_under_the_cursor
+      view = TUI::LogView.new
+      view.layout(::TUI::Rect.new(0, 0, 20, 20))
+      40.times { |i| view.add_entry([ [ "row #{i}", :text ] ]) }
+      view.render(::TUI::Canvas.new(20, 20))
+      view.scroll_by(-20) # top, so the thumb starts at the first row
+      assert_equal 0, scroll_y(view)
+
+      view.begin_scrollbar_drag(19, 5) # inside the thumb, halfway down
+      assert view.scrollbar_dragging?
+      assert_equal 0, view.send(:scrollbar_thumb_top), "the press does not jump"
+
+      view.drag_scrollbar(6)
+      assert_equal 1, view.send(:scrollbar_thumb_top), "the bar followed by one row"
+
+      view.end_scrollbar_drag
+      refute view.scrollbar_dragging?
+    end
+
+    # A press on the track beside the thumb centres the thumb there and
+    # jumps, the way a click on a scrollbar is expected to behave.
+    def test_scrollbar_track_click_jumps
+      view = TUI::LogView.new
+      view.layout(::TUI::Rect.new(0, 0, 20, 20))
+      100.times { |i| view.add_entry([ [ "row #{i}", :text ] ]) }
+      view.render(::TUI::Canvas.new(20, 20))
+      view.scroll_by(-100) # top, so the press lands on the track below the thumb
+      assert_equal 0, scroll_y(view)
+      view.begin_scrollbar_drag(19, 10)
+      view.end_scrollbar_drag
+
+      assert_operator scroll_y(view), :>, 0
+      assert_equal 8, view.send(:scrollbar_thumb_top), "centred under the cursor"
+    end
+
+    # With nothing to scroll there is no bar on screen, so the last column
+    # stays selectable like every other cell.
+    def test_no_scrollbar_grab_when_the_content_fits
+      view = TUI::LogView.new
+      view.layout(::TUI::Rect.new(0, 0, 20, 5))
+      view.add_entry([ [ "short", :text ] ])
+      view.render(::TUI::Canvas.new(20, 5))
+
+      refute view.scrollbar_visible?
+      refute view.scrollbar_at?(19, 0)
+
+      view.begin_scrollbar_drag(19, 0)
+      refute view.scrollbar_dragging?
+    end
+
+    # The bar is brighter while it is held, so the grab has feedback.
+    def test_scrollbar_is_highlighted_while_dragged
+      view = TUI::LogView.new
+      view.layout(::TUI::Rect.new(0, 0, 20, 5))
+      40.times { |i| view.add_entry([ [ "row #{i}", :text ] ]) }
+      canvas = ::TUI::Canvas.new(20, 5)
+      view.scroll_by(-100) # top, so the thumb sits on the first row
+      view.render(canvas)
+      styles = canvas.instance_variable_get(:@styles)
+      assert_equal ::TUI::Style.id(:muted), styles[0][19]
+
+      view.begin_scrollbar_drag(19, 0)
+      view.render(canvas)
+
+      assert_equal ::TUI::Style.id(:thumb), styles[0][19]
+    end
+
+    # The wiring: a press on the bar column must scroll, not select, and the
+    # release that ends the grab must not fire a copy at the same time.
+    def test_scrollbar_drag_in_the_repl_does_not_select
+      repl = build_repl
+      log = repl.instance_variable_get(:@log)
+      app = repl.instance_variable_get(:@app)
+      60.times { |i| log.add_entry([ [ "row #{i}", :text ] ]) }
+      app.render_frame
+
+      rect = log.instance_variable_get(:@rect)
+      bar_x = rect.right
+      log.scroll_by(-10)
+      app.render_frame
+      before = scroll_y(log)
+
+      app.send(:dispatch, ::TUI::Key.new(:mouse_press).at(bar_x, rect.y + 1, button: 0))
+      app.send(:dispatch, ::TUI::Key.new(:mouse_drag).at(bar_x, rect.bottom, button: 0))
+      app.send(:dispatch, ::TUI::Key.new(:mouse_release).at(bar_x, rect.bottom, button: 0))
+
+      refute log.selection?, "the bar is not a selection"
+      assert_operator scroll_y(log), :>, before
+      refute log.scrollbar_dragging?, "the release let go of the bar"
+    end
+
     # A terminal keeps its selection after the mouse is released; so does
     # the log. The copy still happens on release.
     def test_release_keeps_the_highlight_and_copies
@@ -2740,6 +2871,12 @@ module Rubot
     end
 
     # Column indexes of `row` painted with `style`.
+    # The log keeps its scroll offset private; the scrollbar tests read it
+    # the same way the other view tests do.
+    def scroll_y(view)
+      view.instance_variable_get(:@scroll_y)
+    end
+
     def styled_columns(canvas, row, style)
       sid = ::TUI::Style.id(style)
       styles = canvas.instance_variable_get(:@styles)[row]
