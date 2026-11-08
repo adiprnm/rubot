@@ -132,6 +132,11 @@ module Rubot
     # wrap or a typed newline) start where the text of the first row does.
     ECHO_HANG = 2
 
+    # A tool call slower than this shows how long it took. Quick calls stay a
+    # single quiet row; the clock is for the call that makes the reader wonder
+    # whether it hung.
+    SLOW_TOOL_SECONDS = 3.0
+
     # Skills are loaded by reading their SKILL.md through the file tool (see
     # SkillRegistry#to_system_prompt). The TUI spots that path so a skill load
     # gets its own transcript row instead of hiding inside a file_ops row.
@@ -386,6 +391,7 @@ module Rubot
 
       @app.every(0.1) do
         pump
+        refresh_slow_tools
         @working.tick(@busy ? (@stopping ? :cancel : :work) : nil)
       end
     end
@@ -521,6 +527,10 @@ module Rubot
       when :chunk then append_live(event[1])
       # Clearance also resets any tool-line bookkeeping.
       when :stream_end
+        # A call whose result never arrived (cancelled mid-flight) keeps its
+        # row, but stops being clocked: the turn is over, so the counter would
+        # otherwise run on a row nothing is working on.
+        @tool_entries.clear
         # A stop on an answer that never had a non-blank token drops its row,
         # so the cancelled turn does not leave a blank line of its own.
         if event[1] && @live_entry && @live_text.to_s.strip.empty?
@@ -560,8 +570,9 @@ module Rubot
         else
           tool_summary(event[1], event[2], max: tool_summary_limit(event[1]))
         end
-        index = @log.add_entry(tool_call_segments(event[1], summary, skill), keep_leading: true, indent: 2)
-        @tool_entries[event[1].to_s] = [ index, summary, skill ]
+        index = @log.add_entry(tool_call_segments(event[1], summary, skill),
+                              keep_leading: true, indent: 2, nowrap: true)
+        @tool_entries[event[1].to_s] = { index: index, summary: summary, skill: skill, started_at: monotonic_now, shown: nil }
       when :tool_done
         # The ⚒ line flips to ✓ in place — or to ✗ when the call came back a
         # failure. A file the call wrote gains its diff rows below the row.
@@ -569,8 +580,8 @@ module Rubot
         failed = Rubot::TUI::Transcript.failure?(event[3])
         mark = failed ? MARK[:err] : MARK[:ok]
         style = failed ? :error : :tool_ok
-        index = prev ? prev[0] : @log.add_entry([ [ "#{mark} ", style ], [ event[1].to_s, :muted ] ], indent: 2)
-        set_tool_done(index, event[1].to_s, prev && prev[1], prev && prev[2], failed)
+        index = prev ? prev[:index] : @log.add_entry([ [ "#{mark} ", style ], [ event[1].to_s, :muted ] ], indent: 2)
+        set_tool_done(index, event[1].to_s, prev && prev[:summary], prev && prev[:skill], failed, elapsed: tool_elapsed(prev))
         add_file_diff(event[2])
       when :confirm then show_confirm(event)
       when :session_list then show_session_list(event[1])
@@ -588,8 +599,41 @@ module Rubot
       Rubot::TUI::Transcript.tool_call(name, summary, skill)
     end
 
-    def set_tool_done(index, name, summary, skill = nil, failed = false)
-      @log.set_entry(index, Rubot::TUI::Transcript.tool_done(name, summary, skill, failed: failed))
+    def set_tool_done(index, name, summary, skill = nil, failed = false, elapsed: nil)
+      @log.set_entry(index, Rubot::TUI::Transcript.tool_done(name, summary, skill, failed: failed),
+                     tail: elapsed && Rubot::TUI::Transcript.elapsed_tail(elapsed), nowrap: true)
+    end
+
+    # Seconds the call spent running, or nil when it came back before the
+    # threshold — an ordinary call says nothing about its duration.
+    def tool_elapsed(entry)
+      return nil unless entry && entry[:started_at]
+
+      elapsed = monotonic_now - entry[:started_at]
+      elapsed >= SLOW_TOOL_SECONDS ? elapsed : nil
+    end
+
+    # A call still in flight past the threshold grows a live counter pinned to
+    # the right edge of its row, so a hung tool looks busy instead of frozen.
+    # Rewritten only when the label actually changes, once a second rather
+    # than on every tick.
+    def refresh_slow_tools
+      return if @tool_entries.empty?
+
+      now = monotonic_now
+      @tool_entries.each do |name, entry|
+        next unless entry[:started_at]
+
+        elapsed = now - entry[:started_at]
+        next if elapsed < SLOW_TOOL_SECONDS
+
+        label = Rubot::TUI::Transcript.elapsed_label(elapsed)
+        next if entry[:shown] == label
+
+        entry[:shown] = label
+        @log.set_entry(entry[:index], tool_call_segments(name, entry[:summary], entry[:skill]),
+                       tail: Rubot::TUI::Transcript.elapsed_tail(elapsed), nowrap: true)
+      end
     end
 
     # A file the tool just wrote gets its change diff under the tool row,
@@ -847,7 +891,8 @@ module Rubot
     def replay_transcript(messages)
       clear_log_keep_banner
       Rubot::TUI::Transcript.entries(messages, width: @log.content_width).each do |entry|
-        @log.add_entry(entry[:segments], keep_leading: entry[:keep_leading], indent: entry[:indent])
+        @log.add_entry(entry[:segments], keep_leading: entry[:keep_leading], indent: entry[:indent],
+                                          nowrap: entry[:nowrap])
       end
     end
 

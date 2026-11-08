@@ -16,6 +16,11 @@ module Rubot
       # which keeps the wrap stable as output grows past the page height.
       SCROLLBAR_W = 1
 
+      # A right-pinned tail keeps one blank column between itself and the
+      # scrollbar column, so the duration and the bar never fuse into one
+      # blob when both are on screen.
+      TAIL_GAP = 1
+
       # A leading list/quote marker. Wrapped rows are indented by the
       # marker's width so continuation lines sit under the item text
       # instead of under the marker itself.
@@ -34,8 +39,11 @@ module Rubot
         @keep_leading = []   # entries whose leading spaces are meaningful
         @indents = []        # left padding (cells) applied to every wrapped row
         @hangs = []          # hanging indent for the rows after the first
+        @tails = []          # right-pinned segment list per entry, or nil
+        @nowraps = []        # entries kept to one row, overflow cut to a …
         @entry_lines = []    # wrapped rows per entry
         @lines = []          # flattened rows, cached for rendering
+        @line_tails = []     # right-pinned tail per flattened row, or nil
         @wrap_w = 0
         @scroll_y = 0
         @follow = true
@@ -44,15 +52,24 @@ module Rubot
       # Append an entry. `segments` is a list of [text, style] pairs.
       # `hang` indents every row of the entry except the first, which is how
       # a prompt echo keeps its continuation lines under the "❯ " marker.
+      # `tail` is a short segment list (a duration, a state) pinned to the
+      # right edge of the entry's last row: it is drawn after the content, in
+      # the text columns the scrollbar leaves free, and the content wraps one
+      # cell short of it so nothing is ever written underneath.
+      # `nowrap` keeps the entry on a single row, cutting the overflow to an
+      # ellipsis instead. Tool rows use it: a call is one line in the
+      # transcript, however long its arguments are.
       # Returns the entry index so it can be updated later via #set_entry
       # while a response streams in.
-      def add_entry(segments, keep_leading: false, indent: 0, hang: 0)
+      def add_entry(segments, keep_leading: false, indent: 0, hang: 0, tail: nil, nowrap: false)
         @entries << segments
         @keep_leading << keep_leading
         @indents << indent
         @hangs << hang
+        @tails << tail
+        @nowraps << nowrap
         wrap @entries.length - 1
-        @lines = @entry_lines.flatten(1)
+        refresh_lines
         follow_bottom if @follow
         @entries.length - 1
       end
@@ -81,22 +98,27 @@ module Rubot
         @keep_leading.pop
         @indents.pop
         @hangs.pop
+        @tails.pop
+        @nowraps.pop
         @entry_lines.pop
-        @lines = @entry_lines.flatten(1)
+        refresh_lines
         follow_bottom if @follow
         self
       end
 
       # Replace an entry in place; `segments` is a list of [text, style] pairs.
-      def set_entry(index, segments, keep_leading: nil, indent: nil, hang: nil)
+      # `tail: false` clears a tail set before, `tail: nil` leaves it alone.
+      def set_entry(index, segments, keep_leading: nil, indent: nil, hang: nil, tail: false, nowrap: nil)
         return unless index && @entries[index]
 
         @entries[index] = segments
         @keep_leading[index] = keep_leading unless keep_leading.nil?
         @indents[index] = indent unless indent.nil?
         @hangs[index] = hang unless hang.nil?
+        @tails[index] = tail unless tail == false
+        @nowraps[index] = nowrap unless nowrap.nil?
         wrap index
-        @lines = @entry_lines.flatten(1)
+        refresh_lines
         follow_bottom if @follow
         self
       end
@@ -178,8 +200,10 @@ module Rubot
         @keep_leading = @keep_leading[0, keep] || []
         @indents = @indents[0, keep] || []
         @hangs = @hangs[0, keep] || []
+        @tails = @tails[0, keep] || []
+        @nowraps = @nowraps[0, keep] || []
         @entry_lines = @entry_lines[0, keep] || []
-        @lines = @entry_lines.flatten(1)
+        refresh_lines
         @scroll_y = 0
         @follow = true
         @sel = nil
@@ -231,6 +255,8 @@ module Rubot
             x += ::TUI::Text.width(text)
             break if x >= @rect.right
           end
+
+          paint_tail(canvas, i, row)
         end
 
         paint_selection(canvas)
@@ -239,6 +265,25 @@ module Rubot
       end
 
       private
+
+      # A pinned tail (a tool call's duration) is drawn last, right-aligned in
+      # the text columns and one cell clear of the scrollbar column, so the
+      # bar can never sit on top of it and the two characters never fuse. The
+      # content of the row was wrapped that much narrower, so a long summary
+      # is broken before it reaches the tail instead of running underneath it.
+      def paint_tail(canvas, index, row)
+        tail = @line_tails[index]
+        return if tail.nil? || tail.empty?
+
+        width = ::TUI::Text.width(tail.map { |(text, _style)| text.to_s }.join(""))
+        x = @rect.x + text_width - width - TAIL_GAP
+        return if x < @rect.x
+
+        tail.each do |text, style|
+          canvas.put(x, row, text.to_s, style)
+          x += ::TUI::Text.width(text.to_s)
+        end
+      end
 
       def paint_selection(canvas)
         selection_spans.each do |(y, from, to)|
@@ -273,11 +318,30 @@ module Rubot
         [ @rect.w - SCROLLBAR_W, 1 ].max
       end
 
+      # Flatten the wrapped entries into the rows the renderer walks, and
+      # remember which row carries a pinned tail (the last row of an entry
+      # that has one). One pass keeps the two arrays in step; the tail is
+      # aligned at render time, so a resize needs no bookkeeping here.
+      def refresh_lines
+        @lines = []
+        @line_tails = []
+        @entry_lines.each_with_index do |rows, index|
+          tail = @tails[index]
+          rows.each_with_index do |row, row_index|
+            @lines << row
+            @line_tails << (tail && row_index == rows.length - 1 ? tail : nil)
+          end
+        end
+      end
+
       def wrap(index)
         indent = [ @indents[index].to_i, [ text_width - 1, 0 ].max ].min
-        width = [ text_width - indent, 1 ].max
-        hang = hang_for(index, width)
-        lines = wrap_segments(@entries[index], width, keep_leading: @keep_leading[index], hang: hang)
+        width = [ text_width - indent - tail_reserve(@tails[index]), 1 ].max
+        lines = if @nowraps[index]
+          [ truncate_row(@entries[index], width) ]
+        else
+          wrap_segments(@entries[index], width, keep_leading: @keep_leading[index], hang: hang_for(index, width))
+        end
         @entry_lines[index] = indent.positive? ? indent_lines(lines, indent) : lines
       end
 
@@ -285,12 +349,55 @@ module Rubot
         @wrap_w = @rect.w
         @entry_lines = @entries.each_with_index.map do |entry, i|
           indent = [ @indents[i].to_i, [ text_width - 1, 0 ].max ].min
-          width = [ text_width - indent, 1 ].max
-          lines = wrap_segments(entry, width, keep_leading: @keep_leading[i], hang: hang_for(i, width))
+          width = [ text_width - indent - tail_reserve(@tails[i]), 1 ].max
+          lines = if @nowraps[i]
+            [ truncate_row(entry, width) ]
+          else
+            wrap_segments(entry, width, keep_leading: @keep_leading[i], hang: hang_for(i, width))
+          end
           indent.positive? ? indent_lines(lines, indent) : lines
         end
-        @lines = @entry_lines.flatten(1)
+        refresh_lines
         @scroll_y = [ @lines.size - @rect.h, 0 ].max if @follow
+      end
+
+      # One row, cut to `width` cells with a trailing ellipsis. Used by tool
+      # rows, where a long argument list must never push the row onto a
+      # second line and away from the clock at its end.
+      def truncate_row(segments, width)
+        cells = segments.flat_map do |(text, style, _mode)|
+          text.to_s.each_char.map { |ch| [ ch, style ] }
+        end
+        return segments if cells.size <= width
+
+        kept = []
+        used = 0
+        cells.each do |(ch, style)|
+          w = ::TUI::Text.width(ch)
+          break if used + w > width - 1
+
+          kept << [ ch, style ]
+          used += w
+        end
+        style = cells[kept.size] ? cells[kept.size][1] : nil
+        rebuild_segments(kept) + [ [ "…", style ] ]
+      end
+
+      # Regroup a run of cells back into [text, style] segments, so the
+      # renderer still paints one colour per stretch.
+      def rebuild_segments(cells)
+        cells.chunk_while { |(_, a), (_, b)| a == b }.map do |run|
+          [ run.map(&:first).join, run.first[1] ]
+        end
+      end
+
+      # Cells kept free on the right for a pinned tail: its own width, the
+      # blank cell that clears the scrollbar, and one more so the content
+      # stops a cell short of the tail instead of touching it.
+      def tail_reserve(tail)
+        return 0 if tail.nil? || tail.empty?
+
+        ::TUI::Text.width(tail.map { |(text, _style)| text.to_s }.join) + TAIL_GAP + 1
       end
 
       # A hanging indent must leave at least one cell of content, or a long
@@ -421,7 +528,9 @@ module Rubot
         max_scroll = [ content_h - page_h, 1 ].max
         y0 = (@scroll_y * (page_h - bar_h) / max_scroll).round
         (@rect.y + y0..[ @rect.y + y0 + bar_h - 1, @rect.bottom ].min).each do |y|
-          canvas.put(@rect.right - 1, y, "▐", :muted)
+          # The bar owns the rect's last column. Text is wrapped one cell
+          # narrower (see #text_width), so this is the only cell it can take.
+          canvas.put(@rect.right, y, "▐", :muted)
         end
       end
     end

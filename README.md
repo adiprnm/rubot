@@ -15,6 +15,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 📝 **External editor** — Ctrl+G opens the half-typed prompt in `$EDITOR` and takes the edited text straight back into the input box
 - 🧾 **File diffs** — every file the agent writes, edits or deletes shows a compact diff under the tool row in the TUI
 - ❌ **Failure markers** — a tool row settles on ✓ or, when the call fails (an `ERROR:` result or a non-zero exit code), on ✗
+- ⏱️ **Slow-tool clock** — a tool call running past 3 seconds shows how long it has been going, pinned to the right end of its row
 - 📝 **Session management** — persistent conversation history in one central directory, a new session per TUI launch, and `/resume` to browse and reopen the saved sessions started from the directory you are in
 - 🧬 **SOUL.md** — personality and identity file for persistent character
 - 🎛️ **Model presets** — named model configurations with a primary default, switchable per session and manageable from Telegram
@@ -310,7 +311,15 @@ edits (`sed -i`, `rm`, …) still go through the confirmation above. A failed
 call shows the same way at a glance: the row's `⚒` settles on `✗` instead of
 `✓` when the tool returned an `ERROR:` result or a shell command exited
 non-zero, and a resumed session rebuilds that marker from the saved tool
-result. A delete
+result. A call that takes longer than three seconds grows a dim `· 4s` tail
+while it is still running, so a hung tool reads as busy instead of frozen; a
+finished call keeps the total, and a call that came back sooner stays one
+quiet line. The tail is pinned to the right end of the row instead of being
+trailed after the summary: the row itself never wraps — a long command is cut
+to `…` — so the clock stays on the same line, one cell clear of the scrollbar
+column, which is why the bar never covers it. That duration is a view, not a
+record: it is not stored on the tool message, so `/resume` redraws the row
+without it. A delete
 replays every line it removed: the file has no after-content, so the whole
 block is red. The tool still returns its plain `Written/Appended/Edited/Deleted …`
 result to the model; the diff is a TUI view only. Its before/after text is kept as UI

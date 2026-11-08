@@ -46,6 +46,27 @@ module Rubot
         end
       end
 
+      # How long a call waited, e.g. "4s" or "1m 5s". Only calls slow enough
+      # to make the reader wonder get one, so the ordinary quick call stays a
+      # single quiet line.
+      def self.elapsed_label(seconds)
+        total = seconds.to_i
+        minutes, secs = total.divmod(60)
+        return "#{secs}s" if minutes.zero?
+
+        hours, minutes = minutes.divmod(60)
+        return "#{minutes}m #{secs}s" if hours.zero?
+
+        "#{hours}h #{minutes}m"
+      end
+
+      # The duration as a right-pinned tail (see LogView#add_entry). It reads
+      # as a footnote to the row: dimmer than the summary, and pinned to the
+      # end so a long call summary cannot push it out of view.
+      def self.elapsed_tail(seconds)
+        [ [ "· #{elapsed_label(seconds)}", :dim ] ]
+      end
+
       # Shell results carry their status in a leading "[Exit code: N]" line,
       # every other tool reports a failure as a string starting with "ERROR:".
       EXIT_CODE = /\A\[Exit code: (-?\d+)\]/
@@ -150,7 +171,8 @@ module Rubot
           else
             self.class.tool_summary(name, args, max: self.class.summary_limit(name, @width))
           end
-          add(self.class.tool_done(name, summary, skill, failed: self.class.failure?(@tool_results[call_id(call)])), keep_leading: true, indent: 2)
+          add(self.class.tool_done(name, summary, skill, failed: self.class.failure?(@tool_results[call_id(call)])),
+              keep_leading: true, indent: 2, nowrap: true)
           add_ui_diff(@ui_diffs[call_id(call)]) if @ui_diffs
         end
       end
@@ -241,8 +263,8 @@ module Rubot
         [ name.to_s, args ]
       end
 
-      def add(segments, keep_leading: false, indent: 0)
-        @entries << { segments: segments, keep_leading: keep_leading, indent: indent }
+      def add(segments, keep_leading: false, indent: 0, nowrap: false)
+        @entries << { segments: segments, keep_leading: keep_leading, indent: indent, nowrap: nowrap }
         self
       end
 

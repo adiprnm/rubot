@@ -1110,6 +1110,144 @@ module Rubot
       assert_includes line, "\u2717"
     end
 
+    def test_a_tool_call_past_the_threshold_shows_a_live_clock
+      repl = build_repl
+      ev = repl.instance_variable_get(:@events)
+      app = repl.instance_variable_get(:@app)
+      ev << [ :tool_call, "shell_exec", { "command" => "sleep 10" } ]
+      repl.send(:pump)
+
+      # The call started 4.5 seconds ago and has not come back yet.
+      entries = repl.instance_variable_get(:@tool_entries)
+      entries["shell_exec"][:started_at] -= 4.5
+      repl.send(:refresh_slow_tools)
+
+      line = plain(app.render_lines).find { |l| l.include?("shell_exec") }
+      assert_includes line, "\u2692", "the call is still in flight: #{line.inspect}"
+      assert_includes line, "\u00b7 4s", "a slow call shows how long it has been running: #{line.inspect}"
+      assert line.rstrip.end_with?("\u00b7 4s"),
+             "the clock is pinned to the end of the row: #{line.inspect}"
+    end
+
+    def test_a_tool_call_under_the_threshold_shows_no_clock
+      repl = build_repl
+      ev = repl.instance_variable_get(:@events)
+      app = repl.instance_variable_get(:@app)
+      ev << [ :tool_call, "shell_exec", { "command" => "true" } ]
+      repl.send(:pump)
+      ev << [ :tool_done, "shell_exec", nil, "[Exit code: 0]\n" ]
+      repl.send(:pump)
+
+      line = plain(app.render_lines).find { |l| l.include?("shell_exec") }
+      assert_includes line, "\u2713"
+      refute_includes line, "\u00b7", "a quick call keeps its quiet one-line row: #{line.inspect}"
+    end
+
+    def test_a_slow_tool_call_keeps_its_duration_once_done
+      repl = build_repl
+      ev = repl.instance_variable_get(:@events)
+      app = repl.instance_variable_get(:@app)
+      ev << [ :tool_call, "shell_exec", { "command" => "sleep 5" } ]
+      repl.send(:pump)
+      repl.instance_variable_get(:@tool_entries)["shell_exec"][:started_at] -= 12.2
+
+      ev << [ :tool_done, "shell_exec", nil, "[Exit code: 0]\n" ]
+      repl.send(:pump)
+
+      line = plain(app.render_lines).find { |l| l.include?("shell_exec") }
+      assert_includes line, "\u2713", "the row still ends a check: #{line.inspect}"
+      assert_includes line, "\u00b7 12s", "the finished row keeps how long it took: #{line.inspect}"
+    end
+
+    # The duration is pinned in the text columns, one cell short of the
+    # scrollbar column, so the bar can never be drawn over it.
+    def test_a_tool_clock_never_reaches_the_scrollbar_column
+      repl = build_repl
+      ev = repl.instance_variable_get(:@events)
+      app = repl.instance_variable_get(:@app)
+      ev << [ :tool_call, "shell_exec", { "command" => "sleep 10" } ]
+      repl.send(:pump)
+      repl.instance_variable_get(:@tool_entries)["shell_exec"][:started_at] -= 4.5
+      repl.send(:refresh_slow_tools)
+
+      log = repl.instance_variable_get(:@log)
+      row = plain(app.render_lines).find { |l| l.include?("shell_exec") }
+      assert row, "the tool row is on screen"
+
+      # The clock ends on the log's last text column; the bar's own column
+      # follows it and stays untouched.
+      assert_equal log.instance_variable_get(:@rect).right - 2, row.rstrip.length - 1,
+                   "the clock ends on the last text column: #{row.inspect}"
+    end
+
+    # With enough rows to draw a scrollbar, the bar takes the log's last
+    # column and the clock stops just short of it.
+    def test_the_scrollbar_does_not_cover_the_tool_clock
+      repl = build_repl
+      ev = repl.instance_variable_get(:@events)
+      app = repl.instance_variable_get(:@app)
+      40.times { |i| ev << [ :entry, [ [ "filler row #{i}", :text ] ], true, 0 ] }
+      ev << [ :tool_call, "shell_exec", { "command" => "sleep 10" } ]
+      repl.send(:pump)
+      repl.instance_variable_get(:@tool_entries)["shell_exec"][:started_at] -= 4.5
+      repl.send(:refresh_slow_tools)
+
+      rows = plain(app.render_lines)
+      log_row = rows.index { |l| l.include?("shell_exec") }
+      assert log_row, "the tool row is on screen"
+      assert_includes rows[log_row], "\u00b7 4s", "the clock is still drawn: #{rows[log_row].inspect}"
+      # The clock ends one cell short of the bar's column, which leaves a
+      # blank cell between them; the bar keeps the last column.
+      assert_equal "\u2590", rows[log_row][-1],
+                   "the scrollbar owns the last column: #{rows[log_row].inspect}"
+      assert_equal " ", rows[log_row][-2], "one blank cell clears the bar: #{rows[log_row].inspect}"
+      refute_includes rows[log_row][0..-2], "\u2590", "only one cell of bar"
+    end
+
+    # A summary too long for one row is cut to an ellipsis: a tool call is one
+    # line in the transcript, and the clock keeps to the end of that line.
+    def test_a_long_summary_is_cut_short_instead_of_pushing_the_clock_away
+      repl = build_repl
+      ev = repl.instance_variable_get(:@events)
+      app = repl.instance_variable_get(:@app)
+      ev << [ :tool_call, "shell_exec", { "command" => "echo #{'y' * 400}" } ]
+      repl.send(:pump)
+      repl.instance_variable_get(:@tool_entries)["shell_exec"][:started_at] -= 7.0
+      repl.send(:refresh_slow_tools)
+
+      rows = plain(app.render_lines)
+      long_rows = rows.select { |l| l.include?("yyy") }
+      assert_equal 1, long_rows.length, "a tool call stays on one row: #{long_rows.inspect}"
+      row = long_rows.first
+      assert_includes row, "\u2026", "the overflow is an ellipsis: #{row.inspect}"
+      assert row.rstrip.end_with?("\u00b7 7s"), "the clock keeps the end of the row: #{row.inspect}"
+    end
+
+    def test_tool_elapsed_label_reads_like_the_turn_footer
+      assert_equal "4s", TUI::Transcript.elapsed_label(4.9)
+      assert_equal "1m 5s", TUI::Transcript.elapsed_label(65)
+      assert_equal "1h 2m", TUI::Transcript.elapsed_label(3720)
+    end
+
+    # The tail is placed at render time, so a narrower view keeps it at the
+    # new right edge instead of leaving it where the wider one ended.
+    def test_the_tool_clock_follows_a_resize
+      view = TUI::LogView.new
+      view.layout(::TUI::Rect.new(0, 0, 60, 6))
+      view.add_entry([ [ "\u2692 shell_exec sleep 10", :text ] ],
+                     indent: 2, tail: TUI::Transcript.elapsed_tail(7))
+      view.render(::TUI::Canvas.new(60, 6))
+
+      view.layout(::TUI::Rect.new(0, 0, 30, 6))
+      canvas = ::TUI::Canvas.new(30, 6)
+      view.render(canvas)
+
+      row = plain(canvas.lines).find { |l| l.include?("shell_exec") }
+      assert_includes row, "\u00b7 7s"
+      assert_equal view.instance_variable_get(:@rect).right - 2, row.rstrip.length - 1,
+                   "the clock moved with the right edge: #{row.inspect}"
+    end
+
     def test_replay_marks_a_failed_tool_call
       messages = [
         { "role" => "assistant", "content" => "", "tool_calls" => [
