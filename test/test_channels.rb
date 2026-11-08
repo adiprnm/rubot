@@ -722,33 +722,37 @@ module Rubot
       assert_equal [ :sent ], events
     end
 
-    # A 429 used to be swallowed, leaving the card frozen on an old step. It now
-    # retries once using the retry_after Telegram sends.
-    def test_post_edit_retries_once_after_a_429
+    # A 429 is not retried in place: the wait Telegram asks for can be 15-30s,
+    # which would stall the agent loop. The gate closes for that chat instead,
+    # so no further send or edit goes out until the window expires.
+    def test_a_429_closes_the_flood_gate_and_drops_the_edit
       calls = 0
       @tg.define_singleton_method(:http_post) do |_url, _req|
         calls += 1
-        if calls == 1
-          { "ok" => false, "error_code" => 429, "description" => "Too Many Requests",
-            "parameters" => { "retry_after" => 1 } }
-        else
-          { "ok" => true }
-        end
-      end
-      @tg.define_singleton_method(:sleep) { |_seconds| nil }
-
-      assert_equal :ok, @tg.send(:post_edit, 42, "sent-1", "hi", "HTML")
-      assert_equal 2, calls
-    end
-
-    def test_post_edit_gives_up_after_a_second_429
-      @tg.define_singleton_method(:http_post) do |_url, _req|
         { "ok" => false, "error_code" => 429, "description" => "Too Many Requests",
-          "parameters" => { "retry_after" => 1 } }
+          "parameters" => { "retry_after" => 17 } }
       end
-      @tg.define_singleton_method(:sleep) { |_seconds| nil }
 
       assert_equal :error, @tg.send(:post_edit, 42, "sent-1", "hi", "HTML")
+      assert_equal 1, calls
+      assert_operator @tg.send(:flood_remaining, 42), :>, 0
+    end
+
+    def test_a_flood_window_silences_sends_and_edits_for_that_chat
+      sends = 0
+      @tg.define_singleton_method(:http_post) do |_url, _req|
+        sends += 1
+        { "ok" => false, "error_code" => 429, "description" => "Too Many Requests",
+          "parameters" => { "retry_after" => 17 } }
+      end
+
+      @tg.send(:post_edit, 42, "sent-1", "hi", "HTML")
+      assert_equal :error, @tg.send(:deliver, 42, "hello", nil, parse_mode: nil)
+      assert_equal :error, @tg.send(:post_edit, 42, "sent-1", "again", "HTML")
+      assert_equal 1, sends, "nothing reaches the API while the gate is closed"
+
+      # A different chat is unaffected: the limit is per chat.
+      refute_operator @tg.send(:flood_remaining, 99), :>, 0
     end
 
     def test_format_elapsed

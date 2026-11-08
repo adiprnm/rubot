@@ -32,6 +32,7 @@ module Rubot
     #       stream: true                     # enable streaming responses
     #       typing_indicator: true           # show typing indicator while processing
     #       tool_notifications: true         # send status messages for tool execution (default: true)
+    #       status_edit_interval: 1.0        # min seconds between edits of the live status card (floor 1.0)
     #       max_message_length: 4096         # Telegram's max message length
     #       attachments: true                # download inbound photos/documents
     #
@@ -80,6 +81,10 @@ module Rubot
         @status_last_text = {}  # chat_thread_key => String last rendered
         @status_last_edit = {}  # chat_thread_key => Float monotonic seconds
         @last_retry_after = 0   # seconds Telegram asked us to wait after a 429
+        # chat_id => monotonic deadline. Set whenever Telegram answers 429, so
+        # every send and edit for that chat stays quiet until it passes.
+        @flood_until = {}
+        @flood_mutex = Mutex.new
         @status_mutex = Mutex.new
         @active_threads = []   # Track spawned threads for cleanup
         @threads_mutex = Mutex.new
@@ -1940,6 +1945,13 @@ module Rubot
       # One sendMessage call. Returns the Telegram result hash on success,
       # :entity_error when the markup could not be parsed, :error otherwise.
       def deliver(chat_id, text, thread_id, parse_mode:)
+        # Telegram asked this chat to wait. Sending anyway only earns another
+        # 429 and fills the log; the caller treats :error as "not delivered".
+        if (left = flood_remaining(chat_id)).positive?
+          warn "[telegram] Send skipped, flood window #{left.round}s left"
+          return :error
+        end
+
         body = { "chat_id" => chat_id, "text" => text }
         body["parse_mode"] = parse_mode if parse_mode
         body["message_thread_id"] = thread_id if thread_id
@@ -1950,6 +1962,12 @@ module Rubot
 
         result = http_post(url, req)
         return result if result["ok"]
+
+        if result["error_code"].to_i == 429
+          wait = close_flood_gate(chat_id, result.dig("parameters", "retry_after"))
+          warn "[telegram] Send rate limited, pausing #{wait}s for chat #{chat_id}"
+          return :error
+        end
 
         warn "[telegram] API error: #{result["description"]}"
         entity_error?(result["description"].to_s) ? :entity_error : :error
@@ -2236,6 +2254,7 @@ module Rubot
       # Telegram accepts roughly one message per second per chat and an edit
       # counts as a message. A tool batch used to fire one edit per tool, so a
       # five-tool round could trip 429 and leave the card frozen on an old step.
+      # Override per deployment with `status_edit_interval` in channel config.
       MIN_STATUS_EDIT_INTERVAL = 1.0
 
       # Shown once per request, not on every edit.
@@ -2341,6 +2360,40 @@ module Rubot
         Process.clock_gettime(Process::CLOCK_MONOTONIC)
       end
 
+      # Seconds a chat still has to stay quiet. Zero means the gate is open.
+      def flood_remaining(chat_id)
+        key = chat_id.to_s
+        @flood_mutex.synchronize do
+          remaining = @flood_until[key].to_f - monotonic_now
+          if remaining.positive?
+            remaining
+          else
+            @flood_until.delete(key)
+            0.0
+          end
+        end
+      end
+
+      # Telegram answered 429 with `retry_after`. Close the gate for that chat:
+      # continuing to send through the window is what turned one 429 into a log
+      # full of them, and every call that still went out was rejected anyway.
+      def close_flood_gate(chat_id, retry_after)
+        wait = retry_after.to_i
+        wait = 1 if wait <= 0
+        key = chat_id.to_s
+        deadline = monotonic_now + wait
+        @flood_mutex.synchronize do
+          @flood_until[key] = deadline if deadline > @flood_until[key].to_f
+        end
+        wait
+      end
+
+      # Edit interval for the live status card, in seconds.
+      def status_edit_interval
+        interval = @config.fetch("status_edit_interval", MIN_STATUS_EDIT_INTERVAL).to_f
+        interval < MIN_STATUS_EDIT_INTERVAL ? MIN_STATUS_EDIT_INTERVAL : interval
+      end
+
       # Send a new status message or edit the existing one (avoids message spam).
       #
       # Edits are throttled to one per MIN_STATUS_EDIT_INTERVAL per chat, and an
@@ -2351,21 +2404,26 @@ module Rubot
 
         key = status_key(chat_id, thread_id)
         text = text.to_s
+        interval = status_edit_interval
 
         if wait
           resume_at = @status_mutex.synchronize do
             last = @status_last_edit[key]
-            last ? last + MIN_STATUS_EDIT_INTERVAL : 0.0
+            last ? last + interval : 0.0
           end
           delay = resume_at - monotonic_now
           sleep(delay) if delay.positive?
         end
 
+        # Telegram told this chat to wait: painting the card now would be
+        # rejected, and the repaint would land on an already-deleted message.
+        return if flood_remaining(chat_id).positive?
+
         proceed = @status_mutex.synchronize do
           last_at = @status_last_edit[key]
           if @status_last_text[key] == text
             false
-          elsif !wait && last_at && monotonic_now - last_at < MIN_STATUS_EDIT_INTERVAL
+          elsif !wait && last_at && monotonic_now - last_at < interval
             false
           else
             @status_last_edit[key] = monotonic_now
@@ -2448,17 +2506,20 @@ module Rubot
         result = post_edit_once(chat_id, message_id, text, parse_mode)
         return result unless result == :rate_limited
 
-        # Telegram answered 429: it tells us how long to wait. Retry once. If the
-        # wait is long (a busy group), give up rather than stalling the agent
-        # loop — the next status update will repaint the card anyway.
-        retry_after = @last_retry_after.to_i.clamp(1, 5)
-        warn "[telegram] Edit rate limited, retrying in #{retry_after}s"
-        sleep(retry_after)
-        result = post_edit_once(chat_id, message_id, text, parse_mode)
-        result == :rate_limited ? :error : result
+        # Telegram said how long to wait, and that wait is often longer than a
+        # status repaint is worth. Sleeping through it stalls the agent loop, so
+        # the edit is dropped: the flood gate already keeps every other call to
+        # this chat quiet, and the next repaint draws the card once it expires.
+        warn "[telegram] Edit dropped, flood window #{flood_remaining(chat_id).round}s"
+        :error
       end
 
       def post_edit_once(chat_id, message_id, text, parse_mode)
+        if (left = flood_remaining(chat_id)).positive?
+          warn "[telegram] Edit skipped, flood window #{left.round}s left"
+          return :rate_limited
+        end
+
         body = { "chat_id" => chat_id, "message_id" => message_id, "text" => text }
         body["parse_mode"] = parse_mode if parse_mode
         url = URI("#{API_BASE}#{@token}/editMessageText")
@@ -2471,6 +2532,7 @@ module Rubot
 
         if result["error_code"].to_i == 429
           @last_retry_after = result.dig("parameters", "retry_after").to_i
+          close_flood_gate(chat_id, @last_retry_after)
           return :rate_limited
         end
 
