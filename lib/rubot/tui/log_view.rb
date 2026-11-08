@@ -33,6 +33,7 @@ module Rubot
         @entries = []        # [[text, style], ...] per entry
         @keep_leading = []   # entries whose leading spaces are meaningful
         @indents = []        # left padding (cells) applied to every wrapped row
+        @hangs = []          # hanging indent for the rows after the first
         @entry_lines = []    # wrapped rows per entry
         @lines = []          # flattened rows, cached for rendering
         @wrap_w = 0
@@ -41,12 +42,15 @@ module Rubot
       end
 
       # Append an entry. `segments` is a list of [text, style] pairs.
+      # `hang` indents every row of the entry except the first, which is how
+      # a prompt echo keeps its continuation lines under the "❯ " marker.
       # Returns the entry index so it can be updated later via #set_entry
       # while a response streams in.
-      def add_entry(segments, keep_leading: false, indent: 0)
+      def add_entry(segments, keep_leading: false, indent: 0, hang: 0)
         @entries << segments
         @keep_leading << keep_leading
         @indents << indent
+        @hangs << hang
         wrap @entries.length - 1
         @lines = @entry_lines.flatten(1)
         follow_bottom if @follow
@@ -76,6 +80,7 @@ module Rubot
         @entries.pop
         @keep_leading.pop
         @indents.pop
+        @hangs.pop
         @entry_lines.pop
         @lines = @entry_lines.flatten(1)
         follow_bottom if @follow
@@ -83,12 +88,13 @@ module Rubot
       end
 
       # Replace an entry in place; `segments` is a list of [text, style] pairs.
-      def set_entry(index, segments, keep_leading: nil, indent: nil)
+      def set_entry(index, segments, keep_leading: nil, indent: nil, hang: nil)
         return unless index && @entries[index]
 
         @entries[index] = segments
         @keep_leading[index] = keep_leading unless keep_leading.nil?
         @indents[index] = indent unless indent.nil?
+        @hangs[index] = hang unless hang.nil?
         wrap index
         @lines = @entry_lines.flatten(1)
         follow_bottom if @follow
@@ -171,6 +177,7 @@ module Rubot
         @entries = @entries[0, keep] || []
         @keep_leading = @keep_leading[0, keep] || []
         @indents = @indents[0, keep] || []
+        @hangs = @hangs[0, keep] || []
         @entry_lines = @entry_lines[0, keep] || []
         @lines = @entry_lines.flatten(1)
         @scroll_y = 0
@@ -269,7 +276,8 @@ module Rubot
       def wrap(index)
         indent = [ @indents[index].to_i, [ text_width - 1, 0 ].max ].min
         width = [ text_width - indent, 1 ].max
-        lines = wrap_segments(@entries[index], width, keep_leading: @keep_leading[index])
+        hang = hang_for(index, width)
+        lines = wrap_segments(@entries[index], width, keep_leading: @keep_leading[index], hang: hang)
         @entry_lines[index] = indent.positive? ? indent_lines(lines, indent) : lines
       end
 
@@ -278,11 +286,17 @@ module Rubot
         @entry_lines = @entries.each_with_index.map do |entry, i|
           indent = [ @indents[i].to_i, [ text_width - 1, 0 ].max ].min
           width = [ text_width - indent, 1 ].max
-          lines = wrap_segments(entry, width, keep_leading: @keep_leading[i])
+          lines = wrap_segments(entry, width, keep_leading: @keep_leading[i], hang: hang_for(i, width))
           indent.positive? ? indent_lines(lines, indent) : lines
         end
         @lines = @entry_lines.flatten(1)
         @scroll_y = [ @lines.size - @rect.h, 0 ].max if @follow
+      end
+
+      # A hanging indent must leave at least one cell of content, or a long
+      # marker would wrap the row into nothing.
+      def hang_for(index, width)
+        [ @hangs[index].to_i, [ width - 1, 0 ].max ].min
       end
 
       # Pad every non-empty wrapped row, including soft-wrap continuations.
@@ -291,7 +305,7 @@ module Rubot
         lines.map { |line| line.empty? ? line : [ [ pad, nil ] ] + line }
       end
 
-      def wrap_segments(segments, width, keep_leading: false)
+      def wrap_segments(segments, width, keep_leading: false, hang: 0)
         # "\n" in segment text is a hard row break (multiline input,
         # markdown blocks). Split into hard lines first, so each one can
         # carry its own hanging indent.
@@ -303,18 +317,22 @@ module Rubot
           end
         end
 
-        hard_lines.flat_map do |line|
-          wrap_hard_line(line, width, keep_leading: keep_leading)
+        hard_lines.each_with_index.flat_map do |line, index|
+          # The entry's own hang skips the first row, which is where the
+          # marker of a prompt echo sits; every later hard line takes it.
+          wrap_hard_line(line, width, keep_leading: keep_leading, hang: hang,
+                                      indent_first: !index.zero?)
         end
       end
 
-      def wrap_hard_line(segments, width, keep_leading: false)
-        hang = hanging_indent(segments, keep_leading: keep_leading)
+      def wrap_hard_line(segments, width, keep_leading: false, hang: 0, indent_first: false)
+        own = hanging_indent(segments, keep_leading: keep_leading)
+        hang = own if own > hang
         hang = [ hang, [ width - 1, 0 ].max ].min
         prefix = hang.positive? ? [ [ " " * hang, nil ] ] : []
 
-        lines = [ [] ]
-        used = 0
+        lines = [ indent_first ? prefix.dup : [] ]
+        used = indent_first ? hang : 0
         at_start = true
 
         new_row = lambda do

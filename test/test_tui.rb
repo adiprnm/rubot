@@ -493,6 +493,27 @@ module Rubot
       rows.each { |row| assert_equal "  ", row.first[0], "every wrapped row is padded: #{row.inspect}" }
     end
 
+    # A multiline prompt echo keeps its continuation rows under the text of
+    # the first row: the "❯ " marker opens the entry, and every later row —
+    # typed newline or soft wrap — hangs by the marker's width.
+    def test_prompt_echo_continuation_rows_hang_under_the_marker
+      view = TUI::LogView.new
+      view.layout(::TUI::Rect.new(0, 0, 24, 10))
+      view.add_entry([ [ "❯ ", :accent ],
+                       [ "first line\nsecond line wraps on and on\nthird", :text ] ],
+                     keep_leading: true, hang: 2)
+
+      rows = view.instance_variable_get(:@lines).map do |line|
+        line.map { |(text, _style)| text }.join
+      end
+
+      assert_equal "❯ first line", rows[0], "the marker opens the first row"
+      assert_operator rows.size, :>, 3, "the second row must soft-wrap"
+      rows.drop(1).each do |row|
+        assert_equal "  ", row[0, 2], "every later row hangs by two cells: #{row.inspect}"
+      end
+    end
+
     def test_prompt_grows_with_newlines
       repl = build_repl
       prompt = repl.instance_variable_get(:@prompt)

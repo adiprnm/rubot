@@ -368,7 +368,7 @@ module Rubot
 
         # Echo the prompt on screen, ahead of the assistant entry that
         # arrives with :stream_start.
-        publish [ [ "❯ ", :accent ], [ line, :text ] ]
+        publish prompt_echo(line), keep_leading: true, hang: 2
         @mailbox << line
       end
 
@@ -480,7 +480,8 @@ module Rubot
 
     def apply_event(event)
       case event[0]
-      when :entry then @log.add_entry(event[1])
+      when :entry
+        @log.add_entry(event[1], keep_leading: event[2] ? true : false, hang: event[3] || 0)
       when :steer then add_steer_echo(event[1])
       when :command_output then add_command_output(event[1])
       when :clear_log
@@ -1503,14 +1504,24 @@ module Rubot
     end
 
     # Output goes to the TUI log when running, else straight to stdout in
-    # plain mode (the plain loop never drains @events).
-    def publish(segments)
+    # plain mode (the plain loop never drains @events). `keep_leading` keeps
+    # the spaces a row starts with, and `hang` indents every row after the
+    # first — both of which an indented prompt echo needs.
+    def publish(segments, keep_leading: false, hang: 0)
       if @tui
-        @events << [ :entry, segments ]
+        @events << [ :entry, segments, keep_leading, hang ]
       else
         puts segments.map { |t, _s| t.to_s }.join
       end
       nil
+    end
+
+    # The "❯ " marker opens the first row only. The entry carries a hanging
+    # indent the width of the marker, so every later row of a multiline
+    # prompt (typed newlines and soft wraps alike) lines up under the text
+    # instead of starting at the left edge.
+    def prompt_echo(line)
+      [ [ "❯ ", :accent ], [ line.to_s, :text ] ]
     end
 
     def refresh_status
