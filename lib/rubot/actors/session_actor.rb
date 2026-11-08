@@ -16,6 +16,10 @@ module Rubot
     #   - { type: :request, op:, port:, ... }           synchronous call
     #   - { type: :shutdown }
     #
+    # A turn runs on its own thread inside the Ractor (see .serve), so a
+    # request sent while one is in flight is answered there and then instead of
+    # waiting behind the answer.
+    #
     # Responses are messages on the port supplied by the caller. The agent's
     # callbacks are constructed *inside* this Ractor and only capture
     # shareable ports, so no Proc crosses a Ractor boundary.
@@ -82,14 +86,38 @@ module Rubot
 
       # Runs inside the Ractor.
       def self.serve(agent, session_id, stop_port: nil, watcher: nil)
+        # Turns run on a thread of their own. The loop below must stay free to
+        # answer requests: with the turn inlined here, every /command sent
+        # while it ran sat in the Ractor's inbox until the answer was done.
+        #
+        # Still one turn at a time, exactly as before: a second message waits
+        # in this queue until the first one finishes.
+        turns = Queue.new
+        runner = Thread.new do
+          loop do
+            msg = turns.pop
+            break if msg == :shutdown
+
+            begin
+              handle_message(agent, msg)
+            rescue StandardError => e
+              # handle_message reports its own errors; this only keeps a
+              # surprise from killing the thread that later turns need.
+              msg[:events] << [ :error, e.class.name, e.message, Array(e.backtrace).first(5) ]
+            end
+          end
+        end
+
         loop do
           msg = Ractor.receive
           case msg[:type]
           when :message
-            handle_message(agent, msg)
+            turns << msg
           when :request
             handle_request(agent, session_id, msg)
           when :shutdown
+            turns << :shutdown
+            runner.join(2)
             break
           end
         end

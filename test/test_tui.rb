@@ -772,7 +772,7 @@ module Rubot
       refute_includes view[before_ix], "after the steer"
     end
 
-    def test_commands_typed_while_a_turn_runs_still_queue
+    def test_commands_typed_while_a_turn_runs_take_the_command_lane
       repl = build_repl
       agent = repl.instance_variable_get(:@agent)
       steered = []
@@ -783,12 +783,94 @@ module Rubot
       repl.instance_variable_set(:@busy, true)
       prompt = repl.instance_variable_get(:@prompt)
       mailbox = repl.instance_variable_get(:@mailbox)
+      lane = repl.instance_variable_get(:@command_mailbox)
 
       prompt.value = "/help"
       prompt.handle_key(::TUI::Key.new(:enter))
 
       assert_empty steered, "a command is not something the model can act on"
-      assert_equal "/help", mailbox.pop
+      assert_equal "/help", lane.pop
+      assert mailbox.empty?, "the command must not wait behind the running turn"
+    end
+
+    # The point of the lane: the command is answered while the worker is still
+    # inside the turn, not after it.
+    def test_the_command_lane_answers_while_a_turn_is_still_running
+      repl = build_repl
+      app = repl.instance_variable_get(:@app)
+      lane = repl.instance_variable_get(:@command_mailbox)
+      repl.instance_variable_set(:@busy, true)
+      repl.send(:spawn_command_lane)
+
+      begin
+        lane << "/help"
+        rows = []
+        deadline = Time.now + 5
+        while Time.now < deadline
+          repl.send(:pump)
+          app.render_lines
+          rows = repl.instance_variable_get(:@log).instance_variable_get(:@lines).map do |line|
+            line.map { |(text, _style)| text }.join
+          end
+          break if rows.any? { |row| row.include?("Available commands") }
+
+          sleep 0.02
+        end
+
+        assert rows.any? { |row| row.include?("Available commands") },
+               "the lane's output lands mid-turn: #{rows.map(&:strip).first(5).inspect}"
+        assert repl.instance_variable_get(:@busy), "the turn is still running"
+      ensure
+        repl.send(:stop_command_lane)
+      end
+    end
+
+    # A command that changes the session cannot apply mid-turn; it says so
+    # instead of leaving the prompt silent until the answer arrives.
+    # No command waits for the turn any more, session-changing ones included:
+    # /clear is answered by the lane while the answer is still streaming.
+    def test_a_session_changing_command_runs_mid_turn
+      repl = build_repl
+      app = repl.instance_variable_get(:@app)
+      prompt = repl.instance_variable_get(:@prompt)
+      lane = repl.instance_variable_get(:@command_mailbox)
+      repl.instance_variable_set(:@busy, true)
+      cleared = false
+      agent = repl.instance_variable_get(:@agent)
+      agent.define_singleton_method(:clear_session) { cleared = true }
+
+      prompt.value = "/clear"
+      prompt.handle_key(::TUI::Key.new(:enter))
+      assert_equal "/clear", lane.pop, "the lane takes it, not the busy worker"
+
+      repl.send(:handle_command, "/clear")
+      assert cleared, "the command runs straight away"
+      refute plain(app.render_lines).any? { |line| line.include?("runs when this turn ends") },
+             "nothing is deferred any more"
+    end
+
+    # /context mid-turn renders the report the turn itself published: asking
+    # the agent would wait for the turn to end.
+    def test_context_mid_turn_uses_the_live_report
+      repl = build_repl
+      report = { model: "test-model", provider: "openai", context_used: 1234,
+                 context_window: 100_000, messages: 2, requests: 1,
+                 prompt_tokens: 900, completion_tokens: 34, cached_tokens: 0 }
+      repl.instance_variable_set(:@live_report, report)
+      repl.instance_variable_set(:@tui, false)
+
+      agent = repl.instance_variable_get(:@agent)
+      asked = false
+      agent.define_singleton_method(:usage_report) do |**|
+        asked = true
+        report
+      end
+
+      out, _err = capture_io { repl.send(:handle_command, "/context") }
+
+      refute asked, "the agent is not asked while it is busy"
+      assert_includes out, "test-model"
+      assert_includes out, "live —"
     end
 
     def test_prompt_input_enter_emits_submit

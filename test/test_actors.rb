@@ -237,6 +237,63 @@ class TestActors < Minitest::Test
     end
   end
 
+  # A request must not queue behind a turn, whatever it does: the turn runs on
+  # its own thread inside the actor, so the loop is free to answer. Reads and
+  # writes both, since /clear and /usage are as ordinary as /help.
+  def test_requests_are_answered_while_a_turn_is_running
+    api_base = start_sse_server(delay: 1)
+    config = write_config(api_base: api_base)
+    pool = Rubot::Actors::SessionPool.new(config: config)
+
+    begin
+      handle = pool.for("read-during-turn")
+      runner = Thread.new { handle.process("hi") }
+      sleep 0.2
+
+      # A fresh handle for the same session, the way a /command gets one.
+      reader = pool.for("read-during-turn")
+      name = nil
+      queried = Thread.new { name = reader.active_model_name }
+
+      assert queried.join(0.6), "the read answers without waiting for the turn"
+      assert_equal "test-model", name
+
+      # A write is answered just as promptly. It is allowed to change what the
+      # turn is working on — that is the user's call to make mid-answer.
+      flipped = nil
+      writer = Thread.new { flipped = reader.set_auto_approve(true) }
+      assert writer.join(0.6), "a write is answered without waiting for the turn"
+      assert flipped
+
+      assert runner.join(10), "the turn still finishes"
+    ensure
+      pool.shutdown
+    end
+  end
+
+  # One turn at a time: a second message waits for the first one instead of
+  # running beside it on the same agent.
+  def test_a_second_message_waits_for_the_turn_in_flight
+    api_base = start_sse_server(delay: 0.3)
+    config = write_config(api_base: api_base)
+    pool = Rubot::Actors::SessionPool.new(config: config)
+
+    begin
+      handle = pool.for("serial-turns")
+      order = Queue.new
+      first = Thread.new { handle.process("first") && order << :first_done }
+      sleep 0.1
+      second = Thread.new { handle.process("second") && order << :second_done }
+
+      assert first.join(10) && second.join(10), "both turns finish"
+      assert_equal [ :first_done, :second_done ], [ order.pop, order.pop ],
+                   "the second turn runs after the first, not beside it"
+      assert_equal 4, handle.session.message_count, "two user turns, two answers"
+    ensure
+      pool.shutdown
+    end
+  end
+
   def test_session_control_requests
     config = write_config
     pool = Rubot::Actors::SessionPool.new(config: config)

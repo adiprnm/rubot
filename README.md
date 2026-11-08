@@ -268,8 +268,13 @@ next request. That is how a direction is corrected
 mid-turn — "use the other directory", "skip the tests" — without cancelling
 the work already done. Each steer becomes its own user turn, so it stays in
 the session and is replayed on `/resume`. Commands typed while a turn is
-running still queue and run once it finishes; `Esc` (or `/stop`) stops the
-turn as before.
+running do not wait for it either: they run on a lane of their own and the
+actor answers them while the turn is in flight — reads (`/help`, `/info`,
+`/context`, `/tools`, `/model`, `/soul`, `/memory`, `/agents`, `/session`,
+`/stream`) as well as writes and network calls (`/clear`, `/new`, `/compact`,
+`/usage`, `/models`, `/auto`, `/cron`). The one thing the agent still
+serialises is the turn itself: a second *message* waits for the first answer,
+while `Esc` (or `/stop`) stops the turn as before.
 
 The prompt grows with its content: hard newlines and long lines that wrap both
 add rows, up to six. `Shift+Enter` needs a terminal that reports the key

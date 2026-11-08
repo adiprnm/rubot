@@ -51,10 +51,11 @@ module Rubot
   # running turn · ctrl-c quits.
   #
   # Threading: the ruby-tui App owns the main thread. A worker thread feeds
-  # submitted lines (messages and /commands) to the agent; streaming chunks,
-  # tool events and command output flow back through an events Queue and are
-  # applied once per App tick, so component state is only ever touched by the
-  # App thread.
+  # submitted messages to the agent, and a second lane runs /commands so one
+  # typed during a turn is answered next to it instead of after it; streaming
+  # chunks, tool events and command output flow back through an events Queue
+  # and are applied once per App tick, so component state is only ever touched
+  # by the App thread.
   #
   # The class is named TUI, while the gem's own top-level module is written
   # `::TUI` everywhere so Ruby's lexical lookup stays unambiguous.
@@ -167,10 +168,20 @@ module Rubot
       # state is only ever mutated on the App thread (pump + key handlers).
       @events = Queue.new    # worker & channel threads -> UI
       @mailbox = Queue.new   # submitted lines -> worker
+      # Commands get a lane of their own so one typed during a turn runs now
+      # instead of waiting for the answer. See #spawn_command_lane.
+      @command_mailbox = Queue.new
+      # Commands print through @command_output, so only one runs at a time no
+      # matter which lane picked it up.
+      @command_lock = Mutex.new
 
       @worker = nil
+      @command_lane = nil
       @app = nil
       @tui = false
+      # The report the turn in flight last published, so /context has an
+      # answer while the agent is busy.
+      @live_report = nil
       # Resolved on the worker thread (agent.config may cross a Ractor
       # boundary), then only read from the App thread.
       @external_editor = nil
@@ -217,6 +228,7 @@ module Rubot
       end
     ensure
       stop_worker
+      stop_command_lane
     end
 
     private
@@ -229,6 +241,7 @@ module Rubot
       require "tui"
       build_ui
       spawn_worker
+      spawn_command_lane
       @mailbox << :sync
       paint_banner
 
@@ -238,6 +251,7 @@ module Rubot
       @app.run
 
       @mailbox << :stop
+      stop_command_lane
       @worker.join(2) if @worker
       puts "\n👋 Goodbye!"
     end
@@ -376,8 +390,9 @@ module Rubot
 
         # A message typed while a turn is running steers it instead of
         # waiting behind it: the agent hands it to the model between rounds,
-        # after the tool calls of the round in flight. Commands keep the old
-        # path — a command is not something the model can act on.
+        # after the tool calls of the round in flight. A command is not
+        # something the model can act on, so it runs on the command lane
+        # instead: now, next to the turn, rather than after the answer.
         if @busy && !line.start_with?("/") && steer_running_turn(line)
           @events << [ :steer, line ]
           next
@@ -386,7 +401,14 @@ module Rubot
         # Echo the prompt on screen, ahead of the assistant entry that
         # arrives with :stream_start.
         publish prompt_echo(line), keep_leading: true, hang: ECHO_HANG
-        @mailbox << line
+        # A command typed while a turn is running skips the mailbox: the
+        # worker is inside that turn, so anything left there only runs once
+        # the answer is done. The lane runs it now.
+        if @busy
+          @command_mailbox << line
+        else
+          @mailbox << line
+        end
       end
 
       @app.every(0.1) do
@@ -409,13 +431,48 @@ module Rubot
           case item
           when :sync then push_status_info
           when String
-            item.start_with?("/") ? handle_command(item) : process_message(item)
+            item.start_with?("/") ? run_command(item) : process_message(item)
           end
         end
       rescue StandardError => e
         @events << [ :error_text, "worker crashed: #{e.class}: #{e.message}" ]
         retry
       end
+    end
+
+    # Commands run here instead of on the worker: the worker is inside the
+    # turn, and a command must not have to wait for it. Everything the lane
+    # asks the agent goes through the actor, whose loop is free while a turn
+    # runs, so even a write or a network call comes back with the turn still
+    # in flight.
+    def spawn_command_lane
+      @command_lane = Thread.new do
+        loop do
+          line = @command_mailbox.pop
+          break if line == :stop
+
+          run_command(line)
+        end
+      rescue StandardError => e
+        @events << [ :error_text, "command lane crashed: #{e.class}: #{e.message}" ]
+        retry
+      end
+    end
+
+    # One command at a time, whichever lane picked it up: a command collects
+    # its output in @command_output and flushes it as one block.
+    def run_command(line)
+      @command_lock.synchronize { handle_command(line) }
+    end
+
+    # A command that changes the session cannot apply mid-turn, so say when it
+    # will instead of leaving the prompt silent until the answer arrives.
+    def stop_command_lane
+      return unless @command_lane
+
+      @command_mailbox << :stop
+      @command_lane.join(2)
+      @command_lane = nil
     end
 
     def stop_worker
@@ -478,6 +535,9 @@ module Rubot
     def live_usage(report)
       return unless report.is_a?(Hash)
 
+      # Kept for /context: asking the agent for a report mid-turn would wait
+      # for the turn, and this is the same figure it would hand back.
+      @live_report = report
       @events << [ :status_left, Rubot::UsageReport.footer(report) ]
     rescue StandardError => e
       warn "[tui] live usage failed: #{e.class}: #{e.message}" if Rubot.debug?
@@ -527,6 +587,9 @@ module Rubot
       when :chunk then append_live(event[1])
       # Clearance also resets any tool-line bookkeeping.
       when :stream_end
+        # The turn is over; the next /context asks the agent for the settled
+        # figures instead of rendering this one's last snapshot.
+        @live_report = nil
         # A call whose result never arrived (cancelled mid-flight) keeps its
         # row, but stops being clocked: the turn is over, so the counter would
         # otherwise run on a row nothing is working on.
@@ -1114,7 +1177,12 @@ module Rubot
         agent.startup_info.each { |k, v| say_text("#{k}: #{v}") }
       when "/context"
         blank
-        say_text(Rubot::UsageReport.render(agent.usage_report))
+        # Mid-turn the agent is busy with the answer, so the report it last
+        # published is what there is to show — the same numbers the footer
+        # is moving.
+        report = @live_report || agent.usage_report
+        say_text(Rubot::UsageReport.render(report))
+        say_text("live — the request in flight is not in these totals yet") if @live_report
         blank
       when "/usage"
         blank
