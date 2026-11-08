@@ -48,13 +48,19 @@ module Rubot
     # after splitting on shell operators (`;`, `&&`, `||`, `|&`). This prevents
     # command chaining bypasses like `rm -rf /; echo done`.
     #
-    # Patterns using `\beval\b` / `\bexec\b` (no anchor) are applied to
-    # prefix-stripped fragments, preventing bypasses like `env eval 'rm -rf /'`.
+    # Patterns are applied to prefix-stripped fragments, preventing bypasses
+    # like `env eval 'rm -rf /'`.
+    #
+    # A name that is only dangerous as *the command being run* belongs in
+    # DANGEROUS_COMMANDS instead: `\bexec\s+` matched the word anywhere in the
+    # line, so `bundle exec rspec`, `docker exec`, `kubectl exec`,
+    # `find -exec`, `git commit -m 'exec fix'` and `grep -rn 'exec '` were all
+    # refused as dangerous.
     DANGEROUS_PATTERNS = [
       # --- Bulk deletion — any flag order, with optional extra flags ---
       /\brm\s+-(?:[rvfidRV]+[rR][rvfidRV]*|[rvfidRV]*[rR][rvfidRV]+)\s+\/\s*$/,
       /\brm\s+-(?:[rvfidRV]+[rR][rvfidRV]*|[rvfidRV]*[rR][rvfidRV]+)\s+\*\s*$/,
-      /\brm\s+-[rvfidRV]*[rR][rvfidRV]*\s+\.\//,       # rm -rf ./*
+      /\brm\s+-[rvfidRV]*[rR][rvfidRV]*\s+\.\/\*/,     # rm -rf ./*
       /\brm\s+--[rR]ecursive\s+--[fF]orce\s+/,   # rm --recursive --force
       /\brm\s+--[fF]orce\s+--[rR]ecursive\s+/,   # rm --force --recursive
       /\brm\s+(-[rvfidRV]+\s+)+\/\s*$/,             # rm -r -f / (separate flags)
@@ -62,20 +68,15 @@ module Rubot
       # Mass deletion via find
       /\bfind\b.*-exec\b.*\brm\b/,
       /\bfind\b.*-delete\b/,
-      # Disk formatting / low-level writes
-      /\bmkfs\b/,
+      # Disk formatting / low-level writes (the `mkfs*`/`format`/`diskpart`
+      # command names live in DANGEROUS_COMMANDS)
       /\bdd\b.*\bof=\/dev\//,
       /\bdd\b.*\bif=\/dev\//,
-      /\bformat\s/,
-      /\bdiskpart\b/,
       # Direct device writes
       /\bcat\s+.*>\s*\/dev\/sd/,
       /\btee\s+\/dev\/sd/,
       /\becho\s+.*>\s*\/dev\/sd/,
-      # System shutdown
-      /\bshutdown\b/,
-      /\breboot\b/,
-      /\bpoweroff\b/,
+      # System shutdown (command names live in DANGEROUS_COMMANDS)
       # Fork bomb (multiple syntaxes)
       /:\(\)\s*\{.*:\|.*&.*\}\s*;/,
       /:\(\)\s*\{.*:\|:\s*&.*\}\s*;/,             # space after &
@@ -99,9 +100,7 @@ module Rubot
       /\bbase64\b.*(-d|--decode).*\|\s*(?:sudo\s+)?(?:sh|bash|zsh)\b/,
       /\bprintf\b.*\|\s*(?:sudo\s+)?(?:sh|bash|zsh)\b/,
       /\bxxd\b.*-r.*\|\s*(?:sudo\s+)?(?:sh|bash|zsh)\b/,
-      # eval and exec shell builtins (checked on prefix-stripped fragments)
-      /\beval\s+/,
-      /\bexec\s+/,
+      # eval and exec shell builtins (command names live in DANGEROUS_COMMANDS)
       # Heredoc with eval/exec — check inner content
       /\b(?:bash|sh|zsh)\s*<<.*\beval\b/m,
       /\b(?:bash|sh|zsh)\s*<<.*\bexec\b/m,
@@ -109,9 +108,7 @@ module Rubot
       /\bchmod\s+0?777\s+\/\s*$/,
       /\bchmod\s+-R\s+0?777\s+\/\s*$/,
       /\bchmod\s+a\+rwx\s+\/\s*$/,
-      # Filesystem destruction
-      /\bmke2fs\b/,
-      /\bmkswap\b/,
+      # Filesystem destruction (mke2fs/mkswap/chown-root live in DANGEROUS_COMMANDS)
       /\bfsck\b.*-y\s+\/dev\//,
       # Memory destruction — case-insensitive, multiple methods
       /\brm\b.*memory\.md/i,
@@ -132,20 +129,15 @@ module Rubot
       /\bcat\s+\/dev\/null\s*>\s*.*memory\.md/i,
       # xargs can execute arbitrary commands
       /\bxargs\b.*(?:bash|sh|rm)\b/,
-      # User management / privilege escalation
-      /\buseradd\b/,
-      /\busermod\b/,
-      /\bpasswd\b/,
-      /\bvisudo\b/,
+      # User management / privilege escalation (the command names themselves
+      # live in DANGEROUS_COMMANDS)
       /\bchown\s+root/,
       # Reverse shells via netcat/socat
       /\b(?:nc|ncat|netcat)\b.*(?:-e|-c)\s*(?:\/bin\/)?(?:ba)?sh\b/,
       /\b(?:nc|ncat|netcat)\b.*<\s*(?:\/etc\/|\/proc\/|\/sys\/|\/tmp\/|\/home)/,
       /\bsocat\b.*(?:EXEC:|exec,)/,
-      # Scheduled execution bypass (at/batch)
-      /\bat\s+(?:now|today|tomorrow|\+\d+\s*(?:min|hour|day|week|month))/,
-      /\bat\s+-f\s+/,
-      /\bbatch\b/,
+      # Scheduled execution bypass (at/batch — command names live in
+      # DANGEROUS_COMMANDS)
       # Download-then-execute chains (checked on full command before splitting)
       /\bcurl\b.*(?:-o|-O)\s+\S+.*&&\s*(?:sudo\s+)?(?:ba)?sh\b/,
       /\bwget\b.*(?:-O\s+\S+|-O-).*&&\s*(?:sudo\s+)?(?:ba)?sh\b/,
@@ -156,10 +148,41 @@ module Rubot
       # Environment variable manipulation
       /\b(?:PATH|LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|LD_BIND_NOW)\s*=/,
       /\bexport\s+(?:PATH|LD_PRELOAD|LD_LIBRARY_PATH)\s*=/,
-      # Debugger arbitrary code execution
-      /\bgdb\b.*(?:-ex|-batch)/,
-      /\bpython3?\s+-m\s+pdb\b/,
-      /\blldb\b.*-o\b/,
+      # Debugger arbitrary code execution (command names live in
+      # DANGEROUS_COMMANDS)
+    ].freeze
+
+    # Commands that run another command. The dangerous name can sit behind them
+    # (`sudo passwd`, `timeout 30 eval ...`, `xargs rm -f`), so they are skipped
+    # when locating the command position.
+    WRAPPERS = %w[
+      sudo doas env command nohup nice ionice stdbuf time timeout setsid chroot
+      xargs
+    ].freeze
+
+    # Names that are only dangerous as the command being run, never as a word
+    # in the arguments. Matched against #command_position, not the raw fragment:
+    # `bundle exec rspec`, `docker exec`, `find -exec`, `npm run format`,
+    # `git commit -m 'batch import'`, `grep -rn shutdown src/` are allowed.
+    DANGEROUS_COMMANDS = [
+      /\Amkfs(?:\.\w+)?\b/,
+      /\Amke2fs\b/,
+      /\Amkswap\b/,
+      /\Aformat\s/,
+      /\Adiskpart\b/,
+      /\A(?:shutdown|reboot|poweroff)\b/,
+      /\Aeval\b/,
+      /\Aexec\b/,
+      /\Auseradd\b/,
+      /\Ausermod\b/,
+      /\Apasswd\b/,
+      /\Avisudo\b/,
+      /\Aat\s+(?:now|today|tomorrow|\+\d+\s*(?:min|hour|day|week|month))/,
+      /\Aat\s+-f\s+/,
+      /\Abatch\b/,
+      /\Agdb\b.*(?:-ex|-batch)/,
+      /\Apython3?\s+-m\s+pdb\b/,
+      /\Alldb\b.*-o\b/,
     ].freeze
 
     # Sensitive paths blocked in permissive mode.
@@ -345,8 +368,37 @@ module Rubot
         next true if @restrict_to_workspace && INLINE_CODE_PATTERN.match?(stripped)
 
         DANGEROUS_PATTERNS.any? { |pattern| fragment =~ pattern } ||
-          DANGEROUS_PATTERNS.any? { |pattern| stripped =~ pattern }
+          DANGEROUS_PATTERNS.any? { |pattern| stripped =~ pattern } ||
+          DANGEROUS_COMMANDS.any? { |pattern| command_positions(fragment).any? { |pos| pos =~ pattern } }
       end
+    end
+
+    # Command positions of a fragment: the fragment itself plus every pipeline
+    # segment, because `|` is not a split point (pipes are inspected whole for
+    # the "pipe to shell" patterns). `echo x | at now` -> ["echo x | at now",
+    # "echo x", "at now"].
+    def command_positions(fragment)
+      [fragment, *fragment.to_s.split("|")].map { |part| command_position(part) }
+    end
+
+    # Locate the command a fragment actually runs: skip leading variable
+    # assignments, wrapper commands and their flags, and reduce an absolute
+    # binary path to its basename. `timeout 30 exec sh` -> "exec sh".
+    def command_position(fragment)
+      tokens = strip_benign_path_assignment(fragment.to_s.strip).split
+      loop do
+        token = tokens.first
+        break if token.nil?
+
+        if token.match?(/\A[A-Za-z_][A-Za-z0-9_]*=/) || WRAPPERS.include?(token) ||
+           token.start_with?("-") || token.match?(/\A\d+[smhd]?\z/)
+          tokens.shift
+        else
+          break
+        end
+      end
+
+      tokens.join(" ").sub(%r{\A(?:/[\w.+-]+)+/}, "")
     end
 
     # Split a command string on shell control operators.

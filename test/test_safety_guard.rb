@@ -1149,4 +1149,69 @@ class TestSafetyGuard < Minitest::Test
   ensure
     FileUtils.remove_entry(agents_dir) if Dir.exist?(agents_dir)
   end
+
+  # --- False positives: a command name that is also an ordinary word ---
+
+  def test_wrapper_subcommands_are_allowed
+    guard = Rubot::SafetyGuard.new
+    [
+      "bundle exec rspec",
+      "bundle exec rails server",
+      "env RUBYOPT=-w bundle exec rake",
+      "timeout 30 bundle exec rspec",
+      "docker exec -it web bash",
+      "docker compose exec web bundle exec rspec",
+      "kubectl exec -it api-0 -- rails c",
+      "npm exec vite",
+      "grep -rn 'exec ' lib/",
+      "grep -rn batch app/",
+      "git commit -m 'add batch import'",
+      "git commit -m 'add eval harness'"
+    ].each do |cmd|
+      refute guard.dangerous_command?(cmd), "#{cmd.inspect} should be allowed"
+    end
+  end
+
+  def test_command_words_in_arguments_are_allowed
+    guard = Rubot::SafetyGuard.new
+    [
+      "find . -name '*.rb' -exec grep -l foo {} +",
+      "bundle exec rubocop --format progress",
+      "mix format --check-formatted",
+      "git format-patch -1",
+      "npm run format",
+      "grep -rn shutdown app/lib/",
+      "grep -rn reboot config/",
+      "grep -rn passwd test/",
+      "grep -rn mkfs README.md",
+      "grep -rn useradd docs/",
+      "cat /etc/passwd",
+      "find . -name '*.sh' | xargs grep -l deploy",
+      "rm -rf ./tmp/cache"
+    ].each do |cmd|
+      refute guard.dangerous_command?(cmd), "#{cmd.inspect} should be allowed"
+    end
+  end
+
+  def test_wrapper_prefixes_do_not_hide_dangerous_commands
+    guard = Rubot::SafetyGuard.new
+    [
+      "sudo passwd root",
+      "timeout 30 exec sh",
+      "/sbin/mkfs.ext4 /dev/sda1",
+      "sudo mkfs.ext4 /dev/sda1",
+      "exec bash -c 'rm -rf /'",
+      "eval 'rm -rf /'",
+      "echo 'rm -rf /' | at now",
+      "echo 'rm -rf /' | batch",
+      "at now -f /tmp/evil.sh",
+      "shutdown now",
+      "reboot",
+      "visudo",
+      "gdb -batch -ex run ./a.out",
+      "python3 -m pdb app.rb"
+    ].each do |cmd|
+      assert guard.dangerous_command?(cmd), "#{cmd.inspect} should be blocked"
+    end
+  end
 end
