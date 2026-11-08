@@ -105,7 +105,9 @@ module Rubot
     #   (tool_name, result, ui_diff), { "path", "before", "after" } for a file
     #   that changed
     # @param on_progress [Proc, nil] Called after each agent round
-    # @param on_confirm [Proc, nil] Called before irreversible actions
+    # @param on_confirm [Proc, nil] Called before irreversible actions; yields
+    #   (tool_name, arguments, reason) and returns truthy to proceed. Not
+    #   called at all in auto mode.
     # @param on_assistant_text [Proc, nil] Called with the model's narration text
     #   whenever it writes a message before running more tools
     # @return [String, nil] The agent's response, or nil if processing was skipped

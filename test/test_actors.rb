@@ -385,7 +385,7 @@ class TestActors < Minitest::Test
     ractor = Ractor.new do
       agent = Class.new do
         def process(_text, on_confirm: nil, **_callbacks)
-          approved = on_confirm.call("shell_exec", { "command" => "rm -rf build" })
+          approved = on_confirm.call("shell_exec", { "command" => "rm -rf build" }, "deletes files")
           approved ? "approved" : "rejected"
         end
       end.new
@@ -398,14 +398,14 @@ class TestActors < Minitest::Test
     asked = []
 
     response = Timeout.timeout(5) do
-      handle.process("go", on_confirm: ->(name, args) {
-        asked << [ name, args ]
+      handle.process("go", on_confirm: ->(name, args, reason) {
+        asked << [ name, args, reason ]
         true
       })
     end
 
     assert_equal "approved", response
-    assert_equal [ [ "shell_exec", { "command" => "rm -rf build" } ] ], asked
+    assert_equal [ [ "shell_exec", { "command" => "rm -rf build" }, "deletes files" ] ], asked
   ensure
     begin
       ractor&.send({ type: :shutdown })
@@ -441,7 +441,7 @@ class TestActors < Minitest::Test
     chunks = []
 
     response = Timeout.timeout(5) do
-      handle.process("go", on_confirm: ->(name, args) {
+      handle.process("go", on_confirm: ->(name, args, _reason) {
         asked << [ name, args ]
         true
       }) { |chunk| chunks << chunk }
@@ -479,7 +479,7 @@ class TestActors < Minitest::Test
     chunks = []
 
     response = Timeout.timeout(5) do
-      handle.process("go", on_confirm: ->(_name, _args) { raise "network down" }) { |chunk| chunks << chunk }
+      handle.process("go", on_confirm: ->(_name, _args, _reason) { raise "network down" }) { |chunk| chunks << chunk }
     end
 
     assert_equal "done", response
@@ -641,5 +641,41 @@ class TestActorModelPresets < Minitest::Test
     ensure
       pool.shutdown
     end
+  end
+end
+
+# Constants the tools read while running inside a session Ractor have to be
+# shareable. A constant that is only frozen at the top level (an Array of
+# Arrays, a Hash of Hashes) is not: reading it from a non-main Ractor raises
+# Ractor::IsolationError, which reaches the user as "Action failed" in the
+# middle of a turn. This caught exactly that after the destructive-action
+# labels were added.
+class TestRactorShareableConstants < Minitest::Test
+  CONSTANTS = %w[
+    Rubot::Tools::Shell::DESTRUCTIVE_PATTERNS
+    Rubot::TUI::AUTO_TOGGLE
+    Rubot::Channels::Telegram::AUTO_TOGGLE
+  ].freeze
+
+  def test_tool_constants_are_shareable
+    CONSTANTS.each do |name|
+      value = Object.const_get(name)
+      assert Ractor.shareable?(value), "#{name} must be deeply frozen to cross a Ractor"
+    end
+  end
+
+  # The real check: the tool that reads them, used from a Ractor.
+  def test_shell_patterns_can_be_read_inside_a_ractor
+    ractor = Ractor.new do
+      Rubot::Tools::Shell.new.dangerous_action_reason({ "command" => "rm -rf build" })
+    end
+
+    assert_equal "deletes files", ractor.value
+  end
+
+  def test_auto_mode_toggle_is_readable_inside_a_ractor
+    ractor = Ractor.new { Rubot::TUI::AUTO_TOGGLE["on"] }
+
+    assert_equal true, ractor.value
   end
 end

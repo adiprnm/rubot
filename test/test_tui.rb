@@ -33,6 +33,26 @@ module Rubot
       repl
     end
 
+    # Stub that remembers auto mode, the way the real handle does.
+    def auto_agent
+      agent = stub_agent
+      def agent.auto_approve?
+        @auto == true
+      end
+
+      def agent.set_auto_approve(value)
+        @auto = value
+      end
+
+      def agent.startup_info
+        info = { provider: "openai", model: "gpt-test", tools: 3 }
+        info[:auto_approve] = true if auto_approve?
+        info
+      end
+
+      agent
+    end
+
     def teardown
       FileUtils.rm_f(TUI::HISTORY_FILE)
     end
@@ -1702,6 +1722,59 @@ module Rubot
         saved.each { |key, value| ENV[key] = value }
         ([ "VISUAL", "EDITOR" ] - saved.keys).each { |key| ENV.delete(key) }
       end
+    end
+
+    # /auto flips the mode through the agent handle (which persists it to
+    # config.yml) and says so; the status row carries the word, so an agent
+    # that stopped asking is visible without scrolling back.
+    def test_auto_command_turns_auto_mode_on_and_flags_the_status_row
+      agent = auto_agent
+      repl = TUI.new(agent)
+      repl.send(:build_ui)
+      repl.send(:paint_banner)
+
+      repl.send(:handle_command, "/auto on")
+      repl.send(:pump)
+
+      assert agent.auto_approve?, "the agent must be told"
+      view = plain(repl.instance_variable_get(:@app).render_lines)
+      assert_includes view.join("\n"), "Auto mode on"
+      assert_includes view.join("\n"), "AUTO", "the status row must say AUTO"
+    end
+
+    # The badge carries the theme's warning colour (everforest amber
+    # #dbbc7f) instead of the row's dim grey, so a mode that stops asking is
+    # visible at a glance rather than blending into the model text.
+    def test_auto_badge_uses_the_theme_warning_colour
+      agent = auto_agent
+      agent.set_auto_approve(true)
+      repl = TUI.new(agent)
+      repl.send(:build_ui)
+      repl.send(:paint_banner)
+
+      status = repl.instance_variable_get(:@app).render_lines.last
+      warn_sgr = ::TUI::Style.resolve(:warning)
+
+      assert_includes status, "#{warn_sgr}AUTO "
+      assert_includes status, ::TUI::Style.resolve(:dim), "the model text stays dim"
+    end
+
+    # No argument flips the current mode, so one word is enough to turn it off
+    # again after a session started with it on.
+    def test_auto_command_without_argument_flips_the_mode
+      agent = auto_agent
+      agent.set_auto_approve(true)
+      repl = TUI.new(agent)
+      repl.send(:build_ui)
+      repl.send(:paint_banner)
+
+      repl.send(:handle_command, "/auto")
+      repl.send(:pump)
+
+      refute agent.auto_approve?
+      view = plain(repl.instance_variable_get(:@app).render_lines)
+      assert_includes view.join("\n"), "Auto mode off"
+      refute_includes view.join("\n"), "AUTO ·"
     end
 
     def test_help_lists_the_editor_binding

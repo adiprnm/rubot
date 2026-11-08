@@ -102,6 +102,9 @@ module Rubot
       @steering = []
       @steering_mutex = Mutex.new
       @persona = Persona.from(persona)
+      # Auto mode: the preference lives in config.yml and is remembered across
+      # launches; the setter writes it back.
+      @auto_approve = config.respond_to?(:auto_approve) ? config.auto_approve : false
       @session = Session.new(session_id, workspace: config.workspace,
                                          max_messages: config.session_max_messages)
       apply_initial_preset!
@@ -210,7 +213,12 @@ module Rubot
     #                     tokens are recorded and after every round's tool results,
     #                     so a channel can update cost/cache/context mid-turn.
     #   on_confirm:       Called before dangerous actions that could cause data loss.
-    #                     Yields (tool_name, arguments). Return truthy to proceed, falsy to skip.
+    #                     Yields (tool_name, arguments, reason) — reason is a
+    #                     short phrase like "deletes files" or "overwrite
+    #                     build.log — 412 of 900 lines would be lost", or nil
+    #                     when the tool has no better description. Return
+    #                     truthy to proceed, falsy to skip. Not called at all in
+    #                     auto mode.
     #   on_assistant_text: Called with the model's own words whenever it replies
     #                     with text *and* tool calls (progress narration, e.g.
     #                     "Let me check the structure first."). Channels forward
@@ -432,11 +440,20 @@ module Rubot
 
             tool = @tools.get(tool_name)
             if tool && tool.respond_to?(:dangerous_action?) && tool.dangerous_action?(arguments)
-              log_debug("Dangerous action detected: #{tool_name} with args: #{arguments.inspect}")
-              if on_confirm && !on_confirm.call(tool_name, arguments)
-                log_debug("Action cancelled by user: #{tool_name}")
-                @session.add("tool", "Action cancelled by user.", tool_call_id: tool_call_id)
-                next
+              if auto_approve?
+                # Auto mode: the prompt is skipped, not the guard. Destructive
+                # patterns are refused inside the tool itself, so this branch
+                # can only ever run something the guard already allowed.
+                log_debug("Auto mode, allowing #{tool_name}: #{arguments.inspect}")
+              else
+                # Asking costs a second look at the file, so the reason is only
+                # worked out when a question is actually going to be shown.
+                reason = tool.respond_to?(:dangerous_action_reason) ? tool.dangerous_action_reason(arguments) : nil
+                if on_confirm && !on_confirm.call(tool_name, arguments, reason)
+                  log_debug("Action cancelled by user: #{tool_name}")
+                  @session.add("tool", "Action cancelled by user.", tool_call_id: tool_call_id)
+                  next
+                end
               end
             end
 
@@ -762,6 +779,21 @@ module Rubot
       @session
     end
 
+    # Auto mode: run anything the safety guard allows without asking first.
+    # What it skips is the question, never the guard — the destructive
+    # patterns in SafetyGuard are checked inside each tool and stay refused.
+    def auto_approve?
+      @auto_approve == true
+    end
+
+    # Turn auto mode on or off. The choice is written to config.yml, so the
+    # next launch starts in the same mode.
+    def auto_approve=(value)
+      @auto_approve = !!value
+      @config.set_auto_approve(@auto_approve) if @config.respond_to?(:set_auto_approve)
+      @auto_approve
+    end
+
     def startup_info
       model = active_model_name
       info = {
@@ -777,6 +809,7 @@ module Rubot
       info[:agents] = "yes" if @agents_file.enabled?
       info[:persona] = (@persona.name || "yes") if @persona
       info[:safety] = @safety_guard.restrict_to_workspace ? "restricted" : "permissive"
+      info[:auto_approve] = true if auto_approve?
       info[:skills] = @skill_registry.count if @skill_registry.any?
       info[:adaptive] = "memory+batched-extraction+summary+feedback"
       info

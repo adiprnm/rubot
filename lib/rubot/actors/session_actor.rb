@@ -118,9 +118,9 @@ module Rubot
           on_usage: ->(report) { events << [ :usage, report ] },
           on_steer: ->(text) { events << [ :steered, text ] },
           on_stopped: -> { events << [ :stopped ] },
-          on_confirm: lambda do |name, args|
+          on_confirm: lambda do |name, args, reason|
             id = SecureRandom.hex(6)
-            events << [ :confirm, id, name, args ]
+            events << [ :confirm, id, name, args, reason ]
             loop do
               reply = control.receive
               next unless reply[0] == :confirm_result
@@ -164,6 +164,8 @@ module Rubot
         when :message_count        then agent.session.message_count
         when :session_model_override then agent.session.model_override
         when :model_preset        then agent.session.model_preset
+        when :auto_approve        then agent.auto_approve?
+        when :set_auto_approve    then agent.auto_approve = msg[:value]
         when :forced_skill         then agent.session.forced_skill
         when :use_model            then agent.use_model(msg[:name])
         when :persona              then agent.persona_info

@@ -1792,3 +1792,121 @@ class TestAgentLiveUsage < Minitest::Test
     end
   end
 end
+
+
+# Auto mode: the prompt is skipped, the safety guard is not. These tests drive
+# a turn that asks for a destructive action, so they exercise the real decision
+# point in Agent#process rather than a copy of it.
+class TestAgentAutoMode < Minitest::Test
+  # A tool that claims every call is destructive, so the confirmation branch is
+  # always the one under test.
+  class DestructiveTool < Rubot::Tool
+    def name
+      "risky"
+    end
+
+    def description
+      "Test tool that always claims to destroy something."
+    end
+
+    def parameters
+      { "type" => "object", "properties" => {} }
+    end
+
+    def dangerous_action?(_arguments)
+      true
+    end
+
+    def dangerous_action_reason(_arguments)
+      "deletes files"
+    end
+
+    def execute(_arguments)
+      "ran"
+    end
+  end
+
+  class OneCallProvider
+    attr_reader :name
+
+    def initialize
+      @name = "fake"
+      @calls = 0
+    end
+
+    def chat(_messages, tools: nil)
+      @calls += 1
+      if @calls == 1
+        {
+          "content" => "",
+          "tool_calls" => [
+            {
+              "id" => "call_1",
+              "type" => "function",
+              "function" => { "name" => "risky", "arguments" => "{}" }
+            }
+          ]
+        }
+      else
+        { "content" => "done" }
+      end
+    end
+
+    def chat_stream(messages, tools: nil, &_on_chunk)
+      chat(messages, tools: tools)
+    end
+  end
+
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @config = isolated_config(@tmpdir, name: "auto")
+    @tools = Rubot::Tools::Registry.new
+    @tools.register(DestructiveTool.new)
+    @agent = Rubot::Agent.new(config: @config, provider: OneCallProvider.new,
+                              session_id: "auto", tools: @tools)
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+  end
+
+  def test_auto_mode_runs_the_action_without_asking
+    @agent.auto_approve = true
+    asked = []
+
+    @agent.process("go", on_confirm: ->(name, args, reason) { asked << [ name, reason ]; false })
+
+    assert_empty asked, "auto mode must not call the confirmation callback"
+    assert_equal "ran", @agent.session.messages.find { |m| m["role"] == "tool" }["content"]
+  end
+
+  def test_without_auto_mode_the_action_asks_first
+    asked = []
+
+    @agent.process("go", on_confirm: ->(name, args, reason) { asked << [ name, reason ]; false })
+
+    assert_equal [ [ "risky", "deletes files" ] ], asked
+    assert_includes @agent.session.messages.find { |m| m["role"] == "tool" }["content"],
+                    "cancelled"
+  end
+
+  # The preference has to survive a restart, otherwise /auto is per-launch
+  # noise instead of a setting.
+  def test_auto_mode_is_written_to_config
+    refute Rubot::Config.new(@config.config_path).auto_approve
+
+    @agent.auto_approve = true
+
+    assert Rubot::Config.new(@config.config_path).auto_approve
+  end
+
+  def test_a_fresh_agent_reads_the_saved_preference
+    @agent.auto_approve = true
+
+    reloaded = Rubot::Agent.new(config: Rubot::Config.new(@config.config_path),
+                                provider: OneCallProvider.new, session_id: "auto2",
+                                tools: @tools)
+
+    assert reloaded.auto_approve?
+  end
+end

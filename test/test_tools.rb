@@ -843,8 +843,44 @@ class TestTools < Minitest::Test
     filepath = File.join(@tmpdir, "existing.txt")
     File.write(filepath, "existing content")
 
-    # write on existing file = dangerous (data loss)
-    assert file_tool.dangerous_action?({ "operation" => "write", "path" => filepath })
+    # An overwrite that drops the content (here: an empty write) is data loss.
+    assert file_tool.dangerous_action?({ "operation" => "write", "path" => filepath, "content" => "" })
+  end
+
+  # The false positive this fixes: rewriting a file to change one line looked
+  # exactly like wiping it, so every second write asked the user to confirm.
+  def test_file_tool_small_rewrite_is_not_data_loss
+    file_tool = @registry.get("file_ops")
+    filepath = File.join(@tmpdir, "touched.rb")
+    File.write(filepath, (1..50).map { |i| "line #{i}" }.join("\n") + "\n")
+
+    content = (1..50).map { |i| i == 7 ? "line seven" : "line #{i}" }.join("\n") + "\n"
+
+    refute file_tool.dangerous_action?({ "operation" => "write", "path" => filepath, "content" => content })
+    refute file_tool.dangerous_action?({ "operation" => "write", "path" => filepath,
+                                         "content" => File.read(filepath) + "appended\n" })
+  end
+
+  def test_file_tool_rewrite_that_drops_the_content_is_data_loss
+    file_tool = @registry.get("file_ops")
+    filepath = File.join(@tmpdir, "shrunk.rb")
+    File.write(filepath, (1..100).map { |i| "line #{i}" }.join("\n") + "\n")
+
+    reason = file_tool.dangerous_action_reason({
+      "operation" => "write", "path" => filepath, "content" => "line 1\nline 2\n"
+    })
+
+    refute_nil reason
+    assert_includes reason, "98 of 100 lines"
+  end
+
+  def test_shell_reason_names_the_damage
+    shell_tool = @registry.get("shell_exec")
+
+    assert_equal "deletes files", shell_tool.dangerous_action_reason({ "command" => "rm -rf build" })
+    assert_equal "resets git history",
+                 shell_tool.dangerous_action_reason({ "command" => "git reset --hard HEAD" })
+    assert_nil shell_tool.dangerous_action_reason({ "command" => "ls -la" })
   end
 
   def test_file_tool_dangerous_new_file_is_safe

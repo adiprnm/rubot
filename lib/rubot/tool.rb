@@ -42,6 +42,15 @@ module Rubot
       false
     end
 
+    # Why #dangerous_action? said yes, in words the user can act on
+    # ("overwrite build.log — 412 of 900 lines would be lost"), or nil when
+    # the tool has nothing better to offer than its arguments. Channels put
+    # this in the confirmation prompt so the question describes the damage
+    # instead of shouting that something is dangerous.
+    def dangerous_action_reason(arguments)
+      nil
+    end
+
     # Convert to the provider's native tool definition format.
     # Delegates to the provider's format_tools method.
     def to_provider_format(provider_name)

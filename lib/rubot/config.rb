@@ -427,6 +427,26 @@ module Rubot
       !!val
     end
 
+    # Auto mode. When on, the agent runs any action the safety guard allows
+    # without asking first. The guard's own destructive patterns (rm -rf /,
+    # mkfs, dd onto a device, ...) are checked inside the tool itself and are
+    # still refused, so auto mode is not a bypass — it only skips the prompt.
+    def auto_approve
+      agent_defaults["auto_approve"] == true
+    end
+
+    # Set auto mode and write it back to config.yml, so the next launch starts
+    # in the same mode instead of forgetting the choice.
+    def set_auto_approve(value)
+      agents = data["agents"]
+      agents = data["agents"] = {} unless agents.is_a?(Hash)
+      defaults = agents["defaults"]
+      defaults = agents["defaults"] = {} unless defaults.is_a?(Hash)
+      defaults["auto_approve"] = !!value
+      save
+      defaults["auto_approve"]
+    end
+
     def max_rounds
       limit = agent_defaults["max_rounds"]
       # `max_tool_iterations` is the old name; still accepted so existing

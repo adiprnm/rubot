@@ -10,6 +10,12 @@ module Rubot
       MAX_READ = 20_000  # characters returned by one read
       MAX_READ_LINES = 2_000 # lines returned when offset/limit are used
       MAX_LIST = 100     # entries
+      # Compare at most this much of an existing file before deciding whether
+      # a rewrite destroys it; bigger files are treated as fully replaced.
+      MAX_COMPARE_BYTES = 1_000_000
+      # A rewrite that keeps less than this share of the old lines is data
+      # loss; a one-line fix keeps ~99%, so it never asks.
+      DESTRUCTIVE_WRITE_RATIO = 0.7
 
       attr_accessor :safety_guard
 
@@ -115,27 +121,79 @@ module Rubot
       end
 
       # Returns true if the operation could cause data loss.
-      # write on an existing file = data loss (overwriting).
+      # delete on an existing file = data loss, so it is confirmed.
       # write on a new file = safe (creating).
+      # write on an existing file = only when the new content drops most of
+      # what is there (see #dangerous_action_reason).
       # append = safe (never destroys existing data).
-      # delete on an existing file = data loss, so it is confirmed too.
       def dangerous_action?(arguments)
+        !dangerous_action_reason(arguments).nil?
+      end
+
+      # Shared with #dangerous_action? so the decision and the explanation can
+      # never disagree. A rewrite that keeps most of the old lines (a one-line
+      # fix, a new section, a longer file) is not worth asking about; a rewrite
+      # that throws the content away is.
+      def dangerous_action_reason(arguments)
         operation = arguments["operation"].to_s
-        return false unless %w[write delete].include?(operation)
+        return nil unless %w[write delete].include?(operation)
 
         path = arguments["path"]
-        return false if path.nil?
+        return nil if path.nil? || path.to_s.strip.empty?
 
-        # Only flag if the file already exists (overwriting = data loss)
-        begin
-          p = Pathname.new(path).expand_path
-          File.exist?(p)
+        target = begin
+          Pathname.new(path).expand_path
         rescue StandardError
-          false
+          return nil
         end
+        return nil unless target.file? # nothing there to lose
+
+        existing = comparable_lines(target)
+        return "overwrite #{path} (contents cannot be compared)" if existing.nil?
+
+        if operation == "delete"
+          return existing.empty? ? "delete #{path}" : "delete #{path} (#{existing.length} lines)"
+        end
+
+        incoming = split_lines(arguments["content"].to_s)
+        return "empty #{path} (#{existing.length} lines would be lost)" if incoming.empty?
+
+        kept = multiset_intersection(existing, incoming)
+        removed = existing.length - kept
+        return nil if removed.zero?
+
+        # A small edit loses a few lines and keeps the rest. A rewrite that
+        # keeps less than DESTRUCTIVE_WRITE_RATIO of the file is data loss.
+        return nil if kept.to_f / existing.length >= DESTRUCTIVE_WRITE_RATIO
+
+        "overwrite #{path} — #{removed} of #{existing.length} lines would be lost"
       end
 
       private
+
+      # Old lines still present in the new content (multiset: a line repeated
+      # twice counts twice). Cheap and good enough to tell an edit from a
+      # rewrite without diffing the whole file.
+      def multiset_intersection(old_lines, new_lines)
+        incoming = new_lines.tally
+        old_lines.tally.sum { |line, count| [ count, incoming[line].to_i ].min }
+      end
+
+      def split_lines(text)
+        # lines(chomp: true) counts what a reader would call lines: a trailing
+        # newline does not add an empty one, and an empty string is no lines.
+        text.lines(chomp: true)
+      end
+
+      # Lines of the file to compare against, or nil when it is too big or not
+      # text (a binary overwrite is always worth the question).
+      def comparable_lines(target)
+        return nil if target.size > MAX_COMPARE_BYTES
+
+        split_lines(File.binread(target.to_s).force_encoding(Encoding::UTF_8).scrub)
+      rescue StandardError
+        nil
+      end
 
       def safe_path(path)
         expanded = Pathname.new(path).expand_path

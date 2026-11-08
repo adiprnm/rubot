@@ -53,6 +53,11 @@ agents:
     # When restrict_to_workspace is true, allow read-only access outside the workspace.
     # Write operations are always blocked outside the workspace.
     allow_read_outside_workspace: false
+    # Auto mode — skip the confirmation prompt and run anything the safety
+    # guard allows. The destructive patterns in the guard (rm -rf /, mkfs,
+    # dd onto a device, ...) are still refused, so this removes a question,
+    # not a limit. Toggled from the chat with /auto on|off.
+    auto_approve: false
 
 # Editor opened by Ctrl+G in the TUI to write the prompt in. Falls back to
 # $VISUAL, then $EDITOR, then `vi` when unset. The command must block until

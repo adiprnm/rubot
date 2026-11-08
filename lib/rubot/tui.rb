@@ -64,6 +64,10 @@ module Rubot
     # priced report from the worker.
     COST_PLACEHOLDER = "cost — · cache — · ctx —"
 
+    # Words /auto accepts besides a bare flip.
+    AUTO_TOGGLE = { "on" => true, "true" => true, "yes" => true, "1" => true,
+                    "off" => false, "false" => false, "no" => false, "0" => false }.freeze
+
     COMMANDS = {
       "/help"     => "Show this help message",
       "/new"      => "Clear conversation and start a new session",
@@ -85,6 +89,7 @@ module Rubot
       "/memory"   => "Show persistent memory (MEMORY.md)",
       "/agents"   => "Show agent rules (AGENTS.md)",
       "/cron"     => "List scheduled cron jobs",
+      "/auto on|off" => "Auto mode: run non-destructive actions without asking (remembered)",
       "/stream on|off" => "Toggle streaming output",
       "/use SKILL" => "Force a specific skill for the next message",
       "/unuse"    => "Clear the forced skill",
@@ -389,14 +394,26 @@ module Rubot
       # actor mode, and the App thread must never block on a request.
       @external_editor = configured_editor
       info = agent.startup_info
-      @events << [ :status_right,
-                  "#{info[:provider]} · #{info[:model]}" ]
+      @events << [ :status_badge, status_badge_text(info) ]
+      @events << [ :status_right, status_right_text(info) ]
       # The metrics row is part of the launch view, not a reward for the first
       # turn: a fresh session has cost $0, no cache yet, and a system prompt
       # already eating some of the window, and saying so is the point.
       @events << [ :status_left, usage_footer ]
     rescue StandardError => e
       @events << [ :error_text, "#{e.class}: #{e.message}" ]
+    end
+
+    # Auto mode gets a word on the status row: an agent that stops asking has
+    # to say so somewhere the user sees without scrolling back. The badge is
+    # published separately from the model text so it can carry the theme's
+    # warning colour instead of the row's dim grey.
+    def status_badge_text(info)
+      info[:auto_approve] ? "AUTO" : ""
+    end
+
+    def status_right_text(info)
+      "#{info[:provider]} · #{info[:model]}"
     end
 
     # Compact cost / cache / context summary for the status row. Called from
@@ -452,6 +469,7 @@ module Rubot
       when :replay_transcript then replay_transcript(event[1])
       when :error_text then @log.add_entry([ [ MARK[:err] + " ", :error ], [ event[1].to_s, :error ] ])
       when :status_right then @status.right = event[1]
+      when :status_badge then @status.badge = event[1]
       when :status_left then @status.left = event[1]
       when :stream_start
         @working.notice = nil
@@ -669,9 +687,9 @@ module Rubot
     # stale answer from an earlier confirmation can never be reused. Fail
     # closed (deny) if the channel dies mid-dialog.
     def confirm_callback
-      proc do |tool_name, args|
+      proc do |tool_name, args, reason|
         answered = Queue.new
-        @events << [ :confirm, tool_name, args, answered ]
+        @events << [ :confirm, tool_name, args, answered, reason ]
         answered.pop
       end
     end
@@ -690,9 +708,9 @@ module Rubot
     end
 
     def stdin_confirm_callback
-      proc do |tool_name, args|
-        description = "#{tool_name} #{tool_summary(tool_name, args)}".strip
-        print "\n⚠️  Dangerous action (could cause data loss): #{description}\nConfirm? [y/N] "
+      proc do |tool_name, args, reason|
+        description = reason || "#{tool_name} #{tool_summary(tool_name, args)}".strip
+        print "\n⚠️  #{description}\nConfirm? [y/N] "
         $stdout.flush
         answer = $stdin.gets&.strip&.downcase
         answer == "y" || answer == "yes"
@@ -741,8 +759,8 @@ module Rubot
     # ConfirmDialog did — but as transcript rows above the prompt instead of
     # a floating modal, so the text stays selectable with the mouse.
     def show_confirm(event)
-      _, tool_name, args, answered = event
-      @confirm_prompt.ask(tool_name, args, answered: answered)
+      _, tool_name, args, answered, reason = event
+      @confirm_prompt.ask(tool_name, args, answered: answered, reason: reason)
       @prompt.list = @confirm_prompt
     end
 
@@ -904,6 +922,9 @@ module Rubot
       info = agent.startup_info
       puts Rubot::NAME
       puts "Provider: #{info[:provider]} · Model: #{info[:model]} · Tools: #{info[:tools]} loaded"
+      if info[:auto_approve]
+        puts "⚡ Auto mode on — non-destructive actions run without asking; destructive patterns stay blocked (/auto off)"
+      end
       puts "Type /help for commands, /quit to exit."
       puts
     rescue StandardError
@@ -1026,6 +1047,8 @@ module Rubot
         else
           say("Cron tool not available.", :warn)
         end
+      when "/auto"
+        handle_auto_command(parts[1])
       when "/stream"
         @stream = parts[1].downcase == "on" if parts[1]
         say("Streaming #{@stream ? "on" : "off"}.", :info)
@@ -1050,6 +1073,46 @@ module Rubot
       raise if Rubot.debug?
     ensure
       flush_command_output
+    end
+
+    # /auto with no argument flips the current mode, so the common case is one
+    # word. The choice is persisted by the agent (config.yml), which is why the
+    # next launch starts the same way.
+    def handle_auto_command(argument)
+      word = argument.to_s.strip.downcase
+      wanted = if word.empty?
+        !auto_mode?
+      elsif AUTO_TOGGLE.key?(word)
+        AUTO_TOGGLE[word]
+      end
+
+      if wanted.nil?
+        say("Usage: /auto on|off (no argument flips it).", :err)
+        return
+      end
+
+      agent.set_auto_approve(wanted)
+      # Publish the new status row straight away instead of queueing a full
+      # /sync: the metrics did not change, only the badge that says the agent
+      # has stopped asking.
+      info = agent.startup_info
+      @events << [ :status_badge, status_badge_text(info) ]
+      @events << [ :status_right, status_right_text(info) ]
+      if wanted
+        # The same amber as the status badge, so the colour means one thing:
+        # this agent acts without asking.
+        say("Auto mode on — non-destructive actions run without asking.", :warn)
+        say_text("Destructive patterns (rm -rf /, mkfs, dd onto a device, …) are still refused.")
+      else
+        say("Auto mode off — every dangerous action asks first.", :info)
+      end
+    end
+
+    def auto_mode?
+      a = agent
+      a.respond_to?(:auto_approve?) ? !!a.auto_approve? : false
+    rescue StandardError
+      false
     end
 
     def handle_resume(query)
@@ -1413,10 +1476,15 @@ module Rubot
 
       @log.add_entry([ [ Rubot::NAME, :title ] ])
       @log.add_entry([ [ "provider #{provider} · model #{model} · #{tools}", :dim ] ])
+      if info[:auto_approve]
+        @log.add_entry([ [ "⚡ auto mode on", :warning ],
+                         [ " — non-destructive actions run without asking; destructive patterns stay blocked (/auto off)", :dim ] ])
+      end
       @log.add_entry([ [ "type /help for commands · esc cancels a running turn · type to steer it · pgup/pgdn scrolls", :dim ] ])
       @log.add_entry([ [ "", nil ] ])
       @banner_count = @log.entry_count
       @status.right = "#{provider} · #{model}" if info[:provider]
+      @status.badge = status_badge_text(info)
       # The worker fills this in as soon as it has priced the launch (it may
       # read the pricing catalog first); until then the row says what it is
       # waiting for instead of showing an empty half.

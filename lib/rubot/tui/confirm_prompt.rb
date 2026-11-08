@@ -51,13 +51,13 @@ module Rubot
 
       # Publish the question into the log and take the keyboard. `answered`
       # is the Queue the worker blocks on; it is filled by #commit.
-      def ask(tool_name, args, answered:)
+      def ask(tool_name, args, answered:, reason: nil)
         return false if active?
 
         @pending = { answered: answered }
         @choice = OPTIONS.length - 1
         @spacer = @log.add_entry([ [ "", nil ] ])
-        describe(tool_name, args).each { |line| @rows << @log.add_entry([ [ INDENT, nil ] ] + line, keep_leading: true) }
+        describe(tool_name, args, reason).each { |line| @rows << @log.add_entry([ [ INDENT, nil ] ] + line, keep_leading: true) }
         @choice_row = @log.add_entry(chips, keep_leading: true)
         @hint = @log.add_entry(
           [ [ INDENT, nil ], [ "←/→ choose · enter confirm · esc reject", :dim ] ],
@@ -121,16 +121,23 @@ module Rubot
         answered << value if answered
       end
 
-      # One segment-row per printed line, [text, style] pairs.
-      def describe(tool_name, args)
+      # One segment-row per printed line, [text, style] pairs. `reason` is the
+      # tool's own account of what would be lost ("overwrite x — 412 of 900
+      # lines would be lost", "deletes files"); when the tool has none, the
+      # arguments have to do the talking.
+      def describe(tool_name, args, reason = nil)
         args = {} unless args.is_a?(Hash)
-        lines = case tool_name.to_s
-        when "shell_exec"
-          [ "dangerous shell command:", args["command"].to_s[0, 400] ]
-        when "file_ops"
-          [ "#{args["operation"]} #{args["path"]}" ]
+        lines = if reason && !reason.to_s.strip.empty?
+          [ reason.to_s ]
         else
-          [ "#{tool_name} #{args.inspect[0, 400]}" ]
+          case tool_name.to_s
+          when "shell_exec"
+            [ "dangerous shell command:", args["command"].to_s[0, 400] ]
+          when "file_ops"
+            [ "#{args["operation"]} #{args["path"]}" ]
+          else
+            [ "#{tool_name} #{args.inspect[0, 400]}" ]
+          end
         end
 
         lines.compact.reject(&:empty?).each_with_index.map do |line, i|

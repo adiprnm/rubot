@@ -300,8 +300,11 @@ result to the model; the diff is a TUI view only. Its before/after text is kept 
 metadata on the tool message (never sent to the model), so `/resume` redraws
 the same diff at the new width.
 
-When the agent's next action could destroy data (overwriting an existing
-file, a dangerous shell command), the worker asks first: the question is
+When the agent's next action could destroy data (a rewrite that throws most of
+a file away, deleting a file, a dangerous shell command), the worker asks
+first: the question names the damage (`overwrite build.log — 412 of 900 lines
+would be lost`, `deletes files`) rather than announcing that something is
+dangerous, and it is
 written into the transcript right above the input — no floating modal — as `⚠
 <description>` rows above two choice chips, `› ✓ Allow   ✗ Reject`.`←/→` move
 the highlight (it starts on `Reject`, so a blind `Enter` never allows),
@@ -311,6 +314,13 @@ drag-selected and copied while the question is up. The turn is blocked until
 it is answered, and once it is, the exchange is taken back out of the
 transcript — only one blank row keeps the spacing — because the tool rows and
 the answer that follow are the record.
+
+**Auto mode** (`/auto on` in the TUI or Telegram, remembered in `config.yml`)
+skips those questions: anything the safety guard allows runs straight away. The
+guard itself is not affected — the destructive patterns below are checked
+inside the tools and are refused with or without auto mode, which is why auto
+mode removes a prompt and not a limit. The status row says `AUTO` while it is
+on.
 
 `Ctrl+G` hands the prompt to an external editor for a long or multi-paragraph
 message, then reads it back into the input box. The editor is `external_editor`
@@ -1068,7 +1078,7 @@ File operations: read, edit, write, append, delete, list directories, get file i
 |-----------|-------------|
 | `read` | Read a file. `offset` (1-based line) and `limit` (lines) read part of a long file; the reply says which lines came back. A truncated read points at `offset`. |
 | `edit` | Replace an exact `old_string` with `new_string`. It must match exactly once, or the edit is refused with the match count; `replace_all: true` changes every occurrence. This is the preferred way to change an existing file — it does not rewrite the parts you did not touch. |
-| `write` | Write a whole file (overwrites; asks for confirmation when the file exists) |
+| `write` | Write a whole file. Asks for confirmation only when the new content throws most of the existing file away (a one-line fix or a longer file passes) |
 | `append` | Add to the end of a file |
 | `delete` | Delete one file (asks for confirmation; directories are refused) |
 | `list` | List a directory |

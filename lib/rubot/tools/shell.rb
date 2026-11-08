@@ -88,8 +88,14 @@ module Rubot
 
       # Returns true if the command could cause data loss or destructive changes.
       def dangerous_action?(arguments)
+        !dangerous_action_reason(arguments).nil?
+      end
+
+      # Which of the destructive patterns the command hit, in words the
+      # confirmation prompt can show.
+      def dangerous_action_reason(arguments)
         cmd = arguments["command"]
-        return false if cmd.nil? || cmd.strip.empty?
+        return nil if cmd.nil? || cmd.strip.empty?
 
         # Match against the command with plain quoted text removed, so
         # `echo "rm -rf build"` or a commit message does not ask for
@@ -97,35 +103,39 @@ module Rubot
         # -c runs its string as code, so there the quotes are kept.
         cmd = strip_quoted(cmd) unless cmd =~ /\b(?:ba|z|k)?sh\s+-c\b/
 
-        # Destructive patterns that could cause data loss
-        dangerous_patterns = [
-          # File/directory deletion
-          /\brm\b/,
-          # Truncate to zero length
-          /\btruncate\b/,
-          /\b:>\s/,
-          # In-place editing that modifies files destructively
-          /\bsed\s+(-i|--in-place)/,
-          # Disk/partition operations
-          /\bdd\b/,
-          /\bmkfs\b/,
-          /\bmkswap\b/,
-          /\bmke2fs\b/,
-          # Recursive permission changes
-          /\bchmod\s+-R/,
-          # Git destructive
-          /\bgit\s+reset\s+--hard/,
-          /\bgit\s+push\s+--force/,
-          # Docker destructive
-          /\bdocker\s+system\s+prune/,
-          /\bdocker\s+rmi\s+-f/,
-          /\bdocker\s+rm\s+-f/,
-          # shred / secure delete
-          /\bshred\b/,
-        ]
-
-        dangerous_patterns.any? { |p| cmd =~ p }
+        match = DESTRUCTIVE_PATTERNS.find { |_label, pattern| cmd =~ pattern }
+        match && match[0]
       end
+
+      # Destructive patterns that could cause data loss, with a label for the
+      # confirmation prompt. Deeply frozen: this is read from inside a session
+      # Ractor, and a nested array that is merely frozen at the top level is
+      # not shareable, so reading it there raises Ractor::IsolationError.
+      DESTRUCTIVE_PATTERNS = [
+        # File/directory deletion
+        [ "deletes files", /\brm\b/ ],
+        # Truncate to zero length
+        [ "truncates a file", /\btruncate\b/ ],
+        [ "truncates a file", /\b:>\s/ ],
+        # In-place editing that modifies files destructively
+        [ "edits files in place", /\bsed\s+(-i|--in-place)/ ],
+        # Disk/partition operations
+        [ "writes raw data to a device", /\bdd\b/ ],
+        [ "formats a filesystem", /\bmkfs\b/ ],
+        [ "formats a filesystem", /\bmkswap\b/ ],
+        [ "formats a filesystem", /\bmke2fs\b/ ],
+        # Recursive permission changes
+        [ "changes permissions recursively", /\bchmod\s+-R/ ],
+        # Git destructive
+        [ "resets git history", /\bgit\s+reset\s+--hard/ ],
+        [ "force-pushes a branch", /\bgit\s+push\s+--force/ ],
+        # Docker destructive
+        [ "prunes docker data", /\bdocker\s+system\s+prune/ ],
+        [ "removes docker images", /\bdocker\s+rmi\s+-f/ ],
+        [ "removes docker containers", /\bdocker\s+rm\s+-f/ ],
+        # shred / secure delete
+        [ "wipes a file beyond recovery", /\bshred\b/ ]
+      ].map { |label, pattern| [ label, pattern ].freeze }.freeze
 
       private
 

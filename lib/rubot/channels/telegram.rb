@@ -48,6 +48,9 @@ module Rubot
       # Bot API refuses getFile above 20 MB.
       MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
       UNSUPPORTED_MEDIA = %w[sticker voice video video_note audio animation].freeze
+      # Words /auto accepts besides a bare flip.
+      AUTO_TOGGLE = { "on" => true, "true" => true, "yes" => true, "1" => true,
+                      "off" => false, "false" => false, "no" => false, "0" => false }.freeze
       PERSONA_WIZARD_TTL = 15 * 60
       # A quoted message is prepended to the prompt, so it competes with the
       # user's own text and the model's output budget. Telegram caps messages at
@@ -618,7 +621,7 @@ module Rubot
           handle_compact_command
         when "/help"
           bot_name = @config.fetch("bot_name", "Rubot")
-          [ :skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help. While a task is still running, a plain message steers it instead of waiting behind it.\n\nBuilt-in commands:\n/start - Start the bot\n/new - Clear chat and start a new session\n/stop - Stop the task that is running\n/compact - Summarize older messages to free context\n/help - Show this help message\n/info - Show agent info\n/model - Show current model preset\n/model <preset> - Switch preset for this session\n/models - List model presets\n/preset - Manage model presets\n/preset set <name> <model> - Create/update a preset\n/preset default <name> - Preset for new sessions\n/preset models - List models supported by the provider\n/use_model <preset> - Alias for /model <preset>\n/persona - Setup persona for this forum topic\n/persona show - Show this topic's persona\n/persona reset - Remove this topic's persona\n/cancel - Cancel the persona setup\n/skills - List available skills\n/memory - Show persistent memory\n/soul - Show bot personality\n/agents - Show agent rules\n/cron - List scheduled cron jobs\n/context - Context usage, cache hit rate, and estimated cost\n/usage - OpenCode Go subscription usage\n/cron delete <id> - Delete a cron job\n/use <skill> - Force a skill for the next message\n/unuse - Clear the forced skill" ]
+          [ :skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help. While a task is still running, a plain message steers it instead of waiting behind it.\n\nBuilt-in commands:\n/start - Start the bot\n/new - Clear chat and start a new session\n/stop - Stop the task that is running\n/compact - Summarize older messages to free context\n/help - Show this help message\n/info - Show agent info\n/model - Show current model preset\n/model <preset> - Switch preset for this session\n/models - List model presets\n/preset - Manage model presets\n/preset set <name> <model> - Create/update a preset\n/preset default <name> - Preset for new sessions\n/preset models - List models supported by the provider\n/use_model <preset> - Alias for /model <preset>\n/persona - Setup persona for this forum topic\n/persona show - Show this topic's persona\n/persona reset - Remove this topic's persona\n/cancel - Cancel the persona setup\n/skills - List available skills\n/memory - Show persistent memory\n/soul - Show bot personality\n/agents - Show agent rules\n/cron - List scheduled cron jobs\n/context - Context usage, cache hit rate, and estimated cost\n/usage - OpenCode Go subscription usage\n/cron delete <id> - Delete a cron job\n/use <skill> - Force a skill for the next message\n/unuse - Clear the forced skill\n/auto on|off - Run non-destructive actions without asking (remembered)" ]
         when "/info"
           handle_info_command
         when "/context"
@@ -649,6 +652,8 @@ module Rubot
           handle_use_command($2&.strip)
         when "/unuse"
           handle_unuse_command
+        when /^\/auto(\s+(.*))?$/
+          handle_auto_command($2&.strip)
         else
           message
         end
@@ -681,7 +686,8 @@ module Rubot
           { "command" => "agents", "description" => "Show agent rules" },
           { "command" => "cron", "description" => "List scheduled cron jobs" },
           { "command" => "use", "description" => "Force a skill for the next message" },
-          { "command" => "unuse", "description" => "Clear the forced skill" }
+          { "command" => "unuse", "description" => "Clear the forced skill" },
+          { "command" => "auto", "description" => "Auto mode: skip confirmations for safe actions" }
         ]
 
         url = URI("#{API_BASE}#{@token}/setMyCommands")
@@ -830,6 +836,33 @@ module Rubot
           [ :skip, "✅ Forced skill cleared." ]
         else
           [ :skip, "ℹ️ No forced skill is set." ]
+        end
+      rescue StandardError => e
+        [ :skip, "❌ Error: #{e.message}" ]
+      end
+
+      # Auto mode: run anything the safety guard allows without asking. The
+      # destructive patterns inside the guard still refuse, so this skips the
+      # question, not the check. The choice is written to config.yml and shared
+      # with the TUI.
+      def handle_auto_command(argument)
+        ra = request_agent
+        current = ra.respond_to?(:auto_approve?) ? !!ra.auto_approve? : false
+        word = argument.to_s.strip.downcase
+        wanted = if word.empty?
+          !current
+        elsif AUTO_TOGGLE.key?(word)
+          AUTO_TOGGLE[word]
+        end
+
+        return [ :skip, "Usage: /auto on|off (no argument flips it)." ] if wanted.nil?
+
+        ra.set_auto_approve(wanted)
+        if wanted
+          [ :skip, "⚡ Auto mode on — non-destructive actions run without asking.\n" \
+                    "Destructive patterns (rm -rf /, mkfs, dd onto a device, …) are still refused." ]
+        else
+          [ :skip, "🛑 Auto mode off — every dangerous action asks first." ]
         end
       rescue StandardError => e
         [ :skip, "❌ Error: #{e.message}" ]
@@ -1046,8 +1079,8 @@ module Rubot
           notify_tool_finished(chat_id, thread_id, tool_name, result)
         }, on_progress: ->(round, tool_count) {
           notify_progress(chat_id, thread_id, round)
-        }, on_confirm: ->(tool_name, args) {
-          ask_confirmation(chat_id, thread_id, tool_name, args)
+        }, on_confirm: ->(tool_name, args, reason) {
+          ask_confirmation(chat_id, thread_id, tool_name, args, reason)
         })
 
         stop_typing(chat_id, thread_id) unless is_general_topic
@@ -1997,8 +2030,11 @@ module Rubot
 
       CONFIRM_TIMEOUT_SECONDS = 120
 
-      # Describe a dangerous action for the confirmation prompt.
-      def describe_action(tool_name, args)
+      # Describe a dangerous action for the confirmation prompt. The tool's own
+      # reason wins when it has one: it names the damage, not the tool.
+      def describe_action(tool_name, args, reason = nil)
+        return reason.to_s if reason && !reason.to_s.strip.empty?
+
         case tool_name
         when "shell_exec"
           "Shell command: `#{args["command"][0..120]}`"
@@ -2009,18 +2045,32 @@ module Rubot
         end
       end
 
+      # Name the action in the button message: "Overwrite the file" is a
+      # question a user can answer; "Dangerous Action Detected" only startles.
+      def confirmation_title(tool_name, args)
+        operation = args.is_a?(Hash) ? args["operation"].to_s : ""
+        case tool_name.to_s
+        when "file_ops"
+          operation == "delete" ? "Delete this file?" : "Overwrite this file?"
+        when "shell_exec"
+          "Run this command?"
+        else
+          "Confirm this action?"
+        end
+      end
+
       # Send a confirmation message with inline Yes/No buttons.
       # Blocks until the user responds or timeout expires.
       # Returns true if confirmed, false otherwise.
-      def ask_confirmation(chat_id, thread_id, tool_name, args)
+      def ask_confirmation(chat_id, thread_id, tool_name, args, reason = nil)
         confirm_id = SecureRandom.hex(8)
-        description = describe_action(tool_name, args)
+        description = describe_action(tool_name, args, reason)
 
         # Send confirmation message with inline keyboard
         url = URI("#{API_BASE}#{@token}/sendMessage")
         req = Net::HTTP::Post.new(url)
         req["Content-Type"] = "application/json"
-        text = "⚠️ **Dangerous Action Detected**\n\n#{description}\n\nThis could cause data loss. Proceed?"
+        text = "⚠️ **#{confirmation_title(tool_name, args)}**\n\n#{description}\n\nProceed?"
         body = {
           "chat_id" => chat_id,
           "text" => Rubot::TelegramFormat.convert(text),

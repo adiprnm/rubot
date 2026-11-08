@@ -102,7 +102,7 @@ module Rubot
             on_stopped&.call
           when :confirm
             answered = begin
-              on_confirm ? on_confirm.call(event[2], event[3]) : false
+              on_confirm ? on_confirm.call(event[2], event[3], event[4]) : false
             rescue StandardError
               false # fail closed; never leave the actor blocked on a reply
             end
@@ -190,6 +190,16 @@ module Rubot
 
       def persona
         call(:persona)
+      end
+
+      # Auto mode: the flag lives in the session Ractor (the agent that acts on
+      # it) and is persisted to config.yml by the agent itself.
+      def auto_approve?
+        call(:auto_approve)
+      end
+
+      def set_auto_approve(value)
+        call(:set_auto_approve, value: value)
       end
 
       # The session handle exposes plain data, matching Agent#persona_info.
