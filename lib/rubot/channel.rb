@@ -22,6 +22,10 @@ module Rubot
   class Channel
     attr_reader :agent, :config, :name, :pool
 
+    # How long a shutdown waits for stopped turns to unwind before tearing the
+    # pool down anyway. See #stop_running_turns.
+    SHUTDOWN_GRACE = 2
+
     # @param agent [Rubot::Agent, nil] legacy in-process agent
     # @param pool [Rubot::Actors::SessionPool, nil] shared session pool
     # @param app_config [Rubot::Config, nil] configuration used to build a pool
@@ -110,9 +114,12 @@ module Rubot
     #   called at all in auto mode.
     # @param on_assistant_text [Proc, nil] Called with the model's narration text
     #   whenever it writes a message before running more tools
+    # @param on_reasoning [Proc, nil] Called with each fragment of the model's
+    #   hidden thinking as it arrives. A channel that shows it must keep the
+    #   fragments out of the transcript; they are not the answer.
     # @return [String, nil] The agent's response, or nil if processing was skipped
     def process_message(message, session_id: nil, on_tool_call: nil, on_tool_result: nil, on_progress: nil,
-                        on_confirm: nil, on_assistant_text: nil)
+                        on_confirm: nil, on_assistant_text: nil, on_reasoning: nil)
       sid = (session_id || "default").to_s
       handle = session_for(sid)
 
@@ -136,7 +143,8 @@ module Rubot
         on_tool_result: on_tool_result,
         on_progress: on_progress,
         on_confirm: on_confirm,
-        on_assistant_text: on_assistant_text
+        on_assistant_text: on_assistant_text,
+        on_reasoning: on_reasoning
       ) do |chunk|
         on_stream_chunk(chunk) if respond_to?(:on_stream_chunk)
       end
@@ -299,6 +307,7 @@ module Rubot
     def shutdown_pool
       return unless @owned_pool
 
+      stop_running_turns
       @pool&.shutdown
       @owned_pool = false
     rescue Ractor::ClosedError, Ractor::RemoteError
@@ -306,6 +315,27 @@ module Rubot
     end
 
     private
+
+    # A session Ractor must not be torn down while a caller is still blocked
+    # receiving on its event port: Ruby 4.0.9 takes SIGSEGV in
+    # ractor_port_close when port teardown races a live receiver, which is
+    # exactly what a quit during a running turn looks like. Stopping the turns
+    # first lets those callers return and stop receiving.
+    def stop_running_turns
+      handles = @running_mutex.synchronize { @running_handles.values.dup }
+      return if handles.empty?
+
+      handles.each do |handle|
+        handle.cancel! if handle.respond_to?(:cancel!)
+      rescue StandardError
+        nil
+      end
+
+      deadline = Time.now + SHUTDOWN_GRACE
+      while Time.now < deadline && !@running_mutex.synchronize { @running_handles.empty? }
+        sleep 0.02
+      end
+    end
 
     def track_running_session(session_id, handle)
       @running_mutex.synchronize { @running_handles[session_id.to_s] = handle }
