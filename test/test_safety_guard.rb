@@ -4,8 +4,8 @@ require_relative "test_helper"
 
 class TestSafetyGuard < Minitest::Test
   def setup
-    @workspace = File.expand_path("/tmp/rubot_test_workspace")
-    FileUtils.mkdir_p(@workspace)
+    # Unique per process so the file can be sharded across workers.
+    @workspace = Dir.mktmpdir("rubot_test_workspace")
   end
 
   def teardown

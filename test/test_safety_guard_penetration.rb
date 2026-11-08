@@ -13,8 +13,8 @@ require_relative "test_helper"
 
 class TestSafetyGuardPenetration < Minitest::Test
   def setup
-    @workspace = File.expand_path("/tmp/rubot_pen_test_workspace")
-    FileUtils.mkdir_p(@workspace)
+    # Unique per process so the file can be sharded across workers.
+    @workspace = Dir.mktmpdir("rubot_pen_test_workspace")
     File.write(File.join(@workspace, "test.txt"), "hello")
   end
 
