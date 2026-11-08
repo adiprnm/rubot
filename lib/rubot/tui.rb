@@ -443,8 +443,11 @@ module Rubot
       info[:auto_approve] ? "AUTO" : ""
     end
 
+    # The footer names the model only. Which provider serves it is launch
+    # detail, already covered by the banner; repeating it here spends the
+    # row's scarce width on something that never changes mid-session.
     def status_right_text(info)
-      "#{info[:provider]} · #{info[:model]}"
+      info[:model].to_s
     end
 
     # Compact cost / cache / context summary for the status row. Called from
@@ -1601,7 +1604,7 @@ module Rubot
       @log.add_entry([ [ "type /help for commands · esc cancels a running turn · type to steer it · pgup/pgdn scrolls", :dim ] ])
       @log.add_entry([ [ "", nil ] ])
       @banner_count = @log.entry_count
-      @status.right = "#{provider} · #{model}" if info[:provider]
+      @status.right = model if info[:model]
       @status.badge = status_badge_text(info)
       # The worker fills this in as soon as it has priced the launch (it may
       # read the pricing catalog first); until then the row says what it is

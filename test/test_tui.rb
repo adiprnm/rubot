@@ -83,7 +83,7 @@ module Rubot
       prompt.handle_key(::TUI::Key.printable("h"))
       app = repl.instance_variable_get(:@app)
       view = plain(app.render_lines)
-      status_ix = view.index { |l| l.include?("openai · gpt-test") }
+      status_ix = view.index { |l| l.include?("gpt-test") && !l.include?("provider") }
       prompt_ix = view.index { |l| l.include?("h") }
 
       assert prompt_ix && status_ix, "both must render"
@@ -106,7 +106,7 @@ module Rubot
     def test_status_line_puts_metrics_left_of_the_model_info
       repl = build_repl
       ev = repl.instance_variable_get(:@events)
-      ev << [ :status_right, "openai · gpt-test" ]
+      ev << [ :status_right, "gpt-test" ]
       ev << [ :status_left, "$0.001 · cache 60% · ctx 8.2%" ]
       repl.send(:pump)
 
@@ -116,8 +116,8 @@ module Rubot
       assert line, "the metrics row renders"
       assert_includes line, "cache 60%"
       assert_includes line, "ctx 8.2%"
-      assert_includes line, "openai · gpt-test", "model info keeps its spot on the right"
-      assert_operator line.index("$0.001"), :<, line.index("openai · gpt-test"),
+      assert_includes line, "gpt-test", "model info keeps its spot on the right"
+      assert_operator line.index("$0.001"), :<, line.index("gpt-test"),
                       "metrics sit on the left: #{line.inspect}"
     end
 
@@ -127,22 +127,25 @@ module Rubot
       repl.send(:pump)
 
       status = repl.instance_variable_get(:@status)
-      assert_equal "openai · gpt-test", status.instance_variable_get(:@right)
-      refute plain(repl.instance_variable_get(:@app).render_lines).any? { |l| l.include?("session") },
-             "the footer does not name the session"
+      assert_equal "gpt-test", status.instance_variable_get(:@right)
+      lines = plain(repl.instance_variable_get(:@app).render_lines)
+      refute lines.any? { |l| l.include?("session") }, "the footer does not name the session"
+      footer = lines.find { |l| l.include?("$0.000") }
+      assert footer, "the metrics row renders"
+      refute_includes footer, "openai", "the footer does not name the provider: #{footer.inspect}"
     end
 
     def test_status_line_truncates_metrics_before_model_info
       status = TUI::StatusLine.new
       status.layout(::TUI::Rect.new(0, 0, 30, 1))
       status.left = "$0.001 · cache 60% · ctx 8.2% · extra-wide-metric"
-      status.right = "openai · gpt-test"
+      status.right = "gpt-test"
       canvas = ::TUI::Canvas.new(30, 1)
       status.render(canvas)
 
       row = plain(canvas.lines).first
       assert_operator ::TUI::Text.width(row), :<=, 30, row.inspect
-      assert_includes row, "openai · gpt-test", "model info survives: #{row.inspect}"
+      assert_includes row, "gpt-test", "model info survives: #{row.inspect}"
       assert_includes row, "\u2026", "the cut is marked: #{row.inspect}"
     end
 
