@@ -6,6 +6,7 @@ require "tmpdir"
 
 require_relative "usage"
 require_relative "opencode_usage"
+require_relative "clipboard_image"
 require_relative "tui/compat"
 require_relative "tui/log_view"
 require_relative "tui/markdown"
@@ -338,6 +339,9 @@ module Rubot
       @app.on_key(:ctrl_c) { @app.quit }
       # Hand the prompt to $EDITOR and take the result back into the input.
       @app.on_key(:ctrl_g) { edit_prompt }
+      # A terminal only forwards text, so a screenshot on the clipboard is
+      # fetched and saved here before it can reach the prompt.
+      @app.on_key(:ctrl_v) { paste_clipboard }
       @app.on_key(:escape) do
         @log.clear_selection
         cancel_turn
@@ -351,7 +355,10 @@ module Rubot
       @prompt.on(:menu) { |items, index| @menu.set_items(items, index) }
 
       @prompt.on(:submit) do |text|
-        line = text.strip
+        # Collapsed pastes go back to their full text here, once: what the
+        # model sees is what was pasted, not the token on screen. Image
+        # tokens become the file paths, without a sentence around them.
+        line = @prompt.expand(@prompt.expand_images(text)).strip
         @prompt.value = ""
         next if line.empty?
 
@@ -837,6 +844,30 @@ module Rubot
     # ------------------------------------------------------------------
     # External editor (ctrl+g)
     # ------------------------------------------------------------------
+
+    # Paste from the desktop clipboard. The terminal delivers text, never
+    # pixels, so images are fetched from the clipboard and stored as temp
+    # files; the prompt only shows "Image 1", "Image 2", ... and the token
+    # becomes the path on submit. They stay in the temp directory: scratch
+    # input for this turn, not something a resumed session should carry.
+    def paste_clipboard
+      paths = ClipboardImage.capture_all
+      unless paths.empty?
+        paths.each { |path| @prompt.insert_image(path) }
+        @app.focus(@prompt)
+        return
+      end
+
+      # No image: a clipboard holding text is what a paste key is normally
+      # used for, and some terminals do not intercept ctrl+v at all.
+      text = ClipboardImage.text
+      if text
+        @prompt.insert_paste(text)
+        @app.focus(@prompt)
+      end
+    rescue StandardError => e
+      publish [ [ MARK[:err] + " ", :error ], [ "paste: #{e.class}: #{e.message}", :error ] ]
+    end
 
     # Edit the prompt in the configured editor and take back what it wrote.
     # The draft starts as the current buffer, so ctrl+g on a half-typed

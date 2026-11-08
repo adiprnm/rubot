@@ -23,6 +23,17 @@ module Rubot
       COMMAND = :command
       FILE = :file
 
+      # A paste longer than this is collapsed to a one-line token. The
+      # buffer is rendered in full on every frame, so a few thousand pasted
+      # lines cost ~100 ms per redraw and the whole TUI crawls. The token
+      # keeps the editor responsive; the text itself is held aside and put
+      # back in place on submit.
+      COLLAPSE_LINES = 6
+      COLLAPSE_BYTES = 800
+      # Tokens kept for one message. A paste is used when the message is
+      # sent (or abandoned), so a small ring is enough.
+      MAX_PASTES = 8
+
       # An inline session list opened by /resume. While it is set it owns the
       # keyboard, so the prompt neither edits nor submits until it is done.
       attr_accessor :list
@@ -37,6 +48,12 @@ module Rubot
         @files = files || FileIndex.new
         @matches = nil
         @match_idx = nil
+        # Collapsed pastes: token => the text it stands for.
+        @pastes = {}
+        @paste_seq = 0
+        # Pasted images: "Image N" => the temp file holding it.
+        @images = {}
+        @image_seq = 0
 
         @menu_items = []
         @menu_index = 0
@@ -63,6 +80,75 @@ module Rubot
         @menu_suppressed = false
         refresh_menu
         self
+      end
+
+      # Insert text at the cursor on behalf of something that is not a
+      # keystroke: a clipboard paste, or the "attached an image" line a
+      # clipboard screenshot turns into. Runs the same palette refresh a
+      # typed character would, so an @mention opened by the paste still
+      # completes.
+      def insert(text)
+        text = text.to_s
+        return self if text.empty?
+
+        buffer.insert(text)
+        @menu_suppressed = false
+        refresh_menu
+        emit(::TUI::Events::CHANGE, value)
+        self
+      end
+
+      # Insert a clipboard paste. Short text goes in as typed; anything long
+      # enough to make the editor crawl becomes a token that expand() turns
+      # back into the full text when the message is sent.
+      def insert_paste(text)
+        text = text.to_s.gsub("\r\n", "\n").tr("\r", "\n")
+        return self if text.empty?
+
+        if text.lines.size > COLLAPSE_LINES || text.bytesize > COLLAPSE_BYTES
+          insert(paste_token(text))
+        else
+          insert(text)
+        end
+      end
+
+      # Put a pasted screenshot in the prompt as "[Image 1]", "[Image 2]", ...
+      # Brackets keep the token from reading as words the user typed. The
+      # number is what expand_images() turns back into the file path when the
+      # message is sent, so the model gets the file without prose around it.
+      def insert_image(path)
+        @image_seq = @image_seq.to_i + 1
+        token = "[Image #{@image_seq}]"
+        @images[token] = path
+        insert(separator_before_token + token)
+        self
+      end
+
+      # Paths of the images still referenced by the buffer, in order.
+      def images
+        @images.select { |_token, path| value.include?(_token) }.values
+      end
+
+      # Swap every "Image N" back to its path. Called once, on submit.
+      def expand_images(text)
+        return text.to_s if @images.empty?
+
+        expanded = text.to_s.gsub(IMAGE_TOKEN) { @images[Regexp.last_match(0)] || Regexp.last_match(0) }
+        @images.clear
+        @image_seq = 0
+        expanded
+      end
+
+      # Put the collapsed pastes back where their tokens sit. Called once,
+      # on submit: the model gets the text the user actually pasted.
+      def expand(text)
+        return text.to_s if @pastes.empty?
+
+        expanded = text.to_s.gsub(PASTE_TOKEN) do
+          @pastes[Regexp.last_match(0)].to_s
+        end
+        @pastes.clear
+        expanded
       end
 
       def menu_open?
@@ -120,6 +206,11 @@ module Rubot
         when :tab
           file_menu? ? pick_mention : complete
           true
+        when :paste
+          # Bracketed paste from the terminal: one chunk of text, collapsed
+          # here if it is long enough to slow the editor down.
+          insert_paste(key.char)
+          true
         else
           reset_completion
           before = value
@@ -135,6 +226,31 @@ module Rubot
       end
 
       private
+
+      # The shape of a collapsed paste. Matched on submit to find the tokens
+      # that are still in the buffer; a token the user edited out of shape
+      # simply stays literal text.
+      PASTE_TOKEN = /\[pasted \d+ lines #[a-z0-9]+\]/
+
+      # "[Image 1]" as it sits in the buffer. Bracketed so it cannot collide
+      # with a path or a sentence that happens to contain the words.
+      IMAGE_TOKEN = /\[Image \d+\]/
+
+      # A pasted image token reads as a word, so it needs a space before it
+      # unless it opens the line.
+      def separator_before_token
+        head = buffer.current_line.to_s[0, buffer.col].to_s
+        head.empty? || head.end_with?(" ") ? "" : " "
+      end
+
+      def paste_token(text)
+        @paste_seq = (@paste_seq.to_i + 1)
+        token = "[pasted #{text.lines.size} lines ##{@paste_seq}]"
+        # Oldest first, so the ring never grows past MAX_PASTES.
+        @pastes.shift while @pastes.size >= MAX_PASTES
+        @pastes[token] = text
+        token
+      end
 
       # Enter in the palette: run the highlighted command right away. The
       # buffer is set to it just long enough for the submit that follows, so
@@ -249,7 +365,7 @@ module Rubot
 
         @draft = value if @hist_idx.nil?
         @hist_idx = @hist_idx.nil? ? @history.length - 1 : [ @hist_idx - 1, 0 ].max
-        buffer.set(@history[@hist_idx])
+        restore(@history[@hist_idx])
       end
 
       def history_next
@@ -257,12 +373,21 @@ module Rubot
 
         if @hist_idx >= @history.length - 1
           @hist_idx = nil
-          buffer.set(@draft.to_s)
+          restore(@draft.to_s)
           @draft = nil
         else
           @hist_idx += 1
-          buffer.set(@history[@hist_idx].to_s)
+          restore(@history[@hist_idx].to_s)
         end
+      end
+
+      # Recall goes through the paste path so a remembered message that is
+      # long enough to slow the editor is collapsed again instead of being
+      # dropped into the buffer whole.
+      def restore(text)
+        buffer.set("")
+        insert_paste(text)
+        self
       end
 
       def complete

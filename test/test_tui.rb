@@ -3170,5 +3170,236 @@ module Rubot
                "the new session is only written once it has a message"
       end
     end
+
+    # --- clipboard paste ---------------------------------------------------
+
+    # The clipboard is read through desktop tools, which no test can rely on;
+    # what the paste key does with what it finds is what is checked here.
+    def stub_clipboard(images: [], text: nil)
+      originals = { capture_all: ClipboardImage.method(:capture_all), text: ClipboardImage.method(:text) }
+      ClipboardImage.define_singleton_method(:capture_all) { |dir: nil| images }
+      ClipboardImage.define_singleton_method(:text) { text }
+      yield
+    ensure
+      originals.each { |name, method| ClipboardImage.define_singleton_method(name, method) }
+    end
+
+    # A PNG header is enough for ImageInfo to read the dimensions.
+    def png_file(dir, width: 40, height: 30, name: "shot.png")
+      ihdr = [ width, height, 8, 2, 0, 0, 0 ].pack("N2C5")
+      path = File.join(dir, name)
+      File.binwrite(path, "\x89PNG\r\n\x1A\n".b + [ 13 ].pack("N") + "IHDR" + ihdr + [ 0 ].pack("N"))
+      path
+    end
+
+    def test_paste_key_puts_an_image_token_in_the_prompt
+      Dir.mktmpdir do |dir|
+        path = png_file(dir)
+        repl = build_repl
+        app = repl.instance_variable_get(:@app)
+        prompt = repl.instance_variable_get(:@prompt)
+
+        stub_clipboard(images: [ path ]) do
+          assert_equal false, prompt.handle_key(::TUI::Key.new(:ctrl_v)),
+                       "the prompt passes the key on, so the app binding runs"
+          app.send(:dispatch, ::TUI::Key.new(:ctrl_v))
+        end
+
+        assert_equal "[Image 1]", prompt.value,
+                     "the box shows a token, not a sentence and not a path"
+        assert_equal [ path ], prompt.images
+      end
+    end
+
+    def test_paste_key_numbers_several_images
+      Dir.mktmpdir do |dir|
+        first = png_file(dir, name: "a.png")
+        second = png_file(dir, name: "b.png")
+        third = png_file(dir, name: "c.png")
+        repl = build_repl
+        prompt = repl.instance_variable_get(:@prompt)
+
+        stub_clipboard(images: [ first, second, third ]) { repl.send(:paste_clipboard) }
+
+        assert_equal "[Image 1] [Image 2] [Image 3]", prompt.value
+        assert_equal [ first, second, third ], prompt.images
+      end
+    end
+
+    def test_a_second_paste_continues_the_numbering
+      Dir.mktmpdir do |dir|
+        first = png_file(dir, name: "a.png")
+        second = png_file(dir, name: "b.png")
+        repl = build_repl
+        prompt = repl.instance_variable_get(:@prompt)
+
+        stub_clipboard(images: [ first ]) { repl.send(:paste_clipboard) }
+        stub_clipboard(images: [ second ]) { repl.send(:paste_clipboard) }
+
+        assert_equal "[Image 1] [Image 2]", prompt.value
+        assert_equal [ first, second ], prompt.images
+      end
+    end
+
+    def test_the_submitted_message_carries_the_image_paths_and_no_prose
+      Dir.mktmpdir do |dir|
+        path = png_file(dir)
+        repl = build_repl
+        prompt = repl.instance_variable_get(:@prompt)
+        mailbox = repl.instance_variable_get(:@mailbox)
+
+        stub_clipboard(images: [ path ]) { repl.send(:paste_clipboard) }
+        prompt.insert(" jelaskan ini")
+        prompt.handle_key(::TUI::Key.new(:enter))
+
+        line = mailbox.pop
+        assert_equal "#{path} jelaskan ini", line,
+                     "the token becomes the path, with nothing else added"
+        refute_match(/attached/i, line)
+      end
+    end
+
+    def test_paste_key_keeps_the_prompt_text_around_the_image
+      Dir.mktmpdir do |dir|
+        path = png_file(dir)
+        repl = build_repl
+        prompt = repl.instance_variable_get(:@prompt)
+        prompt.value = "lihat:"
+
+        stub_clipboard(images: [ path ]) { repl.send(:paste_clipboard) }
+
+        assert_equal "lihat: [Image 1]", prompt.value, "a space separates the token from the text"
+      end
+    end
+
+    def test_paste_key_says_nothing_when_the_clipboard_is_empty
+      repl = build_repl
+      prompt = repl.instance_variable_get(:@prompt)
+      events = repl.instance_variable_get(:@events)
+
+      stub_clipboard { repl.send(:paste_clipboard) }
+
+      assert_equal "", prompt.value
+      assert_empty events, "an empty clipboard is not worth a line of output"
+    end
+
+    def test_paste_key_inserts_clipboard_text_when_there_is_no_image
+      repl = build_repl
+      prompt = repl.instance_variable_get(:@prompt)
+
+      stub_clipboard(text: "one\ntwo") { repl.send(:paste_clipboard) }
+
+      assert_equal "one\ntwo", prompt.value
+    end
+
+    def test_insert_places_text_at_the_cursor
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      "ac".each_char { |c| input.handle_key(::TUI::Key.printable(c)) }
+      input.handle_key(::TUI::Key.new(:left))
+
+      changes = 0
+      input.on(:change) { changes += 1 }
+      input.insert("b")
+
+      assert_equal "abc", input.value
+      assert_equal 1, changes, "one change event per insertion"
+    end
+
+    # --- long pastes -------------------------------------------------------
+
+    def long_text(lines)
+      (1..lines).map { |i| "line #{i} of a pasted passage" }.join("\n")
+    end
+
+    def test_a_short_paste_lands_in_the_buffer_as_typed
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      input.handle_key(::TUI::Key.new(:paste, "one\ntwo"))
+
+      assert_equal "one\ntwo", input.value
+    end
+
+    def test_a_long_paste_is_collapsed_to_a_token
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      input.handle_key(::TUI::Key.new(:paste, long_text(500)))
+
+      assert_equal "[pasted 500 lines #1]", input.value,
+                   "the buffer holds a token, not 500 lines the renderer must draw"
+      assert_equal 1, input.buffer.lines.size
+    end
+
+    def test_a_long_single_line_paste_is_collapsed_too
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      input.handle_key(::TUI::Key.new(:paste, "x" * 2000))
+
+      assert_match(/\A\[pasted 1 lines #\d+\]\z/, input.value)
+    end
+
+    def test_expanding_a_token_gives_back_the_pasted_text
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      pasted = long_text(500)
+      input.handle_key(::TUI::Key.new(:paste, pasted))
+      input.handle_key(::TUI::Key.printable("?"))
+      input.handle_key(::TUI::Key.printable(" "))
+
+      assert_equal "#{pasted}? ", input.expand(input.value),
+                   "the text comes back untouched, with what was typed around it"
+    end
+
+    def test_expansion_happens_once
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      input.handle_key(::TUI::Key.new(:paste, long_text(20)))
+      input.expand(input.value)
+
+      assert_equal "[pasted 20 lines #1]", input.expand(input.value),
+                   "a stale token is left alone instead of expanding to nothing"
+    end
+
+    def test_several_pastes_each_keep_their_own_text
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      first = long_text(10)
+      second = long_text(20).sub("line 1", "other 1")
+      input.handle_key(::TUI::Key.new(:paste, first))
+      input.handle_key(::TUI::Key.printable("\n"))
+      input.handle_key(::TUI::Key.new(:paste, second))
+
+      assert_equal "#{first}\n#{second}", input.expand(input.value)
+    end
+
+    def test_the_submitted_message_carries_the_pasted_text
+      repl = build_repl
+      prompt = repl.instance_variable_get(:@prompt)
+      mailbox = repl.instance_variable_get(:@mailbox)
+      pasted = long_text(300)
+
+      prompt.handle_key(::TUI::Key.new(:paste, pasted))
+      prompt.handle_key(::TUI::Key.printable("!"))
+      prompt.handle_key(::TUI::Key.new(:enter))
+
+      assert_equal "#{pasted}!", mailbox.pop, "the model sees the paste, not the token"
+      assert_equal "", prompt.value
+    end
+
+    def test_history_recall_collapses_a_long_message_again
+      repl = build_repl
+      prompt = repl.instance_variable_get(:@prompt)
+      pasted = long_text(400)
+
+      prompt.handle_key(::TUI::Key.new(:paste, pasted))
+      prompt.handle_key(::TUI::Key.new(:enter))
+      prompt.handle_key(::TUI::Key.new(:up))
+
+      assert_equal 1, prompt.buffer.lines.size, "recall must not put 400 rows back"
+      assert_equal pasted, prompt.expand(prompt.value)
+    end
+
+    def test_repeated_pastes_do_not_grow_the_store_without_bound
+      input = TUI::PromptInput.new([], TUI::COMPLETABLE)
+      (TUI::PromptInput::MAX_PASTES + 4).times do |i|
+        input.handle_key(::TUI::Key.new(:paste, long_text(10 + i)))
+      end
+
+      assert_operator input.instance_variable_get(:@pastes).size,
+                      :<=, TUI::PromptInput::MAX_PASTES
+    end
   end
 end
