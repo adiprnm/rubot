@@ -37,6 +37,12 @@ module Rubot
         md_table_head:   { fg: PALETTE[:text], bold: true }
       }.freeze
 
+      # A bullet and a number share one marker column, so a bulleted and a
+      # numbered list put their item text at the same place. Three cells is
+      # "•  " and "1. "; a number that needs more ("10. ") widens its own
+      # marker rather than losing the space before the text.
+      LIST_MARKER_W = 3
+
       INLINE_RE = /
         (?<code>`+)(?<code_body>.+?)\k<code>            # `code`
         | (?<!\*)\*\*\*(?![\s*])(?<bi>.+?)(?<![\s*])\*\*\*(?!\*)   # ***bold italic***
@@ -134,7 +140,7 @@ module Rubot
           bullet = line.match(/\A\s*[*+-]\s+(.*\S)?\s*\z/m)
           if bullet
             new_row(segments)
-            segments << [ "  • ", :accent ]
+            segments << list_marker("•", :accent)
             segments.concat(inline(bullet[1].to_s))
             return
           end
@@ -142,7 +148,7 @@ module Rubot
           numbered = line.match(/\A\s*(\d+)[.)]\s+(.*\S)?\s*\z/m)
           if numbered
             new_row(segments)
-            segments << [ "  #{numbered[1]}. ", :muted ]
+            segments << list_marker("#{numbered[1]}.", :muted)
             segments.concat(inline(numbered[2].to_s))
             return
           end
@@ -155,6 +161,12 @@ module Rubot
         # cells and line i+1 is a markdown table separator. Returns the
         # rows (first is the header) and the index after the table.
         SEP_CELL = /\A\s*:?-+(?::-?-+)*:?\s*\z/.freeze
+
+        # One marker, padded out to the shared column so the item text of a
+        # bulleted list lines up with the item text of a numbered one.
+        def list_marker(token, style)
+          [ token.ljust([ LIST_MARKER_W, token.length + 1 ].max), style ]
+        end
 
         def table_sep?(line)
           body = line.strip.sub(/\A\|/, "").sub(/\|\s*\z/, "")

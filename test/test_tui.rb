@@ -1637,6 +1637,39 @@ module Rubot
       end
     end
 
+    # End to end through the markdown renderer: the marker sits at the
+    # paragraph indent, and a wrapped item continues under its text. The
+    # bullet and the number share one marker column, so the item text — and
+    # every wrapped row under it — starts at the same column in both kinds.
+    def test_markdown_list_items_hang_under_their_text
+      bullet = list_rows("- alpha beta gamma delta epsilon zeta\n")
+      numbered = list_rows("1. alpha beta gamma delta epsilon zeta\n")
+
+      assert bullet.first.start_with?("  •  "), "the bullet sits at the entry indent: #{bullet.inspect}"
+      assert numbered.first.start_with?("  1. "), "the number sits at the entry indent: #{numbered.inspect}"
+
+      bullet_text = bullet.first.index("alpha")
+      numbered_text = numbered.first.index("alpha")
+      assert_equal bullet_text, numbered_text, "both markers put the text in the same column"
+
+      [ [ bullet, "a bullet" ], [ numbered, "a number" ] ].each do |rows, label|
+        rows.drop(1).each do |row|
+          assert_equal bullet_text, row.index(row.strip),
+                       "#{label} continues under its text: #{row.inspect}"
+        end
+      end
+    end
+
+    # The wrapped rows of one markdown list, each as the plain text the log
+    # paints, with the entry indent already applied.
+    def list_rows(markdown)
+      view = TUI::LogView.new
+      view.layout(::TUI::Rect.new(0, 0, 24, 14))
+      view.add_entry(TUI::Markdown.to_segments(markdown), keep_leading: true, indent: 2)
+      rows = view.instance_variable_get(:@lines).map { |row| row.map(&:first).join }
+      rows.reject(&:empty?)
+    end
+
     def test_markdown_formatter_blocks_and_inline
       segs = TUI::Markdown.to_segments("# Title\n\n**bold** *em* `code` [link](http://x)~~s~~\n\n- a\n- b\n\n```ruby\nputs 1\n```")
       styles = segs
@@ -1648,7 +1681,7 @@ module Rubot
       assert styles.include?([ "code", :md_code ]), styles.inspect
       assert styles.include?([ "link", :md_link ]), styles.inspect
       assert styles.include?([ "s", :md_strike ]), styles.inspect
-      assert styles.include?([ "  • ", :accent ]), styles.inspect
+      assert styles.include?([ "•  ", :accent ]), styles.inspect
       assert styles.include?([ "  puts 1", :md_code_blk ]), styles.inspect
       # No leading or trailing row break: the log handles spacing.
       refute_equal "\n", styles.first[0]

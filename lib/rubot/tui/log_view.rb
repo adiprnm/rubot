@@ -318,21 +318,26 @@ module Rubot
         end
 
         hard_lines.each_with_index.flat_map do |line, index|
-          # The entry's own hang skips the first row, which is where the
-          # marker of a prompt echo sits; every later hard line takes it.
+          # The entry's own hang (a prompt echo) skips the entry's first row,
+          # where the "❯ " marker sits, and covers every later one.
           wrap_hard_line(line, width, keep_leading: keep_leading, hang: hang,
-                                      indent_first: !index.zero?)
+                                      continuation: !index.zero?)
         end
       end
 
-      def wrap_hard_line(segments, width, keep_leading: false, hang: 0, indent_first: false)
-        own = hanging_indent(segments, keep_leading: keep_leading)
-        hang = own if own > hang
-        hang = [ hang, [ width - 1, 0 ].max ].min
-        prefix = hang.positive? ? [ [ " " * hang, nil ] ] : []
+      # `hang` is the entry's hanging indent and only reaches rows that come
+      # after its first one. A row a soft wrap produced takes the wider of
+      # that and the row's own list marker, so a wrapped bullet stays under
+      # its item text.
+      def wrap_hard_line(segments, width, keep_leading: false, hang: 0, continuation: false)
+        limit = [ width - 1, 0 ].max
+        own = [ hanging_indent(segments, keep_leading: keep_leading), limit ].min
+        wrap_indent = [ own, [ hang, limit ].min ].max
+        lead_indent = continuation ? [ hang, limit ].min : 0
+        prefix = wrap_indent.positive? ? [ [ " " * wrap_indent, nil ] ] : []
 
-        lines = [ indent_first ? prefix.dup : [] ]
-        used = indent_first ? hang : 0
+        lines = [ lead_indent.positive? ? [ [ " " * lead_indent, nil ] ] : [] ]
+        used = lead_indent
         at_start = true
 
         new_row = lambda do
