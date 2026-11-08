@@ -2,6 +2,7 @@
 
 require_relative "cron_actor"
 require_relative "session_actor"
+require_relative "../config"
 require_relative "../persona_store"
 require_relative "../session_handle"
 
@@ -45,7 +46,7 @@ module Rubot
 
         ractor = @mutex.synchronize do
           @actors[sid] ||= SessionActor.new(
-            config_data: @config_data,
+            config_data: config_data_for(sid),
             config_path: @config_path,
             session_id: sid,
             cron_actor: @cron,
@@ -100,7 +101,8 @@ module Rubot
 
       def build_persona_store(config)
         PersonaStore.new(
-          workspace: config.workspace,
+          dir: File.dirname(config.config_path),
+          legacy_workspace: config.workspace,
           available_models: Array(config.models).filter_map { |model| model["name"] if model.is_a?(Hash) },
           available_presets: config.model_preset_names
         )
@@ -114,6 +116,30 @@ module Rubot
       rescue StandardError => e
         warn "[persona] failed to load persona for #{session_id}: #{e.class}: #{e.message}"
         nil
+      end
+
+      # A persona that owns a workspace gets a config rooted there, so its
+      # SOUL.md, AGENTS.md, skills/ and memory file are its own instead of the
+      # main workspace's. Sessions stay central: sessions_dir comes from the
+      # config path, which this copy keeps.
+      def config_data_for(session_id)
+        workspace = persona_workspace_for(session_id)
+        return @config_data unless workspace
+
+        Config
+          .from_data(@config_data, config_path: @config_path)
+          .with_persona_workspace(workspace)
+          .snapshot
+      rescue StandardError => e
+        warn "[persona] could not root #{session_id} at its workspace: #{e.class}: #{e.message}"
+        @config_data
+      end
+
+      def persona_workspace_for(session_id)
+        key = PersonaStore.key_for_session(session_id)
+        return nil unless key
+
+        @persona_store.workspace_for(key)
       end
     end
   end

@@ -1120,11 +1120,22 @@ module Rubot
         @persona_store ||= begin
           config = persona_config
           PersonaStore.new(
-            workspace: persona_workspace,
+            dir: persona_dir,
+            legacy_workspace: persona_workspace,
             available_models: persona_models.map { |model| model["name"] },
             available_presets: config ? config.model_preset_names : [ "default" ]
           )
         end
+      end
+
+      # Personas live next to config.yml so the web channel and this one read
+      # the same file. Telegram topics keep model + prompt only and never get a
+      # workspace of their own.
+      def persona_dir
+        config = persona_config
+        return File.dirname(config.config_path) if config
+
+        File.join(Dir.home, ".rubot")
       end
 
       def persona_workspace

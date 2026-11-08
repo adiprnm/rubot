@@ -104,8 +104,12 @@ class TestPersonaStore < Minitest::Test
   end
 
   def test_set_rejects_invalid_keys
-    error = assert_raises(ArgumentError) { @store.set("not-a-key", persona) }
+    error = assert_raises(ArgumentError) { @store.set("Not A Slug", persona) }
     assert_includes error.message, "invalid persona key"
+
+    # A slug is a valid key now; a reserved one is not.
+    assert_equal "trading", @store.set("trading", persona).name
+    assert_raises(ArgumentError) { @store.set("default", persona) }
   end
 
   def test_delete
@@ -139,7 +143,7 @@ class TestPersonaStore < Minitest::Test
   def test_malformed_entries_are_skipped
     File.write(File.join(@workspace, "personas.json"), JSON.generate(
       "123:45" => { "name" => "ok", "model" => "gpt-4o-mini" },
-      "bad-key" => { "name" => "nope" },
+      "bad key" => { "name" => "nope" },
       "999:1" => {}
     ))
 

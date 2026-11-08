@@ -209,6 +209,39 @@ module Rubot
       channel = DummyChannel.new(agent: @agent)
       assert_same @agent, channel.request_agent
     end
+
+    # Ruby 4.0.9 takes SIGSEGV in ractor_port_close when a session Ractor is torn
+    # down while a caller is still blocked receiving on its event port — what a
+    # quit during a running turn looks like. #shutdown_pool therefore stops the
+    # turns and waits for their callers to return before shutting the pool down.
+    def test_shutdown_pool_stops_running_turns_before_tearing_the_pool_down
+    order = []
+    pool = Object.new
+    pool.define_singleton_method(:shutdown) { order << :pool_shutdown }
+
+    channel = DummyChannel.new(channel_config: {})
+    channel.instance_variable_set(:@pool, pool)
+    channel.instance_variable_set(:@owned_pool, true)
+
+    handle = Object.new
+    handle.define_singleton_method(:cancel!) do
+      order << :cancelled
+      channel.send(:untrack_running_session, "s1", handle)
+    end
+    channel.send(:track_running_session, "s1", handle)
+
+    channel.shutdown_pool
+
+    assert_equal [ :cancelled, :pool_shutdown ], order
+    end
+
+    def test_shutdown_pool_does_nothing_when_the_channel_owns_no_pool
+    channel = DummyChannel.new(channel_config: {})
+
+    channel.shutdown_pool # must not raise
+
+    assert_nil channel.pool
+    end
   end
 
   class TestChannelRegistry < Minitest::Test

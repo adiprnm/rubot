@@ -411,6 +411,39 @@ module Rubot
       copy
     end
 
+    # A copy whose agent reads its identity from a persona's own directory.
+    #
+    # Unlike #with_workspace this *overwrites* `assets_workspace`. A specialist
+    # persona must load its own SOUL.md, AGENTS.md and skills/ instead of
+    # inheriting the main workspace's, and `||=` there would silently keep the
+    # old path and hand the persona someone else's identity. Sessions stay in
+    # the central directory (see #sessions_dir); only the working root moves.
+    def with_persona_workspace(path)
+      copy = self.class.from_data(snapshot, config_path: config_path)
+      agents = copy.data["agents"]
+      agents = copy.data["agents"] = {} unless agents.is_a?(Hash)
+      defaults = agents["defaults"]
+      defaults = agents["defaults"] = {} unless defaults.is_a?(Hash)
+
+      full = File.expand_path(path)
+      defaults["workspace"] = full
+      defaults["assets_workspace"] = full
+      defaults["sessions_cwd"] = full
+      copy
+    end
+
+    # Where persona metadata and per-persona workspaces live. Next to
+    # config.yml, never inside `workspace`: a persona's files must not be
+    # mistaken for the main agent's, and a custom config directory should take
+    # its personas along.
+    def personas_dir
+      File.join(File.dirname(config_path), "personas")
+    end
+
+    def personas_file
+      File.join(File.dirname(config_path), "personas.json")
+    end
+
     # The directory the current session was started from, or nil when the
     # channel has no notion of one (Telegram). Read from the config file data,
     # never from the live working directory, so a resumed session keeps the
