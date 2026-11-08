@@ -29,16 +29,33 @@ module Rubot
         end
       end
 
-      def self.tool_done(name, summary, skill = nil)
+      # A finished tool row. The marker stays ✓ when the call succeeded and
+      # flips to ✗ when it did not (see .failure?), so a broken call is
+      # visible without opening the transcript body.
+      def self.tool_done(name, summary, skill = nil, failed: false)
+        mark = failed ? Rubot::TUI::MARK[:err] : Rubot::TUI::MARK[:ok]
+        style = failed ? :error : :tool_ok
         if skill
           # Slightly brighter than a finished tool row (muted): the skill name
           # is what the reader came for, the label only marks the row.
-          [ [ "#{Rubot::TUI::MARK[:ok]} ", :tool_ok ], [ "skill ", :dim ], [ summary, :dim ] ]
+          [ [ "#{mark} ", style ], [ "skill ", :dim ], [ summary, :dim ] ]
         else
-          segments = [ [ "#{Rubot::TUI::MARK[:ok]} ", :tool_ok ], [ name.to_s, :muted ] ]
+          segments = [ [ "#{mark} ", style ], [ name.to_s, :muted ] ]
           segments += [ [ " ", :muted ], [ summary, :dim ] ] if summary && !summary.empty?
           segments
         end
+      end
+
+      # Shell results carry their status in a leading "[Exit code: N]" line,
+      # every other tool reports a failure as a string starting with "ERROR:".
+      EXIT_CODE = /\A\[Exit code: (-?\d+)\]/
+
+      def self.failure?(result)
+        text = result.to_s
+        return true if text.start_with?("ERROR:")
+        return false unless (match = EXIT_CODE.match(text))
+
+        match[1].to_i != 0
       end
 
       def self.tool_summary(tool_name, args, max: 64)
@@ -88,6 +105,7 @@ module Rubot
         turn_open = false
         messages = normalize(messages)
         collect_ui_diffs(messages)
+        collect_tool_results(messages)
 
         messages.each do |msg|
           case msg["role"].to_s
@@ -132,7 +150,7 @@ module Rubot
           else
             self.class.tool_summary(name, args, max: self.class.summary_limit(name, @width))
           end
-          add(self.class.tool_done(name, summary, skill), keep_leading: true, indent: 2)
+          add(self.class.tool_done(name, summary, skill, failed: self.class.failure?(@tool_results[call_id(call)])), keep_leading: true, indent: 2)
           add_ui_diff(@ui_diffs[call_id(call)]) if @ui_diffs
         end
       end
@@ -147,6 +165,18 @@ module Rubot
 
           id = msg["tool_call_id"].to_s
           @ui_diffs[id] = msg["ui_diff"] unless id.empty?
+        end
+      end
+
+      # Tool results are separate messages; keying them by tool_call_id lets
+      # the row above know whether that exact call failed.
+      def collect_tool_results(messages)
+        @tool_results = {}
+        messages.each do |msg|
+          next unless msg["role"] == "tool"
+
+          id = msg["tool_call_id"].to_s
+          @tool_results[id] = msg["content"] unless id.empty?
         end
       end
 

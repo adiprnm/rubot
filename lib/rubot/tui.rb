@@ -541,11 +541,14 @@ module Rubot
         index = @log.add_entry(tool_call_segments(event[1], summary, skill), keep_leading: true, indent: 2)
         @tool_entries[event[1].to_s] = [ index, summary, skill ]
       when :tool_done
-        # The ⚒ line flips to ✓ in place — one line per tool call. A file
-        # the call wrote gains its diff rows right below the finished row.
+        # The ⚒ line flips to ✓ in place — or to ✗ when the call came back a
+        # failure. A file the call wrote gains its diff rows below the row.
         prev = @tool_entries.delete(event[1].to_s)
-        index = prev ? prev[0] : @log.add_entry([ [ "✓ ", :tool_ok ], [ event[1].to_s, :muted ] ], indent: 2)
-        set_tool_done(index, event[1].to_s, prev && prev[1], prev && prev[2])
+        failed = Rubot::TUI::Transcript.failure?(event[3])
+        mark = failed ? MARK[:err] : MARK[:ok]
+        style = failed ? :error : :tool_ok
+        index = prev ? prev[0] : @log.add_entry([ [ "#{mark} ", style ], [ event[1].to_s, :muted ] ], indent: 2)
+        set_tool_done(index, event[1].to_s, prev && prev[1], prev && prev[2], failed)
         add_file_diff(event[2])
       when :confirm then show_confirm(event)
       when :session_list then show_session_list(event[1])
@@ -563,8 +566,8 @@ module Rubot
       Rubot::TUI::Transcript.tool_call(name, summary, skill)
     end
 
-    def set_tool_done(index, name, summary, skill = nil)
-      @log.set_entry(index, Rubot::TUI::Transcript.tool_done(name, summary, skill))
+    def set_tool_done(index, name, summary, skill = nil, failed = false)
+      @log.set_entry(index, Rubot::TUI::Transcript.tool_done(name, summary, skill, failed: failed))
     end
 
     # A file the tool just wrote gets its change diff under the tool row,
@@ -671,8 +674,8 @@ module Rubot
                     on_tool_call: proc do |name, args, _snapshot|
                       @events << [ :tool_call, name, args ]
                     end,
-                    on_tool_result: proc do |name, _result, ui_diff|
-                      @events << [ :tool_done, name, file_diff(ui_diff) ]
+                    on_tool_result: proc do |name, result, ui_diff|
+                      @events << [ :tool_done, name, file_diff(ui_diff), result ]
                     end,
                     on_stopped: -> { stopped = true },
                     on_usage: ->(report) { live_usage(report) },

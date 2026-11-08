@@ -14,6 +14,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - ⌨️ **Multiline prompt** — Shift+Enter inserts a newline and the input box grows with the text, word-wrapping long lines
 - 📝 **External editor** — Ctrl+G opens the half-typed prompt in `$EDITOR` and takes the edited text straight back into the input box
 - 🧾 **File diffs** — every file the agent writes, edits or deletes shows a compact diff under the tool row in the TUI
+- ❌ **Failure markers** — a tool row settles on ✓ or, when the call fails (an `ERROR:` result or a non-zero exit code), on ✗
 - 📝 **Session management** — persistent conversation history in one central directory, a new session per TUI launch, and `/resume` to browse and reopen the saved sessions started from the directory you are in
 - 🧬 **SOUL.md** — personality and identity file for persistent character
 - 🎛️ **Model presets** — named model configurations with a primary default, switchable per session and manageable from Telegram
@@ -303,7 +304,11 @@ the configurable prompt, like the `Scripting Language` rule) asks the agent to
 create, edit and delete files through `file_ops` instead of in-place shell
 edits, and not to recite the file's contents in its reply once an edit
 succeeds — what changed is already visible in the interface; destructive shell
-edits (`sed -i`, `rm`, …) still go through the confirmation above. A delete
+edits (`sed -i`, `rm`, …) still go through the confirmation above. A failed
+call shows the same way at a glance: the row's `⚒` settles on `✗` instead of
+`✓` when the tool returned an `ERROR:` result or a shell command exited
+non-zero, and a resumed session rebuilds that marker from the saved tool
+result. A delete
 replays every line it removed: the file has no after-content, so the whole
 block is red. The tool still returns its plain `Written/Appended/Edited/Deleted …`
 result to the model; the diff is a TUI view only. Its before/after text is kept as UI

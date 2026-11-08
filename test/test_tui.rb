@@ -983,6 +983,61 @@ module Rubot
       assert_includes done, [ "shell_exec", :muted ], "completed name recedes"
     end
 
+    def test_failed_tool_call_flips_the_marker_to_a_cross
+      repl = build_repl
+      ev = repl.instance_variable_get(:@events)
+      ev << [ :tool_call, "shell_exec", { "command" => "exit 1" } ]
+      ev << [ :tool_done, "shell_exec", nil, "[Exit code: 1]\nboom" ]
+      app = repl.instance_variable_get(:@app)
+      app.send(:run_timers)
+
+      line = plain(app.render_lines).find { |l| l.include?("shell_exec") }
+      assert line, "the tool row is still there"
+      assert_includes line, "\u2717", "a failed call is marked with a cross: #{line.inspect}"
+      refute_includes line, "\u2713"
+
+      entries = repl.instance_variable_get(:@log).instance_variable_get(:@entries)
+      done = entries.find { |e| e.any? { |(t, _)| t.include?("shell_exec") } }
+      assert_includes done, [ "✗ ", :error ]
+    end
+
+    def test_zero_exit_shell_call_stays_a_check
+      repl = build_repl
+      ev = repl.instance_variable_get(:@events)
+      ev << [ :tool_call, "shell_exec", { "command" => "true" } ]
+      ev << [ :tool_done, "shell_exec", nil, "[Exit code: 0]\n" ]
+      app = repl.instance_variable_get(:@app)
+      app.send(:run_timers)
+
+      line = plain(app.render_lines).find { |l| l.include?("shell_exec") }
+      assert_includes line, "\u2713"
+      refute_includes line, "\u2717"
+    end
+
+    def test_error_tool_result_is_marked_as_a_failure
+      repl = build_repl
+      ev = repl.instance_variable_get(:@events)
+      ev << [ :tool_call, "file_ops", { "operation" => "read", "path" => "/nope" } ]
+      ev << [ :tool_done, "file_ops", nil, "ERROR: Errno::ENOENT: no such file" ]
+      app = repl.instance_variable_get(:@app)
+      app.send(:run_timers)
+
+      line = plain(app.render_lines).find { |l| l.include?("file_ops") }
+      assert_includes line, "\u2717"
+    end
+
+    def test_replay_marks_a_failed_tool_call
+      messages = [
+        { "role" => "assistant", "content" => "", "tool_calls" => [
+          { "id" => "call_1", "function" => { "name" => "shell_exec", "arguments" => '{"command":"exit 3"}' } }
+        ] },
+        { "role" => "tool", "tool_call_id" => "call_1", "content" => "[Exit code: 3]\nnope" }
+      ]
+      texts = TUI::Transcript.entries(messages, width: 73).map { |entry| entry[:segments].map(&:first).join }
+      row = texts.find { |t| t.include?("shell_exec") }
+      assert_includes row, "\u2717", "restored session keeps the failure marker: #{row.inspect}"
+    end
+
     def test_skill_load_gets_its_own_transcript_line
       repl = build_repl
       ev = repl.instance_variable_get(:@events)
