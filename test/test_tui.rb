@@ -550,6 +550,42 @@ module Rubot
       assert_includes texts, "second answer", "post-tool answer is its own entry"
     end
 
+    # A turn that opens with a tool call used to reserve the answer's row (and
+    # the blank above it) at stream_start: two blank rows sat under the prompt
+    # while the model thought, then vanished when the tool row replaced them.
+    def test_a_turn_that_opens_with_a_tool_call_reserves_no_blank_rows
+      repl = build_repl
+      ev = repl.instance_variable_get(:@events)
+      log = repl.instance_variable_get(:@log)
+
+      ev << [ :entry, [ [ "❯ ", :accent ], [ "list the files", :text ] ] ]
+      base = log.entry_count
+      ev << [ :stream_start ]
+      repl.send(:pump)
+      assert_equal base + 1, log.entry_count, "the model thinking must not open blank rows"
+
+      ev << [ :tool_call, "shell_exec", { "command" => "ls" } ]
+      repl.send(:pump)
+      texts = log.instance_variable_get(:@entries).map { |entry| entry.map(&:first).join }
+      assert_equal [ "❯ list the files", "⚒ shell_exec ls" ], texts.last(2),
+                   "the tool row sits directly under the prompt"
+    end
+
+    def test_the_first_token_still_opens_one_blank_and_the_answer
+      repl = build_repl
+      ev = repl.instance_variable_get(:@events)
+      log = repl.instance_variable_get(:@log)
+
+      ev << [ :entry, [ [ "❯ ", :accent ], [ "halo", :text ] ] ]
+      ev << [ :stream_start ]
+      ev << [ :chunk, "Halo!" ]
+      repl.send(:pump)
+
+      texts = log.instance_variable_get(:@entries).map { |entry| entry.map(&:first).join }
+      assert_equal [ "❯ halo", "", "Halo!" ], texts.last(3),
+                   "one blank separates the prompt from the answer"
+    end
+
     def test_turn_footer_reports_duration_and_running_totals
       repl = build_repl
       app = repl.instance_variable_get(:@app)

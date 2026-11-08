@@ -494,14 +494,20 @@ module Rubot
       when :stream_start
         @working.notice = nil
         @turn_started_at = monotonic_now
-        # One blank line between the echoed prompt and the answer.
-        @log.add_entry([ [ "", nil ] ])
-        start_live_entry
+        # The answer's row (and the blank above it) is created when the first
+        # token lands, in #append_live. Reserving it here would leave two
+        # blank rows under the prompt for as long as the model thinks, and a
+        # turn that opens with a tool call would flash them before the tool
+        # row replaced them.
+        @busy = true
+        @stopping = false
+        @live_text = +""
+        @live_entry = nil
       when :chunk then append_live(event[1])
       # Clearance also resets any tool-line bookkeeping.
       when :stream_end
-        # A stop before the first token leaves an empty live entry behind; drop
-        # it so the cancelled turn does not leave a blank row of its own.
+        # A stop on an answer that never had a non-blank token drops its row,
+        # so the cancelled turn does not leave a blank line of its own.
         if event[1] && @live_entry && @live_text.to_s.strip.empty?
           @log.remove_last
         end
