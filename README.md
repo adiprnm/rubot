@@ -29,7 +29,8 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 🔎 **Search tool** — `search` finds files (`**/*.rb`) or matching lines (`path:line: text`) inside a repo, skipping `.git`, `node_modules` and build output
 - 🎯 **Task anchor** — the user's original request is stored on the session and re-stated in the system prompt, so trimming or compaction cannot make a long task forget its goal
 - 🎯 **Skills system** — pluggable skill definitions via SKILL.md files in the workspace; loading one shows up in the TUI transcript as its own `✦ skill <name>` row, and flips to `✓` once read
-- 📡 **Multi-channel** — REPL and Telegram, with a pluggable channel architecture
+- 📡 **Multi-channel** — REPL, Telegram and a browser UI, with a pluggable channel architecture
+- 🌐 **Browser channel** — an HTMX page streamed over Server-Sent Events: token streaming, live tool rows and a confirmation card, with no frontend build step
 - 📎 **Inbound attachments** — screenshots and files sent to Telegram are saved to the workspace, with dimensions and size added to the prompt
 - 🔈 **Progress narration** — the model explains what it is doing between tool calls ("Let me check the structure first."), sent as normal chat messages
 - 🧭 **Steering** — type while a turn is running (TUI, or a plain message in Telegram) and it reaches the model between rounds, without stopping the turn
@@ -740,6 +741,7 @@ can run simultaneously.
 |---------|-------------|
 | `repl` | Terminal REPL (default if no channels configured) |
 | `telegram` | Telegram Bot via long polling or webhook |
+| `web` | Browser UI served over HTTP, streamed with Server-Sent Events |
 
 ### Telegram Setup
 
@@ -917,9 +919,52 @@ channels:
     webhook_port: 8443
 ```
 
+### Web UI
+
+Run it on its own:
+
+```bash
+rubot web            # http://127.0.0.1:4567
+```
+
+Or configure it to run alongside the other channels:
+
+```yaml
+channels:
+  web:
+    enabled: true
+    host: 127.0.0.1
+    port: 4567
+    persona: rubot
+```
+
+How it works: the browser sends a message with a plain form POST; Ruby starts a
+turn and answers with an HTML fragment that opens the SSE stream on its own. The
+stream then pushes `turn` (the timeline: the thought, what the model said, the
+tool rows, the answer), `confirm` (the approval card), `notice` (an error or a
+steering acknowledgement), `usage` (the cost/cache/context row, as an
+out-of-band swap) and finally `done`. Every event is an idempotent render of the
+turn's current state, so a dropped connection just repaints.
+
+No build step: `htmx`, `htmx-ext-sse` and `alpinejs` are vendored under
+`vendor/web/`, templates are ERB from the standard library, and the only
+hand-written JavaScript wires the composer.
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `host` | `127.0.0.1` | Bind address. `0.0.0.0` requires a `token`. |
+| `port` | `4567` | Listening port |
+| `persona` | `rubot` | Prefix for the session id (`web_<persona>`) |
+| `token` | unset | Shared secret, checked on every request |
+| `access_log` | `false` | Print one line per request |
+
+This channel runs shell commands through the same agent as every other channel,
+so it binds to loopback by default. Reaching it from another device is better
+done over a private network (Tailscale, an SSH tunnel) than by exposing the port.
+
 ### Running Multiple Channels
 
-You can run both REPL and Telegram simultaneously:
+You can run the REPL, Telegram and the browser UI simultaneously:
 
 ```yaml
 channels:

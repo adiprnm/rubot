@@ -1,0 +1,19 @@
+<%# The TUI footer, drawn small: cost, cache hit rate, context share. The label
+    lives in the tooltip instead of the row, because the row also has to hold
+    the composer's status and an 80-column habit of writing "cache 92%" costs
+    more than it says. A figure that is not known yet shows a dash — printing
+    a zero would be a claim, not a placeholder.
+
+    This element is also the out-of-band target the end of a turn swaps, so it
+    keeps the same id and shape when it is re-rendered. -%>
+<span class="metrics" id="usage">
+  <span class="metric" title="Biaya percakapan ini">
+    <%= usage_icon(:cost) %><span class="value"><%= h(cost) %></span>
+  </span>
+  <span class="metric" title="Porsi prompt yang diambil dari cache">
+    <%= usage_icon(:cache) %><span class="value"><%= h(cache) %></span>
+  </span>
+  <span class="metric" title="Porsi context window yang terpakai">
+    <%= usage_icon(:context) %><span class="value"><%= h(ctx) %></span>
+  </span>
+</span>

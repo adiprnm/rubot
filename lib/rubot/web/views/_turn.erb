@@ -1,0 +1,17 @@
+<div class="msg user">
+  <div class="bubble"><span class="sr-only">Kamu: </span><%= h(text) %></div>
+</div>
+
+<div class="turn"
+     hx-ext="sse"
+     sse-connect="/turns/<%= h(turn.id) %>/stream<%= h(token_query) %>"
+     sse-close="done"
+     aria-live="polite"
+     x-init="$store.turn.active = '<%= turn.id %>'">
+  <div class="turn-body" sse-swap="turn"><%= timeline(turn.items) %></div>
+  <div class="confirm" sse-swap="confirm"></div>
+  <div class="notice" sse-swap="notice"></div>
+  <%# Where the status row's out-of-band swap arrives. The payload carries
+      hx-swap-oob, so htmx applies it to #usage and this slot stays empty. -%>
+  <div class="status-slot" sse-swap="usage" hidden></div>
+</div>

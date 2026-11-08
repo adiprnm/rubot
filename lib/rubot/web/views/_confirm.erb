@@ -1,0 +1,14 @@
+<% if prompt -%>
+<p class="confirm-title">Konfirmasi: <%= h(prompt[:name]) %></p>
+<p class="confirm-reason"><%= h(prompt[:reason]) %></p>
+<div class="confirm-actions">
+  <button class="btn primary"
+          hx-post="/turns/<%= h(turn_id) %>/confirm"
+          hx-vals='{"value":"1"}'
+          hx-swap="none">Lanjutkan</button>
+  <button class="btn"
+          hx-post="/turns/<%= h(turn_id) %>/confirm"
+          hx-vals='{"value":"0"}'
+          hx-swap="none">Batalkan</button>
+</div>
+<% end -%>

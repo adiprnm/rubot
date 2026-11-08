@@ -1,0 +1,23 @@
+<%# The turn's timeline, in the order it happened: what the model thought,
+    what it said before reaching for a tool, the tool row, the answer. Rendered
+    whole on every change, so the reader never has to reconcile two streams. -%>
+<% items.each do |item| -%>
+<% case item[:kind] -%>
+<% when :thinking -%>
+<% if item[:closed_at] -%>
+<p class="row thinking done"><span class="mark think" aria-hidden="true">◌</span><span class="label">Thought for <%= dur(item[:elapsed]) %></span></p>
+<% else -%>
+<p class="row thinking" data-since="<%= item[:epoch] %>" data-threshold="<%= Turn::THINKING_SECONDS %>"><span class="mark think" aria-hidden="true">◌</span><span class="label">Thinking…</span><span class="live-clock"></span></p>
+<% end -%>
+<% when :tool -%>
+<% slow = item[:elapsed] && item[:elapsed] >= Turn::SLOW_TOOL_SECONDS -%>
+<div class="tool-row <%= item[:state] %>"<% if item[:state] == :running %> data-since="<%= item[:epoch] %>" data-threshold="<%= Turn::SLOW_TOOL_SECONDS %>"<% end %>>
+  <span class="mark <%= item[:state] %>" aria-hidden="true"><%= icon(item[:state]) %></span>
+  <span class="tool-name"><%= h(item[:name]) %></span>
+  <span class="tool-detail"><%= h(item[:detail]) %></span>
+  <span class="live-clock"><%= slow ? dur(item[:elapsed]) : "" %></span>
+</div>
+<% when :text -%>
+<div class="text<%= item[:live] ? " is-live" : "" %>"><%= fmt(item[:text]) %></div>
+<% end -%>
+<% end -%>

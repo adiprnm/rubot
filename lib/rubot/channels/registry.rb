@@ -2,6 +2,7 @@
 
 require_relative "telegram"
 require_relative "tui_channel"
+require_relative "web"
 
 module Rubot
   module Channels
@@ -9,6 +10,7 @@ module Rubot
     module Registry
       CHANNEL_MAP = {
         "telegram" => Telegram,
+        "web" => Web,
         "tui" => TuiChannel,
         "repl" => TuiChannel,       # legacy alias
         "terminal" => TuiChannel,

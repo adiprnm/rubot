@@ -1,0 +1,107 @@
+<div class="app" x-data>
+  <aside class="sidebar">
+    <div class="brand">rubot</div>
+
+    <p class="sidebar-label">Persona</p>
+    <nav class="personas">
+      <% personas.each do |row| %>
+        <a class="persona <%= row[:active] ? "is-active" : "" %>" href="/p/<%= h(row[:slug]) %><%= h(token_query) %>">
+          <span class="sigil" aria-hidden="true"><%= row[:active] ? "◆" : "◇" %></span>
+          <span class="meta">
+            <span class="name"><%= h(row[:label]) %></span>
+            <span class="slug"><%= h(row[:slug]) %></span>
+          </span>
+        </a>
+      <% end %>
+    </nav>
+
+    <details class="new-persona">
+      <summary>Persona baru</summary>
+      <form hx-post="/personas<%= h(token_query) %>" hx-target=".form-error" hx-swap="innerHTML">
+        <label>Slug
+          <input name="slug" placeholder="kanyaah" pattern="[a-z0-9][a-z0-9_-]{0,31}" required>
+        </label>
+        <label>Nama
+          <input name="name" placeholder="Kanyaah">
+        </label>
+        <label>Emoji
+          <select name="emoji">
+            <% %w[🤖 🧭 ✍️ 📚 🧪 🎨 🛠️ 🔍 🧠 💼].each do |choice| %>
+              <option value="<%= h(choice) %>"><%= h(choice) %></option>
+            <% end %>
+          </select>
+        </label>
+        <label>System prompt
+          <textarea name="system_prompt" rows="3" placeholder="Kamu spesialis …"></textarea>
+        </label>
+        <button class="btn primary" type="submit">Buat</button>
+        <p class="form-error"></p>
+      </form>
+    </details>
+
+    <div class="sidebar-foot">
+      <dl>
+        <dt>persona</dt>
+        <dd><%= h(slug) %></dd>
+        <dt>model</dt>
+        <dd><%= h(persona_model) %></dd>
+        <dt>session</dt>
+        <dd><%= h(session_id) %></dd>
+      </dl>
+    </div>
+  </aside>
+
+  <main class="chat">
+    <header class="chat-head">
+      <span class="emoji" aria-hidden="true"><%= h(persona_emoji) %></span>
+      <b><%= h(persona_label) %></b>
+    </header>
+
+    <div id="thread" class="thread">
+      <% messages.each do |msg| %>
+        <% if msg[:kind] == :prompt %>
+          <%= View.render("_message", role: "user", text: msg[:text]) %>
+        <% else %>
+          <div class="turn is-done">
+            <div class="turn-body"><%= View.render("_timeline", items: msg[:items]) %></div>
+          </div>
+        <% end %>
+      <% end %>
+      <% if messages.empty? %>
+        <p class="empty">
+          <%= h(persona_label) %> punya SOUL, skills, dan memory sendiri.
+          Apa pun yang dijalankannya lewat tool tampil di atas jawabannya.
+        </p>
+      <% end %>
+    </div>
+
+    <form class="composer"
+          hx-post="/p/<%= h(slug) %>/turn<%= h(token_query) %>"
+          hx-target="#thread"
+          hx-swap="beforeend"
+          x-data="composer">
+      <textarea x-ref="input"
+                x-model="text"
+                name="message"
+                rows="1"
+                aria-label="Pesan"
+                placeholder="Tulis pesan… Enter mengirim, Shift+Enter baris baru"
+                x-on:keydown="keydown($event)"></textarea>
+      <div class="composer-actions">
+        <button type="button"
+                class="btn ghost"
+                x-show="$store.turn.active"
+                x-cloak
+                x-on:click="stop()">Stop</button>
+        <button type="submit"
+                class="btn primary"
+                x-text="$store.turn.active ? 'Arahkan' : 'Kirim'">Kirim</button>
+      </div>
+    </form>
+
+    <div class="status-line">
+      <%= View.render("_usage", **usage) %>
+      <span class="live" x-show="$store.turn.active" x-cloak>mengirim</span>
+    </div>
+  </main>
+</div>

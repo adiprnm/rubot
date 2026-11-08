@@ -283,10 +283,10 @@ end
 
 # Subcommand: `rubot tui` runs the terminal UI on its own, ignoring the
 # channels (Telegram gateway included) configured in config.yml.
+# `rubot web` does the same for the browser channel.
 forced_channel = nil
-if %w[tui repl chat].include?(ARGV.first)
-  forced_channel = "tui"
-  ARGV.shift
+if %w[tui repl chat web].include?(ARGV.first)
+  forced_channel = ARGV.shift == "web" ? "web" : "tui"
 end
 
 options = {}
@@ -334,7 +334,7 @@ parser = OptionParser.new do |opts|
     options[:env_file] = e
   end
 
-  opts.on("-C", "--channel CHANNEL", "Channel to use: tui, telegram (default: tui)") do |c|
+  opts.on("-C", "--channel CHANNEL", "Channel to use: tui, telegram, web (default: tui)") do |c|
     options[:channel] = c
   end
 
@@ -345,6 +345,7 @@ parser = OptionParser.new do |opts|
     puts "  init    Initialize config, workspace, and default files"
     puts "  check   Validate config and test channel connections"
     puts "  tui     Run the terminal UI only (ignore configured channels)"
+    puts "  web     Run the browser UI only (default: http://127.0.0.1:4567)"
     exit
   end
 end

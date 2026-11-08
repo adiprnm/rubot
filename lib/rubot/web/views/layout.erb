@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#2b332f">
+  <title>rubot · <%= h(title) %></title>
+  <link rel="preload" href="/assets/source-serif-4-var.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/assets/martian-mono-var.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/assets/app.css?v=<%= h(asset_version) %>">
+  <script src="/vendor/htmx.min.js"></script>
+  <script src="/vendor/htmx-sse.js"></script>
+  <script src="/assets/app.js?v=<%= h(asset_version) %>"></script>
+  <script src="/vendor/alpine.min.js" defer></script>
+</head>
+<body>
+<%= content %>
+</body>
+</html>

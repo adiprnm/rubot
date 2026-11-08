@@ -126,12 +126,24 @@ tools:
 # Available channels:
 #   tui      — Terminal UI chat (full-screen, ruby-tui). `repl` is a legacy alias.
 #   telegram — Telegram Bot (long polling or webhook)
+#   web      — Browser UI (HTMX + Server-Sent Events). `rubot web` runs it alone.
 
 channels:
 
   repl:
     enabled: true
     stream: true
+
+  # Browser chat. Ruby renders every HTML fragment; the page only wires the
+  # composer. Bind to loopback unless you put a token in front of it: this
+  # channel can run shell commands.
+  # web:
+  #   enabled: true
+  #   host: 127.0.0.1        # anything else needs `token`
+  #   port: 4567
+  #   persona: rubot         # session id becomes web_<persona>
+  #   token: ""              # shared secret, checked on every request
+  #   access_log: false      # true prints one line per request
 
   telegram:
     enabled: true

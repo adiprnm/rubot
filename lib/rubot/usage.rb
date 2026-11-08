@@ -274,9 +274,25 @@ module Rubot
       [ price(report), cache(report), context(report) ].join(" · ")
     end
 
+    # The same three figures without their words, for a channel that draws a
+    # glyph and keeps the label in a tooltip. `nil` means there is nothing
+    # honest to show yet — a caller must not print a zero in its place.
+    def metrics(report)
+      {
+        cost: cost_value(report),
+        cache: cache_value(report),
+        context: context_value(report)
+      }
+    end
+
     def price(report)
+      value = cost_value(report)
+      value ? value : "cost n/a"
+    end
+
+    def cost_value(report)
       cost = report[:cost]
-      return "cost n/a" unless cost
+      return nil unless cost
 
       # A provisional figure is part estimate: the request it prices has not
       # come back yet. Marking it keeps the moving number honest instead of
@@ -297,20 +313,31 @@ module Rubot
     def cache(report)
       # No request yet: a hit rate would be a claim about nothing.
       return "cache —" if report[:requests].to_i.zero?
-      return "cache n/a" if report[:prompt_tokens].to_i.zero?
+
+      pct = cache_value(report)
+      pct ? "cache #{pct}" : "cache n/a"
+    end
+
+    def cache_value(report)
+      return nil if report[:requests].to_i.zero?
+      return nil if report[:prompt_tokens].to_i.zero?
 
       pct = format("%.1f", report[:cache_hit_rate].to_f * 100).sub(/\.0\z/, "")
-      "cache #{pct}%"
+      "#{pct}%"
     end
 
     # Share of the window in use. Falls back to the raw token count when the
     # window is unknown; the footer stays short so it never elbows the
     # session block on an 80-column terminal.
     def context(report)
+      "ctx #{context_value(report)}"
+    end
+
+    def context_value(report)
       if report[:context_percent] && report[:context_window].to_i.positive?
-        format("ctx %.1f%%", report[:context_percent])
+        format("%.1f%%", report[:context_percent])
       else
-        "ctx #{compact_tokens(report[:context_used])}"
+        compact_tokens(report[:context_used])
       end
     end
 

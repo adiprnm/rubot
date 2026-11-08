@@ -1,0 +1,699 @@
+/* rubot web — chat surface for a terminal tool.
+   Palette is Everforest dark, lifted from the TUI so both faces of rubot read
+   as one product. Type: Source Serif for message text, Martian Mono only for
+   values that really are machine strings (slug, session, tool, duration). */
+
+@font-face {
+  font-family: "Source Serif 4";
+  src: url("/assets/source-serif-4-var.woff2") format("woff2");
+  font-weight: 200 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Source Serif 4";
+  src: url("/assets/source-serif-4-var-italic.woff2") format("woff2");
+  font-weight: 200 900;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Martian Mono";
+  src: url("/assets/martian-mono-var.woff2") format("woff2");
+  font-weight: 100 800;
+  font-display: swap;
+}
+
+:root {
+  --bg0: #2b332f;
+  --bg1: #333c37;
+  --bg2: #3d4843;
+  --bg-dim: #232b27;
+
+  --fg: #d3c6aa;
+  /* Everforest's greys are tuned for a terminal at larger sizes; these two
+     are lifted a step so 10px metadata still clears 4.5:1. */
+  --fg-dim: #a6b1a8;
+  --fg-faint: #939e8b;
+
+  --green: #a7c080;
+  --blue: #7fbbb3;
+  --yellow: #dbbc7f;
+  --red: #e67e80;
+
+  --line: #3f4a43;
+  --line-soft: #354039;
+
+  --serif: "Source Serif 4", Charter, Georgia, serif;
+  --mono: "Martian Mono", "Iosevka", ui-monospace, monospace;
+
+  --measure: 62ch;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; margin: 0; }
+
+body {
+  background: var(--bg0);
+  color: var(--fg);
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection { background: #4a5a4d; color: #f0ece0; }
+
+:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Alpine keeps these hidden until the bindings have been evaluated. */
+[x-cloak] { display: none !important; }
+
+/* ---------- shell ------------------------------------------------ */
+
+.app {
+  display: grid;
+  grid-template-columns: 15.5rem minmax(0, 1fr);
+  height: 100dvh;
+}
+
+/* ---------- persona pane ----------------------------------------- */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 1.15rem 0.75rem 0.75rem;
+  background: var(--bg-dim);
+  border-right: 1px solid var(--line);
+}
+
+.brand {
+  padding: 0 0.55rem 1.1rem;
+  font-family: var(--mono);
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.05em;
+  color: var(--fg);
+}
+
+.sidebar-label {
+  padding: 0 0.55rem 0.4rem;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--fg-faint);
+}
+
+.personas {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.persona {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr);
+  gap: 0.45rem;
+  align-items: baseline;
+  padding: 0.42rem 0.55rem;
+  border-radius: 3px;
+  text-decoration: none;
+  color: var(--fg-dim);
+}
+
+.persona:hover { background: var(--bg1); color: var(--fg); }
+
+/* The glyph carries the state: filled means this is the open persona. */
+.persona .sigil {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg-faint);
+}
+
+.persona.is-active { background: var(--bg1); color: var(--fg); }
+.persona.is-active .sigil { color: var(--green); }
+
+.persona .meta { display: block; min-width: 0; }
+
+.persona .name {
+  display: block;
+  font-size: 15px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.persona .slug {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: -0.03em;
+  color: var(--fg-faint);
+}
+
+/* ---------- new persona ------------------------------------------ */
+
+.new-persona { margin-top: 0.5rem; }
+
+.new-persona summary {
+  padding: 0.4rem 0.55rem;
+  border-radius: 3px;
+  font-size: 13.5px;
+  font-style: italic;
+  color: var(--fg-faint);
+  cursor: pointer;
+  list-style: none;
+}
+
+.new-persona summary::-webkit-details-marker { display: none; }
+.new-persona summary:hover { color: var(--fg); background: var(--bg1); }
+
+.new-persona form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.75rem 0.55rem 0.6rem;
+}
+
+.new-persona label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--fg-faint);
+}
+
+.new-persona input,
+.new-persona select,
+.new-persona textarea {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: -0.03em;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg0);
+  color: var(--fg);
+  outline: none;
+  resize: vertical;
+}
+
+.new-persona input:focus,
+.new-persona textarea:focus,
+.new-persona select:focus { border-color: var(--green); }
+
+.form-error { margin: 0; font-size: 12.5px; color: var(--red); }
+.form-error:empty { display: none; }
+
+/* What this persona is connected to. The header no longer carries it, so the
+   sidebar footer does — labels quiet, values readable, session id elided from
+   the middle when the slug runs long. */
+.sidebar-foot {
+  margin-top: auto;
+  padding: 0.7rem 0.55rem 0;
+  border-top: 1px solid var(--line-soft);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: -0.03em;
+  color: var(--fg-faint);
+  min-width: 0;
+}
+
+.sidebar-foot dl {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.2rem 0.55rem;
+  margin: 0;
+}
+
+.sidebar-foot dt { color: var(--fg-faint); }
+
+.sidebar-foot dd {
+  margin: 0;
+  color: var(--fg-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- chat column ------------------------------------------ */
+
+.chat {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* A strip, not a banner: the persona is already named in the sidebar, so this
+   only has to say where you are and stay out of the way. The turn's state
+   lives in the status line under the composer instead of here. */
+.chat-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.35rem 1.6rem 0.4rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-dim);
+  min-height: 0;
+}
+
+.chat-head .emoji { font-size: 13px; }
+
+.chat-head b { font-size: 14.5px; font-weight: 600; letter-spacing: -0.01em; }
+
+/* ---------- thread ----------------------------------------------- */
+
+.thread {
+  /* A scroll container has to be the containing block for its own absolutely
+     positioned descendants. Without this the `.sr-only` labels inside every
+     bubble resolve against the initial containing block instead: they escape
+     the clip, and the browser grows the *document* to fit their static
+     positions — a page that scrolls thousands of pixels of empty background
+     below a chat that only looks 800px tall. */
+  position: relative;
+  overflow-y: auto;
+  padding: 1.5rem 1.6rem 0.6rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg2) transparent;
+}
+
+/* On a wide monitor an unbounded column leaves a dead margin on the right,
+   so the conversation settles into a readable column instead. */
+.thread > .msg,
+.thread > .empty,
+.thread > .turn { width: 100%; max-width: 52rem; margin-inline: auto; }
+
+.thread > .turn > .turn-body,
+.thread > .turn > .confirm,
+.thread > .turn > .notice { max-width: 100%; }
+
+.thread::-webkit-scrollbar { width: 9px; }
+.thread::-webkit-scrollbar-thumb {
+  background: var(--bg2);
+  border-radius: 9px;
+  border: 3px solid var(--bg0);
+}
+
+/* Only the prompt is quoted. A bubble says "someone said this to you"; the
+   answer is the page itself speaking, so it runs the full column with no
+   surface, no border and no avatar. */
+.msg {
+  display: flex;
+  align-items: flex-start;
+  margin-bottom: 1.05rem;
+}
+
+.msg.user { justify-content: flex-end; }
+
+/* A turn is appended to the thread when the person sends it, so this entry
+   animation only ever answers that action — never a page load. */
+.turn { animation: enter 170ms ease-out both; }
+
+@keyframes enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.msg.user .bubble {
+  max-width: min(var(--measure), 86%);
+  padding: 0.55rem 0.9rem;
+  overflow-wrap: break-word;
+  background: var(--bg2);
+  border-radius: 5px 5px 0 5px;
+}
+
+/* The answer still arriving owns a blinking cursor — the only motion on the
+   page, and it answers "is this still coming?". Only the block being written
+   gets it: an earlier narration stays still above the tool row. */
+.turn:not(.is-done) .text.is-live::after {
+  content: "";
+  display: inline-block;
+  width: 0.45em;
+  height: 1em;
+  margin-left: 0.12em;
+  vertical-align: -0.14em;
+  background: var(--green);
+  animation: cursor 1.05s steps(1) infinite;
+}
+
+@keyframes cursor {
+  0%, 50% { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+
+/* The answer: full column, ordinary prose. */
+.text {
+  margin: 0 0 1.05rem;
+  overflow-wrap: break-word;
+}
+
+.text > *:first-child { margin-top: 0; }
+.text > *:last-child { margin-bottom: 0; }
+.text p { margin: 0 0 0.7em; }
+.text strong { font-weight: 600; }
+
+.text code {
+  padding: 0.1em 0.32em;
+  border-radius: 2px;
+  background: var(--bg1);
+  font-family: var(--mono);
+  font-size: 0.72em;
+  letter-spacing: -0.04em;
+  color: var(--yellow);
+}
+
+.text pre.code {
+  margin: 0.8em 0;
+  padding: 0.7rem 0.85rem;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  background: var(--bg0);
+  overflow-x: auto;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.text pre.code code {
+  padding: 0;
+  background: none;
+  color: var(--fg-dim);
+  font-size: 1em;
+}
+
+.text blockquote {
+  margin: 0.7em 0;
+  padding-left: 0.85rem;
+  border-left: 1px solid var(--line);
+  color: var(--fg-dim);
+  font-style: italic;
+}
+
+/* A list is a block, not a run of centred text: the marker column belongs to
+   the list, so a wrapped item stays under its own text. */
+.text ul,
+.text ol {
+  margin: 0.7em 0;
+  padding-left: 1.4em;
+}
+
+.text ul { list-style: disc; }
+.text ol { list-style: decimal; }
+
+.text li { margin: 0.2em 0; padding-left: 0.15em; }
+
+.text li::marker {
+  color: var(--fg-faint);
+  font-family: var(--mono);
+  font-size: 0.85em;
+}
+
+.text li > ul,
+.text li > ol { margin: 0.25em 0; }
+
+/* ---------- turn timeline ---------------------------------------- */
+
+/* Everything the turn did, in the order it did it: thought, narration, tool
+   row, answer. With no avatar in the column, every row starts at the same
+   left edge — the timeline reads as one line of work. */
+.turn-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.turn-body > .msg { margin-bottom: 0.5rem; }
+.turn-body > .msg:last-child,
+.turn-body > .text:last-child { margin-bottom: 1.05rem; }
+
+/* The mark is a label prefix, nothing more. It needs no special box: with the
+   row's baseline alignment the ring, the half disc and the check all land
+   within 0.2px of the cap-height centre on their own. (The ring used to look
+   low because the row was a flex container without baseline alignment, which
+   stretched the mark and lifted its ink.) */
+.mark { flex: 0 0 auto; }
+
+.row {
+  display: flex;
+  /* Without baseline alignment the mark is a stretched flex item and its ink
+     floats above the label's: the ring sat 2.7px high. */
+  align-items: baseline;
+  gap: 0.35rem;
+  margin: 0 0 0.4rem;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: -0.03em;
+  color: var(--fg-faint);
+}
+
+.row .label { color: var(--fg-dim); }
+.row.done { margin-bottom: 0.55rem; }
+
+/* A clock that only exists past its threshold: an ordinary call says nothing
+   about its duration, and a thought worth noticing says how long it ran. The
+   separator belongs to the clock, so an empty one leaves no dot behind. */
+.live-clock:empty { display: none; }
+
+.live-clock::before {
+  content: "·";
+  margin-right: 0.35rem;
+  color: var(--line);
+}
+
+/* ---------- tool activity ---------------------------------------- */
+
+.tool-row {
+  display: flex;
+  gap: 0.45rem;
+  align-items: baseline;
+  /* The row runs to the edge of the column; the detail is the part that gets
+     clipped, at the edge — not at a width the row picked for itself. */
+  max-width: none;
+  margin: 0 0 0.4rem;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: -0.03em;
+  color: var(--fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.tool-row .mark { flex: 0 0 auto; }
+.tool-row.running .mark { color: var(--yellow); }
+.tool-row.ok .mark { color: var(--green); }
+.tool-row.failed .mark { color: var(--red); }
+.tool-row.unknown .mark { color: var(--fg-faint); }
+
+.tool-name {
+  flex: 0 0 auto;
+  color: var(--fg-dim);
+}
+
+/* The detail yields first: it shrinks and ellipsizes, while the name and the
+   clock keep their whole width. */
+.tool-detail {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg-faint);
+}
+
+/* A tool row and the answer under it are two different things: the row is
+   machine output, the text is what the person reads. Without this the answer
+   sat 6px under the last call and read as part of the log. */
+.tool-row + .text { margin-top: 0.7rem; }
+
+/* ---------- confirm prompt --------------------------------------- */
+
+.confirm:empty,
+.notice:empty { display: none; }
+
+.confirm,
+.notice {
+  margin: 0 0 1.05rem;
+  max-width: min(var(--measure), 86%);
+}
+
+.confirm .confirm-title { margin: 0 0 0.15rem; font-weight: 600; }
+
+.confirm .confirm-reason {
+  margin: 0 0 0.55rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--yellow);
+  font-size: 14.5px;
+  color: var(--fg-dim);
+}
+
+.confirm .confirm-actions { display: flex; gap: 0.45rem; }
+
+.notice { font-size: 14px; color: var(--red); }
+
+.empty {
+  max-width: 44ch;
+  margin: 1rem auto;
+  text-align: center;
+  font-size: 15px;
+  font-style: italic;
+  color: var(--fg-faint);
+}
+
+/* ---------- composer --------------------------------------------- */
+
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  width: calc(100% - 3.2rem);
+  max-width: 52rem;
+  margin: 0 auto 0.55rem;
+  padding: 0.4rem 0.4rem 0.4rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-dim);
+  transition: border-color .12s;
+}
+
+.composer:focus-within { border-color: var(--fg-faint); }
+
+.composer textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 1.7rem;
+  padding: 0.15rem 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font-family: var(--serif);
+  font-size: 16.5px;
+  line-height: 1.6;
+  resize: none;
+  outline: none;
+  field-sizing: content;
+  max-height: 40vh;
+}
+
+.composer textarea::placeholder { color: var(--fg-faint); font-style: italic; }
+
+.composer-actions { display: flex; gap: 0.4rem; }
+
+.btn {
+  padding: 0.3rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: none;
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: -0.03em;
+  cursor: pointer;
+  transition: color .12s, border-color .12s, background .12s;
+}
+
+.btn:hover { color: var(--fg); border-color: var(--fg-faint); }
+
+.btn.primary { border-color: var(--green); color: var(--green); }
+.btn.primary:hover { background: var(--green); color: var(--bg0); }
+
+/* ---------- status line ------------------------------------------ */
+
+/* The same facts the TUI keeps pinned at its bottom edge: which model, which
+   session, and whether a turn is live. */
+.status-line {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  width: calc(100% - 3.2rem);
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 0 0 0.55rem;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: -0.03em;
+  color: var(--fg-faint);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* The TUI footer, cheap in space: an icon says which figure this is, so the
+   row never spells out "cache" or "ctx". The words live in the tooltips. */
+.status-line .metrics {
+  display: flex;
+  gap: 0.7rem;
+  align-items: center;
+  margin-left: auto;
+  min-width: 0;
+}
+
+.status-line .metric {
+  display: inline-flex;
+  gap: 0.28rem;
+  align-items: center;
+  color: var(--fg-dim);
+}
+
+.metric-icon {
+  flex: 0 0 auto;
+  /* Drawn, not typed: there is no baseline to fight, so it centres itself. */
+  display: block;
+  opacity: 0.85;
+}
+
+.status-line .sep { color: var(--line); }
+.status-line .live { color: var(--yellow); }
+.status-line .status-slot { display: none; }
+
+/* ---------- narrow ----------------------------------------------- */
+
+@media (max-width: 860px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .sidebar {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 0.5rem;
+  }
+
+  .brand { padding-bottom: 0.5rem; }
+  .sidebar { padding-top: 0.8rem; }
+  .sidebar-label { display: none; }
+  .personas { flex-direction: row; overflow-x: auto; gap: 0.25rem; }
+  .persona { grid-template-columns: 0.8rem auto; white-space: nowrap; }
+  .persona .slug { display: none; }
+
+  .sidebar-foot,
+  .new-persona { display: none; }
+
+  .thread,
+  .chat-head { padding-left: 1rem; padding-right: 1rem; }
+
+  .composer,
+  .status-line { width: calc(100% - 2rem); }
+
+  .msg .bubble { max-width: 90%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
