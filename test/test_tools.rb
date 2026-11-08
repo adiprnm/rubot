@@ -444,6 +444,51 @@ class TestTools < Minitest::Test
     assert_includes result, "rejected for safety"
   end
 
+  # A background child inherits stdout, so waiting for EOF would never return
+  # even though the command itself already finished. The tool has to come back
+  # on its own and say the output may be short.
+  def test_shell_exec_does_not_wait_for_a_background_child
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    result = Timeout.timeout(15) do
+      @registry.execute("shell_exec", { "command" => "echo hi; sleep 30 &" })
+    end
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+    assert_includes result, "hi"
+    assert_includes result, "output may be incomplete"
+    assert_operator elapsed, :<, 10
+  end
+
+  # Output written by a grandchild just after the shell exits still belongs to
+  # the command, so the drain grace has to be long enough to collect it.
+  def test_shell_exec_keeps_output_written_after_the_shell_exits
+    result = Timeout.timeout(15) do
+      @registry.execute("shell_exec", { "command" => "(sleep 0.3; echo late) &" })
+    end
+
+    assert_includes result, "late"
+    refute_includes result, "output may be incomplete"
+  end
+
+  # A command that never exits used to hold the turn open forever: the only way
+  # out was /stop. It is now killed at the deadline and reported as such.
+  def test_shell_exec_kills_a_command_that_never_exits
+    tool = Rubot::Tools::Shell.new(timeout: 1)
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    result = Timeout.timeout(15) { tool.execute({ "command" => "sleep 30" }) }
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+    assert_includes result, "still running after 1.0s"
+    assert_includes result, "killed by signal"
+    assert_operator elapsed, :<, 10
+  end
+
+  def test_shell_exec_timeout_of_zero_waits_forever
+    tool = Rubot::Tools::Shell.new(timeout: 0)
+
+    assert_nil tool.send(:command_timeout)
+  end
+
   # --- File tool ---
 
   def test_file_write_and_read

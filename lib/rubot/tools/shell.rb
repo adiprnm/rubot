@@ -12,10 +12,78 @@ module Rubot
       MAX_OUTPUT = 20_000
       HEAD_OUTPUT = 6_000
 
+      # A command that never exits — a program waiting on a terminal, a daemon
+      # that does not detach, a stuck network call — would hold the turn open
+      # forever, because nothing below this tool has a deadline. The whole
+      # process group is killed once this many seconds have passed.
+      # RUBOT_SHELL_TIMEOUT overrides it; 0 waits forever.
+      DEFAULT_TIMEOUT = 600
+
+      # Seconds to wait for a graceful exit after TERM, and after KILL.
+      KILL_GRACE = 3
+
+      # Seconds the pipes get to reach EOF once the process has exited. A
+      # background child that inherited stdout keeps the write end open, so
+      # waiting for EOF can block long after the command itself is done.
+      DRAIN_GRACE = 2
+
       attr_accessor :safety_guard
 
-      def initialize(safety_guard: nil)
+      # Reads one pipe on its own thread while keeping whatever has already
+      # arrived. Waiting for EOF is not an option: a background child that
+      # inherited the write end keeps it open, and a plain `read` would block
+      # there forever even though the command itself finished.
+      class PipeReader
+        CHUNK = 64 * 1024
+
+        def initialize(io)
+          @io = io
+          @mutex = Mutex.new
+          @text = +""
+          @thread = Thread.new { read_all }
+        end
+
+        # Waits until `deadline` (monotonic clock) for EOF, then closes the pipe
+        # to release the reader. Returns [text, forced?], where `forced?` says
+        # the output may be short because the pipe had to be closed.
+        def drain(deadline)
+          return [ text, false ] if @thread.join(remaining(deadline))
+
+          @io.close
+          @thread.join(1)
+          [ text, true ]
+        rescue IOError
+          [ text, true ]
+        end
+
+        # What has been read so far; safe to call while the reader is running.
+        def text
+          @mutex.synchronize { @text.dup }
+        end
+
+        private
+
+        # One monotonic instant shared by both pipes, so a stdout that needs the
+        # full grace does not make stderr wait for another one.
+        def remaining(deadline)
+          left = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          left.positive? ? left : 0
+        end
+
+        def read_all
+          loop do
+            chunk = @io.readpartial(CHUNK)
+            @mutex.synchronize { @text << chunk }
+          end
+        rescue EOFError, IOError, Errno::EBADF, Errno::EIO
+          nil
+        end
+      end
+
+      # `timeout:` is for tests; the real setting comes from the environment.
+      def initialize(safety_guard: nil, timeout: nil)
         @safety_guard = safety_guard
+        @timeout = timeout
       end
 
       def name
@@ -31,6 +99,8 @@ module Rubot
           or by writing a .rb file; do not introduce Python for new work.
           Output is limited to #{MAX_OUTPUT} characters (the beginning and the
           end are kept when it is longer).
+          A command that has not exited after #{DEFAULT_TIMEOUT} seconds is
+          killed, so do not use it to start long-running servers.
         DESC
         if @safety_guard&.restrict_to_workspace
           desc + "\nCommands are restricted to the workspace directory."
@@ -64,7 +134,7 @@ module Rubot
         # Safety guard checks
         check_command_safety(cmd)
 
-        stdout, stderr, status = run_command(cmd)
+        stdout, stderr, status, problems = run_command(cmd)
         output = ""
         output += stdout if stdout && !stdout.empty?
         output += "\nSTDERR: #{stderr}" if stderr && !stderr.empty?
@@ -78,8 +148,11 @@ module Rubot
                    output[-tail_size..]
         end
 
-        exit_status = status.exitstatus
-        "[Exit code: #{exit_status}]\n#{output}"
+        # Why the exit code is missing or late travels with the output: the
+        # model has to see that the command did not simply end.
+        output += "\n" + problems.join("\n") unless problems.empty?
+
+        "[Exit code: #{exit_status_label(status)}]\n#{output}"
       rescue Errno::ENOENT => e
         "ERROR: Command not found: #{e.message}"
       rescue StandardError => e
@@ -166,21 +239,93 @@ module Rubot
       # Run the command in its own process group so /stop can kill it and
       # anything it started, not just the shell wrapper. The cancellation
       # token is set per turn by the agent.
+      #
+      # The call always comes back: the process group is killed once the
+      # deadline passes, and the pipe readers are released a couple of seconds
+      # after the process exits instead of being awaited forever. Returns
+      # [stdout, stderr, status, problems], where `status` is nil when the
+      # process could not be reaped and `problems` explains anything that
+      # stopped the output from arriving whole.
       def run_command(cmd)
         cancellation = Thread.current[:rubot_cancellation]
+        limit = command_timeout
 
         Open3.popen3(cmd, pgroup: true) do |stdin, stdout, stderr, wait_thr|
           stdin.close
           cancellation&.track(wait_thr.pid)
           begin
-            out_reader = Thread.new { stdout.read }
-            err_reader = Thread.new { stderr.read }
-            status = wait_thr.value
-            [ out_reader.value, err_reader.value, status ]
+            out_reader = PipeReader.new(stdout)
+            err_reader = PipeReader.new(stderr)
+            problems = []
+
+            status = wait_for_exit(wait_thr, limit)
+            if status.nil?
+              status = terminate(wait_thr)
+              problems << "[the command was still running after #{limit}s, " \
+                          "so its process group was killed]"
+            end
+
+            drain_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + DRAIN_GRACE
+            out, out_cut = out_reader.drain(drain_deadline)
+            err, err_cut = err_reader.drain(drain_deadline)
+            if out_cut || err_cut
+              problems << "[output may be incomplete: a process started by the " \
+                          "command kept the pipe open after it exited]"
+            end
+
+            [ out, err, status, problems ]
           ensure
             cancellation&.untrack(wait_thr.pid)
           end
         end
+      end
+
+      # Deadline for one command, in seconds, or nil for no limit.
+      def command_timeout
+        value = @timeout
+        value = ENV["RUBOT_SHELL_TIMEOUT"] if value.nil?
+        value = DEFAULT_TIMEOUT if value.nil? || value.to_s.strip.empty?
+        return nil if value.to_f <= 0
+
+        value.to_f
+      end
+
+      # Waits for the process to exit, checking the deadline instead of blocking
+      # on it. A cancellation kills the group, which wakes this early.
+      def wait_for_exit(wait_thr, limit)
+        return wait_thr.value if limit.nil?
+
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + limit
+        loop do
+          return wait_thr.value if wait_thr.join(0.1)
+          return nil if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+        end
+      end
+
+      # TERM the group, then KILL it if it is still alive after the grace.
+      def terminate(wait_thr)
+        signal_group(wait_thr.pid, "TERM")
+        return wait_thr.value if wait_thr.join(KILL_GRACE)
+
+        signal_group(wait_thr.pid, "KILL")
+        wait_thr.join(KILL_GRACE) ? wait_thr.value : nil
+      end
+
+      def signal_group(pid, signal)
+        Process.kill(signal, -pid)
+      rescue Errno::ESRCH, Errno::EPERM
+        begin
+          Process.kill(signal, pid)
+        rescue StandardError
+          nil
+        end
+      end
+
+      def exit_status_label(status)
+        return "unknown" if status.nil?
+        return status.exitstatus.to_s if status.exitstatus
+
+        "killed by signal #{status.termsig}"
       end
 
       def check_command_safety(cmd)
