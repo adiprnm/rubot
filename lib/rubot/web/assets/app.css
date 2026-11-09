@@ -1120,12 +1120,16 @@ body {
    tall, and reserved even when empty so the thread above it does not shrink
    and grow every time a turn starts or ends. Nothing is centred here — the
    row starts at the field's own left edge, where its mark can line up with
-   the one in the status line below. */
+   the one in the status line below.
+
+   The gap under the row is the field's breathing room, not the row's: "still
+   working" sits on top of the input while the reader is deciding whether to
+   wait, and at 0.25rem the two lines read as one block of text. */
 .working-band {
   width: calc(100% - 3.2rem);
   max-width: 52rem;
   min-height: 1.05rem;
-  margin: 0 auto 0.25rem;
+  margin: 0 auto 0.75rem;
 }
 
 .working-band .row { margin: 0; }
@@ -1147,8 +1151,8 @@ body {
 
 .composer {
   display: flex;
-  align-items: flex-end;
-  gap: 0.5rem;
+  flex-direction: column;
+  gap: 0.35rem;
   width: calc(100% - 3.2rem);
   max-width: 52rem;
   margin: 0 auto 0.55rem;
@@ -1156,10 +1160,25 @@ body {
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--bg-dim);
-  transition: border-color .12s;
+  transition: border-color .12s, background .12s;
+}
+
+/* A file dragged over the field is about to become an attachment; saying so
+   before the drop is the only feedback a drag has. */
+.composer.is-dragging {
+  border-color: var(--green);
+  background: var(--bg2);
 }
 
 .composer:focus-within { border-color: var(--fg-faint); }
+
+/* The text and its buttons are one line; the attachments above them are a row
+   of their own, so a screenshot never narrows the field it was sent with. */
+.composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
 
 .composer textarea {
   flex: 1;
@@ -1181,6 +1200,208 @@ body {
 .composer textarea::placeholder { color: var(--fg-faint); font-style: italic; }
 
 .composer-actions { display: flex; gap: 0.4rem; }
+
+/* The paperclip is a square the height of the text line it sits beside, so
+   the two buttons read as one row rather than as a tall and a short one. */
+.btn.attach {
+  display: grid;
+  place-items: center;
+  padding: 0.34rem 0.5rem;
+  color: var(--fg-faint);
+}
+
+.btn.attach svg { display: block; }
+
+.btn.attach:hover { color: var(--fg); }
+
+/* ---------- pictures --------------------------------------------- */
+
+/* A message's pictures are a strip, not a column: several screenshots are
+   wider than the bubble, so they scroll sideways at one height instead of
+   stacking the conversation out of view. `scroll-snap` keeps a picture from
+   settling half-drawn at the edge. */
+.attachments {
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  padding: 0.1rem 0.1rem 0.2rem;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.composer-attachments {
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  padding: 0.1rem 0.1rem 0;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.attachments::-webkit-scrollbar,
+.composer-attachments::-webkit-scrollbar { height: 6px; }
+
+.attachments::-webkit-scrollbar-thumb,
+.composer-attachments::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+
+.attachment {
+  position: relative;
+  flex: 0 0 auto;
+  margin: 0;
+  scroll-snap-align: start;
+}
+
+.attachment-open,
+.md-image-open {
+  display: block;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: none;
+  cursor: zoom-in;
+  overflow: hidden;
+  line-height: 0;
+}
+
+.attachment img {
+  display: block;
+  height: 6.5rem;
+  width: auto;
+  max-width: 13rem;
+  object-fit: cover;
+}
+
+.attachment.is-draft img { height: 3.6rem; max-width: 7rem; }
+
+.attachment-open:hover,
+.attachment-open:focus-visible,
+.md-image-open:hover,
+.md-image-open:focus-visible { border-color: var(--fg-faint); }
+
+/* Download and remove sit on the picture, appearing when the pointer is on it
+   (or when a keyboard reaches them). On a touch screen there is no hover, so
+   they are simply always visible there. */
+.attachment-download,
+.attachment-remove {
+  position: absolute;
+  top: 0.25rem;
+  display: grid;
+  place-items: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(20, 25, 22, 0.72);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .12s;
+}
+
+.attachment-download { right: 0.25rem; }
+.attachment-remove { right: 1.75rem; color: var(--red); font-size: 0.95rem; }
+
+.attachment:hover .attachment-download,
+.attachment:hover .attachment-remove,
+.attachment-download:focus-visible,
+.attachment-remove:focus-visible { opacity: 1; }
+
+@media (hover: none) {
+  .attachment-download,
+  .attachment-remove { opacity: 1; }
+}
+
+/* A bubble with pictures is wider than a line of text needs to be, but still
+   narrower than the column: the strip is what has to have room to scroll. */
+.bubble.has-attachments { width: min(86%, 34rem); }
+
+.bubble-text { display: block; white-space: pre-wrap; }
+
+.bubble-text + .attachments { margin-top: 0.45rem; }
+
+/* An image written in an answer (markdown) keeps its prose position: inline
+   with the paragraph, with the same download affordance as an attachment. */
+.md-image { position: relative; display: inline-block; line-height: 0; }
+
+.md-image .md-image-download {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  display: grid;
+  place-items: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  background: rgba(20, 25, 22, 0.72);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity .12s;
+}
+
+.md-image:hover .md-image-download,
+.md-image-download:focus-visible { opacity: 1; }
+
+@media (hover: none) {
+  .md-image .md-image-download { opacity: 1; }
+}
+
+/* ---------- lightbox --------------------------------------------- */
+
+/* One sheet for the whole page. It is `hidden` until a picture is pressed, and
+   the click handler fills in the source — so a thread with any number of
+   pictures still costs one <img>. */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgba(12, 16, 14, 0.86);
+  backdrop-filter: blur(3px);
+}
+
+.lightbox[hidden] { display: none; }
+
+.lightbox-figure {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.lightbox-image {
+  display: block;
+  max-width: min(92vw, 100rem);
+  max-height: calc(100vh - 7rem);
+  object-fit: contain;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.lightbox-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.lightbox-download { border-color: var(--green); color: var(--green); text-decoration: none; }
+
+/* The page behind the sheet must not scroll: on a phone a stray swipe
+   otherwise moves the conversation under the picture. */
+body.lightbox-open { overflow: hidden; }
 
 .btn {
   padding: 0.3rem 0.65rem;
@@ -1384,6 +1605,11 @@ body {
 
   .composer,
   .status-line { width: calc(100% - 2rem); }
+
+  /* The band above the field follows the field's own gutter: on a phone the
+     two edges are close enough that any difference reads as a misalignment. */
+  .working-band,
+  .composer-notice { width: calc(100% - 2rem); }
 
   .msg .bubble { max-width: 90%; }
 
