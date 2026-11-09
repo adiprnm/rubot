@@ -3387,6 +3387,27 @@ module Rubot
                         "a pinch-zoom shrinks the visual viewport too, and the shell must not follow it"
       end
 
+      # A phone keeps the browser's hover state on whatever was tapped last, so a
+      # hover rule is a *stuck* rule there: the send button stayed filled green
+      # until something else was touched, which read as a message still going.
+      # Hover belongs to a pointer that can leave the button; the press is what a
+      # finger gets instead.
+      def test_the_send_button_does_not_stay_filled_after_a_tap
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        hover = css[/@media \(hover: hover\) \{\n(.*?)\n\}/m, 1]
+
+        refute_nil hover, "the buttons' hover needs a pointer that can leave"
+        assert_includes hover, ".btn.primary:hover"
+        assert_includes hover, ".composer-stop:hover"
+
+        elsewhere = css.sub(hover, "")
+        refute_includes elsewhere, ".btn.primary:hover",
+                        "a hover outside the query sticks to a tapped button"
+        refute_includes elsewhere, ".composer-stop:hover"
+        assert_includes elsewhere, ".btn.primary:active",
+                        "the press has to answer on a screen with no hover"
+      end
+
       def rem(value)
         value.to_s.delete("rem").to_f
       end
