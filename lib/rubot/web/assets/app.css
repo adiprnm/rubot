@@ -50,6 +50,13 @@
   --mono: "Martian Mono", "Iosevka", ui-monospace, monospace;
 
   --measure: 62ch;
+
+  /* How far a list marker hangs into the margin. One value for both list
+     kinds: a bullet and a digit sharing a box is what makes a numbered list
+     and a bulleted one look like the same column. The scroll container keeps
+     this much room on its left (see .thread), or the marker is clipped
+     instead of hanging in the margin. */
+  --marker-gutter: 1.45em;
 }
 
 * { box-sizing: border-box; }
@@ -518,7 +525,10 @@ body {
      below a chat that only looks 800px tall. */
   position: relative;
   overflow-y: auto;
-  padding: 1.5rem 1.6rem 0.6rem;
+  /* The left padding is the room a hanging list marker needs: at the text
+     size the gutter is wider than the old 1.6rem, and a marker without room
+     to hang is clipped by this scroll container rather than drawn. */
+  padding: 1.5rem calc(var(--marker-gutter) + 0.6rem) 0.6rem;
   scrollbar-width: thin;
   scrollbar-color: var(--bg2) transparent;
 }
@@ -634,27 +644,51 @@ body {
   font-style: italic;
 }
 
-/* A list is a block, and its marker is a column of its own. The numbers hang
+/* A list is a block, and its marker is a column of its own. The marker hangs
    in the margin the page already keeps, so the item text starts on the same
    left edge as the paragraph above it and a wrapped line stays under its own
    words. Indenting the whole list by a text-width instead put every line a
-   marker-width to the right of the prose it belongs to. */
+   marker-width to the right of the prose it belongs to.
+
+   The marker is drawn here rather than left to the browser: a bullet and a
+   digit do not share a box, so the two kinds of list put their markers in two
+   different columns — the numbered list looked indented next to the bulleted
+   one. Both are now placed in the same fixed box and start at the same x. */
 .text ul,
 .text ol {
   margin: 0.7em 0;
   padding-left: 0;
+  list-style: none;
 }
 
-.text ul { list-style: disc; }
-.text ol { list-style: decimal; }
+/* One counter per list, reset where the list starts, so a nested list numbers
+   from one instead of continuing its parent's count. */
+.text ol { counter-reset: rubot-item; }
+.text ol > li { counter-increment: rubot-item; }
 
-.text li { margin: 0.2em 0; }
+.text li {
+  position: relative;
+  margin: 0.2em 0;
+}
 
-.text li::marker {
+.text li::before {
+  position: absolute;
+  left: calc(-1 * var(--marker-gutter));
+  width: var(--marker-gutter);
   color: var(--fg-faint);
   font-family: var(--mono);
   font-size: 0.85em;
+  text-align: left;
+  /* The marker is absolutely positioned, so it starts at the top of the line
+     box rather than sitting on its baseline. Its line box is scaled up to the
+     height of the text's (1.6 / 0.85 of its own size), which puts the two
+     baselines in the same place: without it the bullet floated about 2px
+     above the words it belongs to. */
+  line-height: calc(1.6 / 0.85 * 1em);
 }
+
+.text ul > li::before { content: "•"; }
+.text ol > li::before { content: counter(rubot-item) "."; }
 
 /* A nested list is the one place that indents: its items belong to the item
    above them, not to the column, and its markers must not land on the
@@ -664,6 +698,7 @@ body {
   margin: 0.25em 0;
   padding-left: 1.3em;
 }
+
 
 
 /* A table is its own block and can be wider than the column; it scrolls
@@ -998,8 +1033,14 @@ body {
   .session .label { max-width: 11rem; font-size: 12.5px; }
   .session .meta { display: none; }
 
+  /* Narrow, but the marker still needs its gutter: a phone is where a list is
+     most likely to be read, and a clipped bullet is worse than 4px less
+     measure. The header keeps the same left edge so the text lines up. */
   .thread,
-  .chat-head { padding-left: 1rem; padding-right: 1rem; }
+  .chat-head {
+    padding-left: calc(var(--marker-gutter) + 0.35rem);
+    padding-right: 1rem;
+  }
 
   .composer,
   .status-line { width: calc(100% - 2rem); }

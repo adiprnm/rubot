@@ -1012,12 +1012,27 @@ module Rubot
       # already keeps, so item text starts where the paragraph above it starts.
       # Indenting the list by a marker-width instead put every line to the right
       # of the prose it belongs to.
-      def test_a_list_hangs_its_marker_instead_of_indenting_the_text
+      #
+      # The marker is drawn by the stylesheet because a bullet and a digit do
+      # not share a box: left to the browser, the numbered list put its numbers
+      # in a different column from the bulleted list's bullets.
+      def test_a_list_hangs_its_marker_in_one_column_for_both_kinds
         css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
         list = css[/^\.text ul,\n\.text ol \{[^}]*\}/]
 
         refute_nil list, "the .text list rule is missing from app.css"
         assert_includes list, "padding-left: 0"
+        assert_includes list, "list-style: none"
+
+        # One box, shared: the pixel the marker starts on cannot depend on
+        # whether the item is numbered.
+        box = css[/^\.text li::before \{[^}]*\}/]
+        refute_nil box, "the marker needs a rule of its own"
+        assert_includes box, "var(--marker-gutter)"
+        assert_includes box, "text-align: left"
+
+        assert_includes css, %(.text ul > li::before { content: "•"; })
+        assert_includes css, %(.text ol > li::before { content: counter(rubot-item) "."; })
 
         # A nested list is the one that does indent: its markers must not land
         # on top of the parent's.
