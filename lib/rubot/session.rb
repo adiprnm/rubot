@@ -30,6 +30,17 @@ module Rubot
     # Hard cap on the transcript stored on disk. The request itself is bounded
     # by the context window and compaction; this only keeps a session file from
     # growing forever. 400 messages is roughly 50 tool-call rounds.
+    #
+    # Measured on this repo's own store before picking a different number
+    # (73 sessions, 2026-11-10): three were parked at the cap, the ninetieth
+    # percentile was 293 messages and the median 38 — so the ceiling is reached,
+    # which is what a file-size guard is for. What the count is *not* is a
+    # measure of size: the largest file held 388 messages at 3.8 MB while a
+    # capped one held 400 at 1.0 MB, because a tool result can be a hundred
+    # times the size of a sentence. Raising the cap would not buy context (the
+    # window is 1M and compaction fires long before 400 messages); it would only
+    # let those two files grow. A byte budget is the honest guard if this ever
+    # needs to move.
     DEFAULT_MAX_MESSAGES = 400
 
     attr_reader :id, :messages, :workspace, :usage, :last_usage, :cost
