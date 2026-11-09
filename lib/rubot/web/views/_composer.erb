@@ -26,8 +26,10 @@
         spend that moment being the way out. -%>
     <button type="button"
             class="btn primary"
-            x-bind:class="{ 'is-stop': $store.turn.active }"
+            x-bind:class="{ 'is-stop': $store.turn.active, 'is-stopping': stopping }"
+            x-bind:disabled="stopping"
+            x-bind:aria-busy="stopping"
             x-on:click="sendOrStop()"
-            x-text="$store.turn.active ? 'Batal' : 'Kirim'">Kirim</button>
+            x-text="buttonLabel">Kirim</button>
   </div>
 </form>

@@ -9,7 +9,7 @@ module Rubot
       # --- Format ---------------------------------------------------------
 
       def test_markdown_escapes_html
-        assert_equal "&lt;script&gt;alert(1)&lt;/script&gt;", Format.markdown("<script>alert(1)</script>")
+        assert_equal "<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>", Format.markdown("<script>alert(1)</script>")
       end
 
       def test_markdown_renders_fenced_code_without_escaped_newlines
@@ -33,7 +33,7 @@ module Rubot
       end
 
       def test_markdown_inline_code_and_bold
-        assert_equal "<code>x</code> <strong>y</strong>", Format.markdown("`x` **y**")
+        assert_equal "<p><code>x</code> <strong>y</strong></p>", Format.markdown("`x` **y**")
       end
 
       # --- lists ----------------------------------------------------------
@@ -232,7 +232,7 @@ module Rubot
         assert_equal "<h3>Kecil</h3>", Format.markdown("### Kecil")
 
         # A tag is not a heading, and a line of hashes alone is not one either.
-        assert_equal "#hashtag", Format.markdown("#hashtag")
+        assert_equal "<p>#hashtag</p>", Format.markdown("#hashtag")
       end
 
       def test_a_heading_ends_the_paragraph_and_the_list_above_it
@@ -292,39 +292,80 @@ module Rubot
       def test_a_multi_line_quote_is_one_blockquote
         html = Format.markdown("> satu\n> dua\n> tiga")
 
-        assert_equal "<blockquote>satu<br>dua<br>tiga</blockquote>", html
+        assert_equal "<blockquote><p>satu<br>dua<br>tiga</p></blockquote>", html
       end
 
       def test_a_blank_line_still_ends_a_quote
         html = Format.markdown("> satu\n\nbiasa")
 
-        assert_includes html, "<blockquote>satu</blockquote>"
+        assert_includes html, "<blockquote><p>satu</p></blockquote>"
         assert_includes html, "biasa"
+      end
+
+      # "> > x" is a quote inside a quote: the depth is read per line, so the
+      # tree is built while walking down and a shallower line closes the
+      # levels above it.
+      def test_a_nested_quote_becomes_a_quote_inside_a_quote
+        html = Format.markdown("> luar\n> > dalam\n> luar lagi")
+
+        assert_equal "<blockquote><p>luar</p><blockquote><p>dalam</p></blockquote><p>luar lagi</p></blockquote>",
+                     html
+      end
+
+      def test_three_levels_of_quote_nest_three_deep
+        html = Format.markdown("> > > tiga")
+
+        assert_equal "<blockquote><blockquote><blockquote><p>tiga</p></blockquote></blockquote></blockquote>",
+                     html
+      end
+
+      def test_consecutive_lines_at_one_depth_share_a_paragraph
+        html = Format.markdown("> > satu\n> > dua")
+
+        assert_equal "<blockquote><blockquote><p>satu<br>dua</p></blockquote></blockquote>", html
+      end
+
+      # --- paragraphs -----------------------------------------------------
+
+      # A paragraph is an element, not a bare run of text. Without a block the
+      # margins of the heading around it have nothing to sit on, and a heading
+      # after a paragraph reads as glued to the line before it.
+      def test_a_paragraph_is_a_p_element
+        assert_equal "<p>satu</p>", Format.markdown("satu")
+        assert_equal "<p>satu<br>dua</p>", Format.markdown("satu\ndua")
+      end
+
+      def test_a_heading_keeps_its_room_after_a_paragraph
+        html = Format.markdown("sebelum\n\n# Judul\n\nsesudah")
+
+        assert_includes html, "<p>sebelum</p>\n<h1>Judul</h1>\n<p>sesudah</p>"
+        refute_includes html, "<h1>Judul</h1>sebelum",
+                        "the heading must not be the first child of the run"
       end
 
       # --- inline marks ---------------------------------------------------
 
       def test_bold_italic_bold_italic_and_strikethrough
-        assert_equal "<strong>b</strong>", Format.markdown("**b**")
-        assert_equal "<em>i</em>", Format.markdown("*i*")
-        assert_equal "<em>i</em>", Format.markdown("_i_")
-        assert_equal "<strong><em>x</em></strong>", Format.markdown("***x***")
-        assert_equal "<del>d</del>", Format.markdown("~~d~~")
+        assert_equal "<p><strong>b</strong></p>", Format.markdown("**b**")
+        assert_equal "<p><em>i</em></p>", Format.markdown("*i*")
+        assert_equal "<p><em>i</em></p>", Format.markdown("_i_")
+        assert_equal "<p><strong><em>x</em></strong></p>", Format.markdown("***x***")
+        assert_equal "<p><del>d</del></p>", Format.markdown("~~d~~")
       end
 
       def test_the_other_spelling_of_bold_and_italic
-        assert_equal "<strong>b</strong>", Format.markdown("__b__")
-        assert_equal "<em>i</em>", Format.markdown("_i_")
+        assert_equal "<p><strong>b</strong></p>", Format.markdown("__b__")
+        assert_equal "<p><em>i</em></p>", Format.markdown("_i_")
       end
 
       # An underscore inside a word is a name, not an emphasis: snake_case
       # must survive a message about code.
       def test_an_underscore_inside_a_word_is_not_italic
-        assert_equal "snake_case_name", Format.markdown("snake_case_name")
+        assert_equal "<p>snake_case_name</p>", Format.markdown("snake_case_name")
       end
 
       def test_marks_nest
-        assert_equal "<strong>bold with <code>code</code></strong>",
+        assert_equal "<p><strong>bold with <code>code</code></strong></p>",
                      Format.markdown("**bold with `code`**")
       end
 
@@ -371,6 +412,32 @@ module Rubot
         assert_equal %(<hr class="rule">), Format.markdown("---")
         assert_equal %(<hr class="rule">), Format.markdown("***")
         assert_equal %(<hr class="rule">), Format.markdown("- - -")
+      end
+
+      # --- markdown styles ------------------------------------------------
+
+      # The hero heading needs the space above it to read as a heading rather
+      # than as the last line of the paragraph before it.
+      def test_headings_carry_room_above_them
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        heading = css[/^\.text h1,.*?^  font-weight: 600;/m]
+
+        refute_nil heading, "the heading rule is missing from app.css"
+        margin = heading[/margin:\s*([^;]+);/, 1].to_s
+
+        refute_empty margin, "a heading needs a margin, or it sticks to the text above"
+        refute_equal "0", margin.split.first
+      end
+
+      # The tick is drawn from two borders and rotated; it is centred by
+      # translating half its own size back, because pinning it by left/top put
+      # it in the corner of the box instead of in the middle.
+      def test_the_tick_is_centred_by_translation
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        tick = css[/^\.text li\.task\.is-done > \.task-box::after \{.*?\n\}/m]
+
+        refute_nil tick, "the tick rule is missing from app.css"
+        assert_includes tick, "translate(-50%, -50%)"
       end
 
       # --- Turn -----------------------------------------------------------
@@ -751,7 +818,26 @@ module Rubot
 
         assert_equal 1, buttons.size, "the composer should carry a single button"
         assert_includes buttons.first, "sendOrStop()"
-        assert_includes buttons.first, "'Batal'"
+        assert_includes buttons.first, "buttonLabel"
+      end
+
+      # Stopping is a request, not a fact: the turn keeps running until the
+      # server has acted. The button has to say so and stop taking presses for
+      # that round trip, or it looks untouched and a second press just repeats
+      # the same request.
+      def test_the_stop_button_says_it_is_stopping_and_locks_itself
+        html = View.render("_composer", session_id: "web_rubot", token_query: "")
+        button = html[/<button\b.*?<\/button>/m]
+
+        assert_includes button, "x-bind:disabled=\"stopping\""
+        assert_includes button, "is-stopping"
+
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+
+        assert_includes js, "Membatalkan…", "the button has to say what it is doing"
+        assert_includes js, "this.stopping = true"
+        assert_includes js, "if (this.stopping) return;",
+                        "a second press while the first is in flight is a no-op"
       end
 
       # A prompt the server refuses keeps its text in the field and puts

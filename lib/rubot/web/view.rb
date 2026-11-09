@@ -30,7 +30,10 @@ module Rubot
         flush_paragraph = lambda do
           next if paragraph.empty?
 
-          paragraphs << paragraph.map { |line| inline(line) }.join("<br>")
+          # A paragraph is a <p>, not a bare run of text: without the element
+          # there is no block for a margin to sit on, so the heading above it
+          # collapsed to nothing and read as glued to the line before.
+          paragraphs << "<p>#{paragraph.map { |line| inline(line) }.join("<br>")}</p>"
           paragraph.clear
         end
 
@@ -135,16 +138,15 @@ module Rubot
           elsif (quote = stripped[/\A&gt;[ \t]?(.*)\z/, 1])
             # One blockquote for the whole run, not one per line: a border per
             # line is a stack of separate rules with a gap between each, which
-            # reads as several quotes rather than one.
+            # reads as several quotes rather than one. A line that starts with
+            # a further "&gt;" is the same run nested one level deeper, so the
+            # depth is read per line and the tree is built from it.
             flush_paragraph.call
             flush_list.call
-            quoted = [ quote ]
-            cursor = i + 1
-            while cursor < lines.length && (next_quote = lines[cursor].strip[/\A&gt;[ \t]?(.*)\z/, 1])
-              quoted << next_quote
-              cursor += 1
-            end
-            paragraphs << "<blockquote>#{quoted.map { |q| inline(q) }.join("<br>")}</blockquote>"
+            start = i
+            cursor = i
+            cursor += 1 while cursor < lines.length && lines[cursor].strip.match?(/\A&gt;/)
+            paragraphs << render_quote(lines[start...cursor])
             i = cursor
             next
           else
@@ -159,6 +161,64 @@ module Rubot
         flush_list.call
 
         paragraphs.join("\n")
+      end
+
+      # A run of quote lines becomes one blockquote per level, nested inside
+      # each other. Each line carries its own depth — the number of "&gt;"
+      # markers in front of it — so the tree is built while walking down, and
+      # a shallower line closes the levels above it.
+      #
+      # Lines at the same depth are one paragraph joined by breaks, because a
+      # quoted passage is quoted prose: its lines belong to the same thought,
+      # and a border drawn per line would put a gap between each.
+      def render_quote(lines)
+        html = +""
+        depth = 0
+        open_paragraph = false
+
+        lines.each do |line|
+          markers = line.strip[/\A(?:&gt;[ \t]?)*/].to_s
+          level = markers.scan("&gt;").size
+          text = line.strip.sub(/\A(?:&gt;[ \t]?)*/, "")
+
+          while depth > level
+            html << "</p>" if open_paragraph
+            html << "</blockquote>"
+            open_paragraph = false
+            depth -= 1
+          end
+
+          if depth < level
+            # A deeper line continues the sentence above it, so the paragraph
+            # it was in is closed before the nested quote opens.
+            html << "</p>" if open_paragraph
+            open_paragraph = false
+            while depth < level
+              html << "<blockquote>"
+              depth += 1
+            end
+          end
+
+          unless open_paragraph
+            html << "<p>"
+            open_paragraph = true
+          else
+            html << "<br>"
+          end
+
+          html << inline(text)
+        end
+
+        html << "</p>" if open_paragraph
+        # Every level left open has to be closed, and the counter has to move:
+        # this used to be `html << "</blockquote>" while depth.positive?`, which
+        # never decremented, so a quoted line spun forever appending the same
+        # tag and ate all the memory on the machine.
+        while depth.positive?
+          html << "</blockquote>"
+          depth -= 1
+        end
+        html
       end
 
       # "#" opens a heading only when a space follows it: "#hashtag" is a word,
@@ -201,7 +261,7 @@ module Rubot
 
       def code_block(body, language, streaming: false)
         lang = language.to_s.downcase
-        classes = ["code"]
+        classes = [ "code" ]
         classes << "streaming" if streaming
 
         pre = +%(<pre class="#{classes.join(" ")}")
@@ -276,8 +336,8 @@ module Rubot
         elsif marker
           patterns << "(?<com>#{Regexp.escape(marker)}[^\\n]*)"
         end
-        patterns << '(?<com>&lt;!--.*?--&gt;)' if language == "html"
-        patterns << '(?<num>\b\d+(?:\.\d+)?\b)'
+        patterns << "(?<com>&lt;!--.*?--&gt;)" if language == "html"
+        patterns << "(?<num>\\b\\d+(?:\\.\\d+)?\\b)"
         patterns << "(?<lit>\\b(?:#{LITERALS.join("|")})\\b)"
         patterns << "(?<kw>\\b(?:#{KEYWORDS.join("|")})\\b)"
 

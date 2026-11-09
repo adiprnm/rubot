@@ -805,17 +805,19 @@ body {
 }
 
 /* A tick, drawn from two borders rather than set in a font: at 9px no glyph
-   survives, and the box is smaller than a line of text. */
+   survives, and the box is smaller than a line of text. It is centred by
+   translating half its own size back, so its width and height cannot drift it
+   off centre — pinning it by left/top put it in the corner. */
 .text li.task.is-done > .task-box::after {
   content: "";
   position: absolute;
-  left: 0.2em;
-  top: 0.06em;
-  width: 0.3em;
-  height: 0.13em;
+  left: 50%;
+  top: 43%;
+  width: 0.34em;
+  height: 0.15em;
   border-left: 1.5px solid var(--bg0);
   border-bottom: 1.5px solid var(--bg0);
-  transform: rotate(-45deg);
+  transform: translate(-50%, -50%) rotate(-45deg);
 }
 
 .text li.task.is-done { color: var(--fg-faint); }
@@ -1081,6 +1083,19 @@ body {
    wearing the send colour would promise the opposite of what it does. */
 .btn.primary.is-stop { border-color: var(--red); color: var(--red); }
 .btn.primary.is-stop:hover { background: var(--red); color: var(--bg0); }
+
+/* The round trip after a press: the request is out, the turn is not stopped
+   yet. Read-only, waiting, and plainly not something to press again — but
+   still legible, because it is a state the reader is meant to see. */
+.btn.primary.is-stopping,
+.btn.primary.is-stopping:hover {
+  border-color: var(--line);
+  color: var(--fg-faint);
+  background: none;
+  cursor: progress;
+}
+
+.btn:disabled { pointer-events: none; }
 
 /* ---------- status line ------------------------------------------ */
 
