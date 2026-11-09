@@ -1409,6 +1409,33 @@ module Rubot
         refute_includes View.render("_usage", cost: "$0.1", cache: "50%", ctx: "1%"), "hx-swap-oob"
       end
 
+      # The figures have to move while the turn is still running, and the
+      # session cannot be asked for them then: in actor mode the turn owns the
+      # Ractor. The report the agent pushes is what the row is drawn from.
+      def test_the_status_row_is_drawn_from_the_live_report
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        report = { cost: { "total" => 0.0004 }, requests: 1, prompt_tokens: 1000,
+                   cache_hit_rate: 0.6, context_percent: 8.2, context_window: 200_000,
+                   provisional: true }
+
+        markup = channel.send(:usage_markup_from, report)
+
+        assert_includes markup, "~$0.0004", "an estimate is marked as one"
+        assert_includes markup, "60%"
+        assert_includes markup, "8.2%"
+        assert_includes markup, %(hx-swap-oob="true"),
+                        "it lands on #usage from outside the turn"
+      end
+
+      # Nothing to draw must not become an empty swap: that would blank the
+      # row and lose the last figure the reader had.
+      def test_an_empty_live_report_draws_nothing
+        channel = Rubot::Channels::Web.new(channel_config: {})
+
+        assert_nil channel.send(:usage_markup_from, nil)
+        assert_nil channel.send(:usage_markup_from, "bukan report")
+      end
+
       def test_form_value_is_forced_to_utf8
         channel = Rubot::Channels::Web.new(channel_config: {})
         req = Object.new

@@ -671,7 +671,12 @@ module Rubot
       # local named `context` would shadow Scope#context, which ERB calls to
       # get its binding.
       def usage_locals(sid)
-        metrics = usage_metrics(sid)
+        metrics_locals(usage_metrics(sid))
+      end
+
+      # The three figures, from whatever report is at hand: a fresh query of the
+      # session, or the live report the agent pushes mid-turn.
+      def metrics_locals(metrics)
         {
           cost: metrics&.dig(:cost) || "—",
           cache: metrics&.dig(:cache) || "—",
@@ -852,6 +857,10 @@ module Rubot
           on_tool_call: ->(name, args, _snapshot) { turn.tool_started(name, summarize_arguments(args)) },
           on_tool_result: ->(name, result, _diff) { tool_finished(turn, name, result) },
           on_reasoning: ->(delta) { turn.thinking(delta) },
+          on_usage: ->(report) {
+            markup = usage_markup_from(report)
+            turn.emit(:usage, markup) if markup
+          },
           on_confirm: ->(name, _args, reason) { turn.ask_confirm(name, reason) }
         )
 
@@ -876,6 +885,23 @@ module Rubot
       # is out-of-band, so it lands on #usage wherever that element sits.
       def usage_markup(sid)
         usage_markup_with(usage_locals(sid))
+      end
+
+      # The same row from a report the agent pushed while the turn was still
+      # running. The session cannot be asked for it: in actor mode the turn owns
+      # the Ractor, so a query would wait for the answer it is meant to price.
+      # The report carries a provisional flag for the request still in flight,
+      # and the renderer marks it, so a moving estimate never poses as a
+      # measurement.
+      #
+      # Returns nil when there is nothing worth drawing: an empty swap would
+      # blank the row instead of leaving the last figure in place.
+      def usage_markup_from(report)
+        return nil if report.nil?
+
+        usage_markup_with(metrics_locals(Rubot::UsageReport.metrics(report)))
+      rescue StandardError
+        nil
       end
 
       # Split out so the marker can be tested without a live session behind it.

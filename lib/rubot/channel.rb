@@ -119,7 +119,7 @@ module Rubot
     #   fragments out of the transcript; they are not the answer.
     # @return [String, nil] The agent's response, or nil if processing was skipped
     def process_message(message, session_id: nil, on_tool_call: nil, on_tool_result: nil, on_progress: nil,
-                        on_confirm: nil, on_assistant_text: nil, on_reasoning: nil)
+                        on_confirm: nil, on_assistant_text: nil, on_reasoning: nil, on_usage: nil)
       sid = (session_id || "default").to_s
       handle = session_for(sid)
 
@@ -144,7 +144,8 @@ module Rubot
         on_progress: on_progress,
         on_confirm: on_confirm,
         on_assistant_text: on_assistant_text,
-        on_reasoning: on_reasoning
+        on_reasoning: on_reasoning,
+        on_usage: on_usage
       ) do |chunk|
         on_stream_chunk(chunk) if respond_to?(:on_stream_chunk)
       end
