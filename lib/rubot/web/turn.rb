@@ -173,6 +173,24 @@ module Rubot
         end
       end
 
+      # Text the reader sent while this turn was already running. It joins the
+      # timeline where it was typed, not where the model got around to reading
+      # it: a steering message that only shows up after a refresh looks like it
+      # was never sent at all, and the reader has no way to tell whether to say
+      # it again.
+      #
+      # The agent still consumes it between rounds; this is the page's copy of
+      # the moment, drawn in the same bubble the session file will draw later.
+      def add_steer(text)
+        body = text.to_s.strip
+        return if body.empty?
+
+        @mutex.synchronize do
+          @items << { kind: :steer, text: body, epoch: epoch_now }
+          publish_locked
+        end
+      end
+
       # Called from the turn thread; blocks until the browser answers or the
       # deadline passes. Fails closed, like every other channel.
       def ask_confirm(name, reason)

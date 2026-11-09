@@ -1021,7 +1021,15 @@ module Rubot
           text = form(req, "text").strip
           return bad_request(res) if text.empty?
 
-          res.status = steer_session(turn.session_id, text) ? 204 : 409
+          if steer_session(turn.session_id, text)
+            # The page draws the message the moment it is handed over, rather
+            # than waiting for the model to reach it: a steering message that
+            # only appeared after a refresh read as one that was never sent.
+            turn.add_steer(text)
+            res.status = 204
+          else
+            res.status = 409
+          end
         when "stop"
           cancel_session(turn.session_id)
           res.status = 204

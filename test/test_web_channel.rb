@@ -972,6 +972,47 @@ module Rubot
                         "the page has to join the stream again, not sit on a frozen copy"
       end
 
+      # Steering used to reach the model but not the page: the bubble only
+      # appeared after a refresh, which left the reader unsure whether the
+      # message had been sent at all.
+      def test_steering_a_running_turn_draws_the_message_at_once
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        turn = Turn.new(id: "tabc", session_id: "web_kanyaah", prompt: "Halo")
+        channel.instance_variable_get(:@turns)["tabc"] = turn
+        channel.define_singleton_method(:steer_session) { |_sid, _text| true }
+
+        res = FakeResponse.new
+        channel.send(:control_turn, Struct.new(:query).new({ "text" => "Pakai template Grey" }),
+                     res, "tabc", "steer")
+
+        assert_equal 204, res.status
+        steer = turn.items.find { |item| item[:kind] == :steer }
+
+        refute_nil steer, "the page draws the message it was just handed"
+        assert_equal "Pakai template Grey", steer[:text]
+
+        html = View.render("_timeline", items: turn.items)
+
+        assert_includes html, %(class="msg user")
+        assert_includes html, "Pakai template Grey"
+      end
+
+      # A steering message nobody took is not drawn: the bubble would claim
+      # something was delivered that never left the page.
+      def test_steering_a_turn_that_cannot_take_it_draws_nothing
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        turn = Turn.new(id: "tabc", session_id: "web_kanyaah", prompt: "Halo")
+        channel.instance_variable_get(:@turns)["tabc"] = turn
+        channel.define_singleton_method(:steer_session) { |_sid, _text| false }
+
+        res = FakeResponse.new
+        channel.send(:control_turn, Struct.new(:query).new({ "text" => "Halo?" }),
+                     res, "tabc", "steer")
+
+        assert_equal 409, res.status
+        assert_empty turn.items.select { |item| item[:kind] == :steer }
+      end
+
       # A turn that has ended is in the session file, where the history loop
       # draws it. Drawing it again would show every answer twice.
       def test_a_page_does_not_draw_a_turn_that_has_already_ended
