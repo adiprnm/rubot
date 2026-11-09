@@ -1,0 +1,31 @@
+<%# The composer is the one part of the page that is pure behaviour: which key
+    sends, where the button sits, what a turn in flight does to both. It is
+    kept as a partial so the markup the JavaScript addresses has a place of
+    its own — and a name in a test.
+
+    `x-ref="form"` is what the keydown handler submits through. Without it the
+    handler throws on `undefined.requestSubmit()` and Enter stops sending. -%>
+<form class="composer"
+      x-ref="form"
+      hx-post="/s/<%= h(session_id) %>/turn<%= h(token_query) %>"
+      hx-target="#thread"
+      hx-swap="beforeend"
+      x-data="composer">
+  <textarea x-ref="input"
+            x-model="text"
+            name="message"
+            rows="1"
+            aria-label="Pesan"
+            placeholder="Tulis pesan… Enter mengirim, Shift+Enter baris baru"
+            x-on:keydown="keydown($event)"></textarea>
+  <div class="composer-actions">
+    <button type="button"
+            class="btn ghost"
+            x-show="$store.turn.active"
+            x-cloak
+            x-on:click="stop()">Stop</button>
+    <button type="submit"
+            class="btn primary"
+            x-text="$store.turn.active ? 'Arahkan' : 'Kirim'">Kirim</button>
+  </div>
+</form>

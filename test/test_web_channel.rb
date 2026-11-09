@@ -545,6 +545,18 @@ module Rubot
         assert_includes html, 'sse-swap="turn"'
       end
 
+      # Enter is handled in JavaScript, which submits through `$refs.form`.
+      # The ref used to be missing, so every press of Enter threw before a
+      # request was made and the only way to send was the button.
+      def test_the_composer_form_carries_the_ref_enter_submits_through
+        html = View.render("_composer", session_id: "web_rubot", token_query: "")
+        form = html[/<form\b[^>]*>/m]
+
+        refute_nil form, "the composer must be a form: Enter submits it"
+        assert_includes form, 'x-ref="form"'
+        assert_includes form, 'hx-post="/s/web_rubot/turn"'
+      end
+
       # WEBrick hands form values back as ASCII-8BIT. Encoding them at the
       # edge is what keeps emoji and accented names from blowing up later
       # when the persona is written to personas.json.

@@ -103,29 +103,7 @@
       <% end %>
     </div>
 
-    <form class="composer"
-          hx-post="/s/<%= h(session_id) %>/turn<%= h(token_query) %>"
-          hx-target="#thread"
-          hx-swap="beforeend"
-          x-data="composer">
-      <textarea x-ref="input"
-                x-model="text"
-                name="message"
-                rows="1"
-                aria-label="Pesan"
-                placeholder="Tulis pesan… Enter mengirim, Shift+Enter baris baru"
-                x-on:keydown="keydown($event)"></textarea>
-      <div class="composer-actions">
-        <button type="button"
-                class="btn ghost"
-                x-show="$store.turn.active"
-                x-cloak
-                x-on:click="stop()">Stop</button>
-        <button type="submit"
-                class="btn primary"
-                x-text="$store.turn.active ? 'Arahkan' : 'Kirim'">Kirim</button>
-      </div>
-    </form>
+    <%= View.render("_composer", session_id: session_id, token_query: token_query) %>
 
     <div class="status-line">
       <%= View.render("_usage", **usage) %>
