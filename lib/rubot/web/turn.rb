@@ -99,8 +99,15 @@ module Rubot
           # clock running over a thought that already stopped.
           close_thinking_locked
           block = @items.last
-          if block && block[:kind] == :text && block[:live]
+          if block && block[:kind] == :text
+            # A sealed block is still where the answer was written: sealing only
+            # means a *later* round may open a block below it. A provider that
+            # interleaves reasoning with the answer closes and re-opens the
+            # thought between two chunks, and when that thought was too quick to
+            # record the answer came back as a second block — a line break in
+            # the middle of a word ("S" then "aya").
             block[:text] << text
+            block[:live] = true
           else
             @items << { kind: :text, text: +text, live: true }
           end

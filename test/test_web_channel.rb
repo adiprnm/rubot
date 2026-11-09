@@ -732,6 +732,33 @@ module Rubot
         refute turn.items.first[:live]
       end
 
+      # A provider can interleave its reasoning with the answer, so a thought
+      # opens between two chunks of one word. Closed a moment later it is too
+      # quick to record and leaves nothing behind but a sealed block — and the
+      # rest of the answer used to open a second block below it, which the page
+      # drew as a newline in the middle of a word ("Sa", then "ya").
+      def test_a_quick_thought_does_not_split_the_answer
+        turn = build
+        turn.append_chunk("Sa")
+        turn.thinking("sebentar")
+        turn.append_chunk("ya")
+
+        assert_equal [ :text ], kinds(turn)
+        assert_equal "Saya", turn.items.first[:text]
+      end
+
+      # The seal still means what it says: once a tool has run, the answer that
+      # follows is a new block below the row, not more of the narration above it.
+      def test_a_tool_call_still_separates_the_answer_that_follows_it
+        turn = build
+        turn.append_chunk("mau jalankan")
+        turn.tool_started("shell_exec", "ls")
+        turn.tool_finished("shell_exec", true)
+        turn.append_chunk("selesai")
+
+        assert_equal [ :text, :tool, :text ], kinds(turn)
+      end
+
       def test_ask_confirm_blocks_until_answered
         turn = build
         answer = nil
