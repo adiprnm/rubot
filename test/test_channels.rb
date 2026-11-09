@@ -1456,6 +1456,54 @@ module Rubot
       assert_nil @tg.send(:wizard_for_topic, 42, 7)
     end
 
+    # The usual setup once a specialist exists: point the topic at it instead
+    # of retyping a prompt. The topic keeps its own session; the persona — and
+    # so its memory — is shared.
+    def test_a_topic_can_be_pointed_at_an_existing_persona
+      @tg.send(:persona_store).set("trainer", Rubot::Persona.new(
+        slug: "trainer", name: "Trainer", emoji: "🧪", system_prompt: "Kamu personal trainer."
+      ))
+
+      @tg.send(:process_update, topic_message(created: true))
+
+      assert_includes @tg.keyboards.last[1], "Pakai persona yang sudah ada"
+      assert keyboard_data(last_keyboard).any? { |value| value.end_with?(":use:0") }
+      assert keyboard_data(last_keyboard).any? { |value| value.end_with?(":new") }
+
+      click("use:0")
+
+      stored = @tg.send(:persona_store).all["42:7"]
+      assert_equal "trainer", stored.ref
+      assert_equal "Trainer", @tg.send(:persona_store).get(42, 7).name
+
+      session = @tg.sessions["tg_42_7"]
+      assert_equal "Kamu personal trainer.", session.personas.last["system_prompt"]
+      assert @tg.sent.any? { |_chat, text, _thread| text.include?("memakai persona") }
+    end
+
+    def test_a_topic_can_still_build_its_own_persona
+      @tg.send(:persona_store).set("trainer", Rubot::Persona.new(slug: "trainer", name: "Trainer"))
+
+      @tg.send(:process_update, topic_message(created: true))
+      click("new")
+
+      assert_includes @tg.keyboards.last[1], "Langkah 1/3"
+      assert keyboard_data(last_keyboard).any? { |value| value.end_with?(":preset:0") }
+    end
+
+    def test_persona_show_names_the_borrowed_persona
+      @tg.send(:persona_store).set("trainer", Rubot::Persona.new(
+        slug: "trainer", name: "Trainer", emoji: "🧪"
+      ))
+      @tg.send(:persona_store).set("42:7", Rubot::Persona.new(ref: "trainer"))
+
+      @tg.send(:process_update, topic_message(text: "/persona show"))
+
+      text = @tg.sent.last[1]
+      assert_includes text, "Memakai : Trainer (trainer)"
+      assert_includes text, "dipakai bersama"
+    end
+
     def test_prompt_can_be_skipped_to_use_the_default
       @tg.send(:process_update, topic_message(created: true))
       click("preset:0")
@@ -1535,7 +1583,9 @@ module Rubot
     end
 
     def test_fallback_skips_topics_that_already_have_a_session
-      path = File.join(@config.workspace, "sessions", "tg_42_7.json")
+      # Sessions live next to config.yml, not in the workspace: the guard has
+      # to look where they actually are, or every used topic looks new.
+      path = File.join(@config.sessions_dir, "tg_42_7.json")
       FileUtils.mkdir_p(File.dirname(path))
       File.write(path, "{}")
 

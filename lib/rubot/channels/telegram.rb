@@ -1296,7 +1296,10 @@ module Rubot
           return
         end
 
-        send_message(chat_id, persona_summary(persona), thread_id)
+        # The resolved persona is the one that runs; the stored entry says
+        # whether it is borrowed or this topic's own.
+        stored = persona_store.all[persona_topic_key(chat_id, thread_id)]
+        send_message(chat_id, persona_summary(persona, ref: stored&.ref), thread_id)
       end
 
       def reset_persona(chat_id, thread_id)
@@ -1306,7 +1309,7 @@ module Rubot
         end
 
         removed = persona_store.delete(persona_topic_key(chat_id, thread_id))
-        session_for(topic_session_id(chat_id, thread_id)).set_persona(nil)
+        apply_persona_to_session(topic_session_id(chat_id, thread_id), nil)
 
         text = removed ? "✅ Persona topic ini dihapus. Model kembali ke default." : "ℹ️ Topic ini memang belum punya persona."
         send_message(chat_id, text, thread_id)
@@ -1354,8 +1357,18 @@ module Rubot
       end
 
       def topic_session_exists?(chat_id, thread_id)
-        path = File.join(persona_workspace, "sessions", "#{topic_session_id(chat_id, thread_id)}.json")
+        path = File.join(sessions_dir, "#{topic_session_id(chat_id, thread_id)}.json")
         File.exist?(path)
+      end
+
+      # Sessions are central (next to config.yml), not in the workspace, so
+      # this must not look in `persona_workspace/sessions` — that path stopped
+      # being where sessions live and every topic then looked brand new.
+      def sessions_dir
+        config = persona_config
+        return config.sessions_dir if config.respond_to?(:sessions_dir)
+
+        File.join(persona_dir, "sessions")
       end
 
       # Open the wizard. `only_if_new` keeps repeated forum_topic_created
@@ -1394,8 +1407,50 @@ module Rubot
         end
         delete_wizard_message(previous)
 
-        send_persona_model_step(wizard)
+        # A topic may borrow a persona that already exists — the usual case
+        # once a specialist is set up — so the first question is which one,
+        # not which model. With nothing to borrow, go straight to building one.
+        if persona_choices.any?
+          send_persona_source_step(wizard)
+        else
+          send_persona_model_step(wizard)
+        end
         wizard
+      end
+
+      # The specialists a topic can be pointed at: every persona that owns a
+      # workspace. Taken from the store, so a persona created in the web UI is
+      # offered here without a restart.
+      def persona_choices
+        persona_store.specialists.map do |slug, persona|
+          { "slug" => slug, "label" => "#{persona.emoji_or} #{persona.label}".strip }
+        end
+      rescue StandardError => e
+        warn "[persona] could not list personas: #{e.class}: #{e.message}"
+        []
+      end
+
+      def send_persona_source_step(wizard)
+        choices = persona_choices
+        @persona_mutex.synchronize do
+          wizard[:choices] = choices
+          wizard[:step] = :source
+        end
+
+        text = "🧬 Persona untuk topic ini\n\n" \
+               "Pakai persona yang sudah ada (memory-nya ikut, sesi tidak), " \
+               "atau buat persona baru khusus topic ini:"
+
+        keyboard = choices.each_with_index.each_slice(2).map do |slice|
+          slice.map do |choice, index|
+            { "text" => truncate(choice["label"].to_s, 28),
+              "callback_data" => "persona:#{wizard[:id]}:use:#{index}" }
+          end
+        end
+        keyboard << [ { "text" => "➕ Buat persona baru", "callback_data" => "persona:#{wizard[:id]}:new" } ]
+        keyboard << [ { "text" => "❌ Batal", "callback_data" => "persona:#{wizard[:id]}:cancel" } ]
+
+        store_wizard_message(wizard, send_keyboard_message(wizard[:chat_id], text, wizard[:thread_id], keyboard))
       end
 
       # Consume the reply to step 2 (the system prompt). Returns true when the
@@ -1565,6 +1620,13 @@ module Rubot
         @persona_mutex.synchronize { wizard[:updated_at] = Time.now }
 
         case action
+        when "use"
+          apply_existing_persona(callback_query, wizard, argument)
+        when "new"
+          @persona_mutex.synchronize { wizard[:step] = :preset }
+          delete_wizard_message(wizard)
+          send_persona_model_step(wizard)
+          answer_callback_query(callback_query["id"])
         when "preset", "model"
           apply_persona_preset_choice(callback_query, wizard, argument)
         when "prompt_default"
@@ -1594,8 +1656,55 @@ module Rubot
         end
       end
 
-      def apply_persona_preset_choice(callback_query, wizard, argument)
-        preset_name = "default"
+      # Point this topic at a persona that already exists. The topic keeps its
+      # own session (its own conversation and history); what it borrows is the
+      # persona — model, prompt, skills and, because the workspace root is what
+      # decides it, the same MEMORY.md.
+      def apply_existing_persona(callback_query, wizard, argument)
+        choices = @persona_mutex.synchronize { Array(wizard[:choices]) }
+        choice = choices[argument.to_i]
+
+        unless choice
+          answer_callback_query(callback_query["id"],
+                                "Daftar persona berubah. Ketik /persona untuk mengulang.")
+          return
+        end
+
+        key = persona_topic_key(wizard[:chat_id], wizard[:thread_id])
+        stored = persona_store.set(key, Persona.new(ref: choice["slug"]))
+        apply_persona_to_session(wizard[:session_id], stored)
+
+        delete_wizard_message(wizard)
+        remove_persona_wizard(wizard)
+        answer_callback_query(callback_query["id"], "Persona dipasang.")
+        send_message(
+          wizard[:chat_id],
+          "✅ Topic ini kini memakai persona #{choice['label'].to_s.strip} (#{choice['slug']}).\n\n" \
+          "Memory-nya dipakai bersama dengan persona itu; sesinya tetap milik topic ini.",
+          wizard[:thread_id]
+        )
+      end
+
+      # Set (or clear) the persona of a live session. The actor is dropped
+      # first: its config is fixed when it spawns, so a session that moves to
+      # another persona's workspace has to be built again to read that
+      # persona's SOUL.md and MEMORY.md.
+      def apply_persona_to_session(session_id, persona)
+        invalidate_session(session_id)
+        session_for(session_id).set_persona(persona&.to_h)
+      rescue StandardError => e
+        warn "[persona] failed to apply persona to #{session_id}: #{e.class}: #{e.message}"
+      end
+
+      def invalidate_session(session_id)
+        return unless actor_mode? && @pool.respond_to?(:invalidate)
+
+        @pool.invalidate(session_id)
+      rescue StandardError => e
+        warn "[persona] failed to reset #{session_id}: #{e.class}: #{e.message}"
+      end
+
+      def apply_persona_preset_choice(callback_query, wizard, argument)        preset_name = "default"
         unless argument == "default"
           index = argument.to_i
           presets = wizard[:presets] || preset_choices
@@ -1624,12 +1733,7 @@ module Rubot
         )
         key = persona_topic_key(wizard[:chat_id], wizard[:thread_id])
         stored = persona_store.set(key, persona)
-
-        begin
-          session_for(wizard[:session_id]).set_persona(stored.to_h)
-        rescue StandardError => e
-          warn "[persona] failed to apply persona to #{wizard[:session_id]}: #{e.class}: #{e.message}"
-        end
+        apply_persona_to_session(wizard[:session_id], stored)
 
         delete_wizard_message(wizard)
         remove_persona_wizard(wizard)
@@ -1648,17 +1752,25 @@ module Rubot
           "Persona hanya berlaku di topic ini. Ketik /persona show untuk melihatnya."
       end
 
-      def persona_summary(persona)
+      def persona_summary(persona, ref: nil)
         model = persona_preset_label(persona.preset || persona.model)
         prompt = persona.system_prompt.to_s.strip
         prompt = "(default)" if prompt.empty?
         prompt = "#{prompt[0, 700]}…" if prompt.length > 700
+        skills = Array(persona.skills)
 
-        "🧬 Persona topic ini\n\n" \
-          "Nama   : #{persona.name || '-'}\n" \
-          "Model  : #{model}\n" \
-          "Prompt : #{prompt}\n" \
-          "Dibuat : #{persona.created_at || '-'}"
+        lines = [ "🧬 Persona topic ini", "" ]
+        if ref
+          lines << "Memakai : #{persona.label} (#{ref})"
+          lines << "Memory  : dipakai bersama persona itu"
+        else
+          lines << "Nama    : #{persona.name || '-'}"
+        end
+        lines << "Model   : #{model}"
+        lines << "Skills  : #{skills.join(', ')}" unless skills.empty?
+        lines << "Prompt  : #{prompt}"
+        lines << "Dibuat  : #{persona.created_at || '-'}"
+        lines.join("\n")
       end
 
       # Send a plain-text message with an inline keyboard and return its id.
