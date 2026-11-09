@@ -634,18 +634,21 @@ body {
   font-style: italic;
 }
 
-/* A list is a block, not a run of centred text: the marker column belongs to
-   the list, so a wrapped item stays under its own text. */
+/* A list is a block, and its marker is a column of its own. The numbers hang
+   in the margin the page already keeps, so the item text starts on the same
+   left edge as the paragraph above it and a wrapped line stays under its own
+   words. Indenting the whole list by a text-width instead put every line a
+   marker-width to the right of the prose it belongs to. */
 .text ul,
 .text ol {
   margin: 0.7em 0;
-  padding-left: 1.4em;
+  padding-left: 0;
 }
 
 .text ul { list-style: disc; }
 .text ol { list-style: decimal; }
 
-.text li { margin: 0.2em 0; padding-left: 0.15em; }
+.text li { margin: 0.2em 0; }
 
 .text li::marker {
   color: var(--fg-faint);
@@ -653,8 +656,15 @@ body {
   font-size: 0.85em;
 }
 
+/* A nested list is the one place that indents: its items belong to the item
+   above them, not to the column, and its markers must not land on the
+   parent's. */
 .text li > ul,
-.text li > ol { margin: 0.25em 0; }
+.text li > ol {
+  margin: 0.25em 0;
+  padding-left: 1.3em;
+}
+
 
 /* A table is its own block and can be wider than the column; it scrolls
    itself rather than pushing the whole conversation sideways. */

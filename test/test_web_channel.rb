@@ -964,6 +964,24 @@ module Rubot
                         ".thread must be positioned, or its absolutely positioned " \
                         "descendants escape the scroll clip and stretch the document"
       end
+
+      # A list is a column of its own: the marker hangs in the margin the page
+      # already keeps, so item text starts where the paragraph above it starts.
+      # Indenting the list by a marker-width instead put every line to the right
+      # of the prose it belongs to.
+      def test_a_list_hangs_its_marker_instead_of_indenting_the_text
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        list = css[/^\.text ul,\n\.text ol \{[^}]*\}/]
+
+        refute_nil list, "the .text list rule is missing from app.css"
+        assert_includes list, "padding-left: 0"
+
+        # A nested list is the one that does indent: its markers must not land
+        # on top of the parent's.
+        nested = css[/^\.text li > ul,\n\.text li > ol \{[^}]*\}/]
+        refute_nil nested, "a nested list needs a rule of its own"
+        assert_includes nested, "padding-left: 1.3em"
+      end
     end
   end
 end
