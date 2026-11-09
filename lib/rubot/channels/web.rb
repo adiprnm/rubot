@@ -981,7 +981,7 @@ module Rubot
           # The band above the composer, sent again every time the turn reaches
           # for a tool: the payload carries its own out-of-band marker, so the
           # swap lands there and the timeline is untouched.
-          sse(out, "working", View.render("_working", since: turn.activity_epoch))
+          sse(out, "working", View.render("_working", since: turn.epoch))
         when :heartbeat
           out.write(": keepalive\n\n")
           out.flush if out.respond_to?(:flush)

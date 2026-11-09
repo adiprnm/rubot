@@ -35,8 +35,8 @@ module Rubot
       # `clock` is injectable so the timing rules can be tested without
       # sleeping through them. `epoch_clock` is the wall clock the timeline rows
       # stamp themselves with, injectable for the same reason: the working row
-      # has to be shown restarting from a tool call, and microseconds are a
-      # poor thing to assert on.
+      # and a restarted clock are microseconds apart, and a poor thing to
+      # assert on.
       def initialize(id:, session_id:, prompt: nil, clock: nil, epoch_clock: nil)
         @id = id
         @session_id = session_id
@@ -48,8 +48,9 @@ module Rubot
         @epoch_clock = epoch_clock || -> { Time.now.to_f }
         # When the prompt was accepted, on the wall clock. The timeline rows
         # count from the moment their own work started; the row that says the
-        # turn is still running has nothing of its own to count from, so it
-        # counts from here.
+        # turn is still running counts from here and nowhere else — a tool call
+        # re-sends it (which is what makes it blink) but never restarts the
+        # number.
         @epoch = @epoch_clock.call
         @mutex = Mutex.new
         @cond = ConditionVariable.new
@@ -65,19 +66,6 @@ module Rubot
 
       def closed?
         @mutex.synchronize { @closed }
-      end
-
-      # Where the working row's clock starts. Not the prompt: a turn that has
-      # been running for two minutes is not news to anyone watching it, but the
-      # ten seconds since the last tool call is, and a clock that visibly
-      # restarts is how the page says the turn is still moving rather than
-      # stuck. A turn that has not reached for a tool yet counts from the
-      # prompt.
-      def activity_epoch
-        @mutex.synchronize do
-          last = @items.reverse.find { |item| item[:kind] == :tool }
-          last ? last[:epoch] : @epoch
-        end
       end
 
       def confirm_prompt

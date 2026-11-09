@@ -905,22 +905,21 @@ module Rubot
                "the band sits above the field, not in the thread"
       end
 
-      # A clock that only ever climbs says how long the turn has run, which is
-      # not what a reader watching a slow tool wants to know. Restarting it on
-      # every call answers "how long has this step been quiet" — and a number
-      # that visibly drops back to zero is how the page shows the turn is still
-      # moving rather than stuck.
-      def test_a_tool_call_restarts_the_working_clock
+      # The clock says how long the turn has been running, so a tool call must
+      # not take it back to zero: a reader watching a slow call has that call's
+      # own clock in the timeline, and a number that kept dropping answered
+      # nothing. The row is still re-sent on every call — that is the blink, and
+      # it is what says the turn is moving.
+      def test_a_tool_call_keeps_the_working_clock_running
         epochs = [ 1000.0, 1012.0 ]
         turn = Turn.new(id: "t1", session_id: "s1", clock: FakeClock.new,
                         epoch_clock: -> { epochs.shift || 1012.0 })
 
-        assert_equal 1000.0, turn.activity_epoch,
-                     "before any work the clock counts from the prompt"
+        assert_equal 1000.0, turn.epoch, "the clock counts from the prompt"
 
         turn.tool_started("shell_exec", "ls")
 
-        assert_equal 1012.0, turn.activity_epoch, "the call restarts it"
+        assert_equal 1000.0, turn.epoch, "a tool call does not restart it"
 
         channel = Rubot::Channels::Web.new(channel_config: {})
         out = StringIO.new
@@ -928,7 +927,8 @@ module Rubot
         body = out.string
 
         assert_includes body, "event: working"
-        assert_includes body, %(data-since="1012.0")
+        assert_includes body, %(data-since="1000.0"),
+                        "the row keeps the prompt's clock when it is re-sent"
         assert_includes body, 'hx-swap-oob="true"',
                         "the row is not in the timeline, so the swap is out of band"
       end

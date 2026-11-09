@@ -26,5 +26,5 @@
       `working` event keeps that band current while a tool call resets the
       clock. -%>
   <div class="working-slot" sse-swap="working" hidden></div>
-  <%= View.render("_working", since: turn.activity_epoch) %>
+  <%= View.render("_working", since: turn.epoch) %>
 </div>
