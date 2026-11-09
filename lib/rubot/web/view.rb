@@ -521,7 +521,15 @@ module Rubot
           %(<code>#{match[:code_body]}</code>)
         elsif match[:img_url]
           url = safe_url(match[:img_url])
-          url ? %(<img src="#{url}" alt="#{match[:img_alt]}" loading="lazy">) : match[0]
+          if url
+            # The picture is a button (open it larger) with a download beside
+            # it, the same pair the composer's attachments carry.
+            name = match[:img_alt]
+            %(<span class="md-image"><button type="button" class="md-image-open" data-lightbox="#{url}" data-name="#{name}" aria-label="Buka #{name}"><img src="#{url}" alt="#{name}" loading="lazy"></button>) +
+              %(<a class="md-image-download" href="#{url}" download="#{name}" title="Unduh #{name}" aria-label="Unduh #{name}">↓</a></span>)
+          else
+            match[0]
+          end
         elsif match[:fn_id]
           footnote_ref(match[:fn_id], match[0], state)
         elsif match[:link_url]
@@ -693,6 +701,14 @@ module Rubot
         # timeline up to here".
         def timeline(turn)
           View.turn_body(turn)
+        end
+
+        # A message drawn from a session file that predates attachments, or a
+        # partial rendered by a test, has no pictures — and the templates
+        # should not have to spell that out. A caller that passes `images:`
+        # replaces this.
+        def images
+          []
         end
 
         def context

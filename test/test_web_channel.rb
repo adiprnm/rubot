@@ -1044,14 +1044,19 @@ module Rubot
       end
 
       # One button, two jobs: it sends when the session is free and stops the
-      # turn when it is not, in the same place under the same hand.
+      # turn when it is not, in the same place under the same hand. The
+      # paperclip beside it is a different job entirely, which is why the
+      # primary button is what this looks for.
       def test_the_composer_has_one_button_that_stops_a_running_turn
         html = View.render("_composer", session_id: "web_rubot", token_query: "")
-        buttons = html.scan(/<button\b[^>]*>/m)
+        buttons = html.scan(/<button\b.*?<\/button>/m)
+        primary = buttons.find { |button| button.include?("btn primary") }
 
-        assert_equal 1, buttons.size, "the composer should carry a single button"
-        assert_includes buttons.first, "sendOrStop()"
-        assert_includes buttons.first, "buttonLabel"
+        refute_nil primary, "the composer needs its send/stop button"
+        assert_equal 1, buttons.count { |button| button.include?("btn primary") },
+                     "the composer should carry a single primary button"
+        assert_includes primary, "sendOrStop()"
+        assert_includes primary, "buttonLabel"
       end
 
       # Stopping is a request, not a fact: the turn keeps running until the
@@ -1060,9 +1065,10 @@ module Rubot
       # the same request.
       def test_the_stop_button_says_it_is_stopping_and_locks_itself
         html = View.render("_composer", session_id: "web_rubot", token_query: "")
-        button = html[/<button\b.*?<\/button>/m]
+        button = html[/<button\b[^>]*class="btn primary".*?<\/button>/m]
 
-        assert_includes button, "x-bind:disabled=\"stopping\""
+        refute_nil button, "the primary button is the one that sends and stops"
+        assert_includes button, "x-bind:disabled=\"stopping"
         assert_includes button, "is-stopping"
 
         js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
@@ -1649,6 +1655,314 @@ module Rubot
         nested = css[/^\.text li > ul,\n\.text li > ol \{[^}]*\}/]
         refute_nil nested, "a nested list needs a rule of its own"
         assert_includes nested, "padding-left: var(--marker-gutter)"
+      end
+
+      # --- pictures -------------------------------------------------------
+
+      # The id the server writes is its own: a hex name, the reader's file name
+      # reduced to a slug, and a known extension — so a path typed by hand
+      # cannot name a file, while the download still reads like a file name.
+      def test_an_uploaded_picture_is_named_by_an_id_and_kept_per_session
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        res = FakeResponse.new
+
+        channel.send(:upload_image, upload_request(png_bytes), res, "web_kanyaah")
+
+        assert_equal 200, res.status
+        payload = JSON.parse(res.body)
+        assert_match(/\A[0-9a-f]{32}-shot\.png\z/, payload["id"])
+        assert_equal "shot.png", payload["name"]
+        assert_includes payload["url"], "/s/web_kanyaah/images/#{payload["id"]}"
+
+        dir = channel.send(:images_dir, "web_kanyaah")
+        assert File.file?(File.join(dir, payload["id"])), "the bytes have to land on disk"
+        assert_equal png_bytes, File.binread(File.join(dir, payload["id"]))
+      end
+
+      # A file name can be anything at all; what lands on disk is a slug.
+      def test_a_strange_file_name_is_reduced_to_a_slug
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        res = FakeResponse.new
+
+        channel.send(:upload_image,
+                     upload_request(png_bytes, name: "../../Desain Final (v2)!.PNG"),
+                     res, "web_kanyaah")
+
+        payload = JSON.parse(res.body)
+
+        assert_match(/\A[0-9a-f]{32}-desain-final-v2\.png\z/, payload["id"])
+        assert_equal "desain-final-v2.png", payload["name"]
+      end
+
+      # A declared type is only a claim. The bytes decide whether the file is
+      # served back as an image.
+      def test_an_upload_that_is_not_really_a_picture_is_refused
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        res = FakeResponse.new
+
+        channel.send(:upload_image, upload_request("<html>hi</html>"), res, "web_kanyaah")
+
+        assert_equal 415, res.status
+        assert_empty Dir.glob(File.join(channel.send(:images_dir, "web_kanyaah").to_s, "*"))
+      end
+
+      def test_an_upload_of_an_unsupported_type_is_refused
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        res = FakeResponse.new
+
+        channel.send(:upload_image, upload_request("GIF89a....", type: "image/tiff"), res, "web_kanyaah")
+
+        assert_equal 415, res.status
+        assert_includes res.body, "PNG"
+      end
+
+      # A picture belongs to a conversation. Resolving an id looks only inside
+      # that conversation's own folder, so an id borrowed from another session
+      # simply does not resolve.
+      def test_a_picture_from_another_session_does_not_resolve
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: { "web_kanyaah" => "Halo", "web_kanyaah~20261108-101010" => "Hai" }
+        )
+
+        res = FakeResponse.new
+        channel.send(:upload_image, upload_request(png_bytes), res, "web_kanyaah")
+        id = JSON.parse(res.body)["id"]
+
+        assert_equal 1, channel.send(:resolve_images, "web_kanyaah", [ id ]).size
+        assert_empty channel.send(:resolve_images, "web_kanyaah~20261108-101010", [ id ])
+        assert_empty channel.send(:resolve_images, "web_kanyaah", [ "../../etc/passwd" ])
+      end
+
+      def test_a_picture_is_served_back_with_the_type_its_bytes_prove
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        upload = FakeResponse.new
+        channel.send(:upload_image, upload_request(png_bytes), upload, "web_kanyaah")
+        id = JSON.parse(upload.body)["id"]
+
+        res = FakeResponse.new
+        channel.send(:serve_image, res, "web_kanyaah", id)
+
+        assert_equal 200, res.status
+        assert_equal "image/png", res.headers["Content-Type"]
+        assert_equal png_bytes, res.body
+      end
+
+      def test_a_picture_that_does_not_exist_is_not_found
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        res = FakeResponse.new
+
+        channel.send(:serve_image, res, "web_kanyaah", "a" * 32 + ".png")
+
+        assert_equal 404, res.status
+      end
+
+      # The note is what the model reads; the bubble is what the reader sees.
+      # The note names the file and how big it is, exactly as the Telegram
+      # channel says it.
+      def test_the_prompt_tells_the_agent_where_the_picture_is
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        upload = FakeResponse.new
+        channel.send(:upload_image, upload_request(png_bytes), upload, "web_kanyaah")
+        images = channel.send(:resolve_images, "web_kanyaah", [ JSON.parse(upload.body)["id"] ])
+
+        prompt = channel.send(:prompt_with_images, "Ini desainnya", images)
+
+        assert prompt.start_with?("Ini desainnya")
+        assert_includes prompt, "📎 User attached an image: #{images.first[:path]}"
+        assert_includes prompt, images.first[:path]
+      end
+
+      # A session file holds the note because that is what the agent was
+      # given. Drawn back, it becomes a picture again — and the paragraph the
+      # reader typed stays a paragraph of its own.
+      def test_history_turns_the_note_back_into_a_picture
+        sid = "web_kanyaah"
+        id = "b" * 32 + ".png"
+        prompt = "Lihat ini\n\n📎 User attached an image: /tmp/x/#{id} (10×10, 1 KB)"
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: { sid => prompt }
+        )
+
+        entry = channel.send(:history, sid).first
+
+        assert_equal :prompt, entry[:kind]
+        assert_equal "Lihat ini", entry[:text]
+        assert_equal 1, entry[:images].size
+        assert_includes entry[:images].first[:url], "/s/#{sid}/images/#{id}"
+      end
+
+      # The bubble: the pictures are a strip inside the message, and each one
+      # is a button (open it larger) with a download beside it.
+      def test_a_message_with_pictures_draws_a_strip_with_a_download
+        image = { id: "c" * 32 + ".png", url: "/s/web_kanyaah/images/x.png", name: "shot.png" }
+
+        html = View.render("_message", role: "user", text: "Halo", images: [ image ])
+
+        assert_includes html, %(class="msg user has-attachments")
+        assert_includes html, %(class="attachments")
+        assert_includes html, %(data-lightbox="#{image[:url]}")
+        assert_includes html, %(download="shot.png")
+        assert_includes html, "Halo"
+      end
+
+      # A picture sent without a caption is a whole message: no empty bubble
+      # text above it.
+      def test_a_picture_without_text_is_a_message_of_its_own
+        image = { id: "d" * 32 + ".png", url: "/s/web_kanyaah/images/y.png", name: "y.png" }
+
+        html = View.render("_message", role: "user", text: "", images: [ image ])
+
+        refute_includes html, %(class="bubble-text")
+        assert_includes html, %(class="attachments")
+      end
+
+      # The composer uploads as soon as a file is chosen, and the form carries
+      # the ids that came back — not bytes, and not a path.
+      def test_the_composer_has_a_place_to_choose_pictures
+        html = View.render("_composer", session_id: "web_rubot", token_query: "?token=t0k")
+
+        assert_includes html, %(data-upload="/s/web_rubot/images?token=t0k")
+        assert_includes html, %(type="file")
+        assert_includes html, %(accept="image/*")
+        assert_includes html, %(name="images")
+        assert_includes html, "attachment-remove"
+
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+
+        assert_includes js, "async attach(files)"
+        assert_includes js, "X-Filename"
+        assert_includes js, "if (!text && this.images.length === 0) return;",
+                        "a picture on its own is something to send"
+        assert_includes js, "body.append(\"images\", image.id)",
+                        "a picture sent mid-turn rides along with the steer"
+      end
+
+      # One sheet per page, not one per picture. A thread can hold a hundred
+      # images; the lightbox is filled in when one of them is pressed.
+      def test_the_page_carries_one_lightbox
+        html = View.render("index",
+                           personas: [], sessions: [],
+                           slug: "rubot", persona_label: "Rubot", persona_emoji: "🤖",
+                           persona_model: "m", session_id: "web_rubot",
+                           session_short: "web_rubot", session_label: "Sesi baru",
+                           document_title: "rubot · Rubot", live_turn: nil, token_query: "",
+                           page: { entries: [], more: false, before: 0 }, older_url: "",
+                           usage: { cost: "—", cache: "—", ctx: "—" })
+
+        assert_equal 1, html.scan(%(id="lightbox")).size
+        assert_match(/id="lightbox"[^>]*hidden/, html)
+        assert_includes html, 'class="btn lightbox-download"'
+
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+        assert_includes js, "function openLightbox", "the sheet has to be able to open"
+        assert_includes js, %(event.target.closest("[data-lightbox]")),
+                        "the handler is delegated: the thread is rewritten by htmx"
+      end
+
+      # An image written in markdown is the same affordance as an attachment.
+      def test_a_markdown_image_can_be_opened_and_downloaded
+        html = Format.markdown("![papan](/img/a.png)")
+
+        assert_includes html, %(<img src="/img/a.png" alt="papan")
+        assert_includes html, %(data-lightbox="/img/a.png")
+        assert_includes html, %(download="papan")
+      end
+
+      # "Still working" sits directly above the field, and at a quarter of a
+      # rem the two rows read as one line of text. The gap belongs to the band,
+      # not to the composer: the field's own spacing is already spoken for.
+      # Sending a prompt with a picture draws the bubble from the turn, not from
+      # the session file (which does not know about it yet), and hands the
+      # agent a prompt that names the file it can open.
+      def test_a_turn_with_a_picture_draws_it_and_tells_the_agent_where_it_is
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        upload = FakeResponse.new
+        channel.send(:upload_image, upload_request(png_bytes), upload, "web_kanyaah")
+        id = JSON.parse(upload.body)["id"]
+
+        seen = nil
+        channel.define_singleton_method(:run_turn) { |_turn, prompt| seen = prompt }
+        channel.define_singleton_method(:owner_slug) { |_sid| "kanyaah" }
+        channel.define_singleton_method(:process_message) { |*| nil }
+
+        res = FakeResponse.new
+        channel.send(:create_turn, turn_request("Ini desainnya", [ id ]), res, "web_kanyaah")
+        sleep 0.05
+
+        assert_equal 200, res.status
+        assert_includes res.body, %(class="msg user has-attachments")
+        assert_includes res.body, %(data-lightbox="/s/web_kanyaah/images/#{id}")
+        assert_includes res.body, "Ini desainnya"
+        assert_includes seen.to_s, "📎 User attached an image:"
+        assert_includes seen.to_s, id
+      end
+
+      # A picture on its own is a prompt: nothing typed, something sent.
+      def test_a_turn_can_be_a_picture_with_no_text
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        upload = FakeResponse.new
+        channel.send(:upload_image, upload_request(png_bytes), upload, "web_kanyaah")
+        id = JSON.parse(upload.body)["id"]
+
+        channel.define_singleton_method(:run_turn) { |*| }
+        channel.define_singleton_method(:owner_slug) { |_sid| "kanyaah" }
+
+        res = FakeResponse.new
+        channel.send(:create_turn, turn_request("", [ id ]), res, "web_kanyaah")
+
+        assert_equal 200, res.status
+        assert_includes res.body, "attachments"
+        refute_includes res.body, %(class="bubble-text")
+      end
+
+      def test_a_turn_that_is_neither_text_nor_picture_is_refused
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        channel.define_singleton_method(:owner_slug) { |_sid| "kanyaah" }
+
+        res = FakeResponse.new
+        channel.send(:create_turn, turn_request("   ", []), res, "web_kanyaah")
+
+        assert_equal 400, res.status
+        assert_includes res.body, "Pesan kosong"
+      end
+
+      def test_the_working_row_has_room_under_it
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        rule = css[/^\.working-band \{[^}]*\}/]
+
+        refute_nil rule, "the .working-band rule is missing from app.css"
+        assert_match(/margin: 0 auto 0\.75rem;/, rule)
+      end
+
+      def upload_request(body, type: "image/png", name: "shot.png")
+        headers = name ? { "x-filename" => URI.encode_www_form_component(name) } : {}
+
+        Struct.new(:body, :content_type, :headers) do
+          def [](key)
+            headers[key.to_s]
+          end
+        end.new(body, type, headers)
+      end
+
+      # A form POST as WEBrick hands it over: repeated `images` fields arrive as
+      # an array, which is what form_list reads.
+      def turn_request(message, images)
+        query = { "message" => message }
+        query["images"] = images unless images.empty?
+
+        Struct.new(:query, :query_string) do
+          def content_type = "application/x-www-form-urlencoded"
+          def body = ""
+          def [](_key) = nil
+        end.new(query, "")
+      end
+
+      # A real PNG signature: the upload is checked against the bytes, so a
+      # made-up string would be refused before the test got anywhere.
+      def png_bytes
+        "\x89PNG\r\n\x1A\n".b + ("\x00".b * 64)
       end
     end
   end

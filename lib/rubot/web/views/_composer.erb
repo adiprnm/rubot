@@ -4,32 +4,88 @@
     its own — and a name in a test.
 
     `x-ref="form"` is what the keydown handler submits through. Without it the
-    handler throws on `undefined.requestSubmit()` and Enter stops sending. -%>
+    handler throws on `undefined.requestSubmit()` and Enter stops sending.
+
+    A picture is uploaded as soon as it is chosen — one raw-body POST per file
+    — and the form only carries the ids it got back. That way the turn stays a
+    plain form POST the server already knows how to read, and a slow upload
+    never looks like a slow turn. -%>
 <form class="composer"
       x-ref="form"
+      data-upload="/s/<%= h(session_id) %>/images<%= h(token_query) %>"
       hx-post="/s/<%= h(session_id) %>/turn<%= h(token_query) %>"
       hx-target="#thread"
       hx-swap="beforeend"
-      x-data="composer">
-  <textarea x-ref="input"
-            x-model="text"
-            name="message"
-            rows="1"
-            aria-label="Pesan"
-            placeholder="Tulis pesan… Enter mengirim, Shift+Enter baris baru"
-            x-on:keydown="keydown($event)"></textarea>
-  <div class="composer-actions">
-    <%# One button, two jobs: it sends when the session is free and stops the
-        turn when it is not. A turn that is running is exactly when a reader
-        wants a way out of it, so the same box stays where the hand already is.
-        Steering while a turn runs is Enter's job, which is why the button can
-        spend that moment being the way out. -%>
-    <button type="button"
-            class="btn primary"
-            x-bind:class="{ 'is-stop': $store.turn.active, 'is-stopping': stopping }"
-            x-bind:disabled="stopping"
-            x-bind:aria-busy="stopping"
-            x-on:click="sendOrStop()"
-            x-text="buttonLabel">Kirim</button>
+      x-data="composer"
+      x-on:dragover.prevent="dragging = true"
+      x-on:dragleave="dragging = false"
+      x-on:drop.prevent="drop($event)"
+      x-bind:class="{ 'is-dragging': dragging }">
+  <%# The strip of pictures already chosen. It sits above the field so the text
+      keeps its full width, and it scrolls sideways like the ones in the
+      thread, so choosing five screenshots does not make the composer five rows
+      tall. -%>
+  <div class="composer-attachments" x-show="images.length" x-cloak>
+    <template x-for="image in images" :key="image.id">
+      <figure class="attachment is-draft">
+        <img :src="image.url" :alt="image.name" loading="lazy">
+        <a class="attachment-download" :href="image.url" :download="image.name"
+           title="Unduh gambar" aria-label="Unduh gambar">↓</a>
+        <button type="button" class="attachment-remove"
+                x-on:click="remove(image.id)"
+                title="Hapus lampiran" aria-label="Hapus lampiran">×</button>
+      </figure>
+    </template>
   </div>
+
+  <div class="composer-row">
+    <textarea x-ref="input"
+              x-model="text"
+              name="message"
+              rows="1"
+              aria-label="Pesan"
+              placeholder="Tulis pesan… Enter mengirim, Shift+Enter baris baru"
+              x-on:keydown="keydown($event)"
+              x-on:paste="paste($event)"></textarea>
+    <div class="composer-actions">
+      <%# A file input behind a button: a browser draws a bare `<input
+          type=file>` as a form control from 1997, and the composer is not a
+          form. The button is the part the reader is meant to press. -%>
+      <button type="button"
+              class="btn attach"
+              x-bind:disabled="uploading > 0"
+              x-bind:aria-busy="uploading > 0"
+              x-on:click="$refs.files.click()"
+              title="Lampirkan gambar"
+              aria-label="Lampirkan gambar">
+        <svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor"
+             stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"
+             aria-hidden="true" focusable="false">
+          <path d="M7.6 3.2 4.1 6.7a1.7 1.7 0 0 0 2.4 2.4l3.9-3.9a2.9 2.9 0 0 0-4.1-4.1L2 5.5a4.1 4.1 0 0 0 5.8 5.8l2.7-2.7"/>
+        </svg>
+      </button>
+      <input type="file" x-ref="files" accept="image/*" multiple hidden
+             x-on:change="pick($event)">
+
+      <%# One button, two jobs: it sends when the session is free and stops the
+          turn when it is not. A turn that is running is exactly when a reader
+          wants a way out of it, so the same box stays where the hand already is.
+          Steering while a turn runs is Enter's job, which is why the button can
+          spend that moment being the way out. -%>
+      <button type="button"
+              class="btn primary"
+              x-bind:class="{ 'is-stop': $store.turn.active, 'is-stopping': stopping }"
+              x-bind:disabled="stopping || (uploading > 0 && !$store.turn.active)"
+              x-bind:aria-busy="stopping || uploading > 0"
+              x-on:click="sendOrStop()"
+              x-text="buttonLabel">Kirim</button>
+    </div>
+  </div>
+
+  <%# The ids, not the paths: the server resolves each one inside this
+      session's own attachment directory, so a hand-written value cannot point
+      the note at a file the reader was not given. -%>
+  <template x-for="image in images" :key="image.id">
+    <input type="hidden" name="images" :value="image.id">
+  </template>
 </form>

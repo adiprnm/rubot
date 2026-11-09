@@ -30,20 +30,25 @@ module Rubot
       # wonder whether it hung.
       SLOW_TOOL_SECONDS = 3.0
 
-      attr_reader :id, :session_id, :response, :epoch, :prompt
+      attr_reader :id, :session_id, :response, :epoch, :prompt, :images
 
       # `clock` is injectable so the timing rules can be tested without
       # sleeping through them. `epoch_clock` is the wall clock the timeline rows
       # stamp themselves with, injectable for the same reason: the working row
       # has to be shown restarting from a tool call, and microseconds are a
       # poor thing to assert on.
-      def initialize(id:, session_id:, prompt: nil, clock: nil, epoch_clock: nil)
+      def initialize(id:, session_id:, prompt: nil, images: nil, clock: nil, epoch_clock: nil)
         @id = id
         @session_id = session_id
         # The prompt is kept here because the session file only learns about it
         # when the turn is written at the end. A page refreshed mid-answer has
         # to draw the bubble it is answering, and this is the only copy.
         @prompt = prompt.to_s
+        # Attachments are part of the prompt's own fragment, not of the model's
+        # text: the transcript carries a note with the path, while the browser
+        # draws the picture. Kept here for the same reason the prompt is — a
+        # refresh has no other copy of them.
+        @images = Array(images).map { |image| image.transform_keys(&:to_sym) }
         @clock = clock || -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }
         @epoch_clock = epoch_clock || -> { Time.now.to_f }
         # When the prompt was accepted, on the wall clock. The timeline rows

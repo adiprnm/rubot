@@ -113,7 +113,7 @@
           yet, so this fragment is the only record of it on a refreshed page. -%>
       <% if live_turn %>
         <%= View.render("_turn", turn: live_turn, text: live_turn.prompt,
-                        token_query: token_query) %>
+                        images: live_turn.images, token_query: token_query) %>
       <% end %>
     </div>
 
@@ -137,4 +137,18 @@
       <%= View.render("_usage", **usage) %>
     </div>
   </main>
+</div>
+
+<%# The sheet a picture opens into. One of them serves every image on the page:
+    the click handler fills in its src from the picture that was pressed, so a
+    thread with a hundred screenshots still costs one sheet. `hidden` keeps it
+    out of the page — and out of the tab order — until something opens it. -%>
+<div id="lightbox" class="lightbox" hidden role="dialog" aria-modal="true" aria-label="Pratinjau gambar">
+  <figure class="lightbox-figure">
+    <img class="lightbox-image" alt="">
+    <figcaption class="lightbox-actions">
+      <a class="btn lightbox-download" href="#" download>Unduh</a>
+      <button type="button" class="btn lightbox-close" aria-label="Tutup pratinjau">Tutup</button>
+    </figcaption>
+  </figure>
 </div>

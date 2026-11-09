@@ -1,0 +1,27 @@
+<%# The pictures sent with one message, drawn as a strip rather than a column:
+    a few screenshots are often wider than the bubble, and growing the bubble
+    downwards pushes the conversation out of view. The strip scrolls sideways,
+    which keeps every image the same height and the thread the same width.
+
+    Each picture is a button, not a link: opening it is a moment in the page,
+    not a navigation. The download anchor beside it is a link, because that is
+    what a download is — the same URL the lightbox offers, so both paths hand
+    back the file the reader is looking at. -%>
+<div class="attachments" role="group" aria-label="Gambar yang dilampirkan">
+  <% images.each do |image| -%>
+  <figure class="attachment">
+    <button type="button"
+            class="attachment-open"
+            data-lightbox="<%= h(image[:url]) %>"
+            data-name="<%= h(image[:name]) %>"
+            aria-label="Buka <%= h(image[:name]) %>">
+      <img src="<%= h(image[:url]) %>" alt="<%= h(image[:name]) %>" loading="lazy">
+    </button>
+    <a class="attachment-download"
+       href="<%= h(image[:url]) %>"
+       download="<%= h(image[:name]) %>"
+       title="Unduh <%= h(image[:name]) %>"
+       aria-label="Unduh <%= h(image[:name]) %>">↓</a>
+  </figure>
+  <% end -%>
+</div>
