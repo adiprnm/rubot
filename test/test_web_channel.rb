@@ -531,7 +531,10 @@ module Rubot
                     session_short: "web_rubot", session_label: "Sesi baru",
                     document_title: "rubot · Rubot", live_turn: live_turn, token_query: "",
                     page: { entries: [], more: false, before: 0 }, older_url: "",
-                    usage: { cost: "—", cache: "—", ctx: "—" })
+                    usage: { cost: "—", cache: "—", ctx: "—" },
+                    usage_facts: { model: "m · openai", cost: "—", breakdown: "",
+                                   requests: "0", messages: "0", tokens_in: "0",
+                                   tokens_out: "0", reasoning: "", cache: "—", ctx: "—" })
       end
 
       # Enough of a WEBrick::HTTPResponse for the channel's rendering paths: it
@@ -1207,7 +1210,10 @@ module Rubot
                            session_short: "web_rubot", session_label: "Sesi baru",
                            document_title: "rubot · Rubot", live_turn: nil, token_query: "",
                            page: { entries: [], more: false, before: 0 }, older_url: "",
-                           usage: { cost: "—", cache: "—", ctx: "—" })
+                           usage: { cost: "—", cache: "—", ctx: "—" },
+                           usage_facts: { model: "m", cost: "—", breakdown: "", requests: "0",
+                                          messages: "0", tokens_in: "0", tokens_out: "0",
+                                          reasoning: "", cache: "—", ctx: "—" })
 
         assert_includes html, 'id="composer-notice"', "the composer needs a notice slot"
         assert_match(/id="composer-notice"[^>]*hidden/, html,
@@ -1620,6 +1626,113 @@ module Rubot
 
         assert_nil channel.send(:usage_markup_from, nil)
         assert_nil channel.send(:usage_markup_from, "bukan report")
+      end
+
+      # --- usage panel ----------------------------------------------------
+
+      # The three figures in the row are a glance; the panel is what the glance
+      # is made of. Every one of them has to be spelled out, or opening the
+      # panel answers nothing.
+      def test_the_panel_spells_out_the_report_behind_the_row
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        facts = channel.send(:usage_facts, {
+          model: "claude-sonnet-4", provider: "anthropic", messages: 42, requests: 17,
+          prompt_tokens: 128_400, completion_tokens: 9_120, cached_tokens: 96_000,
+          cache_hit_rate: 0.7477, context_used: 41_200, context_window: 200_000,
+          context_percent: 20.6,
+          cost: { "total" => 0.0412, "input" => 0.0098, "cached_input" => 0.0028,
+                  "cache_creation" => 0.0011, "output" => 0.0275 }
+        })
+        html = View.render("_usage_facts", **facts)
+
+        assert_includes html, "claude-sonnet-4"
+        assert_includes html, "$0.0412"
+        assert_includes html, "128,400", "tokens are grouped, not a wall of digits"
+        assert_includes html, "9,120"
+        assert_includes html, "74.8%", "the cache share of the latest request"
+        assert_includes html, "41,200 / 200,000"
+        assert_includes html, "cache baca", "the breakdown answers \"why this cost\""
+      end
+
+      # A launch has spent nothing and knows nothing yet. It says so rather
+      # than printing a confident $0.00 over a conversation no request has
+      # touched.
+      def test_the_panel_admits_an_empty_report
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        html = View.render("_usage_facts", **channel.send(:usage_facts, {}))
+
+        assert_includes html, "belum diketahui"
+        assert_includes html, %(id="usage-facts")
+        refute_includes html, "$0.0000"
+      end
+
+      # The panel lives inside the page from the first paint — it is a
+      # `<details>`, so it needs no request to open — and only the allowance
+      # waits for the reader.
+      def test_the_usage_panel_is_in_the_page_and_fetches_its_quota_on_open
+        html = render_page
+        sheet = html[/<details class="usage-sheet".*?<\/details>/m]
+
+        refute_nil sheet, "the status row needs its way into the full report"
+        assert_includes sheet, %(id="usage-facts")
+        assert_includes sheet, %(hx-get="/s/web_rubot/quota")
+        assert_includes sheet, %(hx-target="#usage-quota")
+        assert_includes sheet, "toggle[this.open]",
+                        "the allowance costs a request, so it waits for the reader"
+        assert html.index('class="usage-sheet"') > html.index('id="usage"'),
+               "the button sits at the end of the row it expands"
+      end
+
+      # A meter says three things: what is spent, what is left, when it comes
+      # back. A provider that already cut the account off says that too.
+      def test_the_quota_draws_one_meter_per_allowance
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        meters = channel.send(:quota_meters,
+                              { "rolling" => { "percent" => 12.5,
+                                               "resets_at" => (Time.now + 3600).utc.iso8601 },
+                                "monthly" => { "percent" => 100.0, "limited" => true } })
+        html = View.render("_quota", meters: meters, note: "")
+
+        assert_equal 2, meters.size, "only the windows the provider reported"
+        assert_includes html, "Rolling"
+        assert_includes html, "12.5% terpakai"
+        assert_includes html, "87.5% sisa"
+        assert_includes html, %(style="width: 12.5%")
+        assert_includes html, "is-limited", "an allowance that is gone is not green"
+        assert_includes html, "reset dalam"
+      end
+
+      # A provider that sells tokens by the drink has no allowance at all. That
+      # is not a failure, and it must not be drawn as an empty box.
+      def test_a_provider_without_an_allowance_says_so_in_one_sentence
+        channel = Rubot::Channels::Web.new(channel_config: {})
+
+        html = View.render("_quota", meters: channel.send(:quota_meters, { unavailable: true }),
+                                              note: channel.send(:quota_note, { unavailable: true }))
+
+        refute_includes html, "usage-meters"
+        assert_includes html, "tidak punya kuota langganan"
+
+        error = View.render("_quota", meters: [], note: channel.send(:quota_note, { error: "HTTP 500" }))
+        assert_includes error, "HTTP 500"
+      end
+
+      # The panel's facts ride along with the row: a reader watching an open
+      # panel during a turn must not see the row move while the breakdown
+      # under it stands still.
+      def test_the_live_report_refreshes_the_panel_as_well_as_the_row
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        report = { cost: { "total" => 0.5 }, requests: 3, prompt_tokens: 5000,
+                   completion_tokens: 900, cached_tokens: 4000, cache_hit_rate: 0.8,
+                   context_percent: 12.0, context_window: 100_000, context_used: 12_000 }
+
+        markup = channel.send(:usage_markup_from, report)
+
+        assert_equal 2, markup.scan(%(hx-swap-oob="true")).size,
+                     "the row and the facts both swap out of band"
+        assert_includes markup, %(id="usage-facts" hx-swap-oob="true")
+        assert_includes markup, "12,000 / 100,000"
+        refute_includes markup, "masuk 0", "a breakdown of zeros explains nothing"
       end
 
       # A persona form asks for three fields and a prompt; a popover beside the
@@ -2407,7 +2520,10 @@ module Rubot
                            session_short: "web_rubot", session_label: "Sesi baru",
                            document_title: "rubot · Rubot", live_turn: nil, token_query: "",
                            page: { entries: [], more: false, before: 0 }, older_url: "",
-                           usage: { cost: "—", cache: "—", ctx: "—" })
+                           usage: { cost: "—", cache: "—", ctx: "—" },
+                           usage_facts: { model: "m", cost: "—", breakdown: "", requests: "0",
+                                          messages: "0", tokens_in: "0", tokens_out: "0",
+                                          reasoning: "", cache: "—", ctx: "—" })
 
         assert_equal 1, html.scan(%(id="lightbox")).size
         assert_match(/id="lightbox"[^>]*hidden/, html)

@@ -1,0 +1,33 @@
+<%# What the three figures in the status row are made of. The row is a glance —
+    a cost, a cache share, a slice of the context window — and this is the same
+    report written out: how many requests paid for that cost, how the tokens
+    split, which model answered.
+
+    It is redrawn by the same out-of-band swap the row is (see
+    `usage_markup_with`), so a reader who leaves the panel open while a turn
+    runs watches these numbers move too. `id` is what the swap lands on, which
+    is why the list has one and the panel around it does not. -%>
+<dl class="usage-facts" id="usage-facts">
+  <dt>model</dt>
+  <dd title="<%= h(model) %>"><%= h(model) %></dd>
+
+  <dt>biaya</dt>
+  <dd class="usage-cost">
+    <span class="value"><%= h(cost) %></span>
+    <% unless breakdown.to_s.empty? -%>
+      <span class="usage-breakdown" title="<%= h(breakdown) %>"><%= h(breakdown) %></span>
+    <% end -%>
+  </dd>
+
+  <dt>permintaan</dt>
+  <dd><%= h(requests) %> · <%= h(messages) %> pesan</dd>
+
+  <dt>token</dt>
+  <dd><%= h(tokens_in) %> masuk · <%= h(tokens_out) %> keluar<% if reasoning.to_s.empty? == false %> · <%= h(reasoning) %> penalaran<% end %></dd>
+
+  <dt>cache</dt>
+  <dd><%= h(cache) %></dd>
+
+  <dt>context</dt>
+  <dd><%= h(ctx) %></dd>
+</dl>

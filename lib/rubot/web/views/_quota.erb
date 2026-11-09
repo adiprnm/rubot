@@ -1,0 +1,29 @@
+<%# The provider's own allowance, when it has one. This is the one figure the
+    page cannot compute: it belongs to the account, not the session, and only
+    the provider knows it — so it is fetched when the panel is opened, and this
+    fragment is what comes back.
+
+    `meters` is empty for a provider that sells tokens by the drink; `note` then
+    says so instead of drawing an empty box. -%>
+<% if meters.empty? -%>
+  <p class="usage-note"><%= h(note) %></p>
+<% else -%>
+  <ul class="usage-meters">
+    <% meters.each do |meter| -%>
+      <li class="usage-meter<%= meter[:limited] ? " is-limited" : "" %>">
+        <span class="meter-name"><%= h(meter[:name]) %></span>
+        <%# The bar is the used share: an allowance half gone reads as half
+            full, which is the way round a reader expects a limit to look. -%>
+        <span class="meter-bar" role="img"
+              aria-label="<%= h("#{meter[:used]}% terpakai") %>">
+          <span class="meter-fill" style="width: <%= h(meter[:used]) %>%"></span>
+        </span>
+        <span class="meter-left"><%= h(meter[:left]) %></span>
+        <span class="meter-reset"><%= h(meter[:reset]) %></span>
+      </li>
+    <% end -%>
+  </ul>
+  <% unless note.to_s.empty? -%>
+    <p class="usage-note"><%= h(note) %></p>
+  <% end -%>
+<% end -%>

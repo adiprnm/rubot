@@ -1,0 +1,37 @@
+<%# The button that opens the whole picture: the three figures in the row are a
+    glance, and this is where a reader goes when the glance raises a question —
+    what paid for that cost, which model answered, and how much allowance the
+    provider has left.
+
+    It is a `<details>` rather than a dialog so it needs no script to open, and
+    Escape closes it through the page's own handler. The panel hangs above the
+    status line instead of pushing it: the line is at the bottom edge of the
+    screen, and a panel below it would open off the page.
+
+    The facts are drawn with the page, then kept current by the same
+    out-of-band swap that moves the row. The allowance is not: it costs a
+    request to the provider, so it is fetched once, the first time the panel is
+    opened, and only when the reader actually asks. -%>
+<details class="usage-sheet"
+         hx-get="/s/<%= h(session_id) %>/quota<%= h(token_query) %>"
+         hx-target="#usage-quota"
+         hx-swap="innerHTML"
+         hx-trigger="toggle[this.open]">
+  <summary class="usage-toggle" title="Pemakaian dan kuota" aria-label="Pemakaian dan kuota">
+    <svg viewBox="0 0 10 10" width="10" height="10" fill="none" stroke="currentColor"
+         stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"
+         aria-hidden="true" focusable="false">
+      <path d="M1.6 7.6V5.4"/><path d="M5 7.6V2.4"/><path d="M8.4 7.6V4"/>
+    </svg>
+  </summary>
+
+  <div class="usage-panel" role="group" aria-label="Pemakaian dan kuota">
+    <p class="panel-title">Pemakaian</p>
+    <%= View.render("_usage_facts", **facts) %>
+
+    <p class="panel-title">Kuota</p>
+    <div id="usage-quota" class="usage-quota">
+      <p class="usage-note">Memeriksa kuota…</p>
+    </div>
+  </div>
+</details>

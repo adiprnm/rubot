@@ -7,6 +7,7 @@ require "fileutils"
 require "json"
 
 require_relative "../channel"
+require_relative "../opencode_usage"
 require_relative "../persona_store"
 require_relative "../session"
 require_relative "../tools/send_file"
@@ -70,6 +71,7 @@ module Rubot
       SESSION_TURN_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/turn\z}
       SESSION_MEDIA_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/media/([0-9a-f]{32}(?:-[a-z0-9-]{1,60})?\.(?:png|jpg|gif|webp))\z}
       SESSION_DELETE_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/delete\z}
+      SESSION_QUOTA_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/quota\z}
       PERSONA_SESSIONS_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/sessions\z}
 
       ASSETS = File.expand_path("../web/assets", __dir__)
@@ -325,6 +327,8 @@ module Rubot
           create_turn(req, res, match[1])
         elsif method == "GET" && (match = SESSION_MEDIA_PATH.match(path))
           serve_media(res, match[1], match[2])
+        elsif method == "GET" && (match = SESSION_QUOTA_PATH.match(path))
+          render_quota(res, match[1])
         elsif method == "POST" && (match = SESSION_DELETE_PATH.match(path))
           delete_session(res, match[1], req)
         elsif method == "GET" && (match = %r{\A/turns/([\w-]+)/stream\z}.match(path))
@@ -545,6 +549,16 @@ module Rubot
                                             older_url: older_url(sid, page[:before]))
       end
 
+      # The allowance, fetched when the panel behind the status row is opened.
+      # Never cached: it is a reading of an account, not a document.
+      def render_quota(res, sid)
+        return not_found(res) unless owner_slug(sid)
+
+        res["Content-Type"] = "text/html; charset=utf-8"
+        res["Cache-Control"] = "no-store"
+        res.body = quota_markup(sid)
+      end
+
       def render_session(res, sid)
         slug = owner_slug(sid)
         return not_found(res) unless slug
@@ -570,6 +584,7 @@ module Rubot
           older_url: older_url(sid, page[:before]),
           live_turn: live,
           usage: usage_locals(sid),
+          usage_facts: index_usage_facts(sid),
           token_query: token_query
         )
         res["Content-Type"] = "text/html; charset=utf-8"
@@ -735,12 +750,132 @@ module Rubot
         }
       end
 
-      # Asking a session that is mid-turn is safe: the actor runs the turn on
-      # its own thread, so the report is answered rather than queued behind it.
-      def usage_metrics(sid)
-        Rubot::UsageReport.metrics(session_for(sid).usage_report)
+      # The report itself, or nil. Asking a session that is mid-turn is safe:
+      # the actor runs the turn on its own thread, so the report is answered
+      # rather than queued behind it.
+      def session_report(sid)
+        session_for(sid).usage_report
       rescue StandardError
         nil
+      end
+
+      def usage_metrics(sid)
+        Rubot::UsageReport.metrics(session_report(sid))
+      rescue StandardError
+        nil
+      end
+
+      # The facts for the panel on first paint. The report is asked for once and
+      # used twice — by the row and by the panel — so the page never shows two
+      # different numbers side by side.
+      def index_usage_facts(sid)
+        usage_facts(session_report(sid) || {})
+      rescue StandardError
+        usage_facts({})
+      end
+
+      # The panel's copy of the same report: the row is a glance, this is what
+      # the glance is made of. Every figure is a string already — the template
+      # fills a two-column list, not a calculator.
+      def usage_facts(report)
+        report = {} unless report.is_a?(Hash)
+        cost = report[:cost]
+        {
+          model: [ report[:model], report[:provider] ].compact.map(&:to_s).reject(&:empty?).join(" · "),
+          cost: cost ? format("$%s", Rubot::UsageReport.money(cost["total"])) : "belum diketahui",
+          breakdown: cost_breakdown(cost),
+          requests: report[:requests].to_i.to_s,
+          messages: report[:messages].to_i.to_s,
+          tokens_in: Rubot::UsageReport.tokens(report[:prompt_tokens]),
+          tokens_out: Rubot::UsageReport.tokens(report[:completion_tokens]),
+          reasoning: report[:reasoning_tokens].to_i.zero? ? "" : Rubot::UsageReport.tokens(report[:reasoning_tokens]),
+          cache: cache_fact(report),
+          ctx: context_fact(report)
+        }
+      end
+
+      # The four parts that add up to the total. A reader who sees $0.04 and no
+      # idea why has the same question as one who sees a big cache figure. A
+      # report with no breakdown at all gets no line: four zeros under a total
+      # is noise pretending to be an explanation.
+      def cost_breakdown(cost)
+        return "" unless cost.is_a?(Hash)
+        return "" unless %w[input cached_input cache_creation output].any? { |key| cost[key].to_f.positive? }
+
+        parts = []
+        parts << "masuk #{Rubot::UsageReport.money(cost['input'])}"
+        parts << "cache baca #{Rubot::UsageReport.money(cost['cached_input'])}" if cost["cached_input"].to_f.positive?
+        parts << "cache tulis #{Rubot::UsageReport.money(cost['cache_creation'])}" if cost["cache_creation"].to_f.positive?
+        parts << "keluar #{Rubot::UsageReport.money(cost['output'])}"
+        parts.join(" · ")
+      end
+
+      def cache_fact(report)
+        total = Rubot::UsageReport.tokens(report[:cached_tokens])
+        return "#{total} token dari cache" if report[:prompt_tokens].to_i.zero?
+
+        format("%.1f%% dari permintaan terakhir · %s token total",
+               report[:cache_hit_rate].to_f * 100, total)
+      end
+
+      def context_fact(report)
+        used = Rubot::UsageReport.tokens(report[:context_used])
+        window = report[:context_window] ? Rubot::UsageReport.tokens(report[:context_window]) : "?"
+        pct = report[:context_percent] ? format(" · %.1f%%", report[:context_percent]) : ""
+        "#{used} / #{window}#{pct}"
+      end
+
+      # --- quota ----------------------------------------------------------
+
+      # The allowance behind the account, which the page cannot compute: it
+      # belongs to the provider, and only the provider knows it. Fetched when
+      # the panel opens — it costs a request and an actor round trip, and a
+      # reader who never opens the panel should not pay for either.
+      def quota_markup(sid)
+        report = session_for(sid).opencode_usage
+        View.render("_quota", meters: quota_meters(report), note: quota_note(report))
+      rescue StandardError => e
+        warn "[web] quota: #{e.class}: #{e.message}"
+        View.render("_quota", meters: [], note: "Kuota tidak bisa diperiksa sekarang.")
+      end
+
+      # One row per meter the provider reports: how much is spent, how much is
+      # left, and when it comes back.
+      def quota_meters(report)
+        return [] unless report.is_a?(Hash)
+
+        Rubot::OpencodeUsage::METERS.filter_map do |name|
+          meter = report[name]
+          next unless meter.is_a?(Hash)
+
+          used = meter["percent"].to_f
+          {
+            name: name.capitalize,
+            used: format("%.1f", used.clamp(0.0, 100.0)),
+            left: "#{format('%.1f', (100.0 - used).clamp(0.0, 100.0))}% sisa",
+            reset: quota_reset(meter),
+            limited: meter["limited"] ? true : false
+          }
+        end
+      end
+
+      def quota_reset(meter)
+        time = Rubot::OpencodeUsageReport.parse_time(meter["resets_at"])
+        return "" unless time
+
+        "reset dalam #{Rubot::OpencodeUsageReport.relative(time)}"
+      end
+
+      # Why there is nothing to draw, in words a reader can act on: a provider
+      # that sells tokens by the drink has no allowance at all, and that is not
+      # a failure.
+      def quota_note(report)
+        return "Provider ini tidak punya kuota langganan — biayanya dihitung per token." if report[:unavailable]
+        return "Kuota tidak bisa diperiksa — #{report[:error]}." if report[:error]
+
+        ""
+      rescue StandardError
+        ""
       end
 
       # --- personas (create) ---------------------------------------------
@@ -935,7 +1070,8 @@ module Rubot
       # A fragment meant for the status row rather than for the turn: the swap
       # is out-of-band, so it lands on #usage wherever that element sits.
       def usage_markup(sid)
-        usage_markup_with(usage_locals(sid))
+        report = session_report(sid)
+        usage_markup_with(usage_locals(sid), facts: report && usage_facts(report))
       end
 
       # The same row from a report the agent pushed while the turn was still
@@ -950,16 +1086,29 @@ module Rubot
       def usage_markup_from(report)
         return nil if report.nil?
 
-        usage_markup_with(metrics_locals(Rubot::UsageReport.metrics(report)))
+        usage_markup_with(metrics_locals(Rubot::UsageReport.metrics(report)),
+                          facts: usage_facts(report))
       rescue StandardError
         nil
       end
 
       # Split out so the marker can be tested without a live session behind it.
-      def usage_markup_with(locals)
+      #
+      # Two fragments travel together: the row, and — when there is a report to
+      # expand — the list inside the panel that opened from it. Without the
+      # second, a reader watching the panel during a turn would see the figures
+      # in the row move while the breakdown under them stood still.
+      def usage_markup_with(locals, facts: nil)
         body = View.render("_usage", **locals)
-        body.sub(%(<span class="metrics" id="usage">),
-                 %(<span class="metrics" id="usage" hx-swap-oob="true">))
+        body = body.sub(%(<span class="metrics" id="usage">),
+                        %(<span class="metrics" id="usage" hx-swap-oob="true">))
+
+        return body unless facts
+
+        facts_html = View.render("_usage_facts", **facts)
+                          .sub(%(<dl class="usage-facts" id="usage-facts">),
+                               %(<dl class="usage-facts" id="usage-facts" hx-swap-oob="true">))
+        body + facts_html
       end
 
       # The sidebar and the header after a turn. A conversation is named by its

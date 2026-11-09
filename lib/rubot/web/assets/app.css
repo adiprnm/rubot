@@ -1635,6 +1635,161 @@ body.lightbox-open { overflow: hidden; }
   opacity: 0.85;
 }
 
+/* ---------- usage sheet ------------------------------------------- */
+
+/* The button that opens the whole report sits at the end of the status row,
+   level with the figures it expands. A single glyph keeps the row cheap; the
+   words live in its label. */
+.status-line .usage-sheet { margin-left: 0.35rem; }
+.status-line .usage-sheet[open] { margin-left: 0; }
+
+.usage-toggle {
+  display: flex;
+  align-items: center;
+  padding: 0.1rem 0.15rem;
+  color: var(--fg-faint);
+  cursor: pointer;
+  list-style: none;
+  transition: color .12s;
+}
+
+.usage-toggle::-webkit-details-marker { display: none; }
+.usage-toggle:hover { color: var(--fg); }
+
+/* The panel opens upward: the row is pinned to the bottom edge of the screen,
+   so anything drawn below it would be off the page. `bottom` on the panel and
+   `position: relative` on the details is what does that without a dialog. */
+.usage-sheet { position: relative; }
+
+.usage-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 0.4rem);
+  z-index: 20;
+  width: min(24rem, 82vw);
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg1);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  white-space: normal;
+}
+
+.usage-panel .panel-title {
+  margin: 0 0 0.45rem;
+  color: var(--fg-faint);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: -0.03em;
+  text-transform: lowercase;
+}
+
+.usage-panel .panel-title + .usage-facts { margin-bottom: 1rem; }
+.usage-panel .panel-title:not(:first-child) { margin-top: 0.9rem; }
+
+/* Two columns: a name and a figure. The names are machine words (model, cache,
+   token), so the left column is mono and the values take the reading colour. */
+.usage-facts {
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr);
+  gap: 0.22rem 0.6rem;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.usage-facts dt {
+  color: var(--fg-faint);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: -0.03em;
+  padding-top: 0.12rem;
+}
+
+.usage-facts dd {
+  margin: 0;
+  color: var(--fg-dim);
+  overflow-wrap: anywhere;
+}
+
+.usage-facts .value { color: var(--fg); }
+.usage-facts .usage-breakdown { display: block; color: var(--fg-faint); font-size: 11.5px; }
+
+/* The allowance: a name, a bar, and what is left. The bar is the used share,
+   so a limit three quarters spent reads as three quarters full. */
+.usage-meters {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.usage-meter {
+  display: grid;
+  grid-template-columns: 4.2rem minmax(0, 1fr) auto;
+  grid-template-areas:
+    "name bar left"
+    ".    reset reset";
+  gap: 0.15rem 0.5rem;
+  align-items: center;
+  font-size: 11.5px;
+}
+
+.usage-meter .meter-name {
+  grid-area: name;
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: -0.03em;
+}
+
+.meter-bar {
+  grid-area: bar;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg2);
+  overflow: hidden;
+}
+
+.meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--green);
+  transition: width .3s ease;
+}
+
+/* An allowance the provider already cut off says so in the colour that means
+   stop, not in the one that means plenty. */
+.usage-meter.is-limited .meter-fill { background: var(--red); }
+.usage-meter.is-limited .meter-left { color: var(--red); }
+
+.usage-meter .meter-left {
+  grid-area: left;
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: -0.03em;
+  text-align: right;
+}
+
+.usage-meter .meter-reset {
+  grid-area: reset;
+  padding-left: calc(4.2rem + 0.5rem);
+  color: var(--fg-faint);
+  font-size: 10.5px;
+}
+
+/* A provider that has no allowance, or one that could not be asked: one calm
+   sentence where the meters would be. */
+.usage-note {
+  margin: 0;
+  color: var(--fg-faint);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
 .status-line .sep { color: var(--line); }
 .status-line .status-slot { display: none; }
 

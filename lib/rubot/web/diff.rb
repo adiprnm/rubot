@@ -234,10 +234,12 @@ module Rubot
 
       def row(op)
         text = clip(op[:text].to_s.gsub("\t", "  "))
-        sign = case op[:kind]
-               when :add then "+"
-               when :del then "-"
-               else " "
+        sign = if op[:kind] == :add
+          "+"
+        elsif op[:kind] == :del
+          "-"
+        else
+          " "
         end
         number = op[:kind] == :del ? op[:old] : op[:new]
         cls = op[:kind] == :add ? "is-add" : (op[:kind] == :del ? "is-del" : "is-ctx")
