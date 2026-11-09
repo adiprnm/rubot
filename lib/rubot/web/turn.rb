@@ -79,6 +79,7 @@ module Rubot
           @items.map do |item|
             copy = item.dup
             copy[:text] = item[:text].dup if item[:text]
+            copy[:html] = item[:html].dup if item[:html]
             copy[:list] = item[:list].dup if item[:list]
             copy
           end
@@ -176,6 +177,20 @@ module Rubot
           else
             @items << { kind: :images, list: [ image ], epoch: epoch_now }
           end
+          publish_locked
+        end
+      end
+
+      # The edit a tool made, drawn under the row that made it. The fragment is
+      # built once, here, rather than by the renderer: the timeline is redrawn
+      # on every chunk, and a diff recomputed per chunk would walk the whole
+      # file again for every token of the answer.
+      def add_diff(html)
+        body = html.to_s
+        return if body.empty?
+
+        @mutex.synchronize do
+          @items << { kind: :diff, html: body, epoch: epoch_now }
           publish_locked
         end
       end

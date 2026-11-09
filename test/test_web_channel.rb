@@ -1228,7 +1228,7 @@ module Rubot
         ]
 
         results = channel.send(:tool_results, messages)
-        item = channel.send(:history_tool_items, messages[1]["tool_calls"].first, results, "web_rubot").first
+        item = channel.send(:history_tool_items, messages[1]["tool_calls"].first, results, {}, "web_rubot").first
 
         assert_equal :tool, item[:kind]
         assert_equal "shell_exec", item[:name]
@@ -1242,7 +1242,7 @@ module Rubot
         call = { "id" => "c1",
                  "function" => { "name" => "file_ops", "arguments" => %({"path":"x"}) } }
 
-        assert_equal :failed, channel.send(:history_tool_items, call, results, "web_rubot").first[:state]
+        assert_equal :failed, channel.send(:history_tool_items, call, results, {}, "web_rubot").first[:state]
       end
 
       # A call whose result never arrived is neither a success nor a failure:
@@ -1251,14 +1251,138 @@ module Rubot
         channel = Rubot::Channels::Web.new(channel_config: {})
         call = { "id" => "c1", "function" => { "name" => "shell_exec", "arguments" => "{}" } }
 
-        assert_equal :unknown, channel.send(:history_tool_items, call, {}, "web_rubot").first[:state]
+        assert_equal :unknown, channel.send(:history_tool_items, call, {}, {}, "web_rubot").first[:state]
       end
 
       def test_history_tolerates_arguments_that_are_not_json
         channel = Rubot::Channels::Web.new(channel_config: {})
         call = { "id" => "c1", "function" => { "name" => "shell_exec", "arguments" => "bukan json" } }
 
-        assert_equal "", channel.send(:history_tool_items, call, {}, "web_rubot").first[:detail]
+        assert_equal "", channel.send(:history_tool_items, call, {}, {}, "web_rubot").first[:detail]
+      end
+
+      # --- diff -----------------------------------------------------------
+
+      # A tool that changed a file has to show what it did. The row says which
+      # file and how long it took; the hunks are the only record of the change
+      # itself, and without them the reader has to open the file to find out
+      # whether the agent did what was asked.
+      def test_a_changed_file_is_drawn_as_hunks
+        html = Diff.render("a\nb\nc\n", "a\nB\nc\n", path: "lib/x.rb")
+
+        refute_nil html
+        assert_includes html, %(class="diff")
+        assert_includes html, %(class="diff-row is-del")
+        assert_includes html, %(class="diff-row is-add")
+        assert_includes html, %(class="diff-row is-ctx"), "context around the change"
+        assert_includes html, "lib/x.rb"
+        assert_includes html, "+1"
+        assert_includes html, "-1"
+      end
+
+      # A create has no before, a delete has no after: the first is every line
+      # added, the second every line removed. Those are exactly the calls the
+      # reader cannot see any other way.
+      def test_a_created_file_is_all_additions
+        html = Diff.render(nil, "one\ntwo\n", path: "new.txt")
+
+        assert_includes html, "+2"
+        refute_includes html, "is-del"
+        assert_equal 2, html.scan(%(class="diff-row is-add")).size
+      end
+
+      def test_a_deleted_file_is_all_removals
+        html = Diff.render("one\ntwo\n", nil, path: "gone.txt")
+
+        assert_includes html, "-2"
+        refute_includes html, "is-add"
+        assert_equal 2, html.scan(%(class="diff-row is-del")).size
+      end
+
+      # A read, a search, a command: the row is the whole record, and an empty
+      # frame under it would say a file changed when none did.
+      def test_a_call_that_changed_no_file_draws_nothing
+        assert_nil Diff.render("same\n", "same\n")
+        assert_nil Diff.render(nil, nil)
+        assert_nil Diff.render("", "")
+      end
+
+      # The content is someone else's file, so it is text, not markup.
+      def test_the_diff_escapes_the_file_it_shows
+        html = Diff.render("x = 1\n", "<script>alert(1)</script>\n", path: "x.rb")
+
+        refute_includes html, "<script>"
+        assert_includes html, "&lt;script&gt;"
+      end
+
+      # A file with two changes far apart is two hunks and a line saying how
+      # much was skipped — the same shape `git diff` prints, and the reason a
+      # one-word edit in a long file costs a handful of rows.
+      def test_lines_between_two_hunks_collapse_into_one_gap
+        before = (1..20).map { |i| "line #{i}" }.join("\n")
+        after = before.sub("line 2", "line two").sub("line 18", "line eighteen")
+
+        spec = Diff.structure(before, after)
+
+        assert_equal 2, spec[:hunks]
+        gap = spec[:rows].find { |row| row.include?("diff-gap") }
+
+        refute_nil gap, "the lines neither hunk needs are collapsed"
+        assert_equal 9, gap[/>(\d+) baris/, 1].to_i,
+                     "lines 6..14 are shared and shown once as a count"
+      end
+
+      # A rewrite of a big file must not push the rest of the conversation off
+      # the page.
+      def test_a_very_long_diff_is_cut_short
+        before = (1..200).map { |i| "old #{i}" }.join("\n")
+        after = (1..200).map { |i| "new #{i}" }.join("\n")
+
+        html = Diff.render(before, after, path: "big.rb")
+
+        assert_includes html, "baris lagi", "the block has to say it is showing a part"
+        assert_operator html.scan("diff-row").size, :<=, Diff::MAX_ROWS + 1
+      end
+
+      # The live turn and a refreshed page have to agree: the hunks arrive with
+      # the tool result, and are read back out of the session file afterwards.
+      def test_a_tool_result_carries_its_hunks_into_the_timeline
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        turn = build
+
+        channel.send(:tool_finished, turn, "file_ops", "[Exit code: 0] Written 8 characters",
+                     { "path" => "x.rb", "before" => "a\nb\n", "after" => "a\nB\n" })
+
+        diff = turn.items.find { |item| item[:kind] == :diff }
+
+        refute_nil diff, "the hunks belong to the turn, under the row that made them"
+        assert_includes diff[:html], %(class="diff-row is-add")
+      end
+
+      def test_history_draws_the_hunks_under_their_tool_row
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        call = { "id" => "c1",
+                 "function" => { "name" => "file_ops", "arguments" => %({"path":"x.rb"}) } }
+        diffs = { "c1" => { "path" => "x.rb", "before" => "a\n", "after" => "a\nb\n" } }
+
+        items = channel.send(:history_tool_items, call, { "c1" => "[Exit code: 0]" }, diffs, "web_rubot")
+
+        assert_equal [ :tool, :diff ], items.map { |item| item[:kind] }
+        assert_includes items.last[:html], %(class="diff-row is-add")
+      end
+
+      # A picture a call handed back comes after the hunks: the edit happened
+      # first, and the picture is the result the reader is meant to look at.
+      def test_a_picture_follows_the_hunks_of_the_call_that_sent_it
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        call = { "id" => "c1",
+                 "function" => { "name" => "send_file", "arguments" => %({"path":"shot.png"}) } }
+        diffs = { "c1" => { "path" => "shot.png", "before" => nil, "after" => "a\n" } }
+
+        items = channel.send(:history_tool_items, call, { "c1" => "Sent" }, diffs, "web_rubot")
+
+        assert_equal [ :tool, :diff ], items.map { |item| item[:kind] },
+                     "a picture needs an attachment folder; the diff does not"
       end
 
       # --- paging through a long conversation -----------------------------

@@ -23,5 +23,7 @@
 <%= View.render("_attachments", images: item[:list]) %>
 <% when :text -%>
 <div class="text<%= item[:live] ? " is-live" : "" %>"><%= fmt(item[:text]) %></div>
+<% when :diff -%>
+<%= item[:html] %>
 <% end -%>
 <% end -%>

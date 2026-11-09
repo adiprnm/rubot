@@ -1144,6 +1144,130 @@ body {
 
 .turn-body > .attachments + .text { margin-top: calc(1.05rem - 0.2rem); }
 
+/* ---------- diff ------------------------------------------------- */
+
+/* The hunks of a file a tool changed, under the row that changed it. It is
+   machine output — a mono block with the same 10.5px as the row above it — but
+   it is also the one place a reader looks at a file, so the block gets the
+   frame and the tint the row does not: a box says "this is a file", and the
+   green and red say which way each line went.
+
+   The rows scroll sideways rather than wrap. A wrapped line of code reads as
+   two lines, and line numbers beside it stop meaning anything. */
+.diff {
+  margin: 0 0 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-dim);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: -0.03em;
+  overflow: hidden;
+}
+
+.diff-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding: 0.3rem 0.55rem;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg-faint);
+}
+
+.diff-adds { color: var(--green); }
+.diff-dels { color: var(--red); }
+.diff-sep { color: var(--line); }
+.diff-hunks,
+.diff-line { color: var(--fg-faint); }
+
+/* The path is what the diff is about; it gets the row's own colour and the
+   space between it and the counts. */
+.diff-path {
+  padding: 0 0.55rem 0.28rem;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--fg-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-body {
+  overflow-x: auto;
+  padding: 0.22rem 0;
+}
+
+/* The sideways scrollbar is thin and drawn in the palette, like the thread's
+   own: a default light bar across the bottom of the block would be the
+   brightest thing on the page. */
+.diff-body {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg2) transparent;
+}
+
+.diff-body::-webkit-scrollbar { height: 6px; }
+.diff-body::-webkit-scrollbar-thumb { background: var(--bg2); border-radius: 3px; }
+.diff-body::-webkit-scrollbar-track { background: transparent; }
+
+.diff-row {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0 0.55rem;
+  white-space: pre;
+  line-height: 1.5;
+}
+
+/* Every row starts at the same three columns: a line number, the sign, the
+   content. The number column is sized in `ch` so a four-digit file stays
+   aligned with a one-digit one. */
+.diff-no {
+  flex: 0 0 auto;
+  width: 3.2ch;
+  text-align: right;
+  color: var(--fg-faint);
+  opacity: 0.75;
+  user-select: none;
+}
+
+.diff-sign {
+  flex: 0 0 auto;
+  width: 1ch;
+  user-select: none;
+}
+
+.diff-row code {
+  flex: 0 0 auto;
+  font: inherit;
+  color: inherit;
+}
+
+/* The tint is a band across the whole row, so the eye follows it past the
+   end of a short line. */
+.diff-row.is-add { background: rgba(167, 192, 128, 0.1); color: var(--fg); }
+.diff-row.is-add .diff-sign { color: var(--green); }
+.diff-row.is-del { background: rgba(230, 126, 128, 0.1); color: var(--fg); }
+.diff-row.is-del .diff-sign { color: var(--red); }
+.diff-row.is-ctx { color: var(--fg-dim); }
+
+/* "12 baris tidak berubah" between two hunks, and "… 40 baris lagi" at the
+   bottom: both are the block saying it is not showing everything, so neither
+   wears the frame. */
+.diff-gap {
+  padding: 0.2rem 0.55rem;
+  color: var(--fg-faint);
+  opacity: 0.7;
+  white-space: pre;
+}
+
+/* The hunks belong to the row above them — that row named the file — so the
+   block sits close under it and the air goes to the answer that follows. It is
+   the same rhythm the rest of the turn keeps: one sibling claims the gap,
+   never both. */
+.tool-row + .diff { margin-top: 0; }
+
+.diff + .text { margin-top: calc(1.05rem - 0.55rem); }
+.diff + .attachments,
+.diff + .tool-row { margin-top: 0; }
+
 /* ---------- confirm prompt --------------------------------------- */
 
 .confirm:empty,

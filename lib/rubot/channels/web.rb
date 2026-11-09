@@ -10,6 +10,7 @@ require_relative "../channel"
 require_relative "../persona_store"
 require_relative "../session"
 require_relative "../tools/send_file"
+require_relative "../web/diff"
 require_relative "../web/turn"
 require_relative "../web/view"
 
@@ -593,6 +594,7 @@ module Rubot
           dir: @app_config.sessions_dir
         )
         results = tool_results(messages)
+        diffs = tool_diffs(messages)
 
         turns = []
         current = nil
@@ -609,7 +611,7 @@ module Rubot
             items = []
             text = Session.text_content(msg["content"]).to_s.strip
             items << { kind: :text, text: text, live: false } unless text.empty?
-            Array(msg["tool_calls"]).each { |call| items.concat(history_tool_items(call, results, sid)) }
+            Array(msg["tool_calls"]).each { |call| items.concat(history_tool_items(call, results, diffs, sid)) }
             next if items.empty?
 
             # Rounds of one prompt belong to one turn: the model answering,
@@ -627,7 +629,8 @@ module Rubot
       end
 
       # Tool output is stored after the call that asked for it, so the id is
-      # what pairs a row with how it ended.
+      # what pairs a row with how it ended. The same id pairs it with the
+      # before/after of the file it changed.
       def tool_results(messages)
         messages.each_with_object({}) do |msg, acc|
           next unless msg["role"] == "tool"
@@ -636,10 +639,22 @@ module Rubot
         end
       end
 
+      # The edit a tool made, keyed the same way: Agent#file_ui_diff hangs it on
+      # the tool message so a replayed conversation shows what the live one did.
+      def tool_diffs(messages)
+        messages.each_with_object({}) do |msg, acc|
+          next unless msg["role"] == "tool" && msg["ui_diff"].is_a?(Hash)
+
+          id = msg["tool_call_id"].to_s
+          acc[id] = msg["ui_diff"] unless id.empty?
+        end
+      end
+
       # The row for a call, plus the picture below it when send_file handed one
       # back. Two items rather than one, because the picture is drawn as a
-      # picture and the row as a row.
-      def history_tool_items(call, results, sid)
+      # picture and the row as a row. An edit adds a third, the hunks of the
+      # file it changed, right under the row that changed it.
+      def history_tool_items(call, results, diffs, sid)
         function = call["function"] || {}
         name = function["name"].to_s
         result = results[call["id"].to_s]
@@ -651,6 +666,10 @@ module Rubot
           state: result.nil? ? :unknown : (tool_ok?(result) ? :ok : :failed),
           elapsed: nil
         } ]
+
+        spec = diffs[call["id"].to_s]
+        html = spec ? Rubot::Web::Diff.render(spec["before"], spec["after"], path: spec["path"]) : nil
+        items << { kind: :diff, html: html } if html
 
         pictures = sent_pictures(name, result, sid)
         items << { kind: :images, list: pictures } unless pictures.empty?
@@ -855,7 +874,7 @@ module Rubot
           text,
           session_id: turn.session_id,
           on_tool_call: ->(name, args, _snapshot) { turn.tool_started(name, summarize_arguments(args)) },
-          on_tool_result: ->(name, result, _diff) { tool_finished(turn, name, result) },
+          on_tool_result: ->(name, result, diff) { tool_finished(turn, name, result, diff) },
           on_reasoning: ->(delta) { turn.thinking(delta) },
           on_usage: ->(report) {
             markup = usage_markup_from(report)
@@ -953,9 +972,26 @@ module Rubot
       # A tool row, and — when the tool handed pictures back — the pictures
       # themselves, drawn under the row that produced them. `send_files` names
       # several in one result; they land in the same strip, in the order sent.
-      def tool_finished(turn, name, result)
+      #
+      # A call that changed a file also carries its before/after, which is
+      # drawn between the two: the hunks belong to the edit, and the pictures a
+      # call produced come after it.
+      def tool_finished(turn, name, result, diff = nil)
         turn.tool_finished(name, tool_ok?(result))
+        add_diff(turn, diff)
         sent_pictures(name, result, turn.session_id).each { |picture| turn.add_image(**picture) }
+      end
+
+      # The fragment for a file the call changed, or nothing when it changed
+      # none. A delete arrives with `after` nil and every line it had renders as
+      # a removal; a create arrives with `before` nil and every line is new.
+      def add_diff(turn, spec)
+        return unless spec.is_a?(Hash)
+
+        html = Rubot::Web::Diff.render(spec["before"], spec["after"], path: spec["path"])
+        turn.add_diff(html) if html
+      rescue StandardError => e
+        warn "[web] diff: #{e.class}: #{e.message}"
       end
 
       def summarize_arguments(args)
