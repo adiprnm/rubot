@@ -730,6 +730,46 @@ body {
   border-top: 1px solid var(--line);
 }
 
+/* A footnote: a small number in the text that jumps to the note, and the
+   notes collected under a rule at the end. The rule is the section's own —
+   a note sitting directly under the prose would read as one more paragraph
+   of the answer. The list itself keeps the page's own marker box, so the
+   numbers sit in the same column as every other list. */
+.text .fn-ref {
+  font-size: 0.68em;
+  line-height: 0;
+  vertical-align: super;
+}
+
+.text .fn-ref a {
+  padding: 0 0.06em;
+  text-decoration: none;
+  color: var(--blue);
+  font-variant-numeric: tabular-nums;
+}
+
+.text .footnotes {
+  margin-top: 1.15em;
+  font-size: 0.82rem;
+  color: var(--fg-dim);
+}
+
+.text .footnotes hr {
+  margin: 0 0 0.55em;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.text .footnotes ol { margin: 0.15em 0 0; }
+
+.text .fn-back {
+  margin-left: 0.15em;
+  text-decoration: none;
+  color: var(--fg-faint);
+}
+
+.text .fn-back:hover { color: var(--blue); }
+
 .text em { font-style: italic; }
 .text del { color: var(--fg-faint); text-decoration: line-through; }
 
@@ -1002,6 +1042,12 @@ body {
    machine output, the text is what the person reads. Without this the answer
    sat 6px under the last call and read as part of the log. */
 .tool-row + .text { margin-top: 0.7rem; }
+
+/* The same distance going the other way. The narration the model writes
+   before reaching for a tool is the person's text too, so the row under it
+   keeps the same air it keeps under itself: the call is fenced in on both
+   sides instead of touching the sentence that announced it. */
+.text + .tool-row { margin-top: 0.7rem; }
 
 /* ---------- confirm prompt --------------------------------------- */
 

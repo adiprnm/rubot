@@ -325,6 +325,65 @@ module Rubot
         assert_equal "<blockquote><blockquote><p>satu<br>dua</p></blockquote></blockquote>", html
       end
 
+      # --- footnotes ------------------------------------------------------
+
+      # A note leaves the flow and is drawn once, under a rule at the end, the
+      # way every markdown renderer hoists it: `[^1]: ...` sitting in the
+      # middle of an answer would read as prose.
+      def test_a_footnote_is_hoisted_under_a_rule
+        html = Format.markdown("Harga naik[^1].\n\n[^1]: Mulai November.")
+
+        assert_includes html, %(<sup class="fn-ref"><a href="#fn-1" id="fnref-1">1</a></sup>)
+        assert_includes html, %(<section class="footnotes">)
+        assert_includes html, %(<li id="fn-1">Mulai November.)
+        refute_includes html, "<p>[^1]: Mulai November.</p>", "the definition is not part of the prose"
+      end
+
+      # Numbered by first mention, not by the order the definitions happen to
+      # be written.
+      def test_footnote_numbers_follow_the_reference_not_the_definition
+        html = Format.markdown("Dua[^b] lalu satu[^a].\n\n[^a]: catatan a\n[^b]: catatan b")
+
+        assert_includes html, %(id="fn-1">catatan b)
+        assert_includes html, %(id="fn-2">catatan a)
+        assert_includes html, %(<a href="#fn-1" id="fnref-1">1</a></sup> lalu)
+      end
+
+      def test_a_note_keeps_its_inline_markup
+        html = Format.markdown("Lihat[^n]\n\n[^n]: **wajib** `dp` [situs](https://x.test)")
+
+        assert_includes html, %(<li id="fn-1"><strong>wajib</strong> <code>dp</code> )
+        assert_includes html, %(<a href="https://x.test")
+      end
+
+      # An id with no definition is not a citation: it is the text that was
+      # written, which is what a half-streamed answer has.
+      def test_a_reference_without_a_definition_stays_literal
+        html = Format.markdown("Harga[^1]")
+
+        assert_equal "<p>Harga[^1]</p>", html
+      end
+
+      def test_a_definition_inside_a_code_block_stays_code
+        html = Format.markdown("```\n[^1]: bukan catatan\n```\n[^1]: catatan asli")
+
+        assert_includes html, "[^1]: bukan catatan"
+        assert_includes html, %(<li id="fn-1">catatan asli)
+      end
+
+      # A note cited twice has to anchor twice: two ids in one document is
+      # invalid HTML and the back link would land on the first only.
+      def test_a_note_cited_twice_anchors_twice
+        html = Format.markdown("Satu[^a] dua[^a]\n\n[^a]: catatan")
+
+        assert_includes html, %(id="fnref-1")
+        assert_includes html, %(id="fnref-1-2")
+      end
+
+      def test_a_document_without_notes_draws_no_section
+        refute_includes Format.markdown("biasa saja"), "footnotes"
+      end
+
       # --- paragraphs -----------------------------------------------------
 
       # A paragraph is an element, not a bare run of text. Without a block the

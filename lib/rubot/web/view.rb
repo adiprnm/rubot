@@ -7,6 +7,10 @@ module Rubot
   module Web
     # Minimal markdown for chat bubbles. Everything is HTML-escaped first, so
     # the transform below can only ever emit the tags it writes itself.
+    #
+    # Blocks: headings, lists (bulleted, numbered, task), blockquotes, fenced
+    # code, rules, pipe tables. Inline: code, bold, italic, strike, links,
+    # images. Footnotes: `[^id]` in the text, `[^id]: text` hoisted to the end.
     module Format
       # A private-use character, not NUL: `String#strip` removes NUL, which
       # would quietly turn a fenced code block back into a paragraph line.
@@ -21,7 +25,15 @@ module Rubot
       # are the ones written here.
       def markdown(text)
         blocks = []
-        source = CGI.escapeHTML(extract_fences(text.to_s, blocks))
+        source, notes, numbers = extract_footnotes(extract_fences(text.to_s, blocks))
+        source = CGI.escapeHTML(source)
+
+        # Footnote references need two facts while the flow is being written:
+        # which number each id became, and how many times it has been cited
+        # (a note cited twice has to anchor twice). The state lives in this
+        # call, not in a module variable, so two answers painted at the same
+        # time cannot number each other's notes.
+        state = { numbers: numbers, seen: Hash.new(0) }
 
         paragraphs = []
         paragraph = []
@@ -33,7 +45,7 @@ module Rubot
           # A paragraph is a <p>, not a bare run of text: without the element
           # there is no block for a margin to sit on, so the heading above it
           # collapsed to nothing and read as glued to the line before.
-          paragraphs << "<p>#{paragraph.map { |line| inline(line) }.join("<br>")}</p>"
+          paragraphs << "<p>#{paragraph.map { |line| inline(line, state) }.join("<br>")}</p>"
           paragraph.clear
         end
 
@@ -93,7 +105,7 @@ module Rubot
             html << %(<span class="task-box" aria-hidden="true"></span>)
             html << %(<span class="sr-only">#{done ? "selesai" : "belum"}: </span>)
           end
-          html << inline(body)
+          html << inline(body, state)
           top[:open] = true
         end
 
@@ -116,12 +128,12 @@ module Rubot
             # the list, the way any other block-level line does.
             flush_paragraph.call
             flush_list.call
-            paragraphs << "<h#{heading[:level]}>#{inline(heading[:text])}</h#{heading[:level]}>"
+            paragraphs << "<h#{heading[:level]}>#{inline(heading[:text], state)}</h#{heading[:level]}>"
           elsif stripped.match?(/\A([-*_])(?:[ \t]*\1){2,}\z/)
             flush_paragraph.call
             flush_list.call
             paragraphs << %(<hr class="rule">)
-          elsif (table = table_at(lines, i))
+          elsif (table = table_at(lines, i, state))
             # A table is its own block: the paragraph and the list before it
             # are finished by it, exactly as a fenced code block would.
             flush_paragraph.call
@@ -146,7 +158,7 @@ module Rubot
             start = i
             cursor = i
             cursor += 1 while cursor < lines.length && lines[cursor].strip.match?(/\A&gt;/)
-            paragraphs << render_quote(lines[start...cursor])
+            paragraphs << render_quote(lines[start...cursor], state)
             i = cursor
             next
           else
@@ -160,6 +172,9 @@ module Rubot
         flush_paragraph.call
         flush_list.call
 
+        notes_html = render_footnotes(notes, state)
+        paragraphs << notes_html unless notes_html.empty?
+
         paragraphs.join("\n")
       end
 
@@ -171,7 +186,7 @@ module Rubot
       # Lines at the same depth are one paragraph joined by breaks, because a
       # quoted passage is quoted prose: its lines belong to the same thought,
       # and a border drawn per line would put a gap between each.
-      def render_quote(lines)
+      def render_quote(lines, state = nil)
         html = +""
         depth = 0
         open_paragraph = false
@@ -206,7 +221,7 @@ module Rubot
             html << "<br>"
           end
 
-          html << inline(text)
+          html << inline(text, state)
         end
 
         html << "</p>" if open_paragraph
@@ -390,7 +405,7 @@ module Rubot
         end
       end
 
-      def table_at(lines, start)
+      def table_at(lines, start, state = nil)
         return nil unless table_line?(lines[start])
 
         separator = lines[start + 1]
@@ -403,29 +418,29 @@ module Rubot
           cursor += 1
         end
 
-        { html: render_table(rows, split_row(separator)), next: cursor }
+        { html: render_table(rows, split_row(separator), state), next: cursor }
       end
 
-      def render_table(rows, separator)
+      def render_table(rows, separator, state = nil)
         cols = rows.map(&:length).max.to_i
         aligns = (0...cols).map { |c| alignment(separator[c]) }
         header = rows.first
         body = rows.drop(1)
 
         out = [ %(<div class="md-table-wrap"><table class="md-table">), "<thead>" ]
-        out << table_row("th", header, cols, aligns)
+        out << table_row("th", header, cols, aligns, state)
         out << "</thead>"
         out << "<tbody>"
-        body.each { |row| out << table_row("td", row, cols, aligns) }
+        body.each { |row| out << table_row("td", row, cols, aligns, state) }
         out << "</tbody>"
         out << "</table></div>"
         out.join
       end
 
-      def table_row(tag, cells, cols, aligns)
+      def table_row(tag, cells, cols, aligns, state = nil)
         parts = (0...cols).map do |c|
           style = aligns[c] ? %( style="text-align:#{aligns[c]}") : ""
-          %(<#{tag}#{style}>#{inline(cells[c].to_s)}</#{tag}>)
+          %(<#{tag}#{style}>#{inline(cells[c].to_s, state)}</#{tag}>)
         end
         "<tr>#{parts.join}</tr>"
       end
@@ -456,6 +471,7 @@ module Rubot
       INLINE_RE = /
           (?<code>`+)(?<code_body>.+?)\k<code>
         | !\[(?<img_alt>[^\]\n]*)\]\((?<img_url>[^)\s]*)[^)]*\)
+        | \[\^(?<fn_id>[^\]\n]+)\]
         | \[(?<link_text>[^\]\n]*)\]\((?<link_url>[^)\s]*)[^)]*\)
         | (?<!\*)\*\*\*(?![\s*])(?<bi>.+?)(?<![\s*])\*\*\*(?!\*)
         | (?<![\w_])___(?![\s_])(?<bii>.+?)(?<![\s_])___(?![\w_])
@@ -484,7 +500,7 @@ module Rubot
         nil
       end
 
-      def inline(text)
+      def inline(text, state = nil)
         source = text.to_s
         out = +""
         pos = 0
@@ -492,7 +508,7 @@ module Rubot
         source.scan(INLINE_RE) do
           match = Regexp.last_match
           out << source[pos...match.begin(0)] if match.begin(0) > pos
-          out << inline_token(match)
+          out << inline_token(match, state)
           pos = match.end(0)
         end
 
@@ -500,32 +516,100 @@ module Rubot
         out
       end
 
-      def inline_token(match)
+      def inline_token(match, state = nil)
         if match[:code_body]
           %(<code>#{match[:code_body]}</code>)
         elsif match[:img_url]
           url = safe_url(match[:img_url])
           url ? %(<img src="#{url}" alt="#{match[:img_alt]}" loading="lazy">) : match[0]
+        elsif match[:fn_id]
+          footnote_ref(match[:fn_id], match[0], state)
         elsif match[:link_url]
           url = safe_url(match[:link_url])
           return match[0] unless url
 
-          %(<a href="#{url}" target="_blank" rel="noopener noreferrer">#{inline(match[:link_text])}</a>)
+          %(<a href="#{url}" target="_blank" rel="noopener noreferrer">#{inline(match[:link_text], state)}</a>)
         elsif match[:bi]
-          "<strong><em>#{inline(match[:bi])}</em></strong>"
+          "<strong><em>#{inline(match[:bi], state)}</em></strong>"
         elsif match[:bii]
-          "<strong><em>#{inline(match[:bii])}</em></strong>"
+          "<strong><em>#{inline(match[:bii], state)}</em></strong>"
         elsif match[:bold]
-          "<strong>#{inline(match[:bold])}</strong>"
+          "<strong>#{inline(match[:bold], state)}</strong>"
         elsif match[:ibold]
-          "<strong>#{inline(match[:ibold])}</strong>"
+          "<strong>#{inline(match[:ibold], state)}</strong>"
         elsif match[:em]
-          "<em>#{inline(match[:em])}</em>"
+          "<em>#{inline(match[:em], state)}</em>"
         elsif match[:iem]
-          "<em>#{inline(match[:iem])}</em>"
+          "<em>#{inline(match[:iem], state)}</em>"
         else
-          "<del>#{inline(match[:strike])}</del>"
+          "<del>#{inline(match[:strike], state)}</del>"
         end
+      end
+
+      # --- footnotes ------------------------------------------------------
+      #
+      # `[^1]: the note` is not part of the flow: it is lifted out and drawn
+      # once, under a rule at the end of the answer, the way every markdown
+      # renderer hoists it. The line is cut out before escaping so the note
+      # keeps its own inline markup, and after the fences are cut out so a
+      # `[^1]:` inside a code block stays code.
+      FOOTNOTE_DEF = /\A[ \t]*\[\^([^\]\n]+)\]:[ \t]*(.*)\z/
+
+      def extract_footnotes(source)
+        notes = []
+        kept  = []
+
+        source.lines(chomp: true).each do |line|
+          match = FOOTNOTE_DEF.match(line)
+          if match
+            notes << { id: match[1], body: match[2].strip }
+          else
+            kept << line
+          end
+        end
+
+        [ kept.join("\n"), notes, footnote_numbers(source, notes) ]
+      end
+
+      # Numbered by first mention, not by the order the definitions happen to
+      # be written: `[^a]` cited before `[^b]` must read 1 then 2, whatever
+      # order the two notes are defined in. A note nobody cites still gets a
+      # number, so it is not silently dropped.
+      def footnote_numbers(source, notes)
+        defined = notes.map { |note| note[:id] }
+        cited = source.scan(/\[\^([^\]\n]+)\]/).flatten.uniq.select { |id| defined.include?(id) }
+        (defined - cited).each { |id| cited << id }
+        cited.uniq.each_with_index.to_h { |id, index| [ id, index + 1 ] }
+      end
+
+      # The reference in the text: a superscript number that jumps to its
+      # note. An id with no definition is not a citation, so it stays the
+      # literal text that was written.
+      def footnote_ref(id, literal, state)
+        number = state && state[:numbers][id]
+        return literal unless number
+
+        state[:seen][id] += 1
+        anchor = state[:seen][id] == 1 ? "fnref-#{number}" : "fnref-#{number}-#{state[:seen][id]}"
+
+        %(<sup class="fn-ref"><a href="#fn-#{number}" id="#{anchor}">#{number}</a></sup>)
+      end
+
+      # The notes themselves, in number order. `state` is spent by the time
+      # this runs, so the list is built from the numbers rather than the refs.
+      def render_footnotes(notes, state)
+        return "" if notes.empty?
+
+        items = notes
+                .sort_by { |note| state[:numbers][note[:id]] || Float::INFINITY }
+                .map do |note|
+          number = state[:numbers][note[:id]] || note[:id]
+          body = inline(CGI.escapeHTML(note[:body]), state)
+          back = %(<a class="fn-back" href="#fnref-#{number}" aria-label="kembali ke teks">&#8617;</a>)
+          %(<li id="fn-#{number}">#{body} #{back}</li>)
+        end
+
+        %(<section class="footnotes">\n<hr>\n<ol>\n#{items.join("\n")}\n</ol>\n</section>)
       end
 
       # Same shape as the TUI's, so a duration reads the same in both channels:
