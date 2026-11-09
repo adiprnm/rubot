@@ -32,6 +32,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 📡 **Multi-channel** — REPL, Telegram and a browser UI, with a pluggable channel architecture
 - 🌐 **Browser channel** — an HTMX page streamed over Server-Sent Events: token streaming, live tool rows and a confirmation card, with no frontend build step
 - 🖼️ **Pictures in the browser chat** — a picture the agent sends with `send_file` is drawn in the thread under the tool row that produced it, opens into a lightbox, and can be downloaded from either the thumbnail or the sheet; `send_files` sends a batch in one call and draws it as one strip
+- 📄 **Documents in the browser chat** — a PDF or a markdown note sent the same way becomes a card in that strip: the browser's own viewer opens the PDF in a tab, the note opens as text, and both download under the reader's own file name
 - 📎 **Inbound attachments** — screenshots and files sent to Telegram are saved to the workspace, with dimensions and size added to the prompt
 - 🔈 **Progress narration** — the model explains what it is doing between tool calls ("Let me check the structure first."), sent as normal chat messages
 - 🧭 **Steering** — type while a turn is running (TUI, or a plain message in Telegram) and it reaches the model between rounds, without stopping the turn
@@ -954,14 +955,18 @@ fetches earlier ones as the reader scrolls up, so a long session costs one page
 rather than all of it. Refreshing mid-answer rejoins the running turn instead of
 showing a conversation whose last prompt appears never to have been sent.
 
-Pictures go one way here: the agent hands one back through `send_file`, and the
+Files go one way here: the agent hands one back through `send_file`, and the
 page draws it in the thread under the tool row that produced it — a strip that
 scrolls sideways, each picture opening into a sheet with a download beside it.
 A batch goes through `send_files`, which delivers up to ten paths in one call
-and lands them in one strip rather than one row per picture. The channel aims
-both tools at `<workspace>/attachments/<session>/`, so the tool calls that
-already work in Telegram need no second path; the page serves nothing but the
-formats a browser draws (`png`, `jpg`, `gif`, `webp`).
+and lands them in one strip rather than one row per file. A picture is drawn as
+a picture; a PDF or a markdown note is a card in the same strip that opens in a
+tab — the browser's own viewer for the PDF, plain text for the note, which is
+served as `text/plain` rather than `text/markdown` because a browser downloads a
+type it has no viewer for. The channel aims both tools at
+`<workspace>/attachments/<session>/`, so the tool calls that already work in
+Telegram need no second path; the page serves nothing but the formats a browser
+draws or opens on its own (`png`, `jpg`, `gif`, `webp`, `pdf`, `md`).
 
 No build step: `htmx`, `htmx-ext-sse` and `alpinejs` are vendored under
 `vendor/web/`, templates are ERB from the standard library, and the only

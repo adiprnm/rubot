@@ -168,21 +168,22 @@ module Rubot
         end
       end
 
-      # A picture the agent handed back during this turn. It joins the answer
+      # A file the agent handed back during this turn. It joins the answer
       # where the tool that produced it finished, not above the whole turn: the
       # reader sees it in the place the work happened.
       #
-      # Consecutive pictures share one strip, so a turn that sends four of them
+      # Consecutive files share one strip, so a turn that sends four of them
       # scrolls sideways at one height instead of stacking four rows.
-      def add_image(url:, name:, id: nil)
-        image = { url: url.to_s, name: name.to_s }
-        image[:id] = id.to_s unless id.to_s.empty?
+      def add_attachment(url:, name:, id: nil, kind: :picture, label: nil)
+        file = { url: url.to_s, name: name.to_s, kind: kind }
+        file[:id] = id.to_s unless id.to_s.empty?
+        file[:label] = label.to_s unless label.to_s.empty?
         @mutex.synchronize do
           last = @items.last
-          if last && last[:kind] == :images
-            last[:list] = last[:list] + [ image ]
+          if last && last[:kind] == :attachments
+            last[:list] = last[:list] + [ file ]
           else
-            @items << { kind: :images, list: [ image ], epoch: epoch_now }
+            @items << { kind: :attachments, list: [ file ], epoch: epoch_now }
           end
           publish_locked
         end

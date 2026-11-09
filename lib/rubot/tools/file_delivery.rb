@@ -33,9 +33,14 @@ module Rubot
       # marker per picture.
       WEB_MARKER = "web-attachment"
       WEB_MARKER_RE = /\[#{WEB_MARKER} ([^\]]+)\]/.freeze
-      # What the web page can draw. Anything else is refused rather than stored
-      # where nothing would ever show it.
-      WEB_EXTENSIONS = %w[.png .jpg .jpeg .gif .webp].freeze
+      # What the web page can draw or offer back: the pictures it shows as a
+      # picture, and the two documents a browser already knows how to open —
+      # a PDF it views in a tab of its own and a markdown note it shows as
+      # text. Anything else is refused rather than stored where nothing would
+      # ever show it.
+      WEB_IMAGE_EXTENSIONS = %w[.png .jpg .jpeg .gif .webp].freeze
+      WEB_DOCUMENT_EXTENSIONS = %w[.pdf .md .markdown].freeze
+      WEB_EXTENSIONS = (WEB_IMAGE_EXTENSIONS + WEB_DOCUMENT_EXTENSIONS).freeze
 
       MIME_TYPES = {
         ".png" => "image/png",
@@ -46,7 +51,8 @@ module Rubot
         ".pdf" => "application/pdf",
         ".json" => "application/json",
         ".txt" => "text/plain",
-        ".md" => "text/markdown"
+        ".md" => "text/markdown",
+        ".markdown" => "text/markdown"
       }.freeze
 
       private
@@ -56,10 +62,10 @@ module Rubot
       end
 
       # The web page has no upload endpoint to hand bytes to. What it does have
-      # is a folder it already serves for this one conversation, so the picture
-      # is copied there under a name the page can trust and the result says
-      # which name — that marker is the whole reason a refreshed page can draw
-      # the picture again.
+      # is a folder it already serves for this one conversation, so the file is
+      # copied there under a name the page can trust and the result says which
+      # name — that marker is the whole reason a refreshed page can draw the
+      # picture again, or offer the document again.
       #
       # Returns the stored name, or an error string.
       def deliver_web(file, context)
@@ -68,7 +74,8 @@ module Rubot
 
         extension = file.extname.downcase
         unless WEB_EXTENSIONS.include?(extension)
-          return "ERROR: the web page can only send pictures (png, jpg, gif, webp): #{file.basename}"
+          return "ERROR: the web page can send pictures and documents " \
+                 "(#{WEB_EXTENSIONS.map { |ext| ext.delete_prefix(".") }.join(", ")}): #{file.basename}"
         end
 
         FileUtils.mkdir_p(dir)
@@ -77,12 +84,21 @@ module Rubot
         name
       end
 
+      # Whether the page draws this file as a picture rather than handing it
+      # over as a document card.
+      def web_picture?(extension)
+        WEB_IMAGE_EXTENSIONS.include?(extension.to_s.downcase)
+      end
+
       # An id this process generated, the reader's own file name reduced to a
       # slug, and the extension: a download still reads like a file, while a
-      # hand-typed path cannot name one.
+      # hand-typed path cannot name one. `.markdown` is stored as `.md`, the
+      # same way `.jpeg` is stored as `.jpg`: one extension per format keeps
+      # the route that serves it to a single shape.
       def web_name(file)
         extension = file.extname.downcase
         extension = ".jpg" if extension == ".jpeg"
+        extension = ".md" if extension == ".markdown"
         base = File.basename(file.basename, file.extname)
                    .downcase.gsub(/[^a-z0-9]+/, "-").gsub(/\A-+|-+\z/, "")[0, 60].to_s
         "#{SecureRandom.hex(16)}#{base.empty? ? "" : "-#{base}"}#{extension}"

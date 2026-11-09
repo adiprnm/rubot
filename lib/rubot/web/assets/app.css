@@ -1771,7 +1771,53 @@ body {
   .attachment-download { opacity: 1; }
 }
 
-/* A picture the agent sent sits under the row that produced it, one step in
+/* A file the agent sent that is not a picture — a PDF or a markdown note.
+   The strip is a row of pictures, so the card is built to the same height and
+   reads as one more thing in it: the format as a badge, the reader's own file
+   name under it, and nothing else. The name truncates instead of wrapping,
+   because a card that grew taller for a long name would set the height of the
+   whole strip. The card is a link rather than a button: a PDF opens in the
+   browser's own viewer, and that is a navigation out of the page. */
+.attachment-document {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.4rem;
+  width: 11rem;
+  height: 6.5rem;
+  padding: 0.5rem 1.8rem 0.5rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--fg);
+  line-height: 1.25;
+  text-decoration: none;
+}
+
+.attachment-document:hover,
+.attachment-document:focus-visible { border-color: var(--fg-faint); }
+
+.attachment-label {
+  align-self: flex-start;
+  padding: 0.15rem 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--fg-faint);
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.06em;
+}
+
+.attachment-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+}
+
+/* A file the agent sent sits under the row that produced it, one step in
    from the text it belongs to. */
 .turn-body > .attachments { margin: 0.5rem 0 0.2rem; }
 

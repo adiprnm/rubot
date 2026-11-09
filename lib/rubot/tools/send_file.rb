@@ -33,10 +33,11 @@ module Rubot
         <<~DESC.strip
           Send one local file to the user.
           Use this when the user should receive a file you produced, such as a
-          generated featured image (PNG). Images (.png, .jpg, .jpeg, .webp, .gif)
-          are delivered as pictures so they display inline; other files are
-          delivered as documents. The path may be relative to the workspace or
-          absolute.
+          generated featured image (PNG), a PDF report or a markdown note.
+          Images (.png, .jpg, .jpeg, .webp, .gif) are delivered as pictures so
+          they display inline; a PDF or a markdown note (.md) arrives as a
+          document the reader can open. The path may be relative to the
+          workspace or absolute.
 
           If the user asked for several files — "send the five pictures in
           Pictures" — use send_files once instead of calling this repeatedly:
@@ -90,7 +91,8 @@ module Rubot
           stored = deliver_web(file, context)
           return stored if stored.start_with?("ERROR")
 
-          return "Sent #{file.basename} (#{size} bytes) as a picture. [#{WEB_MARKER} #{stored}]"
+          kind = web_picture?(file.extname) ? "picture" : "document"
+          return "Sent #{file.basename} (#{size} bytes) as a #{kind}. [#{WEB_MARKER} #{stored}]"
         end
 
         upload(file, size, token, context, arguments["caption"].to_s)

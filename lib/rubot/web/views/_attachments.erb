@@ -1,35 +1,57 @@
-<%# The pictures the agent sent during one turn, drawn as a strip rather than a
+<%# The files the agent sent during one turn, drawn as a strip rather than a
     column: a few screenshots are often wider than the column, and growing the
     answer downwards pushes the conversation out of view. The strip scrolls
-    sideways, which keeps every picture the same height and the thread the same
+    sideways, which keeps every file the same height and the thread the same
     width.
 
-    Each picture is a button, not a link: opening it is a moment in the page,
-    not a navigation. The download anchor beside it is a link, because that is
-    what a download is — the same URL the lightbox offers, so both paths hand
-    back the file the reader is looking at.
+    A picture is a button, not a link: opening it is a moment in the page, not
+    a navigation. A document is a link, because there is nothing to show in
+    the page — a PDF opens in the browser's own viewer, a markdown note opens
+    as text — and it is the reader's own tab that should close it again. The
+    download anchor beside both is a link, because that is what a download is:
+    the same URL the lightbox or the tab offers, under the reader's own name.
 
-    The whole timeline is redrawn on every event of a running turn, and a
-    picture that is rebuilt with it is fetched and decoded again — five of them
-    blink in step with the answer. So each one carries its stored id and asks
-    htmx to keep the node it already has: the picture stays exactly as drawn
-    while the text under it grows. -%>
-<div class="attachments" role="group" aria-label="Gambar dari Rubot">
-  <% images.each do |image| -%>
+    The whole timeline is redrawn on every event of a running turn, and a card
+    that is rebuilt with it is fetched again — five of them blink in step with
+    the answer. So each one carries its stored id and asks htmx to keep the
+    node it already has: the file stays exactly as drawn while the text under
+    it grows. -%>
+<div class="attachments" role="group" aria-label="Lampiran dari Rubot">
+  <% attachments.each do |file| -%>
+  <% if file[:kind] == :document -%>
   <figure class="attachment"
-          <% if image[:id] %>id="picture-<%= h(image[:id]) %>" hx-preserve="true"<% end %>>
+          <% if file[:id] %>id="file-<%= h(file[:id]) %>" hx-preserve="true"<% end %>>
+    <a class="attachment-document"
+       href="<%= h(file[:url]) %>"
+       target="_blank"
+       rel="noopener"
+       title="Buka <%= h(file[:name]) %>"
+       aria-label="Buka <%= h(file[:name]) %>">
+      <span class="attachment-label" aria-hidden="true"><%= h(file[:label] || "FILE") %></span>
+      <span class="attachment-name"><%= h(file[:name]) %></span>
+    </a>
+    <a class="attachment-download"
+       href="<%= h(file[:url]) %>"
+       download="<%= h(file[:name]) %>"
+       title="Unduh <%= h(file[:name]) %>"
+       aria-label="Unduh <%= h(file[:name]) %>">↓</a>
+  </figure>
+  <% else -%>
+  <figure class="attachment"
+          <% if file[:id] %>id="picture-<%= h(file[:id]) %>" hx-preserve="true"<% end %>>
     <button type="button"
             class="attachment-open"
-            data-lightbox="<%= h(image[:url]) %>"
-            data-name="<%= h(image[:name]) %>"
-            aria-label="Buka <%= h(image[:name]) %>">
-      <img src="<%= h(image[:url]) %>" alt="<%= h(image[:name]) %>" loading="lazy">
+            data-lightbox="<%= h(file[:url]) %>"
+            data-name="<%= h(file[:name]) %>"
+            aria-label="Buka <%= h(file[:name]) %>">
+      <img src="<%= h(file[:url]) %>" alt="<%= h(file[:name]) %>" loading="lazy">
     </button>
     <a class="attachment-download"
-       href="<%= h(image[:url]) %>"
-       download="<%= h(image[:name]) %>"
-       title="Unduh <%= h(image[:name]) %>"
-       aria-label="Unduh <%= h(image[:name]) %>">↓</a>
+       href="<%= h(file[:url]) %>"
+       download="<%= h(file[:name]) %>"
+       title="Unduh <%= h(file[:name]) %>"
+       aria-label="Unduh <%= h(file[:name]) %>">↓</a>
   </figure>
+  <% end -%>
   <% end -%>
 </div>

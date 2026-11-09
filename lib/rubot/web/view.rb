@@ -767,9 +767,9 @@ module Rubot
           View.turn_body(turn)
         end
 
-        # A partial rendered by a test has no pictures unless the caller passes
+        # A partial rendered by a test has no files unless the caller passes
         # them, and `_attachments` should not have to spell that out.
-        def images
+        def attachments
           []
         end
 

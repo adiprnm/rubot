@@ -19,8 +19,8 @@
 </div>
 <% when :steer -%>
 <%= View.render("_message", role: "user", text: item[:text]) %>
-<% when :images -%>
-<%= View.render("_attachments", images: item[:list]) %>
+<% when :attachments -%>
+<%= View.render("_attachments", attachments: item[:list]) %>
 <% when :text -%>
 <div class="text<%= item[:live] ? " is-live" : "" %>"><%= fmt(item[:text]) %></div>
 <% when :diff -%>

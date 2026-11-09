@@ -53,23 +53,35 @@ module Rubot
       UNTITLED_SESSION = "Sesi baru"
 
       # What the page hands back: the pictures the agent sends through
-      # send_file. The name the server writes is a hex id this channel
-      # generated, an optional slug of the file's own name, and a known
+      # send_file, and the two documents a browser already opens on its own —
+      # a PDF and a markdown note. The name the server writes is a hex id this
+      # channel generated, an optional slug of the file's own name, and a known
       # extension — the slug is what makes a download read like a file, the id
       # is what makes it impossible to guess.
+      MEDIA_EXTENSIONS = %w[png jpg gif webp pdf md].freeze
+      # A markdown note is served as text, not as text/markdown: a browser
+      # downloads a type it has no viewer for, and a note the reader has to
+      # save first is a note they cannot read. PDFs are served as PDFs and
+      # opened by the browser's own viewer.
       MEDIA_TYPES = {
         ".png" => "image/png",
         ".jpg" => "image/jpeg",
         ".gif" => "image/gif",
-        ".webp" => "image/webp"
+        ".webp" => "image/webp",
+        ".pdf" => "application/pdf",
+        ".md" => "text/plain; charset=utf-8"
       }.freeze
-      MEDIA_NAME = /\A[0-9a-f]{32}(?:-[a-z0-9-]{1,60})?\.(?:png|jpg|gif|webp)\z/
+      # The shape a stored name always has, spelled once and used by the route
+      # that serves it and by the reader that picks it back out of a tool
+      # result.
+      MEDIA_NAME_SOURCE = "[0-9a-f]{32}(?:-[a-z0-9-]{1,60})?\\.(?:#{MEDIA_EXTENSIONS.join("|")})"
+      MEDIA_NAME = /\A#{MEDIA_NAME_SOURCE}\z/
 
       SLUG_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})\z}
       SESSION_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})\z}
       SESSION_HISTORY_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/history\z}
       SESSION_TURN_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/turn\z}
-      SESSION_MEDIA_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/media/([0-9a-f]{32}(?:-[a-z0-9-]{1,60})?\.(?:png|jpg|gif|webp))\z}
+      SESSION_MEDIA_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/media/(#{MEDIA_NAME_SOURCE})\z}
       SESSION_DELETE_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/delete\z}
       SESSION_QUOTA_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/quota\z}
       PERSONA_SESSIONS_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/sessions\z}
@@ -701,10 +713,11 @@ module Rubot
         end
       end
 
-      # The row for a call, plus the picture below it when send_file handed one
-      # back. Two items rather than one, because the picture is drawn as a
-      # picture and the row as a row. An edit adds a third, the hunks of the
-      # file it changed, right under the row that changed it.
+      # The row for a call, plus the files below it when send_file handed one
+      # back. Two items rather than one, because a picture is drawn as a
+      # picture, a document as a card, and the row as a row. An edit adds a
+      # third, the hunks of the file it changed, right under the row that
+      # changed it.
       def history_tool_items(call, results, diffs, sid)
         function = call["function"] || {}
         name = function["name"].to_s
@@ -722,8 +735,8 @@ module Rubot
         html = spec ? Rubot::Web::Diff.render(spec["before"], spec["after"], path: spec["path"]) : nil
         items << { kind: :diff, html: html } if html
 
-        pictures = sent_pictures(name, result, sid)
-        items << { kind: :images, list: pictures } unless pictures.empty?
+        files = sent_attachments(name, result, sid)
+        items << { kind: :attachments, list: files } unless files.empty?
         items
       end
 
@@ -989,23 +1002,35 @@ module Rubot
         "/s/#{sid}/media/#{name}#{token_query}"
       end
 
-      # The pictures a call handed back, read out of the result the call left in
+      # The files a call handed back, read out of the result the call left in
       # the transcript. The markers are the only record of which stored files it
       # produced — that is how a conversation drawn from disk a week later can
       # still show them. One result can name several: `send_files` sends a batch
-      # in a single call and writes a marker per picture.
-      def sent_pictures(name, result, sid)
+      # in a single call and writes a marker per file.
+      #
+      # A picture is drawn as a picture and anything else as a document card,
+      # and the type the route serves it under is what decides which: the two
+      # questions have one answer.
+      def sent_attachments(name, result, sid)
         return [] unless %w[send_file send_files].include?(name.to_s)
 
         result.to_s.scan(Rubot::Tools::SendFile::WEB_MARKER_RE).flatten.filter_map do |stored|
           next unless MEDIA_NAME.match?(stored)
 
-          # The stored file's own id is the picture's stable identity on the
-          # page: the timeline is redrawn on every token, and a picture that
-          # kept its node is not fetched or decoded again while the answer grows
-          # under it.
-          { url: media_url(sid, stored), name: download_name(stored), id: stored[/\A[0-9a-f]{32}/] }
-        end.uniq { |picture| picture[:id] }
+          extension = File.extname(stored)
+          url = media_url(sid, stored)
+
+          # The stored file's own id is its stable identity on the page: the
+          # timeline is redrawn on every token, and a file that kept its node
+          # is not fetched or decoded again while the answer grows under it.
+          { url: url, name: download_name(stored), id: stored[0, 32],
+            kind: picture?(stored) ? :picture : :document,
+            label: extension.delete_prefix(".").upcase }
+        end.uniq { |attachment| attachment[:id] }
+      end
+
+      def picture?(name)
+        MEDIA_TYPES.fetch(File.extname(name), "").start_with?("image/")
       end
 
       # Point the agent's file tools at this conversation, so a picture they
@@ -1022,12 +1047,15 @@ module Rubot
         end
       end
 
-      # What a picture is called when it is downloaded: the stored name minus
-      # the id in front of it.
+      # What a file is called when it is downloaded: the stored name minus the
+      # id in front of it. A name the slug could not keep — a file called only
+      # in symbols — falls back to a word for what it is.
       def download_name(name)
         extension = File.extname(name)
         base = File.basename(name, extension).sub(/\A[0-9a-f]{32}-?/, "")
-        base.empty? ? "gambar#{extension}" : "#{base}#{extension}"
+        return "#{base}#{extension}" unless base.empty?
+
+        "#{picture?(name) ? "gambar" : "berkas"}#{extension}"
       end
 
       def serve_media(res, sid, name)
@@ -1215,17 +1243,17 @@ module Rubot
         !result.to_s.start_with?("ERROR")
       end
 
-      # A tool row, and — when the tool handed pictures back — the pictures
+      # A tool row, and — when the tool handed files back — the files
       # themselves, drawn under the row that produced them. `send_files` names
       # several in one result; they land in the same strip, in the order sent.
       #
       # A call that changed a file also carries its before/after, which is
-      # drawn between the two: the hunks belong to the edit, and the pictures a
+      # drawn between the two: the hunks belong to the edit, and the files a
       # call produced come after it.
       def tool_finished(turn, name, result, diff = nil)
         turn.tool_finished(name, tool_ok?(result))
         add_diff(turn, diff)
-        sent_pictures(name, result, turn.session_id).each { |picture| turn.add_image(**picture) }
+        sent_attachments(name, result, turn.session_id).each { |file| turn.add_attachment(**file) }
       end
 
       # The fragment for a file the call changed, or nothing when it changed

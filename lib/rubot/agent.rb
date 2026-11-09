@@ -1021,7 +1021,8 @@ module Rubot
 
       `send_file` hands one local file to the user. Images (.png, .jpg, .jpeg,
       .webp, .gif) are delivered as pictures so they display inline; other
-      files arrive as documents.
+      files arrive as documents, and in the browser a PDF or a markdown note
+      gets a card that opens in a tab.
     PROMPT
 
     # Editing files through the file tool, not shell. Kept here (not in the

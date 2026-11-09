@@ -42,10 +42,11 @@ module Rubot
           "send the five pictures in Pictures" — rather than calling send_file
           once per file: one call sends the whole batch and the pictures arrive
           together instead of one after another. Images (.png, .jpg, .jpeg,
-          .webp, .gif) are delivered as pictures so they display inline; other
-          files are delivered as documents. Paths may be relative to the
-          workspace or absolute. Up to #{MAX_FILES} files per call; a file that
-          cannot be sent is reported and the rest still go.
+          .webp, .gif) are delivered as pictures so they display inline; a PDF
+          or a markdown note (.md) arrives as a document the reader can open.
+          Paths may be relative to the workspace or absolute. Up to #{MAX_FILES}
+          files per call; a file that cannot be sent is reported and the rest
+          still go.
         DESC
       end
 
@@ -173,13 +174,16 @@ module Rubot
         summary += " Failed: #{failures.join("; ")}." unless failures.empty?
         return summary unless sent.first[:stored]
 
-        # One marker per picture: the page reads every marker in the result,
+        # One marker per file: the page reads every marker in the result,
         # which is how five pictures become one strip under the row rather than
-        # a batch the reader has to open one by one.
+        # a batch the reader has to open one by one. A batch may mix them — a
+        # PDF report beside the screenshots it quotes — so the wording is the
+        # one that is true of both.
         markers = sent.map { |entry| "[#{WEB_MARKER} #{entry[:stored]}]" }.join(" ")
-        pictures = "Sent #{sent.size} #{noun} as pictures (png, jpg, gif, webp). #{markers}"
-        pictures += " Failed: #{failures.join("; ")}." unless failures.empty?
-        pictures
+        attachments = "Sent #{sent.size} #{noun} as attachments " \
+                      "(#{WEB_EXTENSIONS.map { |ext| ext.delete_prefix(".") }.join(", ")}). #{markers}"
+        attachments += " Failed: #{failures.join("; ")}." unless failures.empty?
+        attachments
       end
     end
   end

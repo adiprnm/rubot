@@ -2499,19 +2499,57 @@ module Rubot
         assert_equal png_bytes, File.binread(File.join(dir, stored))
       end
 
-      # Only pictures: the page has no way to offer anything else back, and a
-      # file stored where nothing draws it is worse than a refusal.
+      # Only what the page can draw or hand back: a picture, a PDF, a markdown
+      # note. A file stored where nothing would ever show it is worse than a
+      # refusal.
       def test_send_file_refuses_what_the_page_cannot_draw
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
-        source = File.join(Dir.mktmpdir, "catatan.pdf")
-        File.binwrite(source, "%PDF-1.4")
+        source = File.join(Dir.mktmpdir, "arsip.zip")
+        File.binwrite(source, "PK\x03\x04")
 
         tool = Tools::SendFile.new
         tool.delivery_context = { channel: "web", dir: channel.send(:attachments_dir, "web_kanyaah") }
         result = tool.execute("path" => source)
 
         assert result.start_with?("ERROR"), "a file the page cannot draw is refused, not stored"
-        assert_includes result, "pictures"
+        assert_includes result, "pictures and documents"
+      end
+
+      # A PDF is not a picture, but the browser opens one on its own: it is
+      # stored like a picture and named "as a document", which is the word the
+      # page reads to decide between a picture and a card.
+      def test_send_file_hands_a_pdf_into_the_conversation
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        dir = channel.send(:attachments_dir, "web_kanyaah")
+        source = File.join(Dir.mktmpdir, "Laporan Triwulan.pdf")
+        File.binwrite(source, "%PDF-1.4\n")
+
+        tool = Tools::SendFile.new
+        tool.delivery_context = { channel: "web", dir: dir }
+        result = tool.execute("path" => source)
+
+        stored = result[/\[web-attachment ([^\]]+)\]/, 1]
+        assert_match(/\A[0-9a-f]{32}-laporan-triwulan\.pdf\z/, stored.to_s)
+        assert_includes result, "as a document"
+        assert_equal "%PDF-1.4\n", File.binread(File.join(dir, stored))
+      end
+
+      # `.markdown` is stored as `.md`, the same way `.jpeg` becomes `.jpg`:
+      # one extension per format keeps the route that serves it to one shape.
+      def test_send_file_stores_a_markdown_note_as_md
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        dir = channel.send(:attachments_dir, "web_kanyaah")
+        source = File.join(Dir.mktmpdir, "Catatan Rapat.markdown")
+        File.write(source, "# Rapat\n\n- satu\n")
+
+        tool = Tools::SendFile.new
+        tool.delivery_context = { channel: "web", dir: dir }
+        result = tool.execute("path" => source)
+
+        stored = result[/\[web-attachment ([^\]]+)\]/, 1]
+        assert_match(/\A[0-9a-f]{32}-catatan-rapat\.md\z/, stored.to_s)
+        assert_includes result, "as a document"
+        assert_includes File.read(File.join(dir, stored)), "# Rapat"
       end
 
       # "Kirim 5 gambar" is one instruction; one call stores all five and names
@@ -2534,6 +2572,33 @@ module Rubot
         assert_equal 5, stored.size, "every picture in the batch is named: #{result}"
         assert_equal %w[dua empat lima satu tiga], stored.map { |n| n[/-([a-z]+)\.png\z/, 1] }.sort
         stored.each { |name| assert_equal png_bytes, File.binread(File.join(dir, name)) }
+      end
+
+      # A batch may mix pictures and documents — a PDF report beside the
+      # screenshots it quotes — and one strip holds both: the page decides per
+      # file which of the two it draws.
+      def test_send_files_hands_pictures_and_documents_into_one_strip
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        dir = channel.send(:attachments_dir, "web_kanyaah")
+        sources = [
+          File.join(Dir.mktmpdir, "grafik.png").tap { |path| File.binwrite(path, png_bytes) },
+          File.join(Dir.mktmpdir, "laporan.pdf").tap { |path| File.write(path, "%PDF-1.4\n") },
+          File.join(Dir.mktmpdir, "catatan.md").tap { |path| File.write(path, "# Rapat\n") }
+        ]
+
+        tool = Tools::SendFiles.new
+        tool.delivery_context = { channel: "web", dir: dir }
+        result = tool.execute("paths" => sources)
+
+        stored = result.scan(/\[web-attachment ([^\]]+)\]/).flatten
+        assert_equal 3, stored.size, "every file in the batch is named: #{result}"
+        assert_includes result, "as attachments"
+
+        attachments = channel.send(:sent_attachments, "send_files", result, "web_kanyaah")
+        assert_equal %i[picture document document], attachments.map { |file| file[:kind] }
+        assert_equal %w[MD PDF PNG], attachments.map { |file| file[:label] }.sort
+        assert_equal %w[catatan.md grafik.png laporan.pdf],
+                     attachments.map { |file| file[:name] }.sort
       end
 
       # A batch is not all-or-nothing: the file that is missing is said out
@@ -2654,33 +2719,51 @@ module Rubot
         stored = "e" * 32 + "-desain.png"
         result = "Sent desain.png (12 bytes) as a picture. [web-attachment #{stored}]"
 
-        picture = channel.send(:sent_pictures, "send_file", result, "web_kanyaah").first
+        picture = channel.send(:sent_attachments, "send_file", result, "web_kanyaah").first
 
         assert_equal "desain.png", picture[:name]
         assert_includes picture[:url], "/s/web_kanyaah/media/#{stored}"
         assert_equal "e" * 32, picture[:id],
                      "the stored id is what lets the page keep the picture's node"
+        assert_equal :picture, picture[:kind]
 
-        assert_empty channel.send(:sent_pictures, "shell", result, "web_kanyaah"),
+        assert_empty channel.send(:sent_attachments, "shell", result, "web_kanyaah"),
                      "only a file-sending result names a picture"
-        assert_empty channel.send(:sent_pictures, "send_file",
+        assert_empty channel.send(:sent_attachments, "send_file",
                                   "Sent x. [web-attachment ../../etc/passwd]", "web_kanyaah")
       end
 
-      # One call, several pictures: the result of send_files carries a marker
+      # A PDF and a markdown note are read out of the same marker as a picture,
+      # but they are not pictures: the page hands them over as a card, and the
+      # badge on that card names the format.
+      def test_a_document_is_read_back_as_a_card_not_a_picture
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        stored = "d" * 32 + "-laporan.pdf"
+        result = "Sent laporan.pdf (12 bytes) as a document. [web-attachment #{stored}]"
+
+        document = channel.send(:sent_attachments, "send_file", result, "web_kanyaah").first
+
+        assert_equal :document, document[:kind]
+        assert_equal "PDF", document[:label]
+        assert_equal "laporan.pdf", document[:name]
+        assert_includes document[:url], "/s/web_kanyaah/media/#{stored}"
+      end
+
+      # One call, several files: the result of send_files carries a marker
       # per file, and the page turns every one of them into a picture in the
       # same strip.
       def test_a_batch_result_names_every_picture_it_sent
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
         names = %w[satu dua tiga].map { |base| "#{SecureRandom.hex(16)}-#{base}.png" }
-        result = "Sent 3 files as pictures (png, jpg, gif, webp). " +
+        result = "Sent 3 files as attachments (png, jpg, gif, webp, pdf, md). " +
                  names.map { |name| "[web-attachment #{name}]" }.join(" ")
 
-        pictures = channel.send(:sent_pictures, "send_files", result, "web_kanyaah")
+        pictures = channel.send(:sent_attachments, "send_files", result, "web_kanyaah")
 
         assert_equal 3, pictures.size, "every marker becomes a picture"
         assert_equal names.size, pictures.map { |p| p[:url] }.uniq.size
         assert_equal %w[tiga.png satu.png dua.png], pictures.map { |p| p[:name] }.sort.reverse
+        assert_equal %i[picture picture picture], pictures.map { |p| p[:kind] }
       end
 
       # A picture belongs to a conversation: the route looks only inside that
@@ -2717,6 +2800,49 @@ module Rubot
         assert_equal png_bytes, res.body
       end
 
+      # A PDF is served as a PDF, so the browser's own viewer opens it. It is
+      # inline rather than an attachment: a click on the card is a look at the
+      # document, not a save it.
+      def test_a_pdf_is_served_as_a_pdf
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        name = write_attachment(channel, "web_kanyaah", "laporan.pdf", "%PDF-1.4\n")
+
+        res = FakeResponse.new
+        channel.send(:serve_media, res, "web_kanyaah", name)
+
+        assert_equal 200, res.status
+        assert_equal "application/pdf", res.headers["Content-Type"]
+        assert_includes res.headers["Content-Disposition"], 'filename="laporan.pdf"'
+        assert_equal "%PDF-1.4\n", res.body
+      end
+
+      # A markdown note is served as text, not as text/markdown: a browser
+      # downloads a type it has no viewer for, and a note the reader has to
+      # save before reading is a note that never arrives.
+      def test_a_markdown_note_is_served_as_text
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        name = write_attachment(channel, "web_kanyaah", "catatan.md", "# Rapat\n")
+
+        res = FakeResponse.new
+        channel.send(:serve_media, res, "web_kanyaah", name)
+
+        assert_equal 200, res.status
+        assert_equal "text/plain; charset=utf-8", res.headers["Content-Type"]
+        assert_equal "# Rapat\n", res.body
+      end
+
+      # The route takes the names this channel writes and nothing else: an
+      # extension it never generates is a 404, whatever is on disk.
+      def test_a_name_the_channel_never_writes_is_not_served
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        name = write_attachment(channel, "web_kanyaah", "skrip.rb", "puts 1\n")
+
+        res = FakeResponse.new
+        channel.send(:serve_media, res, "web_kanyaah", name)
+
+        assert_equal 404, res.status
+      end
+
       def test_a_picture_that_does_not_exist_is_not_found
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
         res = FakeResponse.new
@@ -2726,16 +2852,36 @@ module Rubot
         assert_equal 404, res.status
       end
 
-      # A picture the agent sent sits in the timeline under the row that
-      # produced it, drawn by the same strip the answer's pictures use.
+      # A file the agent sent sits in the timeline under the row that produced
+      # it, drawn by the same strip the answer's pictures use.
       def test_a_picture_the_agent_sent_is_drawn_in_the_timeline
-        image = { url: "/s/web_kanyaah/media/x.png?token=t0k", name: "desain.png" }
+        image = { url: "/s/web_kanyaah/media/x.png?token=t0k", name: "desain.png", kind: :picture }
 
-        html = View.render("_timeline", items: [ { kind: :images, list: [ image ] } ])
+        html = View.render("_timeline", items: [ { kind: :attachments, list: [ image ] } ])
 
         assert_includes html, %(class="attachments")
         assert_includes html, %(data-lightbox="#{image[:url]}")
         assert_includes html, %(download="desain.png")
+      end
+
+      # A document is not drawn into a sheet: the card is a link out to the
+      # browser's own viewer, with the format written on it and the same
+      # download beside it that a picture carries.
+      def test_a_document_the_agent_sent_is_drawn_as_a_card
+        document = { url: "/s/web_kanyaah/media/laporan.pdf?token=t0k", name: "laporan.pdf",
+                     id: "c" * 32, kind: :document, label: "PDF" }
+
+        html = View.render("_timeline", items: [ { kind: :attachments, list: [ document ] } ])
+
+        assert_includes html, %(class="attachment-document")
+        assert_includes html, %(href="#{document[:url]}")
+        assert_includes html, %(target="_blank")
+        assert_includes html, %(rel="noopener")
+        assert_includes html, %(<span class="attachment-label" aria-hidden="true">PDF</span>)
+        assert_includes html, %(<span class="attachment-name">laporan.pdf</span>)
+        assert_includes html, %(download="laporan.pdf")
+        refute_includes html, "data-lightbox", "a PDF is not opened into the sheet"
+        assert_includes html, %(id="file-#{"c" * 32}"), "a card is kept across a redraw too"
       end
 
       # A running turn redraws the whole timeline on every event. A picture
@@ -2746,7 +2892,7 @@ module Rubot
         first = { url: "/s/web_kanyaah/media/#{"a" * 32}-satu.png", name: "satu.png", id: "a" * 32 }
         second = { url: "/s/web_kanyaah/media/#{"b" * 32}-dua.png", name: "dua.png", id: "b" * 32 }
 
-        html = View.render("_timeline", items: [ { kind: :images, list: [ first, second ] } ])
+        html = View.render("_timeline", items: [ { kind: :attachments, list: [ first, second ] } ])
 
         assert_equal 2, html.scan(/hx-preserve="true"/).size,
                      "every picture asks to be kept across a redraw"
@@ -2760,7 +2906,7 @@ module Rubot
       def test_a_picture_without_an_id_is_drawn_without_a_preserve_marker
         image = { url: "/s/web_kanyaah/media/x.png", name: "x.png" }
 
-        html = View.render("_attachments", images: [ image ])
+        html = View.render("_attachments", attachments: [ image ])
 
         refute_includes html, "hx-preserve"
         assert_includes html, %(class="attachment")
@@ -2787,8 +2933,35 @@ module Rubot
 
         items = channel.send(:history, sid).last[:items]
 
-        assert_equal %i[tool images], items.last(2).map { |item| item[:kind] }
+        assert_equal %i[tool attachments], items.last(2).map { |item| item[:kind] }
         assert_includes items.last[:list].first[:url], "/s/#{sid}/media/#{stored}"
+        assert_equal :picture, items.last[:list].first[:kind]
+      end
+
+      # A PDF read back from a week-old transcript comes back as a card: the
+      # word the tool result used is the only thing that has to survive.
+      def test_history_draws_a_document_the_agent_sent
+        sid = "web_kanyaah"
+        stored = "f" * 32 + "-laporan.pdf"
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: { sid => "Buat laporan" }
+        )
+        write_messages(channel, sid, [
+          { "role" => "user", "content" => "Buat laporan" },
+          { "role" => "assistant", "content" => "Ini laporannya.",
+            "tool_calls" => [ { "id" => "call_1",
+                                "function" => { "name" => "send_file",
+                                                "arguments" => JSON.generate({ "path" => "laporan.pdf" }) } } ] },
+          { "role" => "tool", "tool_call_id" => "call_1",
+            "content" => "Sent laporan.pdf (12 bytes) as a document. [web-attachment #{stored}]" }
+        ])
+
+        document = channel.send(:history, sid).last[:items].last[:list].first
+
+        assert_equal :document, document[:kind]
+        assert_equal "PDF", document[:label]
+        assert_equal "laporan.pdf", document[:name]
       end
 
       # The prompt is what the reader typed, and nothing else: pictures from the
@@ -2930,12 +3103,18 @@ module Rubot
 
       # A picture already in the conversation's folder, named the way the
       # channel names what it serves.
-      def write_picture(channel, sid, basename = "shot.png")
+      # A file in a conversation's folder, named the way the channel writes
+      # names: an id in front, the reader's own name behind it.
+      def write_attachment(channel, sid, basename, body)
         name = "a" * 32 + "-#{File.basename(basename, File.extname(basename))}#{File.extname(basename)}"
         dir = channel.send(:attachments_dir, sid)
         FileUtils.mkdir_p(dir)
-        File.binwrite(File.join(dir, name), png_bytes)
+        File.binwrite(File.join(dir, name), body)
         name
+      end
+
+      def write_picture(channel, sid, basename = "shot.png")
+        write_attachment(channel, sid, basename, png_bytes)
       end
 
       def write_messages(channel, sid, messages)
