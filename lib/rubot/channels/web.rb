@@ -795,6 +795,11 @@ module Rubot
           # Same trick for the sidebar and the header: what the conversation is
           # called is only known after the first turn has been saved.
           sse(out, "sidebar", payload.to_s)
+        when :working
+          # The band above the composer, sent again every time the turn reaches
+          # for a tool: the payload carries its own out-of-band marker, so the
+          # swap lands there and the timeline is untouched.
+          sse(out, "working", View.render("_working", since: turn.activity_epoch))
         when :heartbeat
           out.write(": keepalive\n\n")
           out.flush if out.respond_to?(:flush)

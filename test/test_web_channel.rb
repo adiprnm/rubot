@@ -891,6 +891,47 @@ module Rubot
                "the band sits above the field, not in the thread"
       end
 
+      # A clock that only ever climbs says how long the turn has run, which is
+      # not what a reader watching a slow tool wants to know. Restarting it on
+      # every call answers "how long has this step been quiet" — and a number
+      # that visibly drops back to zero is how the page shows the turn is still
+      # moving rather than stuck.
+      def test_a_tool_call_restarts_the_working_clock
+        epochs = [ 1000.0, 1012.0 ]
+        turn = Turn.new(id: "t1", session_id: "s1", clock: FakeClock.new,
+                        epoch_clock: -> { epochs.shift || 1012.0 })
+
+        assert_equal 1000.0, turn.activity_epoch,
+                     "before any work the clock counts from the prompt"
+
+        turn.tool_started("shell_exec", "ls")
+
+        assert_equal 1012.0, turn.activity_epoch, "the call restarts it"
+
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        out = StringIO.new
+        channel.send(:write_event, out, turn, :working, nil)
+        body = out.string
+
+        assert_includes body, "event: working"
+        assert_includes body, %(data-since="1012.0")
+        assert_includes body, 'hx-swap-oob="true"',
+                        "the row is not in the timeline, so the swap is out of band"
+      end
+
+      # The signal has to be in the log, or the band would keep the clock the
+      # first paint gave it and never restart.
+      def test_a_tool_call_signals_the_working_row
+        turn = build
+        turn.tool_started("shell_exec", "ls")
+        turn.finish("selesai")
+
+        types = []
+        turn.each_event { |type, _payload| types << type }
+
+        assert_includes types, :working
+      end
+
       def test_the_composer_form_carries_the_ref_enter_submits_through
         html = View.render("_composer", session_id: "web_rubot", token_query: "")
         form = html[/<form\b[^>]*>/m]

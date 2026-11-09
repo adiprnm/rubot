@@ -33,16 +33,20 @@ module Rubot
       attr_reader :id, :session_id, :response, :epoch
 
       # `clock` is injectable so the timing rules can be tested without
-      # sleeping through them.
-      def initialize(id:, session_id:, clock: nil)
+      # sleeping through them. `epoch_clock` is the wall clock the timeline rows
+      # stamp themselves with, injectable for the same reason: the working row
+      # has to be shown restarting from a tool call, and microseconds are a
+      # poor thing to assert on.
+      def initialize(id:, session_id:, clock: nil, epoch_clock: nil)
         @id = id
         @session_id = session_id
         @clock = clock || -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }
+        @epoch_clock = epoch_clock || -> { Time.now.to_f }
         # When the prompt was accepted, on the wall clock. The timeline rows
         # count from the moment their own work started; the row that says the
         # turn is still running has nothing of its own to count from, so it
         # counts from here.
-        @epoch = Time.now.to_f
+        @epoch = @epoch_clock.call
         @mutex = Mutex.new
         @cond = ConditionVariable.new
         @events = []
@@ -57,6 +61,19 @@ module Rubot
 
       def closed?
         @mutex.synchronize { @closed }
+      end
+
+      # Where the working row's clock starts. Not the prompt: a turn that has
+      # been running for two minutes is not news to anyone watching it, but the
+      # ten seconds since the last tool call is, and a clock that visibly
+      # restarts is how the page says the turn is still moving rather than
+      # stuck. A turn that has not reached for a tool yet counts from the
+      # prompt.
+      def activity_epoch
+        @mutex.synchronize do
+          last = @items.reverse.find { |item| item[:kind] == :tool }
+          last ? last[:epoch] : @epoch
+        end
       end
 
       def confirm_prompt
@@ -124,6 +141,10 @@ module Rubot
           seal_text_locked
           @items << { kind: :tool, name: name.to_s, detail: detail.to_s, state: :running,
                       started_at: @clock.call, epoch: epoch_now, elapsed: nil }
+          # The working row counts from the last thing the turn did, so a new
+          # call restarts it. Its own signal rather than a :turn re-render: the
+          # row lives outside the timeline, and only this event has to move it.
+          @events << [ :working, nil ]
           publish_locked
         end
       end
@@ -269,7 +290,7 @@ module Rubot
       end
 
       def epoch_now
-        Time.now.to_f
+        @epoch_clock.call
       end
 
       # An answer that never streamed lands here instead.
