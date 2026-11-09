@@ -455,6 +455,42 @@ class TestSessionSummarization < Minitest::Test
     assert_equal "Ship the search tool", reloaded.task_statement
   end
 
+  def test_the_title_is_persisted_and_loaded
+    session = Rubot::Session.new("title-1", workspace: @workspace)
+    session.add("user", "rapikan layout sidebar met")
+    session.add("assistant", "Sudah.")
+    session.title = "Perbaikan layout"
+    session.save!
+
+    reloaded = Rubot::Session.new("title-1", workspace: @workspace)
+    assert_equal "Perbaikan layout", reloaded.title
+  end
+
+  def test_a_session_file_without_a_title_falls_back_to_the_first_prompt
+    dir = File.join(@workspace, "sessions")
+    FileUtils.mkdir_p(dir)
+    File.write(File.join(dir, "untitled.json"), {
+      "messages" => [ { "role" => "user", "content" => "Rapikan  layout\nsidebar" },
+                      { "role" => "assistant", "content" => "ok" } ]
+    }.to_json)
+
+    entry = Rubot::Session.describe(File.join(dir, "untitled.json"))
+
+    assert_equal "Rapikan layout sidebar", entry[:title]
+  end
+
+  def test_a_stored_title_wins_over_the_first_prompt
+    dir = File.join(@workspace, "sessions")
+    FileUtils.mkdir_p(dir)
+    File.write(File.join(dir, "named.json"), {
+      "title" => "Perbaikan layout",
+      "messages" => [ { "role" => "user", "content" => "rapikan layout sidebar met" },
+                      { "role" => "assistant", "content" => "ok" } ]
+    }.to_json)
+
+    assert_equal "Perbaikan layout", Rubot::Session.describe(File.join(dir, "named.json"))[:title]
+  end
+
   def test_a_session_file_without_a_task_field_recovers_it_from_the_transcript
     dir = File.join(@workspace, "sessions")
     FileUtils.mkdir_p(dir)

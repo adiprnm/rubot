@@ -34,7 +34,7 @@ module Rubot
 
     attr_reader :id, :messages, :workspace, :usage, :last_usage, :cost
     attr_reader :task, :cwd
-    attr_accessor :summary, :forced_skill, :model_override, :model_preset
+    attr_accessor :summary, :forced_skill, :model_override, :model_preset, :title
 
     def initialize(id = "default", workspace: nil, sessions_dir: nil, cwd: nil,
                    max_messages: DEFAULT_MAX_MESSAGES)
@@ -57,6 +57,10 @@ module Rubot
       @forced_skill = nil
       @model_override = nil
       @model_preset = nil
+      # A name for the conversation, chosen by the model from the first prompt
+      # (see SessionNamer). nil means "not named yet"; readers fall back to the
+      # opening prompt.
+      @title = nil
       @usage = Usage.zero
       @last_usage = Usage.zero
       # Cumulative cost, priced per request with the rates of the model that
@@ -360,6 +364,7 @@ module Rubot
       @forced_skill = nil
       @summary = nil
       @task = nil
+      @title = nil
       @model_override = nil
       @model_preset = nil
       @usage = Usage.zero
@@ -547,7 +552,12 @@ module Rubot
         updated_at: updated.iso8601,
         timestamp: updated.to_f,
         cwd: data["cwd"].to_s.strip.empty? ? nil : data["cwd"].to_s,
-        last_prompt: last_prompt(messages)
+        last_prompt: last_prompt(messages),
+        # What the conversation was opened with. /resume lists the newest
+        # prompt because it is about continuing; a sidebar lists conversations,
+        # and a conversation is known by the question that started it — or by
+        # the name the model gave it once the first turn finished.
+        title: title_for(messages, data["title"])
       }
     rescue JSON::ParserError, SystemCallError, EncodingError
       nil
@@ -559,6 +569,21 @@ module Rubot
       message = messages.reverse.find { |msg| msg["role"] == "user" && !text_content(msg["content"]).empty? }
       message ||= messages.reverse.find { |msg| !text_content(msg["content"]).empty? }
       snippet(text_content(message && message["content"]), 100)
+    end
+
+    # The name a session is listed under: the model-chosen title when one has
+    # been stored, otherwise the opening prompt.
+    def self.title_for(messages, title)
+      stored = title.to_s.gsub(/\s+/, " ").strip
+      return snippet(stored, 60) unless stored.empty?
+
+      first_prompt(messages)
+    end
+
+    # The first thing the user asked, used as the conversation's name.
+    def self.first_prompt(messages)
+      message = messages.find { |msg| msg["role"] == "user" && !text_content(msg["content"]).empty? }
+      snippet(text_content(message && message["content"]), 60)
     end
 
     def self.text_content(content)
@@ -602,6 +627,7 @@ module Rubot
       }
       data["cwd"] = @cwd if @cwd
       data["task"] = @task if @task
+      data["title"] = @title if @title
       data["summary"] = @summary if @summary
       data["forced_skill"] = @forced_skill if @forced_skill
       data["model_override"] = @model_override if @model_override
@@ -750,6 +776,7 @@ module Rubot
         @task = @messages.first["content"].to_s.strip
       end
       @summary = data["summary"] if data["summary"]
+      @title = data["title"] if data["title"]
       @forced_skill = data["forced_skill"] if data["forced_skill"]
       @model_override = data["model_override"] if data["model_override"]
       @model_preset = data["model_preset"] if data["model_preset"]

@@ -899,7 +899,13 @@ class TestAgentCompaction < Minitest::Test
 end
 
 class TestAgentAdaptiveLearning < Minitest::Test
+  # Counts requests and files them by purpose, because a flush now sends two
+  # different background requests: one names the conversation (once per
+  # session) and, when the backlog is full enough, one extracts memory.
   class CountingProvider
+    MEMORY_MARKER = "memory extraction assistant"
+    NAMING_MARKER = "You name conversations"
+
     attr_reader :calls, :requests
 
     def initialize
@@ -918,8 +924,12 @@ class TestAgentAdaptiveLearning < Minitest::Test
     def chat(messages, tools: nil)
       @calls += 1
       @requests << messages
-      if messages.first.to_h["content"].to_s.include?("memory extraction assistant")
+      prompt = system_prompt(messages)
+
+      if prompt.include?(MEMORY_MARKER)
         { "content" => '{"facts": [], "preferences": [], "context": []}', "finish_reason" => "stop" }
+      elsif prompt.include?(NAMING_MARKER)
+        { "content" => "Local app tweaks", "finish_reason" => "stop" }
       else
         { "content" => "answered", "finish_reason" => "stop" }
       end
@@ -927,6 +937,25 @@ class TestAgentAdaptiveLearning < Minitest::Test
 
     def chat_stream(messages, tools: nil)
       chat(messages, tools: tools)
+    end
+
+    def extraction_calls
+      count_with(MEMORY_MARKER)
+    end
+
+    def naming_calls
+      count_with(NAMING_MARKER)
+    end
+
+    private
+
+    def system_prompt(messages)
+      first = messages.first
+      first.is_a?(Hash) ? first.to_h["content"].to_s : ""
+    end
+
+    def count_with(marker)
+      @requests.count { |messages| system_prompt(messages).include?(marker) }
     end
   end
 
@@ -965,14 +994,41 @@ class TestAgentAdaptiveLearning < Minitest::Test
   def test_flush_learning_batches_extraction
     @agent.process("first message here", stream: false)
     @agent.flush_learning
-    assert_equal 1, @provider.calls, "one message is below the batch size"
+    assert_equal 0, @provider.extraction_calls, "one message is below the batch size"
+    assert_equal 1, @provider.naming_calls, "the first flush names the conversation"
     assert_equal 1, @agent.session.memory_backlog.size
 
     @agent.process("second message here", stream: false)
     @agent.flush_learning
 
-    assert_equal 3, @provider.calls, "two answers plus one batched extraction"
+    assert_equal 1, @provider.extraction_calls, "two answers plus one batched extraction"
+    assert_equal 1, @provider.naming_calls, "a conversation is named once"
     assert_empty @agent.session.memory_backlog
+  end
+
+  def test_a_named_conversation_keeps_its_title
+    @agent.process("first message here", stream: false)
+    @agent.flush_learning
+
+    assert_equal "Local app tweaks", @agent.session.title
+
+    saved = JSON.parse(File.read(@agent.session.file_path))
+    assert_equal "Local app tweaks", saved["title"], "the title must survive a restart"
+
+    @agent.process("second message here", stream: false)
+    @agent.flush_learning
+
+    assert_equal 1, @provider.naming_calls, "a second turn must not rename the session"
+    assert_equal "Local app tweaks", @agent.session.title
+  end
+
+  def test_naming_replaces_the_first_prompt_in_the_session_list
+    @agent.process("first message here", stream: false)
+    @agent.flush_learning
+
+    entry = Rubot::Session.describe(@agent.session.file_path)
+
+    assert_equal "Local app tweaks", entry[:title]
   end
 
   def test_extraction_usage_is_counted_in_the_session_totals

@@ -120,6 +120,17 @@ class TestActors < Minitest::Test
     @requests_mutex.synchronize { @bodies.dup }
   end
 
+  # The post-answer learning pass sends a naming request before (and apart
+  # from) memory extraction, so the two are counted separately rather than
+  # lumped into the total.
+  def naming_request_count
+    request_bodies.count { |body| body.include?("You name conversations") }
+  end
+
+  def extraction_request_count
+    request_bodies.count { |body| body.include?("memory extraction assistant") }
+  end
+
   # Regression: last_user_message reads Agent::CONTINUE_PROMPT and friends from
   # inside the session Ractor. When those strings are not frozen, every
   # post-answer learning pass dies with Ractor::IsolationError, and because
@@ -138,10 +149,12 @@ class TestActors < Minitest::Test
 
       assert_equal 3, request_count
 
-      # Default batch size is 3, so this flush must reach the provider once.
+      # Default batch size is 3, so this flush must reach the provider once,
+      # plus the one request that names the conversation.
       handle.flush_learning
 
-      assert_equal 4, request_count, "the batched extraction request must be sent"
+      assert_equal 1, extraction_request_count, "the batched extraction request must be sent"
+      assert_equal 1, naming_request_count, "the first flush names the conversation"
       session = JSON.parse(File.read(File.join(config.sessions_dir, "learning-ractor.json")))
       assert_empty Array(session["memory_backlog"]), "the batch must be consumed by extraction"
     ensure
@@ -161,7 +174,8 @@ class TestActors < Minitest::Test
       # One message is below the default batch size, so extraction is a no-op
       # that must still complete without raising across the Ractor boundary.
       assert_nil handle.flush_learning
-      assert_equal 1, request_count, "a flush below the batch size must not call the provider"
+      assert_equal 0, extraction_request_count, "a flush below the batch size must not extract"
+      assert_equal 1, naming_request_count, "but the conversation is still named"
     ensure
       pool.shutdown
     end

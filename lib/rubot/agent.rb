@@ -1099,6 +1099,7 @@ module Rubot
     # A failure here must never cost the user their answer, so everything is
     # rescued and reported through the debug log only.
     def flush_learning
+      run_session_naming
       run_feedback_learning
       run_memory_extraction
     rescue StandardError => e
@@ -1784,6 +1785,57 @@ module Rubot
           warn "[memory_extractor] Stored [#{item[:section]}]: #{item[:fact]}"
         end
       end
+    end
+
+    # Give the conversation a name, once.
+    #
+    # A session file holds a transcript, not a name, and the prompt that opened
+    # it is written for the agent rather than for a list someone scans. One
+    # small request names it after the answer has been delivered, so naming
+    # never delays the reply; its tokens are recorded as auxiliary usage so the
+    # context figure the status row shows stays about the conversation itself.
+    def run_session_naming
+      return unless @session.title.to_s.strip.empty?
+
+      prompt = first_user_prompt
+      return if prompt.nil?
+
+      namer = SessionNamer.new(provider: @provider)
+      title = namer.name(prompt, reply: first_assistant_answer)
+
+      if namer.last_usage
+        @session.record_auxiliary_usage(
+          namer.last_usage, provider: @provider.name,
+          rates: current_rates(network: false)
+        )
+      end
+      return if title.nil?
+
+      @session.title = title
+      @session.save!
+      warn "[session_namer] named #{@session.id}: #{title}" if Rubot.debug?
+    end
+
+    # The prompt that opened this conversation, ignoring the instructions rubot
+    # sends itself.
+    def first_user_prompt
+      @session.messages.each do |msg|
+        next unless msg["role"] == "user"
+
+        content = msg["content"].to_s.strip
+        next if content.empty?
+        next if [ CONTINUE_PROMPT, ANSWER_NOW_PROMPT, EMPTY_ANSWER_PROMPT ].include?(content)
+
+        return content
+      end
+      nil
+    end
+
+    # What the conversation turned into, which is often easier to name than the
+    # request that started it. nil when the first turn produced no text.
+    def first_assistant_answer
+      msg = @session.messages.find { |m| m["role"] == "assistant" && !m["content"].to_s.strip.empty? }
+      msg && msg["content"].to_s
     end
 
     # Run feedback learning — detect if user is correcting the bot (always on)
