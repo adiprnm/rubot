@@ -241,8 +241,9 @@ to the highlighted model — it stays switched until `/new` — and `Esc` clears
 the search, and closes the list once the search is empty. `/models <text>`
 narrows the list to the models whose id or name contains that text. The
 catalog is cached
-in `<workspace>/model_catalog.json`, so a provider that is temporarily
-unreachable still shows the last known list.
+in `model_catalog.json` next to `config.yml`, so a provider that is temporarily
+unreachable still shows the last known list. One copy is shared by every
+workspace and every persona.
 
 ### TUI Keys
 
@@ -472,7 +473,7 @@ Each entry in `model_list` defines a model with its provider and credentials:
 When the provider exposes a `GET /models` endpoint (OpenAI-compatible APIs,
 including OpenCode Go), `/preset models` lists the provider's own catalog
 instead of only the entries in `config.yml`. The catalog is cached at
-`<workspace>/model_catalog.json`; a preset that references a catalog model id
+`model_catalog.json` next to `config.yml`; a preset that references a catalog model id
 reuses the active config entry's `api_base` and `api_key`.
 
 The TUI's `/models` reads the same catalog — Anthropic (`GET /v1/models`) and
@@ -565,8 +566,9 @@ show that no usage is available.
 
 Pricing and context windows are fetched automatically from
 [models.dev](https://models.dev/api.json) and cached in
-`<workspace>/model_pricing.json` for 24 hours. The file is a plain JSON cache:
-delete it to force a refresh. Lookup precedence is:
+`model_pricing.json` next to `config.yml` for 24 hours. It is one file for the
+whole install — a persona does not refresh its own copy. The file is a plain
+JSON cache: delete it to force a refresh. Lookup precedence is:
 
 1. `pricing` / `context_window_tokens` in `config.yml`,
 2. the models.dev cache (or a fresh API response),
@@ -834,12 +836,29 @@ character message limit are truncated with a visible `(truncated)` marker.
 
 #### Per-topic personas (forum topics)
 
-Every Telegram forum topic gets its own session, and now it can also get its
-own **persona**: a model plus a system prompt that applies only to that topic.
+Every Telegram forum topic gets its own session, and it can also get its own
+**persona**: a model plus a system prompt that applies only to that topic.
 The bot must be an admin in the group (or have privacy mode disabled) to see
 the `forum_topic_created` service message that starts the wizard.
 
-When a new topic is created the bot sends a three-step wizard:
+The wizard opens with a question that matters more than the model: does this
+topic borrow a persona that already exists, or build one of its own? A borrowed
+persona brings its model, prompt, skills and — because those live in the
+persona's directory — its `MEMORY.md`. The topic still keeps its own session,
+so the conversation is not shared with the web UI or with another topic.
+
+```
+🧬 Persona untuk topic ini
+
+Pakai persona yang sudah ada (memory-nya ikut, sesi tidak),
+atau buat persona baru khusus topic ini:
+[ 🧪 Personal Trainer ] [ 🧠 Kanyaah ]
+[ ➕ Buat persona baru ]
+[ ❌ Batal ]
+```
+
+Choosing **Buat persona baru** continues to the three-step model + prompt
+wizard:
 
 ```
 🧬 Setup persona untuk topic ini
@@ -872,15 +891,18 @@ Commands:
 | `/persona reset` | Remove the persona and return to the default model/prompt |
 | `/cancel` | Leave the wizard without saving |
 
-Personas are stored in `<workspace>/personas.json`, keyed by
-`"<chat_id>:<thread_id>"`, so they survive restarts and can be edited by hand:
+Personas are stored in `personas.json` next to `config.yml`, keyed by
+`"<chat_id>:<thread_id>"`, so they survive restarts and can be edited by hand.
+A topic that borrows an existing persona stores a reference instead of a copy:
 
 ```json
 {
-  "-1001234567890:42": {
+  "-1001234567890:42": { "ref": "personal-trainer" },
+  "-1001234567890:43": {
     "name": "trading",
     "preset": "primary",
     "system_prompt": "Kamu adalah asisten trading. Jawab singkat, fokus data.",
+    "skills": ["writing"],
     "created_at": "2026-02-11T10:00:00Z"
   }
 }
@@ -893,8 +915,11 @@ Notes:
 - The General topic (`thread_id == nil`) always uses the global/default persona.
 - A persona preset that no longer exists falls back to the primary preset with
   a warning instead of breaking the topic.
-- Memory (`MEMORY.md`) and skills are still shared by all topics. Only the
-  preset and system prompt are per-topic.
+- Two topics may point at the same persona: they share that persona's memory
+  and its `SOUL.md`, and each keeps its own session and history.
+- Skills are shared by every persona (they live in the configured workspace).
+  A persona says which of them it needs with `skills`, which is injected into
+  the system prompt as a required-skill block.
 - `/new` clears the conversation and any per-session preset switch, but keeps the
   topic persona.
 
@@ -982,15 +1007,17 @@ copyable, and it stays hidden while the fence is still open because the text is
 not finished yet.
 
 Personas are the left column: one round avatar per specialist, chosen there and
-created with the `+` beneath them. Each one owns a workspace of its own, so its
-`SOUL.md`, skills and memory are not shared with the next. A persona is edited
+created with the `+` beneath them. Each one owns a directory of its own, so its
+`SOUL.md` and its `MEMORY.md` are not shared with the next. Skills are the
+exception — they are tooling, not identity, so there is one copy in the
+configured workspace and a persona names the ones it needs. A persona is edited
 where its name is shown: the pencil in the sidebar opens the same dialog with
 the name, the face and the system prompt already filled in, and saving keeps the
 slug, creation time and model choice untouched — the slug is the key in
-`personas.json` and the workspace directory's name, so it is shown rather than
-asked for. An edit reaches the conversation's next turn: idle actors are rebuilt
-from the store, and a turn already in flight is left to finish in the voice it
-started with.
+`personas.json` and the directory's name, so it is shown rather than asked for.
+An edit reaches the conversation's next turn: idle actors are rebuilt from the
+store, and a turn already in flight is left to finish in the voice it started
+with.
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
@@ -1116,15 +1143,25 @@ document:
 
 | Layer | File | What belongs there |
 | --- | --- | --- |
-| Global | `~/.rubot/MEMORY.md` (next to `config.yml`) | who you are, how you want the bot to behave — true in every project |
-| Workspace | `~/.rubot/memory/<slug>.md` | what this project is about; keyed by the absolute path of the workspace |
+| Global | `~/.rubot/MEMORY.md` (next to `config.yml`) | who you are, how you want the bot to behave — true everywhere |
+| Local | `~/.rubot/memory/<slug>.md`, or `<persona>/MEMORY.md` | what this project is about (keyed by the workspace path), or what this persona is about |
 
-The workspace file deliberately does **not** live inside the project: memory is
+A project's file deliberately does **not** live inside the project: memory is
 the bot's, and dropping a `MEMORY.md` into every repository you open would
-pollute your `git status`. The `memory` tool takes `scope: "global"` or
-`scope: "workspace"` (default), and automatic extraction files **Facts** and
-**Preferences** globally while **Context** goes to the workspace. Learned
-corrections are global.
+pollute your `git status`. A persona's file is the opposite case — a persona is
+not a directory you might `git add`, so its memory sits inside its own folder
+next to `SOUL.md`, and the whole specialist is one directory.
+
+The `memory` tool takes `scope: "global"` or the local one, which is named after
+where it points: `scope: "persona"` for a specialist, `scope: "workspace"` for a
+project directory. Writes default to the local layer.
+
+Automatic extraction labels each item it stores, instead of deciding by section:
+a fact that holds everywhere ("lives in Jakarta", "183 cm tall") goes global, and
+anything true only of the job at hand ("this client prefers carousels") stays in
+the persona's file. When the extractor is unsure the item stays local, so a wrong
+guess costs one persona's context rather than following the user into every
+conversation. Learned corrections are global.
 
 Both files are organized into sections:
 
@@ -1173,19 +1210,29 @@ agents:
       consolidate: true   # merge duplicates and enforce the section caps
 ```
 
-### `personas.json` — Per-topic Personas
+### `personas.json` — Personas
 
-Telegram forum topics can override the model and system prompt via
-`<workspace>/personas.json`. The file is managed by the `/persona` wizard but is
-plain JSON, so it can also be edited by hand. See the Telegram section above for
-the format and the fallback rules.
+Specialists live in `personas.json` next to `config.yml`, and each slug that owns
+a directory has one under `<config dir>/personas/<slug>/` holding its `SOUL.md`
+and `MEMORY.md`. The file is managed by the `/persona` wizard and the web UI but
+is plain JSON, so it can also be edited by hand. Keys are either a slug (a web
+persona) or `"<chat_id>:<thread_id>"` (a Telegram forum topic, which may point at
+a slug with `"ref"`). See the Telegram section above for the format and the
+fallback rules.
 
 ### `model_catalog.json` — Provider Model Cache
 
 The provider's `/models` response (for example every model available through
-OpenCode Go) is cached here so the picker works even when the provider is
-temporarily unreachable. It is safe to delete; the next `/models` or `/persona`
-command refreshes it.
+OpenCode Go) is cached next to `config.yml` (`~/.rubot/model_catalog.json`), not
+in a workspace: what a provider offers does not change per persona, so there is
+one copy for the whole install. It is safe to delete; the next `/models` or
+`/persona` command refreshes it.
+
+### `model_pricing.json` — Pricing & Context Cache
+
+models.dev prices and context windows, cached next to `config.yml` for 24 hours
+for the same reason. Safe to delete; the next `/context` or `/usage` refresh
+rebuilds it.
 
 ## Tools
 

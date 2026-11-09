@@ -77,7 +77,8 @@ model_presets:
     # reasoning_effort: low
     # Context window and prices used by /usage (USD per 1M tokens).
     # By default these come from models.dev and are cached in
-    # <workspace>/model_pricing.json. Set them only to override.
+    # model_pricing.json next to config.yml (one file for every persona).
+    # Set them only to override.
     context_window_tokens: 128000
     # pricing:
     #   input_per_mtok: 0.15
@@ -94,9 +95,9 @@ model_presets:
 models:
   # Entries here are always available. When the provider exposes GET /models
   # (OpenAI-compatible APIs such as OpenCode Go), /preset models lists the
-  # provider's full catalog. The catalog is cached in
-  # <workspace>/model_catalog.json and a selected catalog model reuses this
-  # entry's api_base/api_key.
+  # provider's full catalog. The catalog is cached in model_catalog.json
+  # next to config.yml and a selected catalog model reuses this entry's
+  # api_base/api_key.
   - name: gpt-4o-mini
     model: openai/gpt-4o-mini
     api_key: sk-your-key
@@ -193,24 +194,32 @@ channels:
 #
 # MEMORY.md — Persistent memory managed by the bot itself.
 #   The bot reads this on every session and can update it via the
-#   memory tool to remember facts, preferences, and context.
+#   memory tool to remember facts, preferences, and context. The file next
+#   to config.yml is the global layer; a persona keeps its own inside
+#   personas/<slug>/MEMORY.md, and a project's lives in memory/<slug>.md.
 #
-# personas.json — Per-topic model + system prompt for Telegram forum topics.
-#   Managed by the /persona wizard, keyed by "<chat_id>:<thread_id>".
+# personas.json — Personas: a web specialist (keyed by slug, with a directory
+#   under personas/<slug>/) or a Telegram forum topic (keyed by
+#   "<chat_id>:<thread_id>"). A topic points at an existing persona with
+#   "ref" so it shares that persona's memory but keeps its own session.
+#   Managed by /persona and the web UI; plain JSON, editable by hand.
 #   Example:
 #     {
-#       "-1001234567890:42": {
+#       "-1001234567890:42": { "ref": "personal-trainer" },
+#       "-1001234567890:43": {
 #         "name": "trading",
 #         "model": "gpt-4o-mini",
 #         "system_prompt": "Kamu adalah asisten trading.",
+#         "skills": ["writing"],
 #         "created_at": "2026-02-11T10:00:00Z"
 #       }
 #     }
 #   If a persona model is removed from config.yml, the topic falls back to
 #   the default model with a warning.
 #
-# model_catalog.json — Cache of the provider's GET /models response. Deleting it
-#   is safe; the next /models or /persona command refreshes it.
+# model_catalog.json — Cache of the provider's GET /models response, next to
+#   config.yml and shared by every persona. Deleting it is safe; the next
+#   /models or /persona command refreshes it.
 #
 # model_pricing.json — Cache of models.dev pricing/context data used by /usage.
 #   Refreshed every 24 hours. Delete it to force a refresh; if the API is

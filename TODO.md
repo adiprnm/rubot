@@ -148,3 +148,36 @@ Langkah 3/3 — Preview:
 ## Estimasi
 
 ~400 baris kode baru/ubahan + test.
+
+## Update 2026-11-09 — memory per persona, shared skills, shared caches
+
+Perubahan setelah fitur ini jalan:
+
+1. **Memory per persona.** Sebuah persona kini punya `MEMORY.md` di direktorinya
+   sendiri (`~/.rubot/personas/<slug>/MEMORY.md`), bukan `~/.rubot/memory/
+   <path-slug>.md`. Config menandai ini lewat `memory_in_workspace`, jadi
+   `workspace_memory_path` tidak perlu menebak dari bentuk path. Memory
+   workspace non-persona (project TUI) tidak berubah.
+2. **Label scope.** Untuk persona, lapisan lokalnya disebut `persona` (di tool
+   `memory` maupun di preamble prompt), bukan `workspace`.
+3. **Ekstraksi per item.** `SCOPE_BY_SECTION` dihapus. Tiap item yang diekstrak
+   membawa `scope` sendiri; hanya `global` yang eksplisit yang keluar dari
+   lapisan lokal. Ragu → lokal.
+4. **Skills terpusat.** `SkillRegistry` membaca `Config#skills_workspace`
+   (workspace utama), bukan direktori persona. Persona menyebut skill yang
+   wajib dipakai lewat field `skills`, yang diinjeksi sebagai blok
+   `# Required Skills` di system prompt.
+5. **Topic menunjuk persona.** Key `"<chat_id>:<thread_id>"` boleh berisi
+   `{"ref": "<slug>"}`. Topic memakai model, prompt, skills dan memory persona
+   itu, tapi session-nya tetap sendiri (`tg_<chat>_<thread>`). Wizard `/persona`
+   kini bertanya dulu: pakai persona yang ada, atau buat baru.
+6. **Cache terpusat.** `model_pricing.json` dan `model_catalog.json` pindah ke
+   samping `config.yml` (`Config#catalog_dir`), satu untuk semua persona.
+   Salinan lama per persona/workspace dihapus lewat skrip one-off.
+7. **Bug lama diperbaiki.** `topic_session_exists?` menunjuk
+   `<workspace>/sessions`, padahal session sudah terpusat di
+   `~/.rubot/sessions`; akibatnya setiap topic lama dianggap baru dan wizard
+   muncul lagi.
+
+Sisa catatan lama yang masih berlaku: `CronActor` tetap satu per pool (dibuat
+dari workspace utama), jadi job cron tidak ikut workspace persona.
