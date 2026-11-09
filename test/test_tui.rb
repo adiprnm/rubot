@@ -16,6 +16,12 @@ module Rubot
         { provider: "openai", model: "gpt-test", tools: 3 }
       end
 
+      # Learning runs after the answer is on screen; a stub that cannot do it
+      # would turn every turn into an error row and hide what is being tested.
+      def agent.flush_learning
+        nil
+      end
+
       # A launch has spent nothing yet but already carries a system prompt.
       def agent.usage_report
         { requests: 0, prompt_tokens: 0, cache_hit_rate: 0.0,
@@ -345,6 +351,44 @@ def test_repin_command_reports_nothing_to_rebuild
 
   texts = log.instance_variable_get(:@entries).map { |segments| segments.map(&:first).join }
   assert texts.any? { |text| text.include?("not pinned") }
+end
+
+# A turn that ends with nothing on the screen is the worst failure this
+# interface has: no error, no answer, and no way to tell whether anything
+# ran. The answer arrives as the return value as well as in chunks, and with
+# `/stream off` only the return value exists.
+def test_a_turn_without_streaming_still_shows_its_answer
+  repl = build_repl
+  agent = repl.instance_variable_get(:@agent)
+  agent.define_singleton_method(:process) { |_text, **_callbacks, &_block| "Jawaban tanpa stream." }
+
+  repl.send(:process_message, "halo")
+  repl.send(:pump)
+
+  texts = repl.instance_variable_get(:@log).instance_variable_get(:@entries).map { |segments| segments.map(&:first).join }
+  assert texts.any? { |text| text.include?("Jawaban tanpa stream.") },
+         "the answer has to reach the log even when nothing streamed"
+end
+
+# Streaming already drew the answer; the return value must not draw it a
+# second time, but the notice appended after the last chunk is news.
+def test_the_tail_of_a_turn_is_shown_once
+  repl = build_repl
+  agent = repl.instance_variable_get(:@agent)
+  answer = "Selesai."
+  notice = "\n\n⚠️ Turn stopped after 25 rounds"
+  agent.define_singleton_method(:process) do |_text, **_callbacks, &block|
+    block.call(answer)
+    answer + notice
+  end
+
+  repl.send(:process_message, "halo")
+  repl.send(:pump)
+
+  log = repl.instance_variable_get(:@log).instance_variable_get(:@entries).map { |segments| segments.map(&:first).join }
+  joined = log.join
+  assert_equal 1, joined.scan("Selesai.").size, "the streamed answer must not be drawn twice"
+  assert_includes joined, "Turn stopped after 25 rounds"
 end
 
     def test_command_output_gets_one_blank_line_above_and_below_and_left_padding

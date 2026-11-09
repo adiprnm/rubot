@@ -969,23 +969,24 @@ module Rubot
       on_confirm = @tui ? confirm_callback : stdin_confirm_callback
 
       @events << [ :stream_start ]
-      response = +""
+      streamed = +""
       stopped = false
-      agent.process(message,
-                    on_confirm: on_confirm,
-                    on_tool_call: proc do |name, args, _snapshot|
-                      @events << [ :tool_call, name, args ]
-                    end,
-                    on_tool_result: proc do |name, result, ui_diff|
-                      @events << [ :tool_done, name, file_diff(ui_diff), result ]
-                    end,
-                    on_stopped: -> { stopped = true },
-                    on_reasoning: proc { |delta| @events << [ :thinking, delta.to_s ] },
-                    on_usage: ->(report) { live_usage(report) },
-                    stream: @stream) do |chunk|
+      final = agent.process(message,
+                            on_confirm: on_confirm,
+                            on_tool_call: proc do |name, args, _snapshot|
+                              @events << [ :tool_call, name, args ]
+                            end,
+                            on_tool_result: proc do |name, result, ui_diff|
+                              @events << [ :tool_done, name, file_diff(ui_diff), result ]
+                            end,
+                            on_stopped: -> { stopped = true },
+                            on_reasoning: proc { |delta| @events << [ :thinking, delta.to_s ] },
+                            on_usage: ->(report) { live_usage(report) },
+                            stream: @stream) do |chunk|
         @events << [ :chunk, chunk.to_s ]
-        response << chunk.to_s
+        streamed << chunk.to_s
       end
+      show_unstreamed_tail(final, streamed, stopped: stopped)
       # The answer is on screen, so learning may safely run now.
       agent.flush_learning
     rescue Interrupt
@@ -1004,6 +1005,38 @@ module Rubot
       # Published after :idle so the working badge does not linger while the
       # pricing catalog is read.
       refresh_usage
+    end
+
+    # The turn's answer arrives twice: in pieces as the model writes it, and
+    # whole as the return value — and the whole one also carries what never
+    # streamed at all.
+    #
+    # Without this, a turn could end with nothing on the screen: with `/stream
+    # off` the provider is called without a stream, so no chunk is ever yielded
+    # and the answer went nowhere. The same held for everything appended after
+    # the last chunk — the notice that the round limit was hit, the note that an
+    # answer was cut off at the output limit, cron results, and the fallback
+    # used when the model returns nothing readable at all.
+    def show_unstreamed_tail(final, streamed, stopped: false)
+      # A stopped turn is reported by the status row above the input; the
+      # sentence the agent appends for it would say the same thing twice.
+      return if stopped
+
+      text = final.to_s
+      return if text.strip.empty?
+
+      rest = if streamed.empty?
+               text
+             elsif text.start_with?(streamed)
+               # The reader has the prefix already; only the tail is news.
+               text[streamed.length..]
+             end
+      # nil means the streamed pieces were not this answer: a steered turn
+      # streams one message and returns the next, and both are wanted as they
+      # came.
+      return if rest.nil? || rest.strip.empty?
+
+      @events << [ :chunk, rest ]
     end
 
     # Allow a dangerous tool, blocking the worker until the dialog is
