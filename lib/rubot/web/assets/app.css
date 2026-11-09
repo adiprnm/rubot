@@ -223,15 +223,22 @@ body {
   grid-template-columns: auto minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   grid-template-areas: "dock chat";
-  /* Two heights, the older one first: a browser that does not know `dvh`
-     throws the second declaration away, and without the first the shell would
-     have no height at all — the thread would grow to fit the whole
-     conversation and push the composer, and the header with it, off the
-     screen. `overflow: hidden` is the belt to that suspender: nothing inside
-     the shell may ever make the page taller than the window, so the field
-     stays where it is even when a list or a thread misbehaves. */
+  /* Three heights, the oldest first: a browser that does not know `dvh`
+     throws that declaration away, and without `vh` the shell would have no
+     height at all — the thread would grow to fit the whole conversation and
+     push the composer, and the header with it, off the screen. `overflow:
+     hidden` is the belt to that suspender: nothing inside the shell may ever
+     make the page taller than the window, so the field stays where it is even
+     when a list or a thread misbehaves.
+     The last one is the keyboard: a phone's keys shrink the *visual* viewport,
+     and the shell has to end where the keys begin or the field sits behind
+     them. app.js writes the visible height there (see fitToKeyboard); on the
+     browsers whose keyboard resizes the layout viewport instead — the ones
+     that understand `interactive-widget=resizes-content` — `dvh` is already
+     right and nothing is written. */
   height: 100vh;
   height: 100dvh;
+  height: var(--vvh, 100dvh);
   overflow: hidden;
 }
 
@@ -1709,7 +1716,11 @@ body {
   resize: none;
   outline: none;
   field-sizing: content;
-  max-height: 40vh;
+  /* 40% of the box the reader can actually see. `vh` is the layout viewport,
+     which on a phone with the keyboard open is taller than the screen being
+     typed on, so a field capped at 40vh could stand taller than the space the
+     keys left behind — and this page does not scroll to make room. */
+  max-height: min(40vh, calc(var(--vvh, 100vh) * 0.4));
 }
 
 .composer textarea::placeholder { color: var(--fg-faint); font-style: italic; }

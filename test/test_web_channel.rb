@@ -560,6 +560,35 @@ module Rubot
         Turn.new(id: "t1", session_id: "s1", clock: clock)
       end
 
+      # A provider that answers without a network: one canned reply for the turn
+      # and one title for the naming request that follows it. The naming call is
+      # told apart by its system prompt, which is the only thing a stub can see.
+      class NamingProvider
+        attr_reader :calls
+
+        def initialize(title: "Undangan pernikahan")
+          @title = title
+          @calls = []
+        end
+
+        def chat(messages, tools: nil)
+          @calls << messages
+          if messages.any? { |msg| msg["content"].to_s.include?("You name conversations") }
+            { "content" => @title }
+          else
+            { "content" => "Siap, undangannya sudah saya susun." }
+          end
+        end
+
+        def chat_stream(messages, tools: nil, &_on_chunk)
+          chat(messages, tools: tools)
+        end
+
+        def naming_calls
+          @calls.count { |messages| messages.any? { |msg| msg["content"].to_s.include?("You name conversations") } }
+        end
+      end
+
       # The shell of the page with nothing in it but what these view tests need:
       # a persona, one open session, and whatever turn is still in flight.
       def render_page(live_turn: nil, persona_prompt: "")
@@ -2450,6 +2479,37 @@ module Rubot
         assert_includes markup, "Riset harga template signature"
       end
 
+      # The end-to-end version of the test above: a real turn through the channel,
+      # the naming request that follows it, and the markup the browser is handed
+      # at the end. The name is only known once the turn is over, so a page that
+      # does not receive this swap shows the prompt's first words until it is
+      # reloaded — which is what the reader reported.
+      def test_the_name_the_model_gives_reaches_the_page_when_the_turn_ends
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        channel.define_singleton_method(:owner_slug) { |_sid| "kanyaah" }
+
+        config = channel.instance_variable_get(:@app_config)
+        provider = NamingProvider.new(title: "Undangan pernikahan")
+        channel.define_singleton_method(:session_for) do |sid|
+          Rubot::Agent.new(config: config, provider: provider, session_id: sid)
+        end
+
+        res = FakeResponse.new
+        channel.send(:create_turn, turn_request("Tolong susun undangan pernikahan"), res, "web_kanyaah")
+
+        turn = channel.instance_variable_get(:@turns).values.first
+        payload = nil
+        turn.each_event { |type, data| payload = data if type == :sidebar }
+
+        assert_equal 1, provider.naming_calls, "the conversation is named once the answer is delivered"
+        refute_nil payload, "the turn has to tell the page that it has a name now"
+        assert_includes payload, "Undangan pernikahan"
+        assert_includes payload, %(id="chat-head" hx-swap-oob="true")
+        assert_includes payload, %(id="sessions" hx-swap-oob="true")
+        assert_includes payload, %(data-title="Kanyaah · Undangan pernikahan"),
+                        "the tab title travels with the same swap"
+      end
+
       # A conversation with no prompt yet has no name, and the header must not
       # invent one: it shows the persona alone.
       def test_an_unnamed_session_adds_nothing_to_the_header
@@ -3292,6 +3352,25 @@ module Rubot
         assert_match(/overscroll-behavior: none;/, shell, "and pull-to-refresh must not reload a running turn")
         assert_match(/overscroll-behavior-y: contain;/, thread,
                      "the momentum at the end of the thread stops at the thread")
+      end
+
+      # A phone's keys do not resize the layout viewport on every browser, and the
+      # page cannot scroll to reveal the field any more — it is a page that never
+      # scrolls, on purpose. So the shell ends where the keys begin: the browser
+      # is asked to resize the layout viewport where it can, and app.js mirrors
+      # the visible height into `--vvh` where it cannot.
+      def test_the_field_climbs_above_the_keyboard
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+        layout = File.read(File.expand_path("../lib/rubot/web/views/layout.erb", __dir__))
+
+        assert_includes layout, "interactive-widget=resizes-content"
+        assert_match(/height: var\(--vvh, 100dvh\);/, css[/^\.app \{[^}]*\}/],
+                     "the shell has to take its height from the visible box")
+        assert_includes js, "visualViewport"
+        assert_includes js, "--vvh"
+        assert_includes js, "view.scale > 1.01",
+                        "a pinch-zoom shrinks the visual viewport too, and the shell must not follow it"
       end
 
       def rem(value)
