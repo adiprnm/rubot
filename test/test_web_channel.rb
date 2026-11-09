@@ -1039,20 +1039,21 @@ module Rubot
                         "descendants escape the scroll clip and stretch the document"
       end
 
-      # A list is a column of its own: the marker hangs in the margin the page
-      # already keeps, so item text starts where the paragraph above it starts.
-      # Indenting the list by a marker-width instead put every line to the right
-      # of the prose it belongs to.
+      # A list is a column of its own, but the column sits inside the
+      # paragraph: the marker starts on the paragraph's left edge and the item
+      # text steps in by one gutter. Hanging the marker in the page margin put
+      # it on the wrong side of the edge the paragraph draws — a stray bullet
+      # rather than a list.
       #
       # The marker is drawn by the stylesheet because a bullet and a digit do
       # not share a box: left to the browser, the numbered list put its numbers
       # in a different column from the bulleted list's bullets.
-      def test_a_list_hangs_its_marker_in_one_column_for_both_kinds
+      def test_a_list_keeps_its_marker_inside_the_paragraph_for_both_kinds
         css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
         list = css[/^\.text ul,\n\.text ol \{[^}]*\}/]
 
         refute_nil list, "the .text list rule is missing from app.css"
-        assert_includes list, "padding-left: 0"
+        assert_includes list, "padding-left: var(--marker-gutter)"
         assert_includes list, "list-style: none"
 
         # One box, shared: the pixel the marker starts on cannot depend on
@@ -1065,11 +1066,11 @@ module Rubot
         assert_includes css, %(.text ul > li::before { content: "•"; })
         assert_includes css, %(.text ol > li::before { content: counter(rubot-item) "."; })
 
-        # A nested list is the one that does indent: its markers must not land
-        # on top of the parent's.
+        # A nested list is the one that indents twice: its markers must not
+        # land on the parent's, and its text must stay inside the parent's.
         nested = css[/^\.text li > ul,\n\.text li > ol \{[^}]*\}/]
         refute_nil nested, "a nested list needs a rule of its own"
-        assert_includes nested, "padding-left: 1.3em"
+        assert_includes nested, "padding-left: var(--marker-gutter)"
       end
     end
   end
