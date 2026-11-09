@@ -152,7 +152,10 @@ module Rubot
       # the configured workspace's copy is the fallback (and is what the
       # Telegram bot always uses, since its workspace is that directory).
       @agents_file = AgentsFile.new(workspace: agents_workspace(config, assets))
-      @skill_registry = SkillRegistry.new(workspace: assets)
+      # Skills stay in the configured workspace even when the agent works out
+      # of a persona's directory: copying a skills tree into every persona
+      # would mean maintaining one copy per specialist.
+      @skill_registry = SkillRegistry.new(workspace: config.skills_workspace)
       config.ensure_workspace
 
       # Register the memory tool so the bot can manage its own memory
@@ -1102,10 +1105,20 @@ module Rubot
         parts << "# Soul\n\n#{soul}" unless soul.strip.empty?
       end
 
-      # 2b. Persona (per Telegram forum topic)
+      # 2b. Persona (per Telegram forum topic, or a web specialist)
       persona_prompt = @persona&.system_prompt.to_s.strip
       unless persona_prompt.empty?
         parts << "# Persona\n\n#{persona_prompt}"
+      end
+
+      # 2c. The skills this persona exists to use. Skills themselves are shared
+      # (they live in the configured workspace, not in the persona's own
+      # directory), so the persona is what says which of them apply here.
+      required_skills = Array(@persona&.skills)
+      unless required_skills.empty?
+        parts << "# Required Skills\n\nThis persona works with: #{required_skills.join(', ')}.\n" \
+                 "Load them and follow them for everything in this conversation, even when the " \
+                 "request looks small enough to answer without one."
       end
 
       # 3. Memory: global (~/.rubot/MEMORY.md) merged with this workspace's.
@@ -1182,16 +1195,19 @@ module Rubot
     end
 
     # Global memory next to config.yml plus the memory of the workspace this
-    # agent works in. Configs that predate the split (tests, plain data
-    # configs) fall back to the single file in the assets workspace.
+    # agent works in — which for a persona is the persona's own MEMORY.md.
+    # Configs that predate the split (tests, plain data configs) fall back to
+    # the single file in the assets workspace.
     def build_memory(cfg)
       unless cfg.respond_to?(:global_memory_path) && cfg.respond_to?(:workspace_memory_path)
         return Memory.new(workspace: cfg.assets_workspace)
       end
 
+      label = cfg.respond_to?(:memory_scope_label) ? cfg.memory_scope_label : MemoryBank::SCOPE_WORKSPACE
       MemoryBank.new(
         global_path: cfg.global_memory_path,
-        workspace_path: cfg.workspace_memory_path(cfg.workspace)
+        workspace_path: cfg.workspace_memory_path(cfg.workspace),
+        workspace_label: label
       )
     end
 
@@ -1458,7 +1474,7 @@ module Rubot
     # A model from the provider's /models catalog rather than config.yml.
     def provider_model_id?(name)
       id = name.to_s
-      return true if ModelCatalog.cached_model_ids(@config.workspace).include?(id)
+      return true if ModelCatalog.cached_model_ids(@config.catalog_dir).include?(id)
 
       # The catalog loaded in this process knows its ids without a fetch.
       @model_catalog&.cached_ids.to_a.include?(id)

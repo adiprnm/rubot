@@ -169,6 +169,52 @@ class TestPersonaStore < Minitest::Test
     assert_nil @store.get(123, nil)
     assert_nil @store.key_for(123, nil)
   end
+
+  # A forum topic may borrow a specialist instead of defining its own prompt.
+  # It keeps its own session; what it shares is the persona and therefore the
+  # memory that hangs off the persona's directory.
+  def test_a_topic_can_point_at_an_existing_persona
+    @store.set("kanyaah", Rubot::Persona.new(name: "Kanyaah", emoji: "🧠"))
+    @store.set("123:7", Rubot::Persona.new(ref: "kanyaah"))
+
+    resolved = @store.get(123, 7)
+
+    assert_equal "kanyaah", resolved.slug
+    assert_equal "Kanyaah", resolved.name
+    assert_equal @store.workspace_for("kanyaah"), @store.workspace_for("123:7"),
+                 "a borrowed persona brings its workspace, and its memory"
+    assert_equal "kanyaah", @store.resolved_slug("123:7")
+  end
+
+  def test_a_topic_that_defines_its_own_prompt_owns_no_workspace
+    @store.set("123:7", persona)
+
+    assert_nil @store.workspace_for("123:7")
+    assert_nil @store.resolved_slug("123:7")
+  end
+
+  def test_a_dangling_reference_resolves_to_nothing
+    @store.set("123:7", Rubot::Persona.new(ref: "nobody"))
+
+    assert_nil @store.get(123, 7)
+    assert_nil @store.workspace_for("123:7")
+  end
+
+  # Sessions must not follow the reference: two topics on one persona still
+  # have two conversations, one file each.
+  def test_borrowed_personas_keep_their_own_sessions
+    assert_equal "123:7", Rubot::PersonaStore.key_for_session("tg_123_7")
+    assert_equal "124:7", Rubot::PersonaStore.key_for_session("tg_124_7")
+  end
+
+  def test_skills_survive_a_round_trip
+    @store.set("123:7", Rubot::Persona.new(
+      name: "Kanyaah",
+      skills: "kanyaah-brand, marketing-strategist"
+    ))
+
+    assert_equal %w[kanyaah-brand marketing-strategist], @store.get(123, 7).skills
+  end
 end
 
 class TestPersonaStorePresets < Minitest::Test

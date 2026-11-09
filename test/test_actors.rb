@@ -329,7 +329,7 @@ class TestActors < Minitest::Test
 
   def test_session_handle_exposes_the_provider_models
     config = write_config
-    File.write(File.join(@workspace, "model_catalog.json"), JSON.generate(
+    File.write(File.join(@tmpdir, "model_catalog.json"), JSON.generate(
       "models" => [ { "id" => "deepseek-v4-pro", "name" => "DeepSeek V4 Pro" } ]
     ))
     pool = Rubot::Actors::SessionPool.new(config: config)
@@ -361,6 +361,36 @@ class TestActors < Minitest::Test
       assert_equal "trading", handle.persona["name"]
       assert_equal "Kamu adalah asisten trading.", handle.persona["system_prompt"]
       assert_nil pool.for("tg_123").persona, "General topic must use the default persona"
+    ensure
+      pool.shutdown
+    end
+  end
+
+  # A topic that points at a persona borrows its workspace, and with it the
+  # persona's own MEMORY.md — while the topic keeps its own session file.
+  def test_a_topic_pointing_at_a_persona_is_rooted_in_that_personas_workspace
+    config = write_config
+    File.write(File.join(@workspace, "personas.json"), JSON.generate(
+      "trainer" => { "slug" => "trainer", "name" => "Trainer" },
+      "-100123:42" => { "ref" => "trainer" }
+    ))
+    pool = Rubot::Actors::SessionPool.new(config: config)
+
+    begin
+      handle = pool.for("tg_-100123_42")
+      persona_dir = File.join(File.dirname(config.config_path), "personas", "trainer")
+
+      assert_equal "Trainer", handle.persona["name"]
+      assert_equal persona_dir, handle.config.workspace
+
+      # The config the actor was built from (the pool hands it over as plain
+      # data) is what decides where memory is read and written.
+      persona_config = Rubot::Config.from_data(
+        pool.send(:config_data_for, "tg_-100123_42"),
+        config_path: config.config_path
+      )
+      assert_equal File.join(persona_dir, "MEMORY.md"), persona_config.workspace_memory_path
+      assert_equal "persona", persona_config.memory_scope_label
     ensure
       pool.shutdown
     end

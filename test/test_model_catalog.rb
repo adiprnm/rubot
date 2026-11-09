@@ -80,11 +80,11 @@ class TestModelCatalog < Minitest::Test
     assert_equal %w[deepseek-v4.1-flash deepseek-v4-pro glm-5.3], entries.map { |e| e["id"] }
     assert_equal "DeepSeek V4 Pro", entries.find { |e| e["id"] == "deepseek-v4-pro" }["name"]
     assert_equal %w[deepseek-v4.1-flash deepseek-v4-pro glm-5.3],
-                 Rubot::ModelCatalog.cached_model_ids(@workspace)
+                 Rubot::ModelCatalog.cached_model_ids(@tmpdir)
   end
 
   def test_falls_back_to_the_disk_cache_when_the_provider_is_unreachable
-    path = Rubot::ModelCatalog.cache_path(@workspace)
+    path = Rubot::ModelCatalog.cache_path(@tmpdir)
     File.write(path, JSON.generate(
       "models" => [ { "id" => "cached-model", "name" => "Cached Model" } ]
     ))

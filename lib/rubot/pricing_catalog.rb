@@ -9,7 +9,9 @@ require_relative "usage"
 
 module Rubot
   # Fetches model pricing and context windows from models.dev and caches a
-  # slimmed copy in the workspace (`<workspace>/model_pricing.json`).
+  # slimmed copy next to config.yml (`model_pricing.json`, see
+  # Config#catalog_dir) — one file for the whole install, shared by every
+  # persona and every workspace.
   #
   # Precedence used by Agent#usage_report:
   #   1. `pricing:` in config.yml (model preset / model entry)
@@ -78,10 +80,13 @@ module Rubot
       window&.positive? ? window : nil
     end
 
-    def self.cache_path(workspace)
-      return nil if workspace.nil? || workspace.to_s.empty?
+    # The shared cache file lives next to config.yml (see
+    # Config#catalog_dir), not in a workspace: every persona asks the same
+    # question of the same file.
+    def self.cache_path(dir)
+      return nil if dir.nil? || dir.to_s.empty?
 
-      File.join(workspace.to_s, CACHE_FILENAME)
+      File.join(dir.to_s, CACHE_FILENAME)
     end
 
     private
@@ -289,7 +294,7 @@ module Rubot
     end
 
     def read_cache
-      path = self.class.cache_path(@config.workspace)
+      path = self.class.cache_path(@config.catalog_dir)
       return nil unless path && File.exist?(path)
 
       data = JSON.parse(File.read(path))
@@ -309,7 +314,7 @@ module Rubot
     end
 
     def write_cache(models)
-      path = self.class.cache_path(@config.workspace)
+      path = self.class.cache_path(@config.catalog_dir)
       return unless path
 
       FileUtils.mkdir_p(File.dirname(path))

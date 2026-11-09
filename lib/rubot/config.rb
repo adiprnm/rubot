@@ -421,11 +421,18 @@ module Rubot
     # A copy whose agent reads its identity from a persona's own directory.
     #
     # Unlike #with_workspace this *overwrites* `assets_workspace`. A specialist
-    # persona must load its own SOUL.md, AGENTS.md and skills/ instead of
-    # inheriting the main workspace's, and `||=` there would silently keep the
-    # old path and hand the persona someone else's identity. Sessions stay in
-    # the central directory (see #sessions_dir); only the working root moves.
+    # persona must load its own SOUL.md and AGENTS.md instead of inheriting the
+    # main workspace's, and `||=` there would silently keep the old path and
+    # hand the persona someone else's identity. Its memory moves into that
+    # directory too (see #workspace_memory_path), so a persona carries its
+    # facts, preferences and context with it. Sessions stay in the central
+    # directory (see #sessions_dir); only the working root moves.
+    #
+    # Skills are the exception: they stay in the configured workspace, because
+    # they are tooling every persona may draw on and copying a skills tree into
+    # every persona would mean updating it once per specialist.
     def with_persona_workspace(path)
+      central = workspace
       copy = self.class.from_data(snapshot, config_path: config_path)
       agents = copy.data["agents"]
       agents = copy.data["agents"] = {} unless agents.is_a?(Hash)
@@ -436,6 +443,8 @@ module Rubot
       defaults["workspace"] = full
       defaults["assets_workspace"] = full
       defaults["sessions_cwd"] = full
+      defaults["skills_workspace"] ||= central
+      defaults["memory_in_workspace"] = true
       copy
     end
 
@@ -473,9 +482,11 @@ module Rubot
     #
     # Memory has two layers. The global file sits next to config.yml and
     # holds what is true everywhere (who the user is, how they want the bot to
-    # behave). The workspace file holds what belongs to one project, and is
-    # keyed by the workspace path so the TUI — which re-roots the workspace to
-    # the directory it was launched from — keeps a separate memory per project.
+    # behave). The second layer holds what belongs to one place: a project for
+    # the TUI, a persona for a specialist. A project's file is keyed by the
+    # workspace path, so the TUI — which re-roots the workspace to the
+    # directory it was launched from — keeps a separate memory per project; a
+    # persona's file lives inside the persona's own directory.
     def global_memory_path
       File.join(File.dirname(config_path), "MEMORY.md")
     end
@@ -484,12 +495,39 @@ module Rubot
       File.join(File.dirname(config_path), "memory")
     end
 
+    # A persona keeps its memory inside its own directory, so the folder the
+    # reader sees for a specialist holds everything that specialist is.
+    def memory_in_workspace?
+      agent_defaults["memory_in_workspace"] == true
+    end
+
+    # What the tools and the prompt call this memory layer. A persona's layer
+    # belongs to that persona, not to a project, and the label is what the
+    # model is told when it reads or writes.
+    def memory_scope_label
+      memory_in_workspace? ? "persona" : "workspace"
+    end
+
     # Path of the workspace memory file for `path` (default: this config's
     # workspace). The name is readable and carries a short digest of the full
-    # path, so two projects with the same basename cannot collide.
+    # path, so two projects with the same basename cannot collide. A persona
+    # (see #with_persona_workspace) keeps its file inside its own directory
+    # instead: there it belongs to the persona, not to a path.
     def workspace_memory_path(path = workspace)
       full = File.expand_path(path.to_s)
+      return File.join(full, "MEMORY.md") if memory_in_workspace?
+
       File.join(memory_dir, "#{memory_slug(full)}.md")
+    end
+
+    # Where the model catalog and the pricing cache live.
+    #
+    # Shared, not per workspace: what a model costs is the same answer for
+    # every persona, and a per-workspace copy meant one network refresh per
+    # specialist and one file to keep in step in each of them. It sits next to
+    # config.yml, beside the sessions and the global memory.
+    def catalog_dir
+      File.dirname(config_path)
     end
 
     # Where SOUL.md, MEMORY.md, AGENTS.md and skills/ are read from. Normally
@@ -499,6 +537,15 @@ module Rubot
     def assets_workspace
       raw = agent_defaults["assets_workspace"]
       raw && !raw.to_s.strip.empty? ? File.expand_path(raw.to_s) : workspace
+    end
+
+    # Where skills/ is read from. A persona re-roots `assets_workspace` at its
+    # own directory but must not lose the skills it exists to use: those stay
+    # in the configured workspace, one copy shared by every persona, and a
+    # persona's prompt says which of them it needs.
+    def skills_workspace
+      raw = agent_defaults["skills_workspace"]
+      raw && !raw.to_s.strip.empty? ? File.expand_path(raw.to_s) : assets_workspace
     end
 
     def restrict_to_workspace

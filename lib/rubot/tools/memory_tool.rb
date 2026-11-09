@@ -17,19 +17,21 @@ module Rubot
       end
 
       def description
+        label = scope_label
         <<~DESC.chomp
           Read and update the bot's persistent memory.
           Use this to remember important facts, user preferences,
-          or project context across sessions.
+          or context across sessions.
 
           Memory has two layers, chosen with `scope`:
-          - workspace (default): what is true for the project you are working
-            in right now. Stored per workspace, so other projects never see it.
+          - #{label} (default): what is true for this #{label} only. Stored in
+            its own file, so no other #{label} sees it.
           - global: what is true everywhere — who the user is, how they want you
-            to behave. Shared by every project.
+            to behave. Shared by every workspace and every persona.
 
-          Rule of thumb: facts about the user and their preferences go to
-          global; what this codebase/project is about goes to workspace.
+          Rule of thumb: facts about the user that hold everywhere go to global;
+          anything true only of this job, this client, this project or this
+          persona's own domain stays in #{label}.
 
           Memory is additive: there is no full replace.
 
@@ -51,8 +53,8 @@ module Rubot
             },
             "scope" => {
               "type" => "string",
-              "enum" => [ "workspace", "global" ],
-              "description" => "Which layer to read/write (default: workspace)"
+              "enum" => [ scope_label, "global" ],
+              "description" => "Which layer to read/write (default: #{scope_label})"
             },
             "section" => {
               "type" => "string",
@@ -92,8 +94,17 @@ module Rubot
 
       private
 
-      # Unknown or missing scope falls back to the workspace layer, which is
-      # what an unattended write should touch: a wrong guess stays local.
+      # What this memory's own layer is called: "persona" for a specialist,
+      # "workspace" for a project. The model reads the label, so a persona is
+      # never told its memory belongs to a workspace.
+      def scope_label
+        return MemoryBank::SCOPE_WORKSPACE unless @memory.respond_to?(:workspace_label)
+
+        @memory.workspace_label
+      end
+
+      # Unknown or missing scope falls back to the local layer, which is what
+      # an unattended write should touch: a wrong guess stays local.
       def scope_for(scope)
         return MemoryBank::SCOPE_GLOBAL if scope.to_s.downcase == MemoryBank::SCOPE_GLOBAL
 

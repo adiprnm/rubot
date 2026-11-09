@@ -130,4 +130,45 @@ class TestConfigMemoryPaths < Minitest::Test
     refute_equal a, b, "two projects with the same name must not share a file"
     assert_equal a, @config.workspace_memory_path(File.join(@tmpdir, "one", "project"))
   end
+
+  # A persona is not a project: its memory is part of the persona, so it
+  # lives in the persona's own directory instead of a path-keyed file.
+  def test_a_persona_keeps_its_memory_in_its_own_directory
+    persona_dir = File.join(@tmpdir, "personas", "trainer")
+    persona = @config.with_persona_workspace(persona_dir)
+
+    assert_equal File.join(persona_dir, "MEMORY.md"), persona.workspace_memory_path
+    assert_equal File.join(@tmpdir, "MEMORY.md"), persona.global_memory_path,
+                 "the global layer is still shared"
+    refute_equal @config.workspace_memory_path(persona_dir), persona.workspace_memory_path
+  end
+
+  def test_a_persona_calls_its_layer_a_persona
+    persona = @config.with_persona_workspace(File.join(@tmpdir, "personas", "trainer"))
+
+    assert_equal "persona", persona.memory_scope_label
+    assert_equal "workspace", @config.memory_scope_label
+  end
+
+  # Skills are tooling, not identity: one copy in the configured workspace,
+  # shared by every persona, instead of a tree per specialist.
+  def test_skills_stay_in_the_configured_workspace_for_a_persona
+    File.write(@config.config_path, {
+      "agents" => { "defaults" => { "workspace" => File.join(@tmpdir, "main") } }
+    }.to_yaml)
+    config = Rubot::Config.new(@config.config_path)
+    persona = config.with_persona_workspace(File.join(@tmpdir, "personas", "trainer"))
+
+    assert_equal File.join(@tmpdir, "main"), persona.skills_workspace
+    assert_equal File.join(@tmpdir, "personas", "trainer"), persona.assets_workspace
+  end
+
+  # One pricing cache and one model catalog for the whole install: the answer
+  # does not change per persona, so neither should the file.
+  def test_the_catalogs_live_next_to_the_config
+    persona = @config.with_persona_workspace(File.join(@tmpdir, "personas", "trainer"))
+
+    assert_equal @tmpdir, persona.catalog_dir
+    assert_equal @config.catalog_dir, persona.catalog_dir
+  end
 end

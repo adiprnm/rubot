@@ -7,40 +7,50 @@ module Rubot
   #
   #   global     ~/.rubot/MEMORY.md        facts about the user and the bot
   #                                        that hold in every project
-  #   workspace  ~/.rubot/memory/<slug>.md what this project is about
+  #   second     ~/.rubot/memory/<slug>.md what this project is about
+  #              or <persona>/MEMORY.md    what this persona is about
   #
   # Both are injected into the system prompt as one merged document, section
   # by section, so a split memory still costs what a single file did. Writes
-  # are always aimed at one layer (workspace by default).
+  # are always aimed at one layer (the second one by default).
   #
-  # The workspace file lives next to `sessions/`, keyed by the absolute path of
-  # the workspace, not inside the project: memory is the bot's, and dropping a
-  # MEMORY.md into every repository the user opens would pollute their git
-  # status.
+  # The second layer used to be the workspace's alone, keyed by the absolute
+  # path of the workspace and stored next to `sessions/` rather than inside
+  # the project, so opening a repository would not leave a MEMORY.md in its
+  # git status. A persona now keeps its own file inside its own directory
+  # (`<persona>/MEMORY.md`): there is nothing to pollute, and everything that
+  # specialist is — its soul, its memory, its files — sits in one folder.
   class MemoryBank
     SCOPE_GLOBAL = "global"
     SCOPE_WORKSPACE = "workspace"
+    SCOPE_PERSONA = "persona"
 
-    # Replaces the per-file preamble in the merged document. The file-level
-    # boilerplate is written twice otherwise, once per layer.
-    PREAMBLE = <<~TEXT.freeze
-      _This file is automatically managed by Rubot. Global entries apply in every
-      workspace; workspace entries apply only to the workspace they were learned in._
-    TEXT
+    attr_reader :global, :workspace, :workspace_label
 
-    attr_reader :global, :workspace
-
-    def self.build(global_path:, workspace_path:)
+    # `workspace_label` is what the model is told the second layer is called:
+    # "persona" for a specialist, "workspace" for a project directory.
+    def self.build(global_path:, workspace_path:, workspace_label: SCOPE_WORKSPACE)
       return nil if global_path.nil? && workspace_path.nil?
 
-      new(global_path: global_path, workspace_path: workspace_path)
+      new(global_path: global_path, workspace_path: workspace_path, workspace_label: workspace_label)
     end
 
-    def initialize(global_path: nil, workspace_path: nil)
+    def initialize(global_path: nil, workspace_path: nil, workspace_label: SCOPE_WORKSPACE)
+      label = workspace_label.to_s.strip.downcase
+      @workspace_label = label.empty? ? SCOPE_WORKSPACE : label
       # The global file is created on first use (it is the one the bot has
       # always had); a workspace file only appears once something is written.
       @global = Memory.new(path: global_path, create: !global_path.nil?)
       @workspace = Memory.new(path: workspace_path, create: false)
+    end
+
+    # The per-file preamble of the merged document. The file-level boilerplate
+    # is written twice otherwise, once per layer, so it lives here instead.
+    def preamble
+      <<~TEXT
+        _This file is automatically managed by Rubot. Global entries apply in every
+        workspace; #{@workspace_label} entries apply only to the #{@workspace_label} they were learned in._
+      TEXT
     end
 
     def global_path
@@ -81,7 +91,7 @@ module Rubot
 
       return "" if body.empty?
 
-      "# Memory\n\n#{PREAMBLE}\n#{body.join("\n")}"
+      "# Memory\n\n#{preamble}\n#{body.join("\n")}"
     end
 
     # Bullets of one section, tagged with the layer they came from.
@@ -94,6 +104,13 @@ module Rubot
 
     def append(section, line, scope: SCOPE_WORKSPACE, max_items: nil)
       layer(scope).append(section, line, max_items: max_items)
+    end
+
+    # One layer's own content. What a write needs to deduplicate against: a
+    # fact already in the global file must not be copied into every persona
+    # that hears it again.
+    def layer_content(scope)
+      layer(scope).read.to_s
     end
 
     def update_section(section, items, scope: SCOPE_WORKSPACE)

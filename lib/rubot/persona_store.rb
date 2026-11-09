@@ -16,8 +16,12 @@ module Rubot
   # one does not exist yet.
   #
   # Two key shapes share the file:
-  #   * "chat:thread" — a Telegram forum topic (model + prompt only)
+  #   * "chat:thread" — a Telegram forum topic. It either carries its own
+  #                     model + prompt, or points at a persona that already
+  #                     exists (`ref`), which is how a topic shares a
+  #                     specialist's memory without sharing its conversations.
   #   * "slug"        — a web persona, which also gets a workspace directory
+  #                     holding its SOUL.md, MEMORY.md and working files.
   #
   # The file is read on every lookup instead of being cached: the channels and
   # the SessionPool own separate store instances, and a persona saved by one
@@ -27,6 +31,9 @@ module Rubot
     SLUG_PATTERN = /\A[a-z0-9][a-z0-9_-]{0,31}\z/
     KEY_PATTERN = /\A(?:-?\d+:\d+|[a-z0-9][a-z0-9_-]{0,31})\z/
     RESERVED_SLUGS = %w[default general all new none].freeze
+    # A topic points at a persona; a chain of pointers is a mistake, not a
+    # feature. Three hops is enough to notice one and stop.
+    MAX_REF_DEPTH = 3
 
     attr_reader :dir, :available_models, :available_presets
 
@@ -50,11 +57,24 @@ module Rubot
       File.join(dir, FILENAME)
     end
 
-    # Where a slug's agent files (SOUL.md, AGENTS.md, skills/, working files)
-    # live, or nil for a key that does not own a workspace.
+    # Where a persona's agent files (SOUL.md, MEMORY.md, working files) live,
+    # or nil for a key that owns none.
+    #
+    # A slug owns a directory of its own. A Telegram topic owns none unless it
+    # points at an existing persona (`ref`), in which case it borrows that
+    # persona's directory: one memory, two conversations.
     def workspace_for(key)
       slug = self.class.slug_for_key(key)
-      slug && File.join(dir, "personas", slug)
+      return File.join(dir, "personas", slug) if slug
+
+      target = resolved_slug(key)
+      target && File.join(dir, "personas", target)
+    end
+
+    # The slug a key ultimately names: the key itself when it is a slug, or the
+    # persona a topic points at. Nil for a topic that carries its own prompt.
+    def resolved_slug(key)
+      resolve(key.to_s, all)&.slug
     end
 
     # Create the persona's workspace, seeding a SOUL.md from the main workspace
@@ -87,8 +107,12 @@ module Rubot
         .map { |key, persona| [ self.class.slug_for_key(key), persona ] }
     end
 
+    # A persona by key. A key that points at another persona resolves to that
+    # persona: the topic gets the specialist's model, prompt, skills and
+    # memory, while its conversations stay its own.
     def [](key)
-      all[key.to_s]
+      data = all
+      resolve(key.to_s, data)
     end
 
     def get(chat_id, thread_id)
@@ -112,8 +136,12 @@ module Rubot
       persona = Persona.from(persona)
       raise ArgumentError, "invalid persona" unless persona
 
-      # The slug is part of the key; keep the record self-describing.
-      persona = normalize_persona(persona_with_slug(persona, self.class.slug_for_key(key)))
+      # A reference is stored as written: it names another key, and validating
+      # its (absent) model would only strip it back to nothing.
+      unless persona.reference?
+        # The slug is part of the key; keep the record self-describing.
+        persona = normalize_persona(persona_with_slug(persona, self.class.slug_for_key(key)))
+      end
 
       @mutex.synchronize do
         data = load_from_disk
@@ -121,7 +149,8 @@ module Rubot
         write!(data)
       end
 
-      persona
+      # What a caller wants back is the persona that will actually run.
+      persona.reference? ? self[key] : persona
     end
 
     def delete(key)
@@ -224,8 +253,25 @@ module Rubot
         preset: preset,
         model: model,
         system_prompt: persona.system_prompt,
+        skills: persona.skills,
+        ref: persona.ref,
         created_at: persona.created_at
       )
+    end
+
+    # Follow `ref` until it lands on a persona that names itself. A dangling or
+    # circular reference resolves to nil, which is what a missing persona looks
+    # like to every caller.
+    def resolve(key, data)
+      persona = data[key]
+      depth = 0
+
+      while persona&.reference? && depth < MAX_REF_DEPTH
+        persona = data[persona.ref]
+        depth += 1
+      end
+
+      persona&.reference? ? nil : persona
     end
 
     def load_from_disk

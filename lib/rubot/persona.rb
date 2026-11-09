@@ -6,19 +6,22 @@ module Rubot
   # A persona: one agent specialised in one field.
   #
   # Two kinds share this value object. A Telegram forum topic is keyed by
-  # "<chat>:<thread>" and only carries model + prompt. A web persona is keyed by
-  # a slug and also owns a workspace (see PersonaStore#workspace_for), which is
-  # where its SOUL.md, AGENTS.md, skills/ and working files live.
+  # "<chat>:<thread>" and either carries its own model + prompt or points at an
+  # existing persona through `ref` (so a topic borrows a specialist's memory
+  # without borrowing its conversation). A web persona is keyed by a slug and
+  # owns a workspace (see PersonaStore#workspace_for), which is where its
+  # SOUL.md, MEMORY.md and working files live.
   #
   # Plain data (a value object), so it can be handed to a session Ractor without
   # sharing mutable state. The workspace path is deliberately *not* stored here:
   # it is derived from the store's directory and the slug, so the file stays
   # portable and cannot point an agent at an arbitrary path.
   class Persona
-    attr_reader :slug, :name, :emoji, :accent, :preset, :model, :system_prompt, :created_at
+    attr_reader :slug, :name, :emoji, :accent, :preset, :model, :system_prompt, :skills, :ref,
+                :created_at
 
     def initialize(slug: nil, name: nil, emoji: nil, accent: nil, preset: nil, model: nil,
-                   system_prompt: nil, created_at: nil)
+                   system_prompt: nil, skills: nil, ref: nil, created_at: nil)
       @slug = normalize_string(slug)
       @name = normalize_string(name)
       @emoji = normalize_string(emoji)
@@ -26,6 +29,8 @@ module Rubot
       @preset = normalize_string(preset)
       @model = normalize_string(model)
       @system_prompt = normalize_string(system_prompt)
+      @skills = normalize_list(skills)
+      @ref = normalize_string(ref)
       @created_at = created_at || Time.now.utc.iso8601
     end
 
@@ -47,6 +52,8 @@ module Rubot
         preset: fetch.call("preset"),
         model: fetch.call("model"),
         system_prompt: fetch.call("system_prompt"),
+        skills: fetch.call("skills"),
+        ref: fetch.call("ref"),
         created_at: fetch.call("created_at")
       )
       persona.empty? ? nil : persona
@@ -61,13 +68,20 @@ module Rubot
         "preset" => @preset,
         "model" => @model,
         "system_prompt" => @system_prompt,
+        "skills" => @skills,
+        "ref" => @ref,
         "created_at" => @created_at
       }
     end
 
     def empty?
-      [ @slug, @name, @emoji, @accent, @preset, @model, @system_prompt ]
+      [ @slug, @name, @emoji, @accent, @preset, @model, @system_prompt, @ref ]
         .all? { |value| value.nil? || value.empty? }
+    end
+
+    # A topic that borrows another persona instead of defining one.
+    def reference?
+      !@ref.nil? && !@ref.empty?
     end
 
     # What the chat header shows. Falls back to the slug so a persona without a
@@ -87,6 +101,18 @@ module Rubot
 
       text = value.to_s.strip
       text.empty? ? nil : text
+    end
+
+    # Skill names the persona always works with. A plain string is accepted so
+    # `"skills: kanyaah-brand"` in a hand-edited personas.json is not ignored.
+    def normalize_list(value)
+      list = case value
+      when Array then value
+      when String then value.split(",")
+      else []
+      end
+
+      list.map { |entry| normalize_string(entry) }.compact.uniq
     end
   end
 end

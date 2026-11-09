@@ -74,6 +74,46 @@ class TestMemoryExtractor < Minitest::Test
     assert_empty result
   end
 
+  # The section alone no longer decides where a fact goes: a persona's
+  # preferences stay in the persona's memory, while a fact about the user
+  # follows them everywhere.
+  def test_each_item_is_stored_in_the_layer_its_scope_names
+    bank = persona_bank
+    @provider.response = JSON.generate(
+      "facts" => [ { "fact" => "User is 183 cm tall", "scope" => "global" } ],
+      "preferences" => [ { "fact" => "Client prefers carousels over reels", "scope" => "persona" } ],
+      "context" => [ { "fact" => "Working on a wedding invitation brand", "scope" => "persona" } ]
+    )
+    extractor = Rubot::MemoryExtractor.new(provider: @provider, memory: bank)
+
+    result = extractor.extract("Saya 183 cm. Klien saya lebih suka carousel untuk brand undangan.")
+
+    assert_equal 3, result.size
+    assert_includes File.read(bank.global_path), "183 cm tall"
+    refute_includes File.read(bank.global_path), "carousels"
+    assert_includes File.read(bank.workspace_path), "carousels"
+    refute_includes File.read(bank.workspace_path), "183 cm tall"
+  end
+
+  def test_an_item_without_a_scope_stays_local
+    bank = persona_bank
+    @provider.response = '{"facts": ["Suka kopi tanpa gula"], "preferences": [], "context": []}'
+    extractor = Rubot::MemoryExtractor.new(provider: @provider, memory: bank)
+
+    extractor.extract("Saya suka kopi tanpa gula setiap pagi.")
+
+    assert_includes File.read(bank.workspace_path), "kopi"
+    refute_includes File.read(bank.global_path), "kopi"
+  end
+
+  def persona_bank
+    Rubot::MemoryBank.new(
+      global_path: File.join(@tmpdir, "MEMORY.md"),
+      workspace_path: File.join(@tmpdir, "personas", "trainer", "MEMORY.md"),
+      workspace_label: "persona"
+    )
+  end
+
   def test_handles_non_json_response
     @provider.response = "I don't think there's anything to extract here."
     extractor = Rubot::MemoryExtractor.new(provider: @provider, memory: @memory)

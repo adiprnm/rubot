@@ -16,11 +16,14 @@ module Rubot
     # Facts and preferences describe the user, so they are worth keeping in
     # every project; context describes the project being worked on and would be
     # noise anywhere else.
-    SCOPE_BY_SECTION = {
-      "Facts" => "global",
-      "Preferences" => "global",
-      "Context" => "workspace"
-    }.freeze
+    #
+    # That rule of thumb is only a fallback. The scope that decides where a
+    # fact is written is asked of the extractor per item: "user is 183 cm tall"
+    # is global even though it is a fact, and "the client prefers carousels
+    # over reels" is a preference that only the Kanyaah persona should carry.
+    # An item the extractor did not label, or labelled ambiguously, stays
+    # local — a wrong guess then costs one persona's memory instead of
+    # everyone's.
 
     # Skip messages that are just acknowledgments or single words
     TRIVIAL_PATTERNS = [
@@ -58,11 +61,26 @@ module Rubot
       - "Saya lebih suka pakai bahasa Indonesia" → preferences: ["User prefers Bahasa Indonesia"]
       - "I work on a Ruby project" → context: ["User works on a Ruby project"]
 
-      Return a JSON object with these keys (each is an array of strings, or empty):
+      Every item also carries a scope, and the scope is what decides which
+      memory file it is written to:
+
+      - "global" — true no matter which persona or project the user is talking
+        to: who they are, where they live, how they want the assistant to
+        behave, how tall they are, what language they speak.
+      - "persona" — true only of the job being done here: this client's
+        preferences, this brand's tone, this codebase's conventions, this
+        training plan's target. A different persona must not inherit it.
+
+      When you are not sure, use "persona". A fact wrongly kept local costs
+      one persona some context; a fact wrongly made global follows the user
+      into every conversation.
+
+      Return a JSON object with these keys (each is an array of objects, or
+      empty):
       {
-        "facts": [],
-        "preferences": [],
-        "context": []
+        "facts": [{"fact": "...", "scope": "global"}],
+        "preferences": [{"fact": "...", "scope": "persona"}],
+        "context": [{"fact": "...", "scope": "persona"}]
       }
 
       Always write extracted facts in English, regardless of the
@@ -98,16 +116,44 @@ module Rubot
         next if facts.empty?
         # Capitalize section name to match MEMORY.md conventions
         section_name = section.capitalize
-        facts.each do |fact|
-          next if duplicate?(section_name, fact)
-          @memory.append(section_name, fact, scope: SCOPE_BY_SECTION.fetch(section_name, "workspace"))
-          stored << { section: section_name, fact: fact }
+        facts.each do |entry|
+          fact, scope = normalize_item(entry)
+          next if fact.nil? || fact.empty?
+
+          next if duplicate?(section_name, fact, scope)
+          @memory.append(section_name, fact, scope: scope)
+          stored << { section: section_name, fact: fact, scope: scope }
         end
       end
       stored
     end
 
     private
+
+    # One extracted item as [fact, scope]. The extractor is asked for objects
+    # ("fact" + "scope"), but a plain string is still accepted — an older or
+    # lazier reply then lands in the local layer instead of being dropped.
+    def normalize_item(entry)
+      fact = nil
+      scope = nil
+
+      case entry
+      when Hash
+        fact = entry["fact"] || entry["content"] || entry["text"]
+        scope = entry["scope"] || entry["layer"]
+      when String
+        fact = entry
+      end
+
+      fact = fact.to_s.strip
+      return [ nil, nil ] if fact.empty?
+
+      # Only an explicit "global" leaves the local layer: "persona",
+      # "workspace", a missing scope and anything unrecognised all stay home.
+      label = scope.to_s.strip.downcase
+      layer = label == MemoryBank::SCOPE_GLOBAL ? MemoryBank::SCOPE_GLOBAL : MemoryBank::SCOPE_WORKSPACE
+      [ fact, layer ]
+    end
 
     # Check if a message should be skipped (too short, trivial, etc.)
     def skip_message?(message)
@@ -203,10 +249,17 @@ module Rubot
       false
     end
 
-    # Check if a fact is already in memory (deduplication)
-    def duplicate?(section, fact)
+    # Check if a fact is already in the layer it would be written to. Checking
+    # only that layer keeps a global fact from being copied into every persona
+    # that happens to hear it again.
+    def duplicate?(section, fact, scope = MemoryBank::SCOPE_WORKSPACE)
       return false unless @memory.enabled?
-      content = @memory.read
+
+      content = if @memory.respond_to?(:layer_content)
+        @memory.layer_content(scope)
+      else
+        @memory.read
+      end
       return false if content.nil? || content.empty?
 
       # Check for exact match or close similarity

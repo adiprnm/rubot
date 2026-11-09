@@ -9,10 +9,11 @@ module Rubot
   # Fetches the list of models supported by the configured provider.
   #
   # OpenAI-compatible endpoints (including OpenCode Go) expose GET /models.
-  # The list is cached in memory and on disk (`<workspace>/model_catalog.json`)
-  # so a provider that is temporarily unreachable does not empty the picker,
-  # and so session actors in other Ractors can validate a persona model without
-  # making their own network request.
+  # The list is cached in memory and on disk (`model_catalog.json` next to
+  # config.yml, see Config#catalog_dir) so a provider that is temporarily
+  # unreachable does not empty the picker, so session actors in other Ractors
+  # can validate a persona model without their own network request, and so
+  # every persona shares one copy instead of refreshing its own.
   class ModelCatalog
     CACHE_FILENAME = "model_catalog.json"
     DEFAULT_TTL = 300
@@ -66,14 +67,14 @@ module Rubot
       end
     end
 
-    def self.cache_path(workspace)
-      File.join(workspace.to_s, CACHE_FILENAME)
+    def self.cache_path(dir)
+      File.join(dir.to_s, CACHE_FILENAME)
     end
 
     # Model ids from the on-disk cache. Used by PersonaStore and Agent to
     # resolve a provider model id that is not a config.yml entry.
-    def self.cached_model_ids(workspace)
-      path = cache_path(workspace)
+    def self.cached_model_ids(dir)
+      path = cache_path(dir)
       return [] unless File.exist?(path)
 
       data = JSON.parse(File.read(path))
@@ -111,7 +112,7 @@ module Rubot
     end
 
     def read_cache
-      path = self.class.cache_path(@config.workspace)
+      path = self.class.cache_path(@config.catalog_dir)
       return [] unless File.exist?(path)
 
       data = JSON.parse(File.read(path))
@@ -133,10 +134,10 @@ module Rubot
     end
 
     def write_cache(entries)
-      workspace = @config.workspace
-      return if workspace.nil? || workspace.to_s.empty?
+      dir = @config.catalog_dir
+      return if dir.nil? || dir.to_s.empty?
 
-      path = self.class.cache_path(workspace)
+      path = self.class.cache_path(dir)
       FileUtils.mkdir_p(File.dirname(path))
       tmp = "#{path}.tmp.#{Process.pid}.#{Thread.current.object_id}"
       File.write(tmp, JSON.pretty_generate(

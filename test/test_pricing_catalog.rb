@@ -89,7 +89,7 @@ class TestPricingCatalog < Minitest::Test
   def test_writes_cache_file
     StubCatalog.new(config: @config, payload: PAYLOAD).rates("gpt-4o-mini", provider: "openai")
 
-    path = Rubot::PricingCatalog.cache_path(@workspace)
+    path = Rubot::PricingCatalog.cache_path(@config.catalog_dir)
     assert File.exist?(path)
 
     data = JSON.parse(File.read(path))
@@ -108,7 +108,7 @@ class TestPricingCatalog < Minitest::Test
   end
 
   def test_falls_back_to_stale_cache
-    path = Rubot::PricingCatalog.cache_path(@workspace)
+    path = Rubot::PricingCatalog.cache_path(@config.catalog_dir)
     File.write(path, JSON.generate(
       "updated_at" => (Time.now - 2 * 86_400).utc.iso8601,
       "models" => {
@@ -160,7 +160,7 @@ class TestPricingCatalog < Minitest::Test
   end
 
   def test_network_false_uses_the_stale_cache
-    path = Rubot::PricingCatalog.cache_path(@workspace)
+    path = Rubot::PricingCatalog.cache_path(@config.catalog_dir)
     File.write(path, JSON.generate(
       "updated_at" => (Time.now - 2 * 86_400).utc.iso8601,
       "models" => {

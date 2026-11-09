@@ -488,6 +488,26 @@ class TestAgentPersona < Minitest::Test
     refute_includes prompt, "GLOBAL DEFAULT PROMPT"
   end
 
+  # Skills are shared, so the persona is what says which of them apply.
+  def test_persona_skills_are_named_in_the_prompt
+    persona = Rubot::Persona.new(
+      name: "kanyaah",
+      skills: %w[kanyaah-brand marketing-strategist]
+    )
+    agent = build_agent(persona: persona.to_h)
+
+    prompt = agent.build_system_prompt
+
+    assert_includes prompt, "# Required Skills"
+    assert_includes prompt, "kanyaah-brand, marketing-strategist"
+  end
+
+  def test_a_persona_without_skills_adds_no_skill_block
+    agent = build_agent(persona: trading_persona.to_h)
+
+    refute_includes agent.build_system_prompt, "# Required Skills"
+  end
+
   def test_persona_without_prompt_keeps_the_config_prompt
     agent = build_agent(persona: { "model" => "model-b" })
 
@@ -596,7 +616,7 @@ class TestAgentCatalogModels < Minitest::Test
       ]
     }.to_yaml)
 
-    File.write(File.join(@workspace, "model_catalog.json"), JSON.generate(
+    File.write(File.join(@tmpdir, "model_catalog.json"), JSON.generate(
       "models" => [
         { "id" => "deepseek-v4.1-flash", "name" => "DeepSeek V4.1 Flash" },
         { "id" => "deepseek-v4-pro", "name" => "DeepSeek V4 Pro" }
