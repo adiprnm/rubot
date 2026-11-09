@@ -5,6 +5,16 @@
     `data-title` carries the same name in the form the browser tab wants, so
     the page can adopt it without re-deriving it. -%>
 <header class="chat-head" id="chat-head" data-title="<%= h(document_title) %>">
+  <%# The drawer's handle. It lives here rather than beside the drawer so that
+      it is reachable from the one screen a phone has, and it is re-rendered
+      with the header after a turn so the two never disagree about state. -%>
+  <button class="nav-toggle" type="button" aria-label="Persona dan sesi"
+          :aria-expanded="nav ? 'true' : 'false'" @click="nav = !nav">
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none"
+         stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+      <path d="M2.5 4h11M2.5 8h11M2.5 12h11" />
+    </svg>
+  </button>
   <span class="emoji" aria-hidden="true"><%= h(persona_emoji) %></span>
   <b><%= h(persona_label) %></b>
   <% if session_label -%>

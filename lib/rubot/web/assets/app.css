@@ -100,23 +100,38 @@ body {
 
 /* ---------- shell ------------------------------------------------ */
 
-/* Three columns, each with one job: the avatar rail says which persona you
-   are in, the sidebar says which conversation, the rest is the conversation
-   itself. */
+/* Two columns, each with one job: the dock says which persona and which
+   conversation you are in, the rest is the conversation itself. The dock holds
+   the avatar rail and the session list, so on a narrow screen the two can be
+   taken away and brought back as one drawer instead of two half-columns. */
 .app {
   display: grid;
-  grid-template-columns: 4.4rem 15rem minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
-  grid-template-areas: "rail side chat";
+  grid-template-areas: "dock chat";
   height: 100dvh;
 }
+
+.side-dock {
+  grid-area: dock;
+  display: grid;
+  grid-template-columns: 4.4rem 15rem;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* The handle for the drawer. A wide screen shows both columns already, so the
+   button has nothing to open and is not drawn there. */
+.nav-toggle { display: none; }
+
+/* The sheet's backdrop. It exists for the narrow layout only. */
+.nav-scrim { display: none; }
 
 /* ---------- persona rail ----------------------------------------- */
 
 /* A roster of faces rather than a list of names: an emoji in a circle is
    enough to say "kanyaah", and the row costs 4rem instead of 15. */
 .rail {
-  grid-area: rail;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -298,10 +313,10 @@ body {
 /* ---------- session pane ----------------------------------------- */
 
 .sidebar {
-  grid-area: side;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
   padding: 0.9rem 0.7rem 0.75rem;
   background: var(--bg-dim);
   border-right: 1px solid var(--line);
@@ -1147,51 +1162,110 @@ body {
 /* ---------- narrow ----------------------------------------------- */
 
 @media (max-width: 860px) {
-  /* The rail keeps its column — it is only a face wide — while the session
-     list turns into a strip above the conversation. */
+  /* One column. There is no room beside the conversation for either list, so
+     both are in one drawer over it, opened from the header button: the
+     personas as a strip across its top, the sessions below. */
   .app {
-    grid-template-columns: 3.4rem minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-    grid-template-areas:
-      "rail side"
-      "rail chat";
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "chat";
   }
 
-  .rail { padding-top: 0.6rem; }
+  .side-dock {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 60;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    width: min(19rem, 84vw);
+    background: var(--bg-dim);
+    border-right: 1px solid var(--line);
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.5);
+    transform: translateX(-101%);
+    transition: transform 210ms ease;
+    /* Kept out of the tab order and off the screen readers' path while shut. */
+    visibility: hidden;
+  }
+
+  .app.nav-open .side-dock { transform: none; visibility: visible; }
+
+  /* The roster turns on its side: a face is enough to pick a persona, and the
+     row costs one line instead of a column of the drawer's width. */
+  .rail {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.55rem 0.5rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--line-soft);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .rail::-webkit-scrollbar { display: none; }
+
   .rail-brand { width: 2rem; height: 2rem; font-size: 12px; }
   .rail-item .avatar,
   .rail-new summary { width: 2.2rem; height: 2.2rem; font-size: 0.95rem; }
 
-  .sidebar {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: center;
+  /* That bar marks a column; across the top the squared green avatar is
+     already saying which persona is open. */
+  .rail-item::before { display: none; }
+
+  .rail-list {
+    flex-direction: row;
     gap: 0.45rem;
-    padding: 0.5rem 0.6rem;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
+    width: auto;
+    margin: 0;
+    padding: 0;
+    border-top: 0;
+    overflow: visible;
   }
 
-  /* The chat header already names the persona, and the footer facts do not
-     fit a strip. */
-  .side-head,
-  .sidebar-label,
+  .rail-new { margin: 0; padding-top: 0; }
+
+  .sidebar {
+    padding: 0.6rem 0.6rem 0.75rem;
+    border-right: 0;
+    overflow: hidden;
+  }
+
+  .side-head { margin-bottom: 0.55rem; padding-bottom: 0.5rem; }
+
+  /* Facts about the connection belong at the foot of a tall column; a drawer
+     spends its height on the list. */
   .sidebar-foot { display: none; }
 
-  .new-session { margin: 0; }
-  .new-session .btn { width: auto; padding: 0.3rem 0.5rem; white-space: nowrap; }
-
-  .sessions {
-    flex-direction: row;
-    gap: 0.3rem;
-    overflow-x: auto;
-    overflow-y: hidden;
+  .nav-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: rgba(0, 0, 0, 0.5);
   }
 
-  .session { grid-template-columns: auto auto; }
-  .session-link { grid-template-columns: auto; padding: 0.3rem 0 0.3rem 0.5rem; }
-  .session .label { max-width: 11rem; font-size: 12.5px; }
-  .session .meta { display: none; }
+  .nav-toggle {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 1.9rem;
+    height: 1.9rem;
+    margin-right: 0.15rem;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: none;
+    color: var(--fg-dim);
+    cursor: pointer;
+    transition: color .12s, border-color .12s;
+  }
+
+  .nav-toggle:hover,
+  .nav-toggle:focus-visible { color: var(--fg); border-color: var(--green); }
+
+  .nav-toggle svg { display: block; }
+
+  /* The header now holds a control, so its parts line up on the middle. */
+  .chat-head { align-items: center; }
 
   /* Narrow, and the measure is what pays for the marker: a phone is where a
      list is most likely to be read, so the page itself keeps only a small
@@ -1207,11 +1281,16 @@ body {
 
   .msg .bubble { max-width: 90%; }
 
-  /* The panel would open off the right edge from a rail this narrow, so it is
-     pinned to the viewport instead. */
+  /* The panel is positioned against the rail, which is now the top edge of a
+     drawer; from there it would hang off the screen, so on a phone it opens as
+     a sheet at the bottom instead. */
   .rail-panel {
-    left: 3.4rem;
-    width: min(17rem, calc(100vw - 4.4rem));
+    position: fixed;
+    left: 0.5rem;
+    right: 0.5rem;
+    bottom: 0.5rem;
+    width: auto;
+    z-index: 70;
   }
 }
 
