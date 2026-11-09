@@ -370,6 +370,27 @@ class TestAgentProgressNarration < Minitest::Test
     assert_includes prompt, "`send_file` is for one file on its own"
   end
 
+  # config.yml can enable one delivery tool and not the other. The rule must
+  # follow the tool list: naming `send_files` when the model cannot call it is
+  # what made a batch of twelve pictures arrive as twelve `send_file` calls.
+  def test_system_prompt_names_only_the_delivery_tools_that_are_enabled
+    single_only = Rubot::Tools::Registry.new
+    single_only.clear
+    single_only.register(Rubot::Tools::SendFile.new)
+
+    agent = Rubot::Agent.new(
+      config: @config,
+      provider: NarratingProvider.new,
+      session_id: "single-delivery",
+      tools: single_only
+    )
+
+    prompt = agent.build_system_prompt
+    assert_includes prompt, "Sending Files"
+    assert_includes prompt, "`send_file` hands one local file"
+    refute_includes prompt, "send_files", "prompt names a tool the model cannot call"
+  end
+
   def test_system_prompt_asks_for_file_tool_edits_instead_of_shell
     prompt = @agent.build_system_prompt
     assert_includes prompt, "Editing Files"

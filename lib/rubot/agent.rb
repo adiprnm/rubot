@@ -1007,6 +1007,18 @@ module Rubot
       to one call per file.
     PROMPT
 
+    # When config.yml enables `send_file` but not `send_files`. The rule above
+    # would name a tool the model cannot call, which is how a batch of twelve
+    # pictures used to arrive as twelve calls: the instruction pointed at the
+    # batch tool while the tool list offered only the single-file one.
+    FILE_DELIVERY_SINGLE_RULE = <<~PROMPT.strip.freeze
+      # Sending Files
+
+      `send_file` hands one local file to the user. Images (.png, .jpg, .jpeg,
+      .webp, .gif) are delivered as pictures so they display inline; other
+      files arrive as documents.
+    PROMPT
+
     # Editing files through the file tool, not shell. Kept here (not in the
     # configurable prompt) so a per-topic persona cannot drop it.
     FILE_EDIT_RULE = <<~PROMPT.strip.freeze
@@ -1040,6 +1052,17 @@ module Rubot
     PROMPT
 
     # Build the full system prompt from all sources
+    # Which delivery rule to send: the batch version only when `send_files` is
+    # actually available, the single-file version when it is not, and nothing
+    # at all when neither tool is enabled.
+    def file_delivery_rule
+      names = (tool_definitions || []).map(&:name)
+      return FILE_DELIVERY_RULE if names.include?("send_files")
+      return FILE_DELIVERY_SINGLE_RULE if names.include?("send_file")
+
+      nil
+    end
+
     def build_system_prompt
       @skill_registry.reload!
       parts = []
@@ -1060,8 +1083,10 @@ module Rubot
       # 1d. File edits go through the file tool (diff view + confirmation)
       parts << FILE_EDIT_RULE
 
-      # 1e. A batch of files is one call, not one call per file
-      parts << FILE_DELIVERY_RULE
+      # 1e. A batch of files is one call, not one call per file. Only the
+      # delivery tools this agent can actually call are named here.
+      delivery_rule = file_delivery_rule
+      parts << delivery_rule if delivery_rule
 
       # 2. SOUL.md (personality and identity)
       if @soul.enabled?
