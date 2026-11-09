@@ -2297,6 +2297,25 @@ module Rubot
         assert_includes worker, "caches.open(VERSION)"
       end
 
+      # The page asks for app.css?v=<mtime>, and a lookup that ignored the query
+      # answered every deploy with the copy the reader already had: the fix
+      # looked like it never landed, on that one device, until the version
+      # constant was bumped by hand. The query counts online — the network is the
+      # only thing that can answer a URL the cache has never seen — and the loose
+      # lookup survives as the offline fallback.
+      def test_the_worker_asks_the_network_for_a_file_it_has_not_seen
+        worker = File.read(File.expand_path("../lib/rubot/web/assets/sw.js", __dir__))
+        lookup = worker[/async function cacheFirst.*?\n\}/m]
+
+        refute_nil lookup, "cacheFirst is missing from sw.js"
+        assert_match(/const hit = await cache\.match\(request\);/, lookup,
+                     "the versioned URL is the key, or a deploy is invisible")
+        assert_match(/cache\.match\(request, \{ ignoreSearch: true \}\)/, lookup,
+                     "a stylesheet from an older deploy beats none while offline")
+        assert_operator lookup.index("cache.match(request);"), :<, lookup.index("ignoreSearch"),
+                        "online first; the loose lookup is only after the network said no"
+      end
+
       # Registering is the only thing the page does about it, and it must not
       # stand in front of the first paint.
       def test_the_page_registers_the_worker_after_load
