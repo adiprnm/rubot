@@ -1640,7 +1640,66 @@ module Rubot
         assert_nil channel.send(:usage_markup_from, "bukan report")
       end
 
-      # --- usage panel ----------------------------------------------------
+      # --- themes ---------------------------------------------------------
+
+      # A theme is a list of names. A block that forgets one inherits it from
+      # the default, which mixes two palettes: a light page with dark scrims,
+      # or a green accent on a blue-grey one.
+      def test_every_theme_defines_the_same_colours
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+
+        blocks = %w[everforest dark light].map do |name|
+          match = css.match(/:root\[data-theme="#{name}"\] \{(.*?)\n\}/m)
+          refute_nil match, "theme #{name} needs its own block"
+          match[1].scan(/--([\w-]+):/).flatten.sort
+        end
+
+        assert_equal blocks[0], blocks[1], "dark is missing names everforest sets"
+        assert_equal blocks[0], blocks[2], "light is missing names everforest sets"
+        assert_includes blocks[0], "scrim", "overlays have to follow the palette too"
+        assert_includes blocks[0], "on-accent", "text on a filled button has to"
+      end
+
+      # The theme is decided in the head, before the stylesheet can paint. Left
+      # to a script at the end of the page, a light reader would get a dark
+      # frame first — a flash across the whole screen.
+      def test_the_theme_is_set_before_the_first_paint
+        html = View.render("layout", title: "x", content: "isi", asset_version: 1)
+        script = html.index("rubot-theme")
+        stylesheet = html.index("app.css")
+
+        refute_nil script, "the head has to choose a theme"
+        assert script < stylesheet, "the choice must land before the stylesheet paints"
+        assert_includes html, %(setAttribute("data-theme", theme))
+        assert_includes html, "prefers-color-scheme",
+                        "with no choice made, the system decides"
+      end
+
+      # Three palettes, one press each, each showing its own colours — a select
+      # would hide two thirds of a choice that is meant to be looked at.
+      def test_the_picker_offers_every_theme_as_its_own_button
+        html = render_page
+
+        %w[everforest dark light].each do |name|
+          assert_includes html, %(data-theme-choice="#{name}"),
+                          "#{name} needs a button of its own"
+        end
+        assert_equal 3, html.scan("data-theme-choice=").size
+        assert_equal 3, html.scan("aria-pressed=").size,
+                     "the state has to be announceable, not just painted"
+        assert_includes html, %(role="group")
+      end
+
+      # A choice is the reader's, on their own device: stored locally and never
+      # sent to the server, so two people in one conversation keep their own.
+      def test_a_theme_choice_is_kept_on_the_device
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+
+        assert_includes js, %(localStorage.setItem(THEME_KEY, theme))
+        assert_includes js, %(localStorage.getItem(THEME_KEY))
+        refute_match(/fetch\([^)]*theme/i, js, "the choice never goes to the server")
+        assert_includes js, %(style.colorScheme), "native controls follow the theme too"
+      end
 
       # The three figures in the row are a glance; the panel is what the glance
       # is made of. Every one of them has to be spelled out, or opening the

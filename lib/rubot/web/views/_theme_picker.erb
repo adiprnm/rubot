@@ -1,0 +1,23 @@
+<%# The three palettes, as three pressed-once buttons rather than a select: a
+    theme is a thing to look at, and a menu hides two thirds of the choice
+    behind a click. Each button carries its own two colours, so the control
+    shows what it will do before it is pressed.
+
+    `aria-pressed` is the state, and it is the only thing the script changes
+    besides the `data-theme` on <html> — the dots are pure CSS on that same
+    attribute, so the labels cannot drift out of step with the page. -%>
+<div class="theme-picker" role="group" aria-label="Tema">
+  <span class="theme-label">tema</span>
+  <button type="button" class="theme-swatch" data-theme-choice="everforest"
+          aria-pressed="false" title="Everforest — hijau gelap">
+    <span class="swatch-dot" aria-hidden="true"></span>Everforest
+  </button>
+  <button type="button" class="theme-swatch" data-theme-choice="dark"
+          aria-pressed="false" title="Gelap netral">
+    <span class="swatch-dot" aria-hidden="true"></span>Gelap
+  </button>
+  <button type="button" class="theme-swatch" data-theme-choice="light"
+          aria-pressed="false" title="Terang">
+    <span class="swatch-dot" aria-hidden="true"></span>Terang
+  </button>
+</div>

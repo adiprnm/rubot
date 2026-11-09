@@ -79,6 +79,12 @@
         <dt>sesi</dt>
         <dd title="<%= h(session_id) %>"><%= h(session_short) %></dd>
       </dl>
+
+      <%# Three palettes, one press each. The choice is the reader's and lives
+          on their device, so it is stored where a device keeps things and
+          nowhere near the session: two people reading the same conversation
+          should each get their own colours. -%>
+      <%= View.render("_theme_picker") %>
     </div>
   </aside>
 </div>

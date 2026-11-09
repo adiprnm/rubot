@@ -26,26 +26,18 @@
   font-display: swap;
 }
 
+/* Every colour on the page comes from the block below, which is what makes a
+   second theme a matter of restating a dozen values rather than editing the
+   stylesheet. The page ships with three: Everforest (the palette the TUI uses,
+   so both faces of rubot read as one product), a neutral dark, and a light one
+   on the warm Everforest paper.
+
+   `data-theme` on <html> chooses between them and is set before the first paint
+   — see the head of layout.erb — so a light-theme reader never sees a dark
+   flash on the way in. The three blocks must define the same names: a theme
+   that forgets one inherits the value from :root and mixes two palettes. */
 :root {
-  --bg0: #2b332f;
-  --bg1: #333c37;
-  --bg2: #3d4843;
-  --bg-dim: #232b27;
-
-  --fg: #d3c6aa;
-  /* Everforest's greys are tuned for a terminal at larger sizes; these two
-     are lifted a step so 10px metadata still clears 4.5:1. */
-  --fg-dim: #a6b1a8;
-  --fg-faint: #939e8b;
-
-  --green: #a7c080;
-  --blue: #7fbbb3;
-  --yellow: #dbbc7f;
-  --red: #e67e80;
-
-  --line: #3f4a43;
-  --line-soft: #354039;
-
+  /* Type and measure are the same in every theme. */
   --serif: "Source Serif 4", Charter, Georgia, serif;
   --mono: "Martian Mono", "Iosevka", ui-monospace, monospace;
 
@@ -66,6 +58,115 @@
   --marker-gutter: 1.5rem;
 }
 
+/* Everforest: a dark forest floor with the paper-coloured text the TUI uses.
+   The greys are lifted a step from the terminal's, so 10px metadata still
+   clears 4.5:1. */
+:root,
+:root[data-theme="everforest"] {
+  --bg0: #2b332f;
+  --bg1: #333c37;
+  --bg2: #3d4843;
+  --bg-dim: #232b27;
+
+  --fg: #d3c6aa;
+  --fg-dim: #a6b1a8;
+  --fg-faint: #939e8b;
+
+  --green: #a7c080;
+  --blue: #7fbbb3;
+  --yellow: #dbbc7f;
+  --red: #e67e80;
+
+  --line: #3f4a43;
+  --line-soft: #354039;
+
+  /* The colour a filled accent button swaps its text to. */
+  --on-accent: #2b332f;
+
+  --selection-bg: #4a5a4d;
+  --selection-fg: #f0ece0;
+
+  /* Anything laid over the page: the drawer's scrim, the lightbox, the dialog
+     behind the persona form. Warm and green-tinted, not black. */
+  --scrim: rgba(20, 25, 22, 0.72);
+  --scrim-dense: rgba(12, 16, 14, 0.86);
+  --shadow: rgba(0, 0, 0, 0.45);
+  --shadow-deep: rgba(0, 0, 0, 0.55);
+
+  --diff-add: rgba(167, 192, 128, 0.10);
+  --diff-del: rgba(230, 126, 128, 0.10);
+}
+
+/* The neutral dark: the same depths with the green taken out, for a reader who
+   wants rubot to sit quietly beside a bluer editor. */
+:root[data-theme="dark"] {
+  --bg0: #1b1f24;
+  --bg1: #232830;
+  --bg2: #2c323b;
+  --bg-dim: #15181c;
+
+  --fg: #d5dae1;
+  --fg-dim: #aab2bd;
+  --fg-faint: #949daa;
+
+  --green: #86b98a;
+  --blue: #84aecd;
+  --yellow: #d7b678;
+  --red: #e08486;
+
+  --line: #333a44;
+  --line-soft: #2b313a;
+
+  --on-accent: #1b1f24;
+
+  --selection-bg: #37414f;
+  --selection-fg: #eef2f7;
+
+  --scrim: rgba(10, 12, 15, 0.72);
+  --scrim-dense: rgba(6, 8, 10, 0.86);
+  --shadow: rgba(0, 0, 0, 0.5);
+  --shadow-deep: rgba(0, 0, 0, 0.6);
+
+  --diff-add: rgba(134, 185, 138, 0.12);
+  --diff-del: rgba(224, 132, 134, 0.12);
+}
+
+/* Light: Everforest's own paper, with every ink darkened until the smallest
+   metadata clears 4.5:1 on it. The accents are not the dark theme's greens and
+   reds lightened — those wash out to pastel on paper — but a separate, deeper
+   set chosen to be readable as text. */
+:root[data-theme="light"] {
+  --bg0: #f3efda;
+  --bg1: #efebd4;
+  --bg2: #e5e1ca;
+  --bg-dim: #ebe7cf;
+
+  --fg: #3f4a52;
+  --fg-dim: #5a656b;
+  --fg-faint: #586460;
+
+  --green: #556b00;
+  --blue: #1f6a92;
+  --yellow: #8a5f00;
+  --red: #b52f2d;
+
+  --line: #cfcab0;
+  --line-soft: #dad5bc;
+
+  --on-accent: #f7f3e3;
+
+  --selection-bg: #d5d0b2;
+  --selection-fg: #2d363c;
+
+  --scrim: rgba(63, 74, 82, 0.35);
+  --scrim-dense: rgba(63, 74, 82, 0.55);
+  --shadow: rgba(63, 74, 82, 0.18);
+  --shadow-deep: rgba(63, 74, 82, 0.25);
+
+  --diff-add: rgba(85, 107, 0, 0.10);
+  --diff-del: rgba(181, 47, 45, 0.10);
+}
+
 * { box-sizing: border-box; }
 
 html, body { height: 100%; margin: 0; }
@@ -80,7 +181,7 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-::selection { background: #4a5a4d; color: #f0ece0; }
+::selection { background: var(--selection-bg); color: var(--selection-fg); }
 
 :focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 
@@ -278,7 +379,7 @@ body {
   position: fixed;
   inset: 0;
   z-index: 39;
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--shadow-deep);
 }
 
 .rail-panel {
@@ -297,7 +398,7 @@ body {
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--bg1);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 24px 60px var(--shadow-deep);
 }
 
 .panel-title {
@@ -525,6 +626,75 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Three palettes, one press each. The dots carry the theme they offer, so the
+   control answers "what does this look like" before it is used rather than
+   after — the reason a select was the wrong shape for it. */
+.theme-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.6rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--line-soft);
+}
+
+.theme-label {
+  margin-right: 0.1rem;
+  color: var(--fg-faint);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: -0.03em;
+}
+
+.theme-swatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  padding: 0.16rem 0.36rem;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: none;
+  color: var(--fg-faint);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: -0.03em;
+  cursor: pointer;
+  transition: color .12s, border-color .12s;
+}
+
+.theme-swatch:hover { color: var(--fg-dim); border-color: var(--line); }
+
+/* The theme in use is the one marked, and marked by more than colour: a border
+   alone would be invisible to a reader who cannot tell the dots apart. */
+.theme-swatch[aria-pressed="true"] {
+  border-color: var(--line);
+  color: var(--fg);
+  background: var(--bg2);
+}
+
+/* Each dot paints its own palette, not the current one: these two colours are
+   the theme's own background and accent, written here because showing another
+   theme's colours is the whole job. */
+.swatch-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+}
+
+.theme-swatch[data-theme-choice="everforest"] .swatch-dot {
+  background: linear-gradient(135deg, #2b332f 50%, #a7c080 50%);
+}
+
+.theme-swatch[data-theme-choice="dark"] .swatch-dot {
+  background: linear-gradient(135deg, #1b1f24 50%, #86b98a 50%);
+}
+
+.theme-swatch[data-theme-choice="light"] .swatch-dot {
+  background: linear-gradient(135deg, #f3efda 50%, #556b00 50%);
 }
 
 /* ---------- chat column ------------------------------------------ */
@@ -1249,9 +1419,9 @@ body {
 
 /* The tint is a band across the whole row, so the eye follows it past the
    end of a short line. */
-.diff-row.is-add { background: rgba(167, 192, 128, 0.1); color: var(--fg); }
+.diff-row.is-add { background: var(--diff-add); color: var(--fg); }
 .diff-row.is-add .diff-sign { color: var(--green); }
-.diff-row.is-del { background: rgba(230, 126, 128, 0.1); color: var(--fg); }
+.diff-row.is-del { background: var(--diff-del); color: var(--fg); }
 .diff-row.is-del .diff-sign { color: var(--red); }
 .diff-row.is-ctx { color: var(--fg-dim); }
 
@@ -1452,7 +1622,7 @@ body {
   height: 1.35rem;
   border: 0;
   border-radius: 50%;
-  background: rgba(20, 25, 22, 0.72);
+  background: var(--scrim);
   color: var(--fg);
   font-family: var(--mono);
   font-size: 0.75rem;
@@ -1487,7 +1657,7 @@ body {
   width: 1.35rem;
   height: 1.35rem;
   border-radius: 50%;
-  background: rgba(20, 25, 22, 0.72);
+  background: var(--scrim);
   color: var(--fg);
   font-family: var(--mono);
   font-size: 0.75rem;
@@ -1515,7 +1685,7 @@ body {
   display: grid;
   place-items: center;
   padding: 1.5rem;
-  background: rgba(12, 16, 14, 0.86);
+  background: var(--scrim-dense);
   backdrop-filter: blur(3px);
 }
 
@@ -1568,7 +1738,7 @@ body.lightbox-open { overflow: hidden; }
 .btn:hover { color: var(--fg); border-color: var(--fg-faint); }
 
 .btn.primary { border-color: var(--green); color: var(--green); }
-.btn.primary:hover { background: var(--green); color: var(--bg0); }
+.btn.primary:hover { background: var(--green); color: var(--on-accent); }
 
 /* The send button with nothing to send: the press would do nothing, so it says
    so before the hand arrives. It stays in place rather than disappearing —
@@ -1583,7 +1753,7 @@ body.lightbox-open { overflow: hidden; }
    colour would promise the opposite of what it does, so it is drawn in the
    colour that means stop. */
 .composer-stop { border-color: var(--red); color: var(--red); }
-.composer-stop:hover { background: var(--red); color: var(--bg0); }
+.composer-stop:hover { background: var(--red); color: var(--on-accent); }
 
 /* The round trip after a press: the request is out, the turn is not stopped
    yet. Read-only, waiting, and plainly not something to press again — but
@@ -1678,7 +1848,7 @@ body.lightbox-open { overflow: hidden; }
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--bg1);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 12px 32px var(--shadow);
   white-space: normal;
 }
 
@@ -1820,7 +1990,7 @@ body.lightbox-open { overflow: hidden; }
     width: min(19rem, 84vw);
     background: var(--bg-dim);
     border-right: 1px solid var(--line);
-    box-shadow: 0 0 40px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 0 40px var(--shadow);
     transform: translateX(-101%);
     transition: transform 210ms ease;
     /* Kept out of the tab order and off the screen readers' path while shut. */
@@ -1881,7 +2051,7 @@ body.lightbox-open { overflow: hidden; }
     position: fixed;
     inset: 0;
     z-index: 55;
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--shadow);
   }
 
   .nav-toggle {
