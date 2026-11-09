@@ -18,11 +18,7 @@
          hx-swap="innerHTML"
          hx-trigger="toggle[this.open]">
   <summary class="usage-toggle" title="Pemakaian dan kuota" aria-label="Pemakaian dan kuota">
-    <svg viewBox="0 0 10 10" width="10" height="10" fill="none" stroke="currentColor"
-         stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"
-         aria-hidden="true" focusable="false">
-      <path d="M1.6 7.6V5.4"/><path d="M5 7.6V2.4"/><path d="M8.4 7.6V4"/>
-    </svg>
+    <%= usage_icon(:usage) %>
   </summary>
 
   <div class="usage-panel" role="group" aria-label="Pemakaian dan kuota">

@@ -1811,9 +1811,23 @@ module Rubot
       def test_each_usage_icon_draws_a_different_shape
         bodies = View::SVG_ICONS.values
 
-        assert_equal 3, bodies.size
-        assert_equal 3, bodies.uniq.size
+        assert_equal 4, bodies.size, "cost, cache, context and the report's own button"
+        assert_equal 4, bodies.uniq.size
         bodies.each { |body| assert_includes body, "<", "every icon needs at least one shape" }
+      end
+
+      # The report's button used to draw its own three bars, a fraction of a
+      # millimetre away from the bars that mean "context": two different figures
+      # announced by the same shape. It draws the shared mark now, so the shapes
+      # can only collide by being added to the one set that is checked above.
+      def test_the_report_button_draws_the_shared_mark
+        erb = File.read(File.expand_path("../lib/rubot/web/views/_usage_sheet.erb", __dir__))
+        toggle = erb[/<summary class="usage-toggle".*?<\/summary>/m]
+
+        refute_nil toggle, "the report button is missing from the usage sheet"
+        assert_includes toggle, "usage_icon(:usage)"
+        refute_includes toggle, "<path", "the button must not carry geometry of its own"
+        refute_includes toggle, "<rect"
       end
 
       # The out-of-band copy has to carry the marker, while the page's own copy

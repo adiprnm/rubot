@@ -706,7 +706,14 @@ module Rubot
                %(<path d="M2.6 8.1V5.9h2.2"/>),
         context: %(<path d="M1.6 7.4V5.2"/>) +
                  %(<path d="M5 7.4V2"/> ) +
-                 %(<path d="M8.4 7.4V3.6"/>)
+                 %(<path d="M8.4 7.4V3.6"/>),
+        # The button that opens the whole report. It used to be three bars, which
+        # is the context mark redrawn a fraction of a millimetre away — two
+        # different things asking to be read as one. A card with two lines says
+        # "there is more written down in here".
+        usage: %(<rect x="1.5" y="1.6" width="7" height="6.8" rx="1.1"/>) +
+               %(<path d="M3.3 4h3.4"/>) +
+               %(<path d="M3.3 6.1h2.1"/>)
       }.freeze
 
       # The round marks are drawn for the same reason: ◌ and ◐ are a fallback
