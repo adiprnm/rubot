@@ -1,0 +1,16 @@
+<%# One conversation per row, named by the prompt that started it. The id
+    carries "~" between persona and start time, so the row can be reopened
+    without asking the store again.
+
+    Re-rendered as an out-of-band swap at the end of a turn: a session opened
+    from the "+" button has no name until its first prompt is in the file. -%>
+<nav class="sessions" id="sessions">
+  <% sessions.each do |row| %>
+    <a class="session<%= row[:active] ? " is-active" : "" %>"
+       href="/s/<%= h(row[:id]) %><%= h(token_query) %>"
+       <%= row[:active] ? 'aria-current="page"' : "" %>>
+      <span class="label"><%= h(row[:label]) %></span>
+      <span class="meta"><%= h(row[:meta]) %></span>
+    </a>
+  <% end %>
+</nav>

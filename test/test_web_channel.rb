@@ -241,6 +241,66 @@ module Rubot
         Turn.new(id: "t1", session_id: "s1", clock: clock)
       end
 
+      # Enough of a WEBrick::HTTPResponse for the channel's rendering paths: it
+      # only ever writes a status, a body and a header or two.
+      class FakeResponse
+        attr_accessor :body, :status
+        attr_reader :headers
+
+        def initialize
+          @headers = {}
+          @status = 200
+          @body = ""
+        end
+
+        def []=(key, value)
+          @headers[key] = value
+        end
+      end
+
+      def setup
+        @fixtures = []
+      end
+
+      def teardown
+        Array(@fixtures).each { |dir| FileUtils.remove_entry(dir) if File.directory?(dir) }
+      end
+
+      # A channel whose config points at a throwaway ~/.rubot: personas.json
+      # next to config.yml, conversations in <dir>/sessions. The channel is
+      # given the config directly, so no session pool (and no Ractor) is
+      # spawned just to list files.
+      def channel_with_sessions(personas:, sessions: {}, titles: {})
+        dir = Dir.mktmpdir("rubot-web-sessions")
+        @fixtures << dir
+        workspace = File.join(dir, "workspace")
+        FileUtils.mkdir_p(File.join(dir, "sessions"))
+        FileUtils.mkdir_p(workspace)
+
+        File.write(File.join(dir, "personas.json"), JSON.generate(personas))
+        sessions.each do |id, prompt|
+          data = {
+            "id" => id,
+            "updated_at" => Time.now.utc.iso8601,
+            "messages" => [
+              { "role" => "user", "content" => prompt },
+              { "role" => "assistant", "content" => "Siap." }
+            ]
+          }
+          data["title"] = titles[id] if titles[id]
+          File.write(File.join(dir, "sessions", "#{id}.json"), JSON.generate(data))
+        end
+
+        config = Rubot::Config.from_data(
+          { "agents" => { "defaults" => { "workspace" => workspace } } },
+          config_path: File.join(dir, "config.yml")
+        )
+
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        channel.instance_variable_set(:@app_config, config)
+        channel
+      end
+
       def kinds(turn)
         turn.items.map { |item| item[:kind] }
       end
@@ -634,6 +694,175 @@ module Rubot
         assert_equal "🧪", channel.send(:form, req, "emoji")
         assert_equal Encoding::UTF_8, channel.send(:form, req, "name").encoding
         assert_equal "", channel.send(:form, req, "missing")
+      end
+
+      # WEBrick parses only the body of a form POST, so a URL that carries
+      # `?token=` — which is what every link the page writes does — has to
+      # authenticate on the query string. The sidebar's "+" button depends on
+      # this: it submits before the page has had a chance to set a cookie.
+      def test_a_post_authenticates_with_the_token_in_the_query_string
+        channel = Rubot::Channels::Web.new(channel_config: { "token" => "t0k" })
+        request = Struct.new(:query_string, :query, :cookies)
+
+        assert channel.send(:authorized?, request.new("token=t0k", {}, []))
+        refute channel.send(:authorized?, request.new("token=nope", {}, []))
+        refute channel.send(:authorized?, request.new("", {}, []))
+      end
+
+      # --- sessions -------------------------------------------------------
+
+      # A session id has to survive the trip back to a persona: the SessionPool
+      # roots a session's Ractor at the persona's workspace from the id alone.
+      # A persona's second conversation must therefore still name its owner.
+      def test_a_later_session_still_belongs_to_its_persona
+        channel = Rubot::Channels::Web.new(channel_config: {})
+
+        sid = channel.send(:new_session_id, "kanyaah")
+
+        assert sid.start_with?("web_kanyaah~"), sid
+        assert_equal "kanyaah", Rubot::PersonaStore.key_for_session(sid)
+        refute_equal channel.send(:session_id, "kanyaah"), sid,
+                     "a new session must not reuse the persona's first session"
+      end
+
+      # The sidebar is a list of conversations, so another persona's work must
+      # never appear in it — the Ractors are separate, their files are not.
+      def test_the_session_list_holds_only_one_personas_conversations
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" }, "rubot" => { "name" => "Rubot" } },
+          sessions: {
+            "web_kanyaah" => "Bikin carousel",
+            "web_kanyaah~20261108-101010" => "Riset harga",
+            "web_rubot" => "Cek repo"
+          }
+        )
+
+        ids = channel.send(:sessions_for, "kanyaah").map { |entry| entry[:id] }
+
+        assert_includes ids, "web_kanyaah"
+        assert_includes ids, "web_kanyaah~20261108-101010"
+        refute_includes ids, "web_rubot"
+      end
+
+      def test_a_session_row_is_named_by_the_prompt_that_started_it
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: { "web_kanyaah" => "Riset harga template signature" }
+        )
+
+        row = channel.send(:session_rows, "kanyaah", "web_kanyaah").first
+
+        assert_equal "Riset harga template signature", row[:label]
+        assert row[:active]
+      end
+
+      # The list holds conversations, so it shows the name the model gave one
+      # rather than the sentence that opened it. The prompt is only a fallback
+      # for a session that has not been named yet.
+      def test_a_named_session_is_listed_under_its_title
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: { "web_kanyaah" => "tolong cek dulu kenapa build-nya gagal di CI tapi lokal aman ya met" },
+          titles: { "web_kanyaah" => "Build gagal di CI" }
+        )
+
+        row = channel.send(:session_rows, "kanyaah", "web_kanyaah").first
+
+        assert_equal "Build gagal di CI", row[:label]
+      end
+
+      def test_the_header_and_tab_share_the_named_title
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: { "web_kanyaah" => "tolong cek kenapa build gagal" },
+          titles: { "web_kanyaah" => "Build gagal di CI" }
+        )
+
+        markup = channel.send(:sidebar_markup, "web_kanyaah")
+
+        assert_includes markup, %(data-title="Kanyaah · Build gagal di CI")
+        assert_includes markup, %(<span class="session-name">Build gagal di CI</span>)
+      end
+
+      # A session that has not been written yet has no file, so the row for the
+      # one on screen comes from the caller instead of the index.
+      def test_a_conversation_with_no_messages_is_listed_while_it_is_open
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+
+        rows = channel.send(:session_rows, "kanyaah", "web_kanyaah~20261108-090000")
+
+        assert_equal 1, rows.size
+        assert_equal "Sesi baru", rows.first[:label]
+        assert rows.first[:active]
+      end
+
+      def test_the_session_list_refresh_is_an_out_of_band_swap
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: { "web_kanyaah" => "Halo" }
+        )
+
+        markup = channel.send(:sidebar_markup, "web_kanyaah")
+
+        assert_includes markup, %(id="sessions" hx-swap-oob="true")
+        assert_includes markup, "Halo"
+      end
+
+      # The name is what separates two conversations of one persona, so the
+      # header has to carry it too — and be refreshable, because it does not
+      # exist until the first turn is saved.
+      def test_the_header_is_refreshed_together_with_the_sidebar
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: { "web_kanyaah" => "Riset harga template signature" }
+        )
+
+        markup = channel.send(:sidebar_markup, "web_kanyaah")
+
+        assert_includes markup, %(id="chat-head" hx-swap-oob="true")
+        assert_includes markup, "Riset harga template signature"
+      end
+
+      # A conversation with no prompt yet has no name, and the header must not
+      # invent one: it shows the persona alone.
+      def test_an_unnamed_session_adds_nothing_to_the_header
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+
+        assert_nil channel.send(:named_session_label, "kanyaah", "web_kanyaah~20261108-090000")
+        assert_equal "Kanyaah",
+                     channel.send(:document_title, "Kanyaah",
+                                  channel.send(:named_session_label, "kanyaah", "web_kanyaah~x"))
+      end
+
+      def test_the_document_title_names_the_session
+        channel = Rubot::Channels::Web.new(channel_config: {})
+
+        assert_equal "Kanyaah · Riset harga",
+                     channel.send(:document_title, "Kanyaah", "Riset harga")
+        assert_equal "Kanyaah", channel.send(:document_title, "Kanyaah", nil)
+      end
+
+      def test_opening_a_persona_lands_on_its_newest_conversation
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: { "web_kanyaah" => "Lama" }
+        )
+        res = FakeResponse.new
+
+        channel.send(:open_persona, res, "kanyaah", nil)
+
+        assert_equal 303, res.status
+        assert_equal "/s/web_kanyaah", res.headers["Location"]
+      end
+
+      # A hand-typed URL must not open a session of a persona that is gone.
+      def test_a_session_of_an_unknown_persona_is_not_found
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        res = FakeResponse.new
+
+        channel.send(:render_session, res, "web_ghost")
+
+        assert_equal 404, res.status
       end
 
       # Every bubble carries a `.sr-only` label, which is absolutely

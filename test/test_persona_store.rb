@@ -96,6 +96,18 @@ class TestPersonaStore < Minitest::Test
     assert_nil Rubot::PersonaStore.key_for_session("default")
   end
 
+  # A persona can own many conversations. Every one of them has to resolve back
+  # to the persona, because the workspace (SOUL, skills, memory) hangs off it.
+  def test_key_for_session_ignores_the_session_suffix
+    assert_equal "kanyaah", Rubot::PersonaStore.key_for_session("web_kanyaah")
+    assert_equal "kanyaah", Rubot::PersonaStore.key_for_session("web_kanyaah~20261108-101010")
+    assert_equal "kanyaah", Rubot::PersonaStore.key_for_session("web_kanyaah~20261108-101010-2")
+    assert_equal "by-adipurnm_2",
+                 Rubot::PersonaStore.key_for_session("web_by-adipurnm_2~20261108-101010")
+    assert_nil Rubot::PersonaStore.key_for_session("web_kanyaah~")
+    assert_nil Rubot::PersonaStore.key_for_session("web_")
+  end
+
   def test_get_by_session
     @store.set("123:7", persona)
 

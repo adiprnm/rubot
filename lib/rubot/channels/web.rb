@@ -2,6 +2,7 @@
 
 require "webrick"
 require "securerandom"
+require "uri"
 
 require_relative "../channel"
 require_relative "../persona_store"
@@ -20,14 +21,31 @@ module Rubot
     # Events are idempotent renders of the turn's current state, which makes a
     # reconnect safe: replaying from the start just paints the same content.
     #
-    # Each persona is its own agent: session `web_<slug>`, rooted at the
-    # persona's workspace by SessionPool, so SOUL.md, skills and memory are not
-    # shared between specialists.
+    # Each persona is its own agent, rooted at the persona's workspace by
+    # SessionPool, so SOUL.md, skills and memory are not shared between
+    # specialists. A persona owns many conversations: the first is
+    # `web_<slug>`, later ones are `web_<slug>~<stamp>`, and the sidebar lists
+    # them beside the avatar rail.
     class Web < Channel
       DEFAULT_HOST = "127.0.0.1"
       DEFAULT_PORT = 4567
       MAX_TURNS = 30
       DEFAULT_SLUG = "rubot"
+
+      # A persona can own many conversations. The first one keeps the historic
+      # id ("web_<slug>"); every later one appends "~<stamp>". "~" cannot occur
+      # in a slug, so the id always splits back into persona + session.
+      SESSION_SEPARATOR = "~"
+      # How many conversations the sidebar lists. Older ones stay on disk and
+      # are still reachable by their URL.
+      MAX_SESSION_ROWS = 40
+      # What a conversation is called before its first prompt has been saved.
+      UNTITLED_SESSION = "Sesi baru"
+
+      SLUG_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})\z}
+      SESSION_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})\z}
+      SESSION_TURN_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/turn\z}
+      PERSONA_SESSIONS_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/sessions\z}
 
       ASSETS = File.expand_path("../web/assets", __dir__)
       VENDOR = File.expand_path("../../../vendor/web", __dir__)
@@ -104,9 +122,102 @@ module Rubot
         Thread.current[:rubot_web_turn]&.append_chunk(chunk)
       end
 
-      # Session ids are per persona: "web_<slug>".
+      # The persona's first session, which is also the id older bookmarks and
+      # the pre-sessions UI used.
       def session_id(slug = default_slug)
         "web_#{slug}"
+      end
+
+      # An id for a conversation that does not exist yet. Nothing is written to
+      # disk until it has a message (see Session#save!), so opening a session
+      # and leaving it untouched leaves nothing behind.
+      def new_session_id(slug)
+        base = "#{session_id(slug)}#{SESSION_SEPARATOR}#{Time.now.strftime("%Y%m%d-%H%M%S")}"
+        candidate = base
+        counter = 1
+        while taken_session_id?(candidate)
+          counter += 1
+          candidate = "#{base}-#{counter}"
+        end
+        candidate
+      end
+
+      def taken_session_id?(sid)
+        dir = @app_config&.sessions_dir
+        return true if dir && File.exist?(File.join(dir, "#{sid}.json"))
+
+        # An id the pool already spawned is taken too, even before it is saved.
+        @pool ? @pool.session_ids.include?(sid) : @active.key?(sid)
+      end
+
+      # Which persona owns a session id, or nil when the id is not a web one.
+      def owner_slug(sid)
+        slug = PersonaStore.key_for_session(sid)
+        return nil unless slug && known_slug?(slug)
+
+        slug
+      end
+
+      # The persona's conversations, newest first. Only files are listed, so a
+      # session that was opened but never used does not appear; the caller adds
+      # the one on screen itself when it is missing.
+      def sessions_for(slug)
+        dir = @app_config&.sessions_dir
+        return [] unless dir && Dir.exist?(dir)
+
+        base = session_id(slug)
+        prefix = "#{base}#{SESSION_SEPARATOR}"
+        Dir.glob(File.join(dir, "#{base}*.json"))
+          .filter_map { |path| Session.describe(path) }
+          .select { |entry| entry[:id] == base || entry[:id].to_s.start_with?(prefix) }
+          .sort_by { |entry| entry[:timestamp] }
+          .reverse
+      end
+
+      # Rows for the sidebar: what the conversation is about and how long ago it
+      # moved. The one on screen is always present, even before it is saved.
+      def session_rows(slug, current_sid)
+        rows = sessions_for(slug).first(MAX_SESSION_ROWS).map do |entry|
+          {
+            id: entry[:id],
+            label: entry[:title].to_s.strip.empty? ? UNTITLED_SESSION : entry[:title].to_s,
+            meta: elapsed_label(entry[:timestamp]),
+            active: entry[:id] == current_sid
+          }
+        end
+
+        return rows if rows.any? { |row| row[:active] }
+
+        [ { id: current_sid, label: UNTITLED_SESSION, meta: "", active: true }, *rows ]
+      end
+
+      # The name of the conversation on screen: the prompt that opened it. It is
+      # the one thing that tells two sessions of the same persona apart, so it
+      # is used as the name everywhere — sidebar, header, tab — instead of
+      # showing it in one place and an id everywhere else.
+      def session_label(slug, sid)
+        row = session_rows(slug, sid).find { |entry| entry[:active] }
+        row ? row[:label] : UNTITLED_SESSION
+      end
+
+      # The name a session carries once it has one; nil while it is still
+      # untouched, so callers can fall back to the persona alone.
+      def named_session_label(slug, sid)
+        label = session_label(slug, sid)
+        label == UNTITLED_SESSION ? nil : label
+      end
+
+      # How long ago, in the units a reader actually uses. Absolute times would
+      # have to assume a timezone; a difference between two instants does not.
+      def elapsed_label(epoch)
+        seconds = Time.now.to_f - epoch.to_f
+        return "baru saja" if seconds < 90
+        return "#{(seconds / 60).round} mnt" if seconds < 3600
+        return "#{(seconds / 3600).round} jam" if seconds < 86_400
+        return "#{(seconds / 86_400).round} hr" if seconds < 2_592_000
+
+        date = Time.at(epoch).utc.strftime("%d %b").sub(/\A0/, "")
+        "#{date} lalu"
       end
 
       private
@@ -167,11 +278,15 @@ module Rubot
 
         if method == "GET" && path == "/"
           redirect(res, "/p/#{default_slug}")
-        elsif method == "GET" && (match = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})\z}.match(path))
-          render_index(res, match[1])
+        elsif method == "GET" && (match = SLUG_PATH.match(path))
+          open_persona(res, match[1], req)
+        elsif method == "POST" && (match = PERSONA_SESSIONS_PATH.match(path))
+          create_session(res, match[1], req)
+        elsif method == "GET" && (match = SESSION_PATH.match(path))
+          render_session(res, match[1])
         elsif method == "POST" && path == "/personas"
           create_persona(req, res)
-        elsif method == "POST" && (match = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/turn\z}.match(path))
+        elsif method == "POST" && (match = SESSION_TURN_PATH.match(path))
           create_turn(req, res, match[1])
         elsif method == "GET" && (match = %r{\A/turns/([\w-]+)/stream\z}.match(path))
           stream_turn(res, match[1])
@@ -202,9 +317,25 @@ module Rubot
       def authorized?(req)
         return true if @token.nil?
 
+        # WEBrick parses only the body for a form POST, so `?token=` in the
+        # action URL is invisible to #form. Every link the page writes carries
+        # it, and the "+" button submits before any cookie exists, so read the
+        # query string directly before falling back to the cookie.
         given = form(req, "token")
+        given = query_token(req) if given.empty?
         given = cookie_token(req) if given.empty?
         !given.empty? && given == @token
+      end
+
+      def query_token(req)
+        raw = req.query_string.to_s
+        return "" if raw.empty?
+
+        # URI, not CGI: `CGI.parse` is gone in Ruby 4 (and `CGI.escape`, which
+        # the links use, is still there, so this is easy to get wrong).
+        URI.decode_www_form(raw).to_h["token"].to_s
+      rescue StandardError
+        ""
       end
 
       def cookie_token(req)
@@ -259,25 +390,56 @@ module Rubot
 
       # --- page ----------------------------------------------------------
 
-      def render_index(res, slug)
+      # /p/<slug> is a doorway, not a page: it opens the persona's newest
+      # conversation, so the avatar in the rail always lands somewhere usable.
+      def open_persona(res, slug, req)
         return not_found(res) unless known_slug?(slug)
 
+        latest = sessions_for(slug).first
+        redirect(res, "/s/#{latest ? latest[:id] : session_id(slug)}", req)
+      end
+
+      # The "+" button in the sidebar. It only mints an id and navigates; the
+      # session file appears with the first message.
+      def create_session(res, slug, req)
+        return not_found(res) unless known_slug?(slug)
+
+        redirect(res, "/s/#{new_session_id(slug)}", req)
+      end
+
+      # The name the browser tab carries. A session that has no name yet does
+      # not get a placeholder there — the persona alone is enough for a tab.
+      def document_title(persona_label, session_label)
+        [ persona_label, session_label ].compact.join(" · ")
+      end
+
+      def render_session(res, sid)
+        slug = owner_slug(sid)
+        return not_found(res) unless slug
+
         persona = persona_store&.[](slug)
+        persona_label = persona ? persona.label : slug.capitalize
+        session_label = named_session_label(slug, sid)
         body = View.render(
           "index",
           personas: persona_rows(slug),
+          sessions: session_rows(slug, sid),
           slug: slug,
-          persona_label: persona ? persona.label : slug.capitalize,
+          session_id: sid,
+          session_short: sid.delete_prefix("web_"),
+          persona_label: persona_label,
           persona_emoji: persona ? persona.emoji_or : "🤖",
           persona_model: persona_model(persona),
-          session_id: session_id(slug),
-          messages: history(slug),
-          usage: usage_locals(slug),
+          session_label: session_label,
+          document_title: document_title(persona_label, session_label),
+          messages: history(sid),
+          usage: usage_locals(sid),
           token_query: token_query
         )
         res["Content-Type"] = "text/html; charset=utf-8"
         res["Cache-Control"] = "no-store"
-        res.body = View.render("layout", content: body, title: persona ? persona.label : slug,
+        res.body = View.render("layout", content: body,
+                                         title: document_title(persona_label, session_label),
                                          asset_version: asset_version)
 
         return unless @token
@@ -293,12 +455,6 @@ module Rubot
         File.mtime(File.join(ASSETS, "app.css")).to_i
       rescue SystemCallError
         0
-      end
-
-      # The emoji the person picked for this persona, or a neutral default.
-      def persona_emoji(slug)
-        persona = persona_store&.[](slug)
-        persona ? persona.emoji_or : "🤖"
       end
 
       # What the status line shows: the model this persona actually talks to.
@@ -323,12 +479,12 @@ module Rubot
       # The conversation as the thread draws it: a prompt, then the turn it
       # produced — including the tool rows. Without replaying the calls a
       # refresh would quietly hide the work the answer was built from.
-      def history(slug)
+      def history(sid)
         return [] unless @app_config
 
         messages = Session.transcript(
           @app_config.workspace,
-          session_id(slug),
+          sid,
           dir: @app_config.sessions_dir
         )
         results = tool_results(messages)
@@ -401,8 +557,8 @@ module Rubot
       # their words replaced by drawn icons. `ctx` rather than `context` — a
       # local named `context` would shadow Scope#context, which ERB calls to
       # get its binding.
-      def usage_locals(slug)
-        metrics = usage_metrics(slug)
+      def usage_locals(sid)
+        metrics = usage_metrics(sid)
         {
           cost: metrics&.dig(:cost) || "—",
           cache: metrics&.dig(:cache) || "—",
@@ -412,8 +568,8 @@ module Rubot
 
       # Asking a session that is mid-turn is safe: the actor runs the turn on
       # its own thread, so the report is answered rather than queued behind it.
-      def usage_metrics(slug)
-        Rubot::UsageReport.metrics(session_for(session_id(slug)).usage_report)
+      def usage_metrics(sid)
+        Rubot::UsageReport.metrics(session_for(sid).usage_report)
       rescue StandardError
         nil
       end
@@ -445,8 +601,8 @@ module Rubot
 
       # --- turn lifecycle ------------------------------------------------
 
-      def create_turn(req, res, slug)
-        return not_found(res) unless known_slug?(slug)
+      def create_turn(req, res, sid)
+        return not_found(res) unless owner_slug(sid)
 
         text = form(req, "message").strip
         if text.empty?
@@ -455,7 +611,6 @@ module Rubot
           return
         end
 
-        sid = session_id(slug)
         turn = Turn.new(id: "t#{SecureRandom.hex(6)}", session_id: sid)
 
         @turns_mutex.synchronize do
@@ -472,13 +627,13 @@ module Rubot
           prune_turns
         end
 
-        Thread.new { run_turn(turn, text, slug) }
+        Thread.new { run_turn(turn, text) }
 
         res["Content-Type"] = "text/html; charset=utf-8"
         res.body = View.render("_turn", turn: turn, text: text, token_query: token_query)
       end
 
-      def run_turn(turn, text, slug)
+      def run_turn(turn, text)
         Thread.current[:rubot_web_turn] = turn
 
         response = process_message(
@@ -493,7 +648,10 @@ module Rubot
         # The footer figures move with every request, so the row is re-rendered
         # once the turn has nothing left to spend — before :done, which ends
         # the stream.
-        turn.emit(:usage, usage_markup(slug))
+        turn.emit(:usage, usage_markup(turn.session_id))
+        # The first prompt names the conversation, and that name only exists
+        # once the turn has been written to the session file.
+        turn.emit(:sidebar, sidebar_markup(turn.session_id))
         turn.finish(response)
       rescue StandardError => e
         turn.fail_with(handle_error(e, text))
@@ -506,8 +664,8 @@ module Rubot
 
       # A fragment meant for the status row rather than for the turn: the swap
       # is out-of-band, so it lands on #usage wherever that element sits.
-      def usage_markup(slug)
-        usage_markup_with(usage_locals(slug))
+      def usage_markup(sid)
+        usage_markup_with(usage_locals(sid))
       end
 
       # Split out so the marker can be tested without a live session behind it.
@@ -515,6 +673,33 @@ module Rubot
         body = View.render("_usage", **locals)
         body.sub(%(<span class="metrics" id="usage">),
                  %(<span class="metrics" id="usage" hx-swap-oob="true">))
+      end
+
+      # The sidebar and the header after a turn. A conversation is named by its
+      # first prompt, and that prompt only exists in the session file once the
+      # turn has been saved — so both have to be re-rendered from the server
+      # rather than patched in the browser. Each fragment carries the
+      # out-of-band marker, so htmx replaces the element wherever it sits.
+      def sidebar_markup(sid)
+        slug = owner_slug(sid)
+        return "" unless slug
+
+        persona = persona_store&.[](slug)
+        persona_label = persona ? persona.label : slug.capitalize
+        label = named_session_label(slug, sid)
+
+        nav = View.render("_sessions", sessions: session_rows(slug, sid), token_query: token_query)
+                  .sub(%(<nav class="sessions" id="sessions">),
+                       %(<nav class="sessions" id="sessions" hx-swap-oob="true">))
+        head = View.render("_chathead",
+                           persona_emoji: persona ? persona.emoji_or : "🤖",
+                           persona_label: persona_label,
+                           session_label: label,
+                           document_title: document_title(persona_label, label))
+                   .sub(%(<header class="chat-head" id="chat-head"),
+                        %(<header class="chat-head" id="chat-head" hx-swap-oob="true"))
+
+        nav + head
       end
 
       def prune_turns
@@ -572,6 +757,10 @@ module Rubot
           # An out-of-band swap: the reader applies it to #usage, so the turn
           # itself is unaffected and the slot stays empty.
           sse(out, "usage", payload.to_s)
+        when :sidebar
+          # Same trick for the sidebar and the header: what the conversation is
+          # called is only known after the first turn has been saved.
+          sse(out, "sidebar", payload.to_s)
         when :heartbeat
           out.write(": keepalive\n\n")
           out.flush if out.respond_to?(:flush)

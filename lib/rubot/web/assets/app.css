@@ -86,114 +86,171 @@ body {
 
 /* ---------- shell ------------------------------------------------ */
 
+/* Three columns, each with one job: the avatar rail says which persona you
+   are in, the sidebar says which conversation, the rest is the conversation
+   itself. */
 .app {
   display: grid;
-  grid-template-columns: 15.5rem minmax(0, 1fr);
+  grid-template-columns: 4.4rem 15rem minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "rail side chat";
   height: 100dvh;
 }
 
-/* ---------- persona pane ----------------------------------------- */
+/* ---------- persona rail ----------------------------------------- */
 
-.sidebar {
+/* A roster of faces rather than a list of names: an emoji in a circle is
+   enough to say "kanyaah", and the row costs 4rem instead of 15. */
+.rail {
+  grid-area: rail;
   display: flex;
   flex-direction: column;
+  align-items: center;
   min-height: 0;
-  padding: 1.15rem 0.75rem 0.75rem;
+  padding: 0.85rem 0 0.7rem;
   background: var(--bg-dim);
-  border-right: 1px solid var(--line);
+  border-right: 1px solid var(--line-soft);
 }
 
-.brand {
-  padding: 0 0.55rem 1.1rem;
+.rail-brand {
+  display: grid;
+  place-items: center;
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 0.7rem;
+  border: 1px solid var(--line);
+  background: var(--bg1);
   font-family: var(--mono);
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: -0.05em;
-  color: var(--fg);
+  color: var(--green);
+  text-decoration: none;
 }
 
-.sidebar-label {
-  padding: 0 0.55rem 0.4rem;
-  font-size: 12px;
-  font-style: italic;
-  color: var(--fg-faint);
-}
+.rail-brand:hover { background: var(--bg2); }
 
-.personas {
+.rail-list {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  margin: 0.65rem 0 0;
+  padding: 0.65rem 0 0;
+  border-top: 1px solid var(--line-soft);
+  list-style: none;
   overflow-y: auto;
-  min-height: 0;
+  scrollbar-width: none;
 }
 
-.persona {
-  display: grid;
-  grid-template-columns: 1rem minmax(0, 1fr);
-  gap: 0.45rem;
-  align-items: baseline;
-  padding: 0.42rem 0.55rem;
-  border-radius: 3px;
+.rail-list::-webkit-scrollbar { display: none; }
+
+.rail-item {
+  position: relative;
+  display: block;
   text-decoration: none;
-  color: var(--fg-dim);
 }
 
-.persona:hover { background: var(--bg1); color: var(--fg); }
-
-/* The glyph carries the state: filled means this is the open persona. */
-.persona .sigil {
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--fg-faint);
+/* The one animated mark on the rail: a bar that says which persona is open,
+   with a shorter one under the pointer so a hover reads as intent. */
+.rail-item::before {
+  content: "";
+  position: absolute;
+  left: -0.6rem;
+  top: 50%;
+  width: 3px;
+  height: 0;
+  border-radius: 0 3px 3px 0;
+  background: var(--fg-dim);
+  transform: translateY(-50%);
+  transition: height 120ms ease, background 120ms ease;
 }
 
-.persona.is-active { background: var(--bg1); color: var(--fg); }
-.persona.is-active .sigil { color: var(--green); }
+.rail-item:hover::before { height: 0.9rem; }
+.rail-item.is-active::before { height: 1.5rem; background: var(--green); }
 
-.persona .meta { display: block; min-width: 0; }
-
-.persona .name {
-  display: block;
-  font-size: 15px;
-  line-height: 1.35;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* Round by default, squared on hover and while open — the same gesture a
+   chat app uses to say "you are here". */
+.rail-item .avatar {
+  display: grid;
+  place-items: center;
+  width: 2.6rem;
+  height: 2.6rem;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--bg1);
+  font-size: 1.05rem;
+  line-height: 1;
+  transition: border-radius 130ms ease, background 130ms ease, border-color 130ms ease;
 }
 
-.persona .slug {
-  display: block;
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: -0.03em;
-  color: var(--fg-faint);
+.rail-item:hover .avatar { border-radius: 0.85rem; background: var(--bg2); }
+
+.rail-item.is-active .avatar {
+  border-color: var(--green);
+  border-radius: 0.85rem;
+  background: var(--bg2);
 }
 
 /* ---------- new persona ------------------------------------------ */
 
-.new-persona { margin-top: 0.5rem; }
+.rail-new {
+  position: relative;
+  margin-top: auto;
+  padding-top: 0.7rem;
+}
 
-.new-persona summary {
-  padding: 0.4rem 0.55rem;
-  border-radius: 3px;
-  font-size: 13.5px;
-  font-style: italic;
+.rail-new summary {
+  display: grid;
+  place-items: center;
+  width: 2.6rem;
+  height: 2.6rem;
+  border: 1px dashed var(--line);
+  border-radius: 50%;
   color: var(--fg-faint);
   cursor: pointer;
   list-style: none;
+  transition: border-radius 130ms ease, color 130ms ease, border-color 130ms ease;
 }
 
-.new-persona summary::-webkit-details-marker { display: none; }
-.new-persona summary:hover { color: var(--fg); background: var(--bg1); }
+.rail-new summary::-webkit-details-marker { display: none; }
 
-.new-persona form {
+.rail-new summary:hover,
+.rail-new[open] summary {
+  border-style: solid;
+  border-color: var(--green);
+  border-radius: 0.85rem;
+  color: var(--green);
+}
+
+/* The form needs a slug, a name and a prompt, so it opens beside the rail
+   instead of inside it. Positioned against the rail, not the viewport, so it
+   sits where the click was. */
+.rail-panel {
+  position: absolute;
+  left: calc(100% + 0.75rem);
+  bottom: 0;
+  z-index: 40;
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
-  padding: 0.75rem 0.55rem 0.6rem;
+  width: 17rem;
+  padding: 0.85rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg1);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
 }
 
-.new-persona label {
+.panel-title {
+  margin: 0 0 0.1rem;
+  font-size: 13px;
+  font-style: italic;
+  color: var(--fg-dim);
+}
+
+.rail-panel label {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
@@ -202,9 +259,9 @@ body {
   color: var(--fg-faint);
 }
 
-.new-persona input,
-.new-persona select,
-.new-persona textarea {
+.rail-panel input,
+.rail-panel select,
+.rail-panel textarea {
   font-family: var(--mono);
   font-size: 11.5px;
   letter-spacing: -0.03em;
@@ -217,16 +274,121 @@ body {
   resize: vertical;
 }
 
-.new-persona input:focus,
-.new-persona textarea:focus,
-.new-persona select:focus { border-color: var(--green); }
+.rail-panel input:focus,
+.rail-panel textarea:focus,
+.rail-panel select:focus { border-color: var(--green); }
 
 .form-error { margin: 0; font-size: 12.5px; color: var(--red); }
 .form-error:empty { display: none; }
 
-/* What this persona is connected to. The header no longer carries it, so the
-   sidebar footer does — labels quiet, values readable, session id elided from
-   the middle when the slug runs long. */
+/* ---------- session pane ----------------------------------------- */
+
+.sidebar {
+  grid-area: side;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0.9rem 0.7rem 0.75rem;
+  background: var(--bg-dim);
+  border-right: 1px solid var(--line);
+}
+
+/* Whose conversations these are. Without it the sidebar is a list of
+   fragments with no owner, since the rail only shows faces. */
+.side-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin-bottom: 0.7rem;
+  padding: 0 0.5rem 0.65rem;
+  border-bottom: 1px solid var(--line-soft);
+  min-width: 0;
+}
+
+.side-head .emoji { font-size: 14px; }
+
+.side-head b {
+  font-size: 14.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-session { margin: 0 0 0.6rem; }
+
+.new-session .btn {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  font-size: 11px;
+  text-align: left;
+}
+
+.new-session .btn span { font-size: 13px; line-height: 1; }
+
+.sidebar-label {
+  padding: 0 0.5rem 0.4rem;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--fg-faint);
+}
+
+.sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg2) transparent;
+}
+
+.sessions::-webkit-scrollbar { width: 8px; }
+.sessions::-webkit-scrollbar-thumb {
+  background: var(--bg2);
+  border-radius: 8px;
+  border: 2px solid var(--bg-dim);
+}
+
+.session {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.42rem 0.5rem;
+  border-radius: 3px;
+  text-decoration: none;
+  color: var(--fg-dim);
+}
+
+.session:hover { background: var(--bg1); color: var(--fg); }
+
+.session.is-active { background: var(--bg2); color: var(--fg); }
+
+/* The prompt that started the conversation, cut to one line: this is a name,
+   not a preview. Hovering still gives the whole thing through the title. */
+.session .label {
+  font-size: 13.5px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session .meta {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: -0.03em;
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+
+/* What this session is connected to. The header no longer carries it, so the
+   sidebar footer does — labels quiet, values readable. */
 .sidebar-foot {
   margin-top: auto;
   padding: 0.7rem 0.55rem 0;
@@ -258,6 +420,7 @@ body {
 /* ---------- chat column ------------------------------------------ */
 
 .chat {
+  grid-area: chat;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto auto;
   min-width: 0;
@@ -277,9 +440,28 @@ body {
   min-height: 0;
 }
 
+/* The persona name is the anchor; the session name takes whatever room is
+   left, so a long prompt cannot push the strip taller. */
+.chat-head b { flex: none; }
+
 .chat-head .emoji { font-size: 13px; }
 
 .chat-head b { font-size: 14.5px; font-weight: 600; letter-spacing: -0.01em; }
+
+/* The conversation's name, taken from the prompt that opened it. Quieter than
+   the persona because the persona is the constant and this is what changes as
+   you move between sessions. Cut with an ellipsis rather than wrapped: the
+   strip is a header, not a title block. */
+.chat-head .sep { color: var(--fg-faint); }
+
+.chat-head .session-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+  color: var(--fg-dim);
+}
 
 /* ---------- thread ----------------------------------------------- */
 
@@ -705,26 +887,50 @@ body {
 /* ---------- narrow ----------------------------------------------- */
 
 @media (max-width: 860px) {
+  /* The rail keeps its column — it is only a face wide — while the session
+     list turns into a strip above the conversation. */
   .app {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: 3.4rem minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas:
+      "rail side"
+      "rail chat";
   }
+
+  .rail { padding-top: 0.6rem; }
+  .rail-brand { width: 2rem; height: 2rem; font-size: 12px; }
+  .rail-item .avatar,
+  .rail-new summary { width: 2.2rem; height: 2.2rem; font-size: 0.95rem; }
 
   .sidebar {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.5rem 0.6rem;
     border-right: 0;
     border-bottom: 1px solid var(--line);
-    padding-bottom: 0.5rem;
   }
 
-  .brand { padding-bottom: 0.5rem; }
-  .sidebar { padding-top: 0.8rem; }
-  .sidebar-label { display: none; }
-  .personas { flex-direction: row; overflow-x: auto; gap: 0.25rem; }
-  .persona { grid-template-columns: 0.8rem auto; white-space: nowrap; }
-  .persona .slug { display: none; }
+  /* The chat header already names the persona, and the footer facts do not
+     fit a strip. */
+  .side-head,
+  .sidebar-label,
+  .sidebar-foot { display: none; }
 
-  .sidebar-foot,
-  .new-persona { display: none; }
+  .new-session { margin: 0; }
+  .new-session .btn { width: auto; padding: 0.3rem 0.5rem; white-space: nowrap; }
+
+  .sessions {
+    flex-direction: row;
+    gap: 0.3rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .session { grid-template-columns: auto; padding: 0.3rem 0.5rem; }
+  .session .label { max-width: 11rem; font-size: 12.5px; }
+  .session .meta { display: none; }
 
   .thread,
   .chat-head { padding-left: 1rem; padding-right: 1rem; }
@@ -733,6 +939,13 @@ body {
   .status-line { width: calc(100% - 2rem); }
 
   .msg .bubble { max-width: 90%; }
+
+  /* The panel would open off the right edge from a rail this narrow, so it is
+     pinned to the viewport instead. */
+  .rail-panel {
+    left: 3.4rem;
+    width: min(17rem, calc(100vw - 4.4rem));
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

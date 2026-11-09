@@ -149,15 +149,21 @@ module Rubot
     end
 
     # Maps a channel session id to a persona key:
-    #   "tg_<chat>_<thread>" -> "<chat>:<thread>"
-    #   "web_<slug>"         -> "<slug>"
+    #   "tg_<chat>_<thread>"    -> "<chat>:<thread>"
+    #   "web_<slug>"            -> "<slug>"   (the persona's first session)
+    #   "web_<slug>~<stamp>"    -> "<slug>"   (a session opened later)
+    #
+    # "~" is the separator because a slug may contain "-" and "_", so the
+    # boundary would otherwise be ambiguous. Several sessions share one persona,
+    # which is why the suffix is ignored here: the persona is what owns the
+    # workspace and the SOUL, not the individual conversation.
     def self.key_for_session(session_id)
       id = session_id.to_s
 
       if (match = /\Atg_(-?\d+)_(\d+)\z/.match(id))
         return "#{match[1]}:#{match[2]}"
       end
-      if (match = /\Aweb_([a-z0-9][a-z0-9_-]{0,31})\z/.match(id))
+      if (match = /\Aweb_([a-z0-9][a-z0-9_-]{0,31})(?:~[a-z0-9-]+)?\z/.match(id))
         return match[1]
       end
 

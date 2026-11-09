@@ -1,0 +1,14 @@
+<%# Which persona, and which of its conversations. The persona alone is not
+    enough once one persona owns several sessions: every tab would look the
+    same. The session name is the prompt that opened the conversation.
+
+    `data-title` carries the same name in the form the browser tab wants, so
+    the page can adopt it without re-deriving it. -%>
+<header class="chat-head" id="chat-head" data-title="<%= h(document_title) %>">
+  <span class="emoji" aria-hidden="true"><%= h(persona_emoji) %></span>
+  <b><%= h(persona_label) %></b>
+  <% if session_label -%>
+    <span class="sep" aria-hidden="true">·</span>
+    <span class="session-name"><%= h(session_label) %></span>
+  <% end -%>
+</header>
