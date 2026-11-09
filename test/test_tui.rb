@@ -4023,6 +4023,25 @@ module Rubot
              "the block is not closed by an empty chunk"
     end
 
+    # Some gateways interleave `reasoning_content` with `content` inside the
+    # same answer. Splitting the answer row there cut the message in two at a
+    # chunk boundary — mid-word, with a blank row between the halves.
+    def test_a_fragment_mid_answer_does_not_split_the_answer
+      repl = build_repl
+
+      repl.send(:apply_event, [ :stream_start ])
+      repl.send(:apply_event, [ :chunk, "Sem" ])
+      repl.send(:apply_event, [ :thinking, "Wait, the tag should be TUI." ])
+      repl.send(:apply_event, [ :chunk, "ua item itu untuk TUI." ])
+      repl.send(:apply_event, [ :stream_end, false ])
+
+      texts = log_texts(repl)
+      assert_includes texts, "Semua item itu untuk TUI.",
+                      "the answer stays in one row: #{texts.inspect}"
+      refute texts.any? { |text| text.include?("Thinking") },
+             "a mid-answer fragment opens no block of its own"
+    end
+
     def test_a_quick_thought_is_removed_without_a_trace
       repl = build_repl
 

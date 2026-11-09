@@ -833,10 +833,16 @@ module Rubot
     # only feed the clock, not a body.
     def append_thinking(_delta)
       if @thinking_entry.nil?
-        # A thought that arrives after the answer started belongs to a new
-        # round: the fragment above is finished, so the answer continues below
-        # the block instead of being split in half by it.
-        close_live_entry if @live_entry
+        # A thought that arrives while the answer is still streaming is an
+        # out-of-band fragment: some gateways interleave reasoning_content
+        # with content, and closing the answer row here cut the message in
+        # two at a chunk boundary — mid-word, with a blank row between the
+        # halves ("Sem" / "" / "ua …"). The fragment is dropped instead: only
+        # a pause *between* rounds deserves a row, and a real one always
+        # starts with no live entry, since :tool_call and :stream_end both
+        # close it.
+        return if @live_entry
+
         @thinking_started_at = monotonic_now
         @thinking_shown = thinking_label
         # Remembered so a block that ends up dropped can take its own blank
