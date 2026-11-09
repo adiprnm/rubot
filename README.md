@@ -942,9 +942,15 @@ How it works: the browser sends a message with a plain form POST; Ruby starts a
 turn and answers with an HTML fragment that opens the SSE stream on its own. The
 stream then pushes `turn` (the timeline: the thought, what the model said, the
 tool rows, the answer), `confirm` (the approval card), `notice` (an error or a
-steering acknowledgement), `usage` (the cost/cache/context row, as an
+steering acknowledgement), `working` (the row above the composer, which restarts
+its clock on every tool call), `usage` (the cost/cache/context row, as an
 out-of-band swap) and finally `done`. Every event is an idempotent render of the
 turn's current state, so a dropped connection just repaints.
+
+A conversation is drawn from its end: the page renders the last 20 entries and
+fetches earlier ones as the reader scrolls up, so a long session costs one page
+rather than all of it. Refreshing mid-answer rejoins the running turn instead of
+showing a conversation whose last prompt appears never to have been sent.
 
 No build step: `htmx`, `htmx-ext-sse` and `alpinejs` are vendored under
 `vendor/web/`, templates are ERB from the standard library, and the only

@@ -581,6 +581,20 @@ module Rubot
         channel
       end
 
+      # A conversation long enough to need more than one page. Each exchange is
+      # a prompt and its answer, so `pairs` of them are twice as many entries.
+      def write_long_session(channel, sid, pairs)
+        dir = channel.instance_variable_get(:@app_config).sessions_dir
+        messages = (1..pairs).flat_map do |i|
+          [ { "role" => "user", "content" => "pesan #{i}" },
+            { "role" => "assistant", "content" => "balasan #{i}" } ]
+        end
+
+        File.write(File.join(dir, "#{sid}.json"),
+                   JSON.generate({ "id" => sid, "updated_at" => Time.now.utc.iso8601,
+                                   "messages" => messages }))
+      end
+
       def kinds(turn)
         turn.items.map { |item| item[:kind] }
       end
@@ -879,8 +893,8 @@ module Rubot
                            slug: "rubot", persona_label: "Rubot", persona_emoji: "🤖",
                            persona_model: "m", session_id: "web_rubot",
                            session_short: "web_rubot", session_label: "Sesi baru",
-                           document_title: "rubot · Rubot", messages: [],
-                           live_turn: nil, token_query: "",
+                           document_title: "rubot · Rubot", live_turn: nil, token_query: "",
+                           page: { entries: [], more: false, before: 0 }, older_url: "",
                            usage: { cost: "—", cache: "—", ctx: "—" })
 
         band = html[/<div id="working"[^>]*>.*?<\/div>/m]
@@ -1069,8 +1083,8 @@ module Rubot
                            slug: "rubot", persona_label: "Rubot", persona_emoji: "🤖",
                            persona_model: "m", session_id: "web_rubot",
                            session_short: "web_rubot", session_label: "Sesi baru",
-                           document_title: "rubot · Rubot", messages: [],
-                           live_turn: nil, token_query: "",
+                           document_title: "rubot · Rubot", live_turn: nil, token_query: "",
+                           page: { entries: [], more: false, before: 0 }, older_url: "",
                            usage: { cost: "—", cache: "—", ctx: "—" })
 
         assert_includes html, 'id="composer-notice"', "the composer needs a notice slot"
@@ -1143,6 +1157,111 @@ module Rubot
         call = { "id" => "c1", "function" => { "name" => "shell_exec", "arguments" => "bukan json" } }
 
         assert_equal "", channel.send(:history_tool_item, call, {})[:detail]
+      end
+
+      # --- paging through a long conversation -----------------------------
+
+      # The page is opened to read the end of the conversation, not the
+      # beginning of it: a session with hundreds of turns should not cost a
+      # full render to show its last answer.
+      def test_the_page_starts_at_the_end_of_a_long_conversation
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        write_long_session(channel, "web_kanyaah", 15)
+
+        page = channel.send(:history_page, "web_kanyaah")
+        prompts = page[:entries].select { |entry| entry[:kind] == :prompt }.map { |entry| entry[:text] }
+
+        assert_equal Rubot::Channels::Web::HISTORY_PAGE, page[:entries].size
+        assert page[:more], "the older half is left to be fetched"
+        assert_includes prompts, "pesan 15", "the newest exchange is on the page"
+        refute_includes prompts, "pesan 1", "the oldest one is not"
+      end
+
+      def test_a_conversation_that_fits_is_not_paged
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        write_long_session(channel, "web_kanyaah", 3)
+
+        page = channel.send(:history_page, "web_kanyaah")
+
+        assert_equal 6, page[:entries].size
+        refute page[:more]
+        assert_equal 0, page[:before], "there is nothing above the first page"
+      end
+
+      # The marker hands back the index it was given, so scrolling up walks
+      # backwards through the same conversation one page at a time.
+      def test_scrolling_up_asks_for_the_page_before
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        write_long_session(channel, "web_kanyaah", 25)
+
+        page = channel.send(:history_page, "web_kanyaah")
+        older = channel.send(:history_page, "web_kanyaah", before: page[:before])
+
+        assert older[:entries].any?, "there is a page above the first one"
+        assert older[:more], "and one above that"
+        assert_equal 10, older[:before]
+
+        newest = page[:entries].map { |entry| entry[:text] }
+        refute (older[:entries].map { |entry| entry[:text] } & newest).any?,
+               "two pages of one conversation do not overlap"
+      end
+
+      def test_the_older_page_comes_back_with_the_marker_for_the_one_above_it
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        write_long_session(channel, "web_kanyaah", 25)
+        res = FakeResponse.new
+
+        channel.send(:render_history, res, "web_kanyaah", Struct.new(:query).new({ "before" => "22" }))
+
+        assert_includes res.body, "pesan 2", "the page ends where the marker was"
+        refute_includes res.body, "pesan 25", "and stops there rather than running on"
+        assert_includes res.body, 'hx-get="/s/web_kanyaah/history?before=2"',
+                        "the page above this one is asked for in turn"
+      end
+
+      # The last page has nothing above it, so the marker would ask for the same
+      # page forever.
+      def test_the_first_page_completes_without_a_marker
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        write_long_session(channel, "web_kanyaah", 3)
+        res = FakeResponse.new
+
+        channel.send(:render_history, res, "web_kanyaah", Struct.new(:query).new({ "before" => "2" }))
+
+        assert_includes res.body, "pesan 1"
+        refute_includes res.body, "history-more"
+      end
+
+      def test_the_marker_asks_for_a_page_when_it_is_scrolled_into_view
+        html = View.render("_history", entries: [], more: true, before: 20,
+                                       older_url: "/s/web_kanyaah/history?before=20")
+        marker = html[/<div class="history-more".*?<\/div>/m]
+
+        refute_nil marker
+        assert_includes marker, 'hx-get="/s/web_kanyaah/history?before=20"'
+        assert_includes marker, 'hx-trigger="revealed"',
+                        "the page is fetched when it is reached, not when the page loads"
+        assert_includes marker, 'hx-swap="outerHTML"',
+                        "the marker is replaced by the page it asked for"
+      end
+
+      def test_the_older_page_request_carries_the_token
+        channel = Rubot::Channels::Web.new(channel_config: { "token" => "t0k" })
+
+        assert_equal "/s/web_kanyaah/history?token=t0k&before=40",
+                     channel.send(:older_url, "web_kanyaah", 40)
+      end
+
+      # Prepending a page moves everything below it down by its own height, and
+      # the reader would be thrown out of the sentence they were reading. The
+      # distance from the bottom is the one measure the insert cannot change.
+      def test_a_prepended_page_keeps_the_reader_in_place
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+
+        assert_includes js, "holdFromBottom"
+        assert_includes js, "thread.scrollTop = thread.scrollHeight - gap"
+        assert_includes js, "el.closest(\".history-more\")",
+                        "an older page must not trigger the jump to the bottom"
       end
 
       def test_a_turn_renders_its_tool_rows_in_history

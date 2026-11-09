@@ -1,0 +1,22 @@
+<%# One page of a conversation, oldest first. The marker sits above the entries
+    it precedes, so a reader who scrolls to the top is handed the page before
+    this one in the same place — the swap replaces the marker with the older
+    page and a marker of its own, and the order of the thread never changes.
+
+    It is a reveal rather than a scroll listener: htmx asks for the page when
+    the marker actually enters the viewport, which is exactly when the reader
+    has reached the top, and stops asking when there is nothing older left. -%>
+<% if more -%>
+<div class="history-more" hx-get="<%= h(older_url) %>" hx-trigger="revealed" hx-swap="outerHTML">
+  <span>Pesan sebelumnya…</span>
+</div>
+<% end -%>
+<% entries.each do |msg| -%>
+<% if msg[:kind] == :prompt -%>
+<%= View.render("_message", role: "user", text: msg[:text]) %>
+<% else -%>
+<div class="turn is-done">
+  <div class="turn-body"><%= View.render("_timeline", items: msg[:items]) %></div>
+</div>
+<% end -%>
+<% end -%>

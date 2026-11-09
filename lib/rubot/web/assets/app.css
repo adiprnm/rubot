@@ -575,7 +575,22 @@ body {
    so the conversation settles into a readable column instead. */
 .thread > .msg,
 .thread > .empty,
+.thread > .history-more,
 .thread > .turn { width: 100%; max-width: 52rem; margin-inline: auto; }
+
+/* The marker that asks for the page above. A reader who has scrolled all the
+   way up should find more conversation arriving, not a button to press, so it
+   is a line of quiet text rather than a control. It sits above what it
+   precedes because that is the order the thread is in. */
+.thread > .history-more {
+  margin-bottom: 1.05rem;
+  padding: 0.15rem 0;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: -0.03em;
+  color: var(--fg-faint);
+}
 
 .thread > .turn > .turn-body,
 .thread > .turn > .confirm,

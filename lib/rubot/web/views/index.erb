@@ -95,16 +95,13 @@
                     document_title: document_title) %>
 
     <div id="thread" class="thread">
-      <% messages.each do |msg| %>
-        <% if msg[:kind] == :prompt %>
-          <%= View.render("_message", role: "user", text: msg[:text]) %>
-        <% else %>
-          <div class="turn is-done">
-            <div class="turn-body"><%= View.render("_timeline", items: msg[:items]) %></div>
-          </div>
-        <% end %>
-      <% end %>
-      <% if messages.empty? && live_turn.nil? %>
+      <%# Only the tail of the conversation is drawn. The rest is one page of
+          entries away, fetched when the reader scrolls up to the marker — a
+          session with hundreds of turns should not cost a full render, and the
+          bottom of it is all anyone opens it for. -%>
+      <%= View.render("_history", entries: page[:entries], more: page[:more],
+                                  older_url: older_url) %>
+      <% if page[:entries].empty? && live_turn.nil? %>
         <p class="empty">
           <%= h(persona_label) %> punya SOUL, skills, dan memory sendiri.
           Apa pun yang dijalankannya lewat tool tampil di atas jawabannya.

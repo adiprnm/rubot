@@ -39,11 +39,17 @@ module Rubot
       # How many conversations the sidebar lists. Older ones stay on disk and
       # are still reachable by their URL.
       MAX_SESSION_ROWS = 40
+      # How much of a conversation the page draws at once. A long session is a
+      # lot of DOM to build for a reader who only ever looks at the end of it,
+      # so the page starts at the tail and earlier turns arrive as the reader
+      # scrolls up.
+      HISTORY_PAGE = 20
       # What a conversation is called before its first prompt has been saved.
       UNTITLED_SESSION = "Sesi baru"
 
       SLUG_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})\z}
       SESSION_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})\z}
+      SESSION_HISTORY_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/history\z}
       SESSION_TURN_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/turn\z}
       SESSION_DELETE_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/delete\z}
       PERSONA_SESSIONS_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/sessions\z}
@@ -285,6 +291,8 @@ module Rubot
           create_session(res, match[1], req)
         elsif method == "GET" && (match = SESSION_PATH.match(path))
           render_session(res, match[1])
+        elsif method == "GET" && (match = SESSION_HISTORY_PATH.match(path))
+          render_history(res, match[1], req)
         elsif method == "POST" && path == "/personas"
           create_persona(req, res)
         elsif method == "POST" && (match = SESSION_TURN_PATH.match(path))
@@ -445,6 +453,42 @@ module Rubot
         [ persona_label, session_label ].compact.join(" · ")
       end
 
+      # One page of the conversation: the entries that end at `before` (an
+      # index into the full history) and start HISTORY_PAGE entries earlier.
+      # `more` says whether anything older is left, so the page can draw the
+      # marker that asks for it.
+      def history_page(sid, before: nil)
+        entries = history(sid)
+        stop = before ? before.clamp(0, entries.size) : entries.size
+        start = [ stop - HISTORY_PAGE, 0 ].max
+
+        { entries: entries[start...stop], more: start.positive?, before: start }
+      end
+
+      # Where the page older than this one lives. The token rides in the query
+      # string like every other link the page writes; the index is what the
+      # marker hands back, so no server-side cursor has to survive a restart.
+      def older_url(sid, before)
+        params = []
+        params << "token=#{CGI.escape(@token)}" if @token
+        params << "before=#{before}"
+        "/s/#{sid}/history?#{params.join("&")}"
+      end
+
+      # An older page, fetched by the marker at the top of the thread when the
+      # reader scrolls it into view.
+      def render_history(res, sid, req)
+        return not_found(res) unless owner_slug(sid)
+
+        before = form(req, "before").to_i
+        page = history_page(sid, before: before.positive? ? before : nil)
+
+        res["Content-Type"] = "text/html; charset=utf-8"
+        res["Cache-Control"] = "no-store"
+        res.body = View.render("_history", **page,
+                                            older_url: older_url(sid, page[:before]))
+      end
+
       def render_session(res, sid)
         slug = owner_slug(sid)
         return not_found(res) unless slug
@@ -453,6 +497,7 @@ module Rubot
         persona = persona_store&.[](slug)
         persona_label = persona ? persona.label : slug.capitalize
         session_label = named_session_label(slug, sid)
+        page = history_page(sid)
         body = View.render(
           "index",
           personas: persona_rows(slug),
@@ -465,7 +510,8 @@ module Rubot
           persona_model: persona_model(persona),
           session_label: session_label,
           document_title: document_title(persona_label, session_label),
-          messages: history(sid),
+          page: page,
+          older_url: older_url(sid, page[:before]),
           live_turn: live,
           usage: usage_locals(sid),
           token_query: token_query
