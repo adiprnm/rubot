@@ -3235,15 +3235,31 @@ module Rubot
         assert_includes res.body, "Pesan kosong"
       end
 
-      # "Still working" sits directly above the field, and at a quarter of a
-      # rem the two rows read as one line of text. The gap belongs to the band,
-      # not to the composer: the field's own spacing is already spoken for.
-      def test_the_working_row_has_room_under_it
+      # "Still working" sits between the conversation and the field, so the room
+      # above it is the band's own margin plus the thread's bottom padding, and
+      # the room below it is the margin under the band. Both must read the same,
+      # or the row looks glued to the last thing the turn said. Measured in a
+      # browser: 0.15rem + 0.6rem above, 0.75rem below.
+      def test_the_working_row_has_the_same_room_above_and_below
         css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
-        rule = css[/^\.working-band \{[^}]*\}/]
+        band = css[/^\.working-band \{[^}]*\}/]
+        thread = css[/^\.thread \{[^}]*\}/]
 
-        refute_nil rule, "the .working-band rule is missing from app.css"
-        assert_match(/margin: 0 auto 0\.75rem;/, rule)
+        refute_nil band, "the .working-band rule is missing from app.css"
+        refute_nil thread, "the .thread rule is missing from app.css"
+
+        margin = band[/margin: ([^;]+);/, 1]
+        refute_nil margin, "the band needs a margin shorthand so both gaps are visible"
+        top, _sides, bottom = margin.split
+        padding = thread[/padding: ([^;]+);/, 1].to_s.split
+
+        assert_equal "0.75rem", bottom, "the room under the row is the composer's 0.75rem"
+        assert_in_delta 0.75, rem(top) + rem(padding[2] || padding[0]), 0.001,
+                        "the room above the row is the band's margin plus the thread's own padding"
+      end
+
+      def rem(value)
+        value.to_s.delete("rem").to_f
       end
 
       # "Thinking…" and "Thought for 12s" are pauses in the work, and a pause

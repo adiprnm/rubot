@@ -1625,7 +1625,12 @@ body {
   width: calc(100% - 3.2rem);
   max-width: 52rem;
   min-height: 1.05rem;
-  margin: 0 auto 0.75rem;
+  /* Symmetric air, counted from the row rather than from the band: what sits
+     above the row is this margin plus the thread's own bottom padding (0.6rem),
+     and what sits below it is the margin under the band. 0.15 + 0.6 = 0.75, the
+     same 0.75 the composer gets — otherwise the row read as glued to the last
+     thing the turn said and floating in front of the field. */
+  margin: 0.15rem auto 0.75rem;
 }
 
 .working-band .row { margin: 0; }
