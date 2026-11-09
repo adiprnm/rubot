@@ -704,6 +704,13 @@ body {
   display: grid;
   /* head · thread · working band · notice · field · status */
   grid-template-rows: auto minmax(0, 1fr) auto auto auto auto;
+  /* Without an explicit column the implicit one is `auto`, which sizes to the
+     widest thing in the column's *max-content* — the status row, whose figures
+     do not wrap. On a phone that made the column wider than the screen, and
+     whatever sat at the far right of that row (the usage button) was pushed
+     off it. `minmax(0, 1fr)` lets the column be no wider than the screen and
+     the row shrink inside it instead. */
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   /* The thread is the only part allowed to scroll; anything that outgrows this
@@ -1784,7 +1791,11 @@ body.lightbox-open { overflow: hidden; }
   font-size: 10px;
   letter-spacing: -0.03em;
   color: var(--fg-faint);
-  overflow: hidden;
+  /* The row itself must not clip. The report opens *upward* out of this row —
+     it has nowhere else to go, the row being at the bottom edge — so clipping
+     here would swallow the very panel the button exists to show. What has to
+     stay inside is the figures, and they are clipped where they live. */
+  overflow: visible;
   white-space: nowrap;
 }
 
@@ -1796,6 +1807,7 @@ body.lightbox-open { overflow: hidden; }
   align-items: center;
   margin-left: auto;
   min-width: 0;
+  overflow: hidden;
 }
 
 .status-line .metric {
@@ -1844,6 +1856,11 @@ body.lightbox-open { overflow: hidden; }
   bottom: calc(100% + 0.4rem);
   z-index: 20;
   width: min(24rem, 82vw);
+  /* A ceiling for the allowance: several meters on a short phone would run off
+     the top of the screen, and a panel that scrolls is better than one that
+     never shows its last row. */
+  max-height: min(70vh, 30rem);
+  overflow-y: auto;
   padding: 0.9rem 1rem;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -2043,8 +2060,25 @@ body.lightbox-open { overflow: hidden; }
   .side-head { margin-bottom: 0.55rem; padding-bottom: 0.5rem; }
 
   /* Facts about the connection belong at the foot of a tall column; a drawer
-     spends its height on the list. */
-  .sidebar-foot { display: none; }
+     spends its height on the list. The palettes stay, because the footer is
+     the only place the picker lives and a phone is exactly the screen where a
+     reader might want the light theme in daylight. */
+  .sidebar-foot { display: block; padding-top: 0.5rem; }
+  .sidebar-foot dl { display: none; }
+
+  .theme-picker {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+    gap: 0.25rem;
+  }
+
+  /* A finger is not a cursor: the swatches keep their size but grow a taller
+     box, so the row stays one quiet line while still being a target. */
+  .theme-swatch { padding: 0.4rem 0.45rem; font-size: 10.5px; }
+
+  /* Same reason: a glyph in the status row needs a target bigger than itself. */
+  .status-line .usage-toggle { padding: 0.35rem 0.3rem; }
 
   .nav-scrim {
     display: block;

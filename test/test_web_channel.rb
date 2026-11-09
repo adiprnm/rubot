@@ -2232,6 +2232,50 @@ module Rubot
                         "descendants escape the scroll clip and stretch the document"
       end
 
+      # The chat column's own column has to be allowed to be narrower than what
+      # is in it. Left implicit it is `auto`, which sizes to the widest
+      # max-content — the status row, whose figures never wrap. On a phone that
+      # column came out wider than the screen, and whatever sat at its far
+      # right, the button that opens the usage report, ended up past the edge.
+      def test_the_chat_column_cannot_grow_past_the_screen
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        rule = css[/^\.chat \{[^}]*\}/]
+
+        refute_nil rule, "the .chat rule is missing from app.css"
+        assert_includes rule, "grid-template-columns: minmax(0, 1fr)"
+      end
+
+      # The report opens upward out of a row pinned to the bottom edge of the
+      # screen, so that row cannot be a clipping box: `overflow: hidden` there
+      # swallowed the panel whole, leaving a button that opened nothing. What
+      # has to stay inside is the figures, and they carry the clip instead.
+      def test_the_status_row_does_not_clip_the_report_it_opens
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        row = css[/^\.status-line \{[^}]*\}/]
+        figures = css[/^\.status-line \.metrics \{[^}]*\}/]
+
+        refute_nil row, "the .status-line rule is missing from app.css"
+        refute_includes row, "overflow: hidden",
+                        "a clipping status row hides the panel that opens out of it"
+        refute_nil figures, "the figures need their own rule to carry the clip"
+        assert_includes figures, "overflow: hidden"
+      end
+
+      # The picker lives at the foot of the sidebar, and a phone's sidebar is
+      # the drawer. Hiding that foot hid the only control that changes the
+      # theme, so the palettes were unreachable on the screen where a light
+      # page matters most. Only the facts about the connection go.
+      def test_the_drawer_keeps_the_theme_picker
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        narrow = css[/^@media \(max-width: 860px\) \{.*?\n\}/m]
+
+        refute_nil narrow, "the drawer's breakpoint is missing from app.css"
+        refute_match(/\.sidebar-foot \{ display: none/, narrow,
+                     "the phone's sidebar foot holds the theme picker")
+        assert_includes narrow, ".sidebar-foot dl { display: none; }",
+                        "the connection facts are what the drawer has no room for"
+      end
+
       # A list is a column of its own, but the column sits inside the
       # paragraph: the marker starts on the paragraph's left edge and the item
       # text steps in by one gutter. Hanging the marker in the page margin put
