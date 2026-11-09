@@ -989,6 +989,24 @@ module Rubot
       sentence as a chat message while you work.
     PROMPT
 
+    # Handing files back to the user. Kept here rather than left to the tool
+    # descriptions alone: the model decides which tool to call before it reads
+    # a description for guidance, and it reaches for the name it already knows.
+    # A batch asked for as one instruction has to arrive as one call.
+    FILE_DELIVERY_RULE = <<~PROMPT.strip.freeze
+      # Sending Files
+
+      Two tools hand files to the user. When the user asks for more than one
+      file at once — "kirim 5 gambar di folder Pictures", "send the three
+      reports" — use `send_files` in a single call with every path. Do not call
+      `send_file` once per file: the batch is one instruction, it arrives as
+      one strip, and five separate calls cost five rounds.
+
+      `send_file` is for one file on its own. Up to ten paths fit in one
+      `send_files` call; past that, send a second batch rather than falling back
+      to one call per file.
+    PROMPT
+
     # Editing files through the file tool, not shell. Kept here (not in the
     # configurable prompt) so a per-topic persona cannot drop it.
     FILE_EDIT_RULE = <<~PROMPT.strip.freeze
@@ -1041,6 +1059,9 @@ module Rubot
 
       # 1d. File edits go through the file tool (diff view + confirmation)
       parts << FILE_EDIT_RULE
+
+      # 1e. A batch of files is one call, not one call per file
+      parts << FILE_DELIVERY_RULE
 
       # 2. SOUL.md (personality and identity)
       if @soul.enabled?

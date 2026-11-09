@@ -357,6 +357,19 @@ class TestAgentProgressNarration < Minitest::Test
     assert_includes prompt, "Do not write new Python"
   end
 
+  # Which file tool to pick is decided before the model reads a description, so
+  # the rule lives in the prompt with the other one-rule-for-one-job entries.
+  # It was learned the hard way: "kirim 5 gambar" once arrived as five
+  # send_file calls, and a "3 gambar" of my own as one call plus a pair.
+  def test_system_prompt_sends_a_batch_with_one_call
+    prompt = @agent.build_system_prompt
+
+    assert_includes prompt, "Sending Files"
+    assert_includes prompt, "use `send_files` in a single call"
+    assert_includes prompt, "once per file"
+    assert_includes prompt, "`send_file` is for one file on its own"
+  end
+
   def test_system_prompt_asks_for_file_tool_edits_instead_of_shell
     prompt = @agent.build_system_prompt
     assert_includes prompt, "Editing Files"
