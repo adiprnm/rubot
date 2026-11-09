@@ -1931,8 +1931,14 @@ module Rubot
     # indent the width of the marker, so every later row of a multiline
     # prompt (typed newlines and soft wraps alike) lines up under the text
     # instead of starting at the left edge.
+    #
+    # The prompt is rendered as markdown for the same reason the answer is: a
+    # reader who pastes a snippet, a list of paths or a diff wrote it in
+    # markdown, and echoing it raw made the one message they typed themselves
+    # the only thing on screen without syntax — a shell command came back
+    # looking like a paragraph, and a `#` line looked like prose.
     def prompt_echo(line)
-      [ [ "❯ ", :accent ], [ line.to_s, :text ] ]
+      [ [ "❯ ", :accent ] ] + Rubot::TUI::Markdown.to_segments(line.to_s)
     end
 
     def refresh_status

@@ -391,6 +391,36 @@ def test_the_tail_of_a_turn_is_shown_once
   assert_includes joined, "Turn stopped after 25 rounds"
 end
 
+# A prompt is written in markdown as often as an answer is — a snippet, a
+# list of paths, a diff. Echoing it raw made the one message the reader typed
+# the only thing on screen without syntax.
+def test_the_prompt_echo_carries_markdown
+  repl = build_repl
+  plain = repl.send(:prompt_echo, "**penting**: lihat `app.rb`")
+  styles = plain.map(&:last)
+
+  assert_equal "❯ ", plain.first.first
+  assert_includes styles, :md_code, "an inline code span is rendered"
+  assert(styles.any? { |s| s.to_s.start_with?("md_bold") }, "bold is rendered")
+
+  fence = repl.send(:prompt_echo, "```ruby
+puts 1
+```")
+  assert_includes fence.map(&:last), :md_code_blk, "a fenced block is rendered"
+end
+
+    # The prompt still starts at the marker: the markdown is drawn inside the
+    # entry, not around it.
+    def test_the_prompt_echo_keeps_the_marker_on_the_first_row
+      repl = build_repl
+      segments = repl.send(:prompt_echo, "- satu\n- dua")
+
+      assert_equal [ "❯ ", :accent ], segments.first, "the marker opens the entry"
+      text = segments.map(&:first).join
+      assert_includes text, "satu"
+      assert_includes text, "dua", "both list items are echoed"
+    end
+
     def test_command_output_gets_one_blank_line_above_and_below_and_left_padding
       repl = build_repl
       agent = repl.instance_variable_get(:@agent)
