@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "json"
+
 require_relative "../tool"
 require_relative "file_delivery"
 
@@ -128,14 +130,35 @@ module Rubot
 
       private
 
-      # `paths` is the shape this tool asks for, but a model that has just used
-      # `send_file` sometimes answers with a single "path". Accepting both costs
-      # nothing and saves a round trip.
+      # `paths` is the shape this tool asks for, but models get it wrong in two
+      # predictable ways, and both cost a round trip that the batch was meant to
+      # save:
+      #
+      # * a single "path", left over from send_file;
+      # * an array serialised back into a string — `"[\"/a.png\", \"/b.png\"]"`
+      #   — which Array() wraps as one path, and every path is then "not found".
+      #     Seen in the wild with ten paths in one call.
+      #
+      # A string that parses as a JSON array is taken at its word; anything else
+      # stays a single path, because a file name may contain brackets.
       def requested_paths(arguments)
         list = arguments["paths"]
         list = [ arguments["path"] ] if list.nil? && arguments["path"]
+        list = unwrap_json_array(list)
 
         Array(list).map { |path| path.to_s.strip }.reject(&:empty?).uniq
+      end
+
+      def unwrap_json_array(value)
+        return value unless value.is_a?(String)
+
+        text = value.strip
+        return value unless text.start_with?("[")
+
+        parsed = JSON.parse(text)
+        parsed.is_a?(Array) ? parsed : value
+      rescue JSON::ParserError
+        value
       end
 
       def report(sent, failures)

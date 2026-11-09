@@ -1877,6 +1877,60 @@ module Rubot
         assert_includes result, Tools::SendFiles::MAX_FILES.to_s
       end
 
+      # A model that has just used send_file answers with "path"; a model
+      # wrapping a long list sometimes serialises the array back into a string.
+      # The second one used to make every path "not found" at once, because
+      # Array() wraps the whole string as a single path.
+      def test_send_files_accepts_a_json_encoded_array
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        dir = channel.send(:attachments_dir, "web_kanyaah")
+        sources = %w[satu dua tiga].map do |base|
+          path = File.join(Dir.mktmpdir, "#{base}.png")
+          File.binwrite(path, png_bytes)
+          path
+        end
+
+        tool = Tools::SendFiles.new
+        tool.delivery_context = { channel: "web", dir: dir }
+        result = tool.execute("paths" => JSON.generate(sources))
+
+        assert_equal 3, result.scan(/\[web-attachment /).size, result
+      end
+
+      # Ten paths in one call is the case that found this: the array arrived as
+      # a string and the whole batch failed as nine non-existent files.
+      def test_send_files_accepts_ten_paths_in_one_json_string
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        dir = channel.send(:attachments_dir, "web_kanyaah")
+        sources = (1..10).map do |n|
+          path = File.join(Dir.mktmpdir, "gambar-#{n}.png")
+          File.binwrite(path, png_bytes)
+          path
+        end
+
+        tool = Tools::SendFiles.new
+        tool.delivery_context = { channel: "web", dir: dir }
+        result = tool.execute("paths" => JSON.generate(sources))
+
+        assert_equal 10, result.scan(/\[web-attachment /).size, result
+        refute_includes result, "not found"
+      end
+
+      # A path that merely begins with a bracket is still a path: parsing must
+      # not swallow a real file name.
+      def test_send_files_keeps_a_path_that_only_looks_like_json
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        dir = channel.send(:attachments_dir, "web_kanyaah")
+        source = File.join(Dir.mktmpdir, "[draft] catatan.png")
+        File.binwrite(source, png_bytes)
+
+        tool = Tools::SendFiles.new
+        tool.delivery_context = { channel: "web", dir: dir }
+        result = tool.execute("paths" => [ source ])
+
+        assert_equal 1, result.scan(/\[web-attachment /).size, result
+      end
+
       def test_send_files_accepts_a_single_path_key
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
         dir = channel.send(:attachments_dir, "web_kanyaah")
