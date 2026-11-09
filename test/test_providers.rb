@@ -13,6 +13,25 @@ class TestProviders < Minitest::Test
     FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
   end
 
+  # Read one request off the socket, body included. A stub that answers after
+  # the headers and closes *without* reading the body leaves the POST payload
+  # unread, and closing such a socket makes the kernel answer with RST: the
+  # client then sees ECONNRESET mid-response instead of the data the stub just
+  # wrote. That made the streaming tests fail about half the time when the
+  # suite ran in parallel.
+  def read_request(client)
+    headers = {}
+    while (line = client.gets)
+      break if line == "\r\n"
+
+      name, value = line.split(":", 2)
+      headers[name.to_s.strip.downcase] = value.to_s.strip
+    end
+    length = headers["content-length"].to_i
+    client.read(length) if length.positive?
+    headers
+  end
+
   # A throwaway HTTP server that answers every request with the same body.
   def with_stub_server(body)
     server = TCPServer.new("127.0.0.1", 0)
@@ -21,8 +40,7 @@ class TestProviders < Minitest::Test
     thread = Thread.new do
       loop do
         client = server.accept
-        request = +""
-        request << client.readpartial(4096) until request.include?("\r\n\r\n")
+        read_request(client)
 
         client.write("HTTP/1.1 200 OK\r\n")
         client.write("Content-Type: application/json\r\n")
@@ -602,9 +620,7 @@ class TestProviders < Minitest::Test
     server_thread = Thread.new do
       client = server.accept
       begin
-        while (line = client.gets)
-          break if line == "\r\n"
-        end
+        read_request(client)
         client.write("HTTP/1.1 200 OK\r\n")
         client.write("Content-Type: text/event-stream\r\n")
         client.write("\r\n")
@@ -647,9 +663,7 @@ class TestProviders < Minitest::Test
     server_thread = Thread.new do
       client = server.accept
       begin
-        while (line = client.gets)
-          break if line == "\r\n"
-        end
+        read_request(client)
         client.write("HTTP/1.1 200 OK\r\n")
         client.write("Content-Type: text/event-stream\r\n")
         client.write("\r\n")
