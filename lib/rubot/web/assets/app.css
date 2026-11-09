@@ -257,6 +257,10 @@ body {
 
 .rail-new summary::-webkit-details-marker { display: none; }
 
+/* The summary stays above the dialog's backdrop, so the button that opened it
+   is also the button that closes it. */
+.rail-new[open] summary { position: relative; z-index: 41; }
+
 .rail-new summary:hover,
 .rail-new[open] summary {
   border-style: solid;
@@ -265,23 +269,35 @@ body {
   color: var(--green);
 }
 
-/* The form needs a slug, a name and a prompt, so it opens beside the rail
-   instead of inside it. Positioned against the rail, not the viewport, so it
-   sits where the click was. */
+/* The form needs a slug, a name and a prompt — a dialog's worth, not a
+   popover's. It opens in the middle of the screen with the page dimmed behind
+   it, so nothing in the rail or the thread is being read past its edges while
+   a persona is typed in. */
+.rail-new[open]::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 39;
+  background: rgba(0, 0, 0, 0.55);
+}
+
 .rail-panel {
-  position: absolute;
-  left: calc(100% + 0.75rem);
-  bottom: 0;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   z-index: 40;
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
-  width: 17rem;
-  padding: 0.85rem 0.9rem;
+  width: min(23rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+  padding: 1rem 1.1rem;
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--bg1);
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
 }
 
 .panel-title {
@@ -312,7 +328,16 @@ body {
   background: var(--bg0);
   color: var(--fg);
   outline: none;
-  resize: vertical;
+  resize: none;
+}
+
+/* The prompt is the one field that wants room; it grows with what is typed
+   instead of being dragged by its corner, which on a dialog would move the
+   fields under it. */
+.rail-panel textarea {
+  min-height: 4.5rem;
+  field-sizing: content;
+  max-height: 40vh;
 }
 
 .rail-panel input:focus,
@@ -1572,17 +1597,18 @@ body.lightbox-open { overflow: hidden; }
 
   .msg .bubble { max-width: 90%; }
 
-  /* The panel is positioned against the rail, which is now the top edge of a
-     drawer; from there it would hang off the screen, so on a phone it opens as
-     a sheet at the bottom instead. */
+  /* The dialog keeps its place in the middle of a phone screen too; only its
+     width changes, so it never runs past the edge it is centred on. It has to
+     climb above the drawer it was opened from: the drawer is a fixed panel at
+     z 60, and a dialog at 40 would be behind the very thing it covers. */
   .rail-panel {
-    position: fixed;
-    left: 0.5rem;
-    right: 0.5rem;
-    bottom: 0.5rem;
-    width: auto;
-    z-index: 70;
+    width: calc(100vw - 1.5rem);
+    padding: 0.9rem 0.95rem;
+    z-index: 80;
   }
+
+  .rail-new[open]::before { z-index: 79; }
+  .rail-new[open] summary { z-index: 81; }
 }
 
 @media (prefers-reduced-motion: reduce) {

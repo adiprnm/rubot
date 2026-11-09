@@ -1436,6 +1436,43 @@ module Rubot
         assert_nil channel.send(:usage_markup_from, "bukan report")
       end
 
+      # A persona form asks for three fields and a prompt; a popover beside the
+      # rail is too small to write in. It is a dialog in the middle of the
+      # screen, with the page dimmed behind it.
+      def test_the_new_persona_form_opens_as_a_dialog_in_the_middle
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        rule = css[/^\.rail-panel \{[^}]*\}/]
+
+        refute_nil rule, "the .rail-panel rule is missing from app.css"
+        assert_equal "fixed", rule[/position:\s*(\w+)/, 1]
+        assert_match(/top:\s*50%/, rule)
+        assert_match(/left:\s*50%/, rule)
+        assert_match(/translate\(-50%,\s*-50%\)/, rule,
+                     "the dialog has to be centred on its own box, not its corner")
+        assert_match(/rail-new\[open\]::before \{[^}]*position: fixed/m, css,
+                     "an open dialog dims the page behind it")
+      end
+
+      # Dragging the corner of the prompt used to resize the whole dialog and
+      # push the fields under it around. It grows with its text instead.
+      def test_the_prompt_field_cannot_be_dragged_open
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        rule = css[/^\.rail-panel input,\n\.rail-panel select,\n\.rail-panel textarea \{[^}]*\}/]
+
+        refute_nil rule, "the field rule is missing from app.css"
+        assert_match(/resize:\s*none/, rule)
+      end
+
+      # The dimmed page is a way out: a click on it, or Escape, closes the
+      # dialog. Without that the only close button is the one it covered.
+      def test_the_persona_dialog_can_be_dismissed_from_the_page_behind_it
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+
+        assert_includes js, %(details.rail-new[open])
+        assert_includes js, "open.open = false"
+        assert_includes js, %(event.key !== "Escape")
+      end
+
       def test_form_value_is_forced_to_utf8
         channel = Rubot::Channels::Web.new(channel_config: {})
         req = Object.new
