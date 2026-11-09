@@ -631,18 +631,25 @@ body {
 /* Three palettes, one press each. The dots carry the theme they offer, so the
    control answers "what does this look like" before it is used rather than
    after — the reason a select was the wrong shape for it. */
+/* The caption takes a line of its own and the three swatches share the next
+   one, rather than all four sitting in a wrapped flex row: "Everforest" is a
+   long word in a 15rem sidebar, so the old row fitted two swatches beside the
+   label and stranded the third on a line of its own — a ragged two-line
+   control that read as broken. One caption line plus three equal-weight
+   swatches is the same content, deliberately placed. */
 .theme-picker {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(3, max-content);
   align-items: center;
-  gap: 0.3rem;
+  justify-content: start;
+  gap: 0.2rem 0.25rem;
   margin-top: 0.6rem;
   padding-top: 0.55rem;
   border-top: 1px solid var(--line-soft);
 }
 
 .theme-label {
-  margin-right: 0.1rem;
+  grid-column: 1 / -1;
   color: var(--fg-faint);
   font-family: var(--mono);
   font-size: 9.5px;
@@ -652,8 +659,8 @@ body {
 .theme-swatch {
   display: inline-flex;
   align-items: center;
-  gap: 0.28rem;
-  padding: 0.16rem 0.36rem;
+  gap: 0.25rem;
+  padding: 0.16rem 0.28rem;
   border: 1px solid transparent;
   border-radius: 3px;
   background: none;

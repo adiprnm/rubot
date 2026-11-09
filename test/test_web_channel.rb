@@ -2315,6 +2315,27 @@ module Rubot
                         "the connection facts are what the drawer has no room for"
       end
 
+      # "Everforest" is a long word in a 15rem sidebar. Laid out as one wrapped
+      # flex row beside its caption, the three swatches fitted two to the first
+      # line and left "Terang" stranded on a second — a control that looked
+      # broken rather than offered. The caption takes a line of its own and the
+      # swatches share an unwrapped row beneath it, so the break is a decision
+      # and not an accident of how wide the words happen to be.
+      def test_the_theme_swatches_share_one_row_under_their_caption
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        picker = css[/^\.theme-picker \{[^}]*\}/]
+        label = css[/^\.theme-label \{[^}]*\}/]
+
+        refute_nil picker, "the .theme-picker rule is missing from app.css"
+        refute_nil label, "the .theme-label rule is missing from app.css"
+        refute_includes picker, "flex-wrap: wrap",
+                        "a wrapped picker strands the last palette on its own line"
+        assert_includes picker, "repeat(3, max-content)",
+                        "three swatches, each as wide as its own word"
+        assert_includes label, "grid-column: 1 / -1",
+                        "the caption spans the row, so the three swatches share the next"
+      end
+
       # A list is a column of its own, but the column sits inside the
       # paragraph: the marker starts on the paragraph's left edge and the item
       # text steps in by one gutter. Hanging the marker in the page margin put
