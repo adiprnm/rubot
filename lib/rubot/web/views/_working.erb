@@ -1,0 +1,11 @@
+<%# The turn is not over until the stream says so, and neither a long answer
+    nor a slow tool says anything about itself while it is happening. This row
+    is the page's "still working" — the state the TUI pins to its own edge.
+
+    It is drawn for a live turn and hidden by class once the stream closes, so
+    the last frame of a finished turn keeps no clock that goes on counting. -%>
+<p class="row working" data-since="<%= h(since) %>" data-threshold="0">
+  <span class="mark working" aria-hidden="true">◐</span>
+  <span class="label">Working…</span>
+  <span class="live-clock"></span>
+</p>

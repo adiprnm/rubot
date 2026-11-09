@@ -744,6 +744,13 @@ body {
 .row .label { color: var(--fg-dim); }
 .row.done { margin-bottom: 0.55rem; }
 
+/* The row that says the turn is not over. It is hidden by the class the
+   stream's close puts on the turn, so a finished turn keeps no clock counting
+   past the work it measured — and a turn replayed from the session file never
+   draws the row at all. */
+.row.working .mark { color: var(--yellow); }
+.turn.is-done .row.working { display: none; }
+
 /* A clock that only exists past its threshold: an ordinary call says nothing
    about its duration, and a thought worth noticing says how long it ran. The
    separator belongs to the clock, so an empty one leaves no dot behind. */
@@ -935,7 +942,6 @@ body {
 }
 
 .status-line .sep { color: var(--line); }
-.status-line .live { color: var(--yellow); }
 .status-line .status-slot { display: none; }
 
 /* ---------- narrow ----------------------------------------------- */

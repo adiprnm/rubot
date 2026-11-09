@@ -277,8 +277,8 @@ module Rubot
         # The turn body is rendered from Ruby rather than through a nested
         # partial call in ERB, so the template only ever says "draw the
         # timeline up to here".
-        def timeline(items)
-          View.render("_timeline", items: items)
+        def timeline(turn)
+          View.turn_body(turn)
         end
 
         def context
@@ -293,6 +293,13 @@ module Rubot
         def render(name, locals = {})
           template = compiled(name)
           template.result(Scope.new(locals).context)
+        end
+
+        # The body of a live turn: everything it has done, plus the row that
+        # says it is not done. The first render and every later one go through
+        # here, so the row cannot go missing because one of them forgot it.
+        def turn_body(turn)
+          render("_timeline", items: turn.items) + render("_working", since: turn.epoch)
         end
 
         private

@@ -805,7 +805,7 @@ module Rubot
       end
 
       def render_timeline(turn)
-        View.render("_timeline", items: turn.items)
+        View.turn_body(turn)
       end
 
       def sse(out, event, html)

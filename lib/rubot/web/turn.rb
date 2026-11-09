@@ -30,7 +30,7 @@ module Rubot
       # wonder whether it hung.
       SLOW_TOOL_SECONDS = 3.0
 
-      attr_reader :id, :session_id, :response
+      attr_reader :id, :session_id, :response, :epoch
 
       # `clock` is injectable so the timing rules can be tested without
       # sleeping through them.
@@ -38,6 +38,11 @@ module Rubot
         @id = id
         @session_id = session_id
         @clock = clock || -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }
+        # When the prompt was accepted, on the wall clock. The timeline rows
+        # count from the moment their own work started; the row that says the
+        # turn is still running has nothing of its own to count from, so it
+        # counts from here.
+        @epoch = Time.now.to_f
         @mutex = Mutex.new
         @cond = ConditionVariable.new
         @events = []

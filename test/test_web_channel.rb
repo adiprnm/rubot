@@ -548,6 +548,38 @@ module Rubot
       # Enter is handled in JavaScript, which submits through `$refs.form`.
       # The ref used to be missing, so every press of Enter threw before a
       # request was made and the only way to send was the button.
+      # A turn says nothing about itself while it runs: a long answer arrives as
+      # one block and a slow tool is a row with no clock until it is slow. The
+      # working row is what fills that silence, and it counts from the prompt —
+      # not from whenever the fragment was rendered, which would restart the
+      # clock on every chunk.
+      def test_a_running_turn_says_it_is_working
+        turn = build
+        html = View.render("_turn", turn: turn, text: "hi", token_query: "")
+
+        assert_includes html, "Working…"
+        assert_includes html, %(data-since="#{turn.epoch}")
+        assert_includes html, %(data-threshold="0")
+      end
+
+      # The row belongs to the turn, not to the timeline: a turn read back from
+      # the session file is over, and nothing in it should claim otherwise.
+      def test_a_replayed_turn_does_not_say_it_is_working
+        html = View.render("_timeline", items: [ { kind: :text, text: "jawaban", live: false } ])
+
+        refute_includes html, "Working…"
+      end
+
+      def test_the_working_row_follows_the_last_thing_the_turn_did
+        turn = build
+        turn.tool_started("shell_exec", "ls")
+
+        html = View.turn_body(turn)
+
+        assert html.index("shell_exec") < html.index("Working…"),
+               "the working row has to sit under the work it is describing"
+      end
+
       def test_the_composer_form_carries_the_ref_enter_submits_through
         html = View.render("_composer", session_id: "web_rubot", token_query: "")
         form = html[/<form\b[^>]*>/m]
