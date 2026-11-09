@@ -3258,6 +3258,23 @@ module Rubot
                         "the room above the row is the band's margin plus the thread's own padding"
       end
 
+      # The header does not stick, so any scroll outside the thread takes it off
+      # the screen and it never comes back on its own. On a phone two things do
+      # exactly that: the momentum at the end of the conversation chains into the
+      # document, and the browser's toolbar collapsing grows `dvh` past the body.
+      # Neither can happen once the page itself cannot scroll.
+      def test_the_page_itself_cannot_scroll
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        shell = css[/^html, body \{[^}]*\}/]
+        thread = css[/^\.thread \{[^}]*\}/]
+
+        refute_nil shell, "the html, body rule is missing from app.css"
+        assert_match(/overflow: hidden;/, shell, "the document must not be a scroller")
+        assert_match(/overscroll-behavior: none;/, shell, "and pull-to-refresh must not reload a running turn")
+        assert_match(/overscroll-behavior-y: contain;/, thread,
+                     "the momentum at the end of the thread stops at the thread")
+      end
+
       def rem(value)
         value.to_s.delete("rem").to_f
       end

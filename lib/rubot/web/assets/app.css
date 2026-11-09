@@ -169,7 +169,20 @@
 
 * { box-sizing: border-box; }
 
-html, body { height: 100%; margin: 0; }
+/* The shell is a page that never scrolls: the thread is the only scroller.
+   On a phone anything else that scrolls takes the header off the top of the
+   screen with it — the header is not sticky, so once the page moves it is
+   simply gone. Two things move it: momentum that reaches the end of the thread
+   and carries on into the document, and the browser's own toolbar collapsing,
+   which grows `dvh` past the body and leaves the shell taller than the page.
+   `overscroll-behavior` also keeps the pull-to-refresh gesture from reloading a
+   turn that is still running. */
+html, body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
 
 body {
   background: var(--bg0);
@@ -830,6 +843,10 @@ body {
      below a chat that only looks 800px tall. */
   position: relative;
   overflow-y: auto;
+  /* Momentum that reaches the end of the conversation stops here instead of
+     carrying the page with it: a scroll that chains out of the thread moves the
+     header off the screen, and the header does not come back on its own. */
+  overscroll-behavior-y: contain;
   /* Nothing needs room in the margin any more: a list marker lives inside the
      paragraph it belongs to, so the scroll container keeps the same gutter on
      both sides. */
