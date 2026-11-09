@@ -648,10 +648,17 @@ body {
   to { opacity: 1; transform: none; }
 }
 
+/* The bubble is a quotation of what the person typed, line breaks and all.
+   With `normal` whitespace a two-paragraph prompt was drawn as one run of
+   text: Shift+Enter made the newline, the field showed it, and the bubble
+   threw it away — which read as the message having lost it on the way to the
+   agent. `pre-wrap` keeps every newline and still wraps a long line inside the
+   measure, which `pre` would not. */
 .msg.user .bubble {
   max-width: min(var(--measure), 86%);
   padding: 0.55rem 0.9rem;
   overflow-wrap: break-word;
+  white-space: pre-wrap;
   background: var(--bg2);
   border-radius: 5px 5px 0 5px;
 }

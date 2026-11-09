@@ -816,8 +816,7 @@ module Rubot
 
       # Only the prompt wears a bubble: it is a quotation. The answer is the
       # page speaking, so it takes the full column, with no avatar beside it.
-      def test_the_answer_is_full_width_and_the_prompt_is_quoted
-        answer = View.render("_timeline", items: [ { kind: :text, text: "jawaban", live: false } ])
+      def test_the_answer_is_full_width_and_the_prompt_is_quoted        answer = View.render("_timeline", items: [ { kind: :text, text: "jawaban", live: false } ])
         prompt = View.render("_message", role: "user", text: "pertanyaan")
         history = View.render("_message", role: "assistant", text: "jawaban lama")
 
@@ -830,6 +829,19 @@ module Rubot
 
         refute_includes history, "bubble"
         assert_includes history, %(class="text")
+      end
+
+      # A prompt is a quotation, and the line breaks in it are part of what was
+      # said. With the default whitespace they collapsed: the field showed two
+      # paragraphs, the bubble showed one run, and a reader had no way to tell
+      # whether the newline had survived the send.
+      def test_the_prompt_keeps_the_line_breaks_that_were_typed
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        rule = css[/^\.msg\.user \.bubble \{[^}]*\}/]
+
+        refute_nil rule, "the prompt bubble needs its own rule to carry this"
+        assert_includes rule, "white-space: pre-wrap",
+                        "pre-wrap keeps every newline; `pre` would not wrap a long one"
       end
 
       def test_timeline_shows_a_duration_only_past_the_threshold
