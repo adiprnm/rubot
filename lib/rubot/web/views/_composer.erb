@@ -11,25 +11,30 @@
       hx-target="#thread"
       hx-swap="beforeend"
       x-data="composer">
-  <textarea x-ref="input"
-            x-model="text"
-            name="message"
-            rows="1"
-            aria-label="Pesan"
-            placeholder="Tulis pesan… Enter mengirim, Shift+Enter baris baru"
-            x-on:keydown="keydown($event)"></textarea>
-  <div class="composer-actions">
-    <%# One button, two jobs: it sends when the session is free and stops the
-        turn when it is not. A turn that is running is exactly when a reader
-        wants a way out of it, so the same box stays where the hand already is.
-        Steering while a turn runs is Enter's job, which is why the button can
-        spend that moment being the way out. -%>
-    <button type="button"
-            class="btn primary"
-            x-bind:class="{ 'is-stop': $store.turn.active, 'is-stopping': stopping }"
-            x-bind:disabled="stopping"
-            x-bind:aria-busy="stopping"
-            x-on:click="sendOrStop()"
-            x-text="buttonLabel">Kirim</button>
+  <%# The field and its button are one line, so the button sits at the end of
+      the text rather than under it: a row is what keeps the two in the same
+      band as the field grows. -%>
+  <div class="composer-row">
+    <textarea x-ref="input"
+              x-model="text"
+              name="message"
+              rows="1"
+              aria-label="Pesan"
+              placeholder="Tulis pesan… Enter mengirim, Shift+Enter baris baru"
+              x-on:keydown="keydown($event)"></textarea>
+    <div class="composer-actions">
+      <%# One button, two jobs: it sends when the session is free and stops the
+          turn when it is not. A turn that is running is exactly when a reader
+          wants a way out of it, so the same box stays where the hand already is.
+          Steering while a turn runs is Enter's job, which is why the button can
+          spend that moment being the way out. -%>
+      <button type="button"
+              class="btn primary"
+              x-bind:class="{ 'is-stop': $store.turn.active, 'is-stopping': stopping }"
+              x-bind:disabled="stopping"
+              x-bind:aria-busy="stopping"
+              x-on:click="sendOrStop()"
+              x-text="buttonLabel">Kirim</button>
+    </div>
   </div>
 </form>

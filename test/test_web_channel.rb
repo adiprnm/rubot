@@ -1043,10 +1043,23 @@ module Rubot
         assert_includes form, 'hx-post="/s/web_rubot/turn"'
       end
 
+      # The field and its button share one row, which is what keeps the button
+      # at the end of the text. Without the row it falls under the field and
+      # reads as a left-aligned block the width of the composer.
+      def test_the_composer_keeps_the_button_at_the_end_of_the_field_s_row
+        html = View.render("_composer", session_id: "web_rubot", token_query: "")
+        row = html[%r{<div class="composer-row">.*?</div>\s*</div>}m]
+
+        refute_nil row, "the composer needs a row to lay the field and the button out"
+        assert_match %r{<div class="composer-row">\s*<textarea\b}, row,
+                     "the field opens the row"
+        assert_includes row[/<div class="composer-actions">.*/m], 'class="btn primary"',
+                        "the button rides along at the end of the same row"
+      end
+
       # One button, two jobs: it sends when the session is free and stops the
-      # turn when it is not, in the same place under the same hand. The
-      # paperclip beside it is a different job entirely, which is why the
-      # primary button is what this looks for.
+      # turn when it is not, in the same place under the same hand. There is
+      # one primary button, which is what this looks for.
       def test_the_composer_has_one_button_that_stops_a_running_turn
         html = View.render("_composer", session_id: "web_rubot", token_query: "")
         buttons = html.scan(/<button\b.*?<\/button>/m)
