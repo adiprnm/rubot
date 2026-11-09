@@ -999,18 +999,37 @@ body {
 .turn-body > .msg:last-child,
 .turn-body > .text:last-child { margin-bottom: 1.05rem; }
 
-/* The mark is a label prefix, nothing more. It needs no special box: with the
-   row's baseline alignment the ring, the half disc and the check all land
-   within 0.2px of the cap-height centre on their own. (The ring used to look
-   low because the row was a flex container without baseline alignment, which
-   stretched the mark and lifted its ink.) */
+/* The mark is a label prefix, nothing more, and the row centres it on the
+   line rather than hanging it from the baseline: the thought and the running
+   turn draw their ring as an SVG in a square box (see `.row .mark`), and a box
+   centred on the line box is centred on the text it labels. The state rows
+   below ("✓ shell_exec") keep baseline alignment, where a glyph belongs. */
 .mark { flex: 0 0 auto; }
+
+/* The ring is drawn, not typed: a fallback font's ◌ has its own size and sits
+   on the baseline, so beside "Thinking…" it always looked a touch low and
+   never quite the same on two machines. The box is square and its SVG fills
+   it, so the mark's own centre is the mark's box centre. */
+.row .mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.8em;
+  height: 0.8em;
+  line-height: 1;
+}
+
+.row .mark .mark-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
 
 .row {
   display: flex;
-  /* Without baseline alignment the mark is a stretched flex item and its ink
-     floats above the label's: the ring sat 2.7px high. */
-  align-items: baseline;
+  /* The label and the clock are text and align on their baselines; the mark
+     has no baseline of its own, so it rides the middle of the row. */
+  align-items: center;
   gap: 0.35rem;
   margin: 0 0 0.4rem;
   font-family: var(--mono);

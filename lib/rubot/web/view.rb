@@ -666,6 +666,20 @@ module Rubot
                  %(<path d="M8.4 7.4V3.6"/>)
       }.freeze
 
+      # The round marks are drawn for the same reason: ◌ and ◐ are a fallback
+      # font's business, so the ring changed weight and rode low or high beside
+      # "Thinking…" depending on the system that painted it. An SVG in a square
+      # box is the same size everywhere and centres by construction (see
+      # `.row .mark`), which is what a mark beside a line of text has to do.
+      MARKS = {
+        think: %(<svg class="mark-svg" viewBox="0 0 10 10" fill="none" stroke="currentColor" ) +
+               %(stroke-width="1.2" stroke-linecap="round" aria-hidden="true" focusable="false">) +
+               %(<circle cx="5" cy="5" r="3.5" stroke-dasharray="1.7 1.5"/></svg>),
+        working: %(<svg class="mark-svg" viewBox="0 0 10 10" aria-hidden="true" focusable="false">) +
+                 %(<circle cx="5" cy="5" r="3.5" fill="none" stroke="currentColor" stroke-width="1.2"/>) +
+                 %(<path d="M5 1.5a3.5 3.5 0 0 1 0 7z" fill="currentColor"/></svg>)
+      }.freeze
+
       class Scope
         def initialize(locals)
           locals.each { |key, value| define_singleton_method(key) { value } }
@@ -681,6 +695,13 @@ module Rubot
 
         def icon(state)
           ICONS.fetch(state, "◐")
+        end
+
+        # A drawn mark for the two rows whose glyph was a ring: the thought and
+        # the turn that is still running. The state rows keep their glyphs —
+        # ✓ and ✗ sit on the baseline where every mono font puts them.
+        def mark(kind)
+          MARKS.fetch(kind, "")
         end
 
         # A 10px stroked mark. Decorative: the row's title carries the meaning,

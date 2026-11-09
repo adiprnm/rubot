@@ -12,7 +12,7 @@
     `working` event — and it has to land on #working instead. -%>
 <div class="working-band" id="working" hx-swap-oob="true">
   <p class="row working" data-since="<%= h(since) %>" data-threshold="0">
-    <span class="mark working" aria-hidden="true">◐</span>
+    <span class="mark working" aria-hidden="true"><%= mark(:working) %></span>
     <span class="label">Working…</span>
     <span class="live-clock"></span>
   </p>

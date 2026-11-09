@@ -2182,6 +2182,38 @@ module Rubot
         assert_operator margin[2].to_f, :>, 0, "and room below it"
       end
 
+      # A ring typed as a glyph sits on the baseline, and its size comes from
+      # whichever font on the reader's machine happens to carry U+25CC — so
+      # beside "Thinking…" it was never the same twice, and on the machine
+      # that reported it, never centred. The two round marks are drawn now.
+      def test_the_round_marks_are_drawn_not_typed
+        thinking = View.render("_timeline",
+                               items: [ { kind: :thinking, epoch: 1.0, started_at: 0.0,
+                                          closed_at: nil, elapsed: nil } ])
+        working = View.render("_working", since: 1.0)
+
+        assert_includes thinking, %(class="mark-svg")
+        assert_includes working, %(class="mark-svg")
+        refute_includes thinking, "◌", "the ring is no longer a borrowed glyph"
+        refute_includes working, "◐", "nor is the half disc"
+      end
+
+      # Centring is the box's job: the mark has no baseline to sit on, so the
+      # row centres it instead, and a square box means the drawing's own centre
+      # is the box's centre. Without the square, a wider mark would drift.
+      def test_the_round_marks_are_centred_by_a_square_box
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+
+        row = css[/^\.row \{[^}]*\}/m]
+        refute_nil row, "the .row rule is missing from app.css"
+        assert_includes row, "align-items: center"
+
+        mark = css[/^\.row \.mark \{[^}]*\}/m]
+        refute_nil mark, "the .row .mark rule is missing from app.css"
+        assert_includes mark, "width: 0.8em"
+        assert_includes mark, "height: 0.8em"
+      end
+
       def turn_request(message)
         Struct.new(:query, :query_string) do
           def content_type = "application/x-www-form-urlencoded"
