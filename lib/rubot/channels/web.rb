@@ -1164,7 +1164,13 @@ module Rubot
         Thread.new { run_turn(turn, text) }
 
         res["Content-Type"] = "text/html; charset=utf-8"
-        res.body = View.render("_turn", turn: turn, text: text, token_query: token_query)
+        # The row above the field is filled here, once, because this response is
+        # the only moment the page is told a turn has begun. Nothing re-sends it
+        # while the turn runs (the row never changes, and a replacement only made
+        # the text flash), so without this the band stayed empty for every prompt
+        # typed into the page and "Working…" was seen only after a refresh.
+        res.body = working_markup(turn.epoch) +
+                   View.render("_turn", turn: turn, text: text, token_query: token_query)
       end
 
       # The turn the browser is following, in one place: the agent reads the
@@ -1203,6 +1209,16 @@ module Rubot
         @turns_mutex.synchronize do
           @active.delete(turn.session_id) if @active[turn.session_id] == turn.id
         end
+      end
+
+      # The row that says a turn is running, marked for the band it belongs to
+      # rather than for the thread it travels beside. The turn fragment is a
+      # fragment of the conversation; this row is a state of the page, and htmx
+      # only knows that from the out-of-band marker.
+      def working_markup(since)
+        View.render("_working", since: since)
+            .sub(%(<div class="working-band" id="working">),
+                 %(<div class="working-band" id="working" hx-swap-oob="true">))
       end
 
       # A fragment meant for the status row rather than for the turn: the swap

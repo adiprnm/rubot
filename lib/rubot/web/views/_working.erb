@@ -7,7 +7,9 @@
     saying it is not finished yet. In the flow it also pushed the last tool
     row up the screen every time the answer grew a line.
 
-    Drawn once, at first paint. A tool call does not re-send it: the row would
+    Drawn once per turn. A turn started from the page gets this row in the
+    answer to the POST that started it; a page opened on a turn already running
+    draws it at first paint. A tool call does not re-send it: the row would
     arrive identical, and the replacement only made the text flash. -%>
 <div class="working-band" id="working">
   <p class="row working" data-since="<%= h(since) %>" data-threshold="0">

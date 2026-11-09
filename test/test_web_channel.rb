@@ -1080,6 +1080,28 @@ module Rubot
                         "the row never changes, so nothing has to swap it"
       end
 
+      # ...but "once" is still once. A turn started from the page is told about
+      # in exactly one place — the answer to the POST — so the band has to be
+      # filled there, or a reader who typed the prompt never sees the row at all
+      # and only a refresh (first paint) brings it back.
+      def test_starting_a_turn_from_the_page_fills_the_working_band
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        channel.define_singleton_method(:owner_slug) { |_sid| "kanyaah" }
+        channel.define_singleton_method(:run_turn) { |turn, _text| turn.finish("ok") }
+
+        res = FakeResponse.new
+        channel.send(:create_turn, turn_request("halo"), res, "web_kanyaah")
+
+        band = res.body[/<div class="working-band" id="working"[^>]*>.*?<\/div>/m]
+
+        refute_nil band, "the turn must say it is working from the moment it starts"
+        assert_includes band, "Working…"
+        assert_includes band, 'hx-swap-oob="true"',
+                        "the row belongs to the band above the field, not to the thread"
+        assert_equal 1, res.body.scan('id="working"').size,
+                     "a second band in the response would be a second copy on the page"
+      end
+
       # A refresh during an answer must not look like a conversation whose last
       # prompt was never sent. Nothing is written to the session file until a
       # turn ends, so the page has to find the turn in memory and draw it —
