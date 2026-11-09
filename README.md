@@ -967,6 +967,13 @@ No build step: `htmx`, `htmx-ext-sse` and `alpinejs` are vendored under
 `vendor/web/`, templates are ERB from the standard library, and the only
 hand-written JavaScript wires the composer.
 
+A code block in an answer carries a quiet `Salin` button in its corner: the text
+is read back out of the block's own markup, so what lands on the clipboard is the
+snippet as the model wrote it — indentation, quotes and all — with no highlighting
+spans in the way. The button is server-rendered rather than injected, so a block
+that streamed in mid-answer is already copyable, and it stays hidden while the
+fence is still open because the text is not finished yet.
+
 | Setting | Default | Meaning |
 |---------|---------|---------|
 | `host` | `127.0.0.1` | Bind address. `0.0.0.0` requires a `token`. |

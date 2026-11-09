@@ -880,8 +880,16 @@ body {
   color: var(--yellow);
 }
 
-.text pre.code {
+/* A code block is a wrapper around the <pre>: the <pre> scrolls sideways for
+   a long line, the corner above it does not, so the label and the copy button
+   stay where they are while the code moves. */
+.text .code-block {
+  position: relative;
   margin: 0.8em 0;
+}
+
+.text pre.code {
+  margin: 0;
   padding: 0.7rem 0.85rem;
   border-radius: 3px;
   border: 1px solid var(--line);
@@ -899,13 +907,25 @@ body {
 }
 
 /* The language a block was tagged with, said quietly in its corner: it is a
-   fact about the snippet, not a title for it. */
-.text pre.code { position: relative; }
-.text pre.code[data-lang]::before {
-  content: attr(data-lang);
+   fact about the snippet, not a title for it. It shares the corner with the
+   button that takes the text away, and both stay out of the way until the
+   pointer is over the block — the code is what is being read, not its
+   furniture. On a device with no pointer to hover there is no way to reveal
+   the button, so there it is simply there. */
+.text .code-top {
   position: absolute;
   top: 0.3rem;
   right: 0.55rem;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  /* The corner lies over the code, so it must not swallow a drag that starts
+     there. Only the button itself takes a click, and only once it is shown. */
+  pointer-events: none;
+}
+
+.text .code-lang {
   font-family: var(--mono);
   font-size: 9px;
   letter-spacing: 0.08em;
@@ -914,6 +934,53 @@ body {
   opacity: 0.75;
   pointer-events: none;
 }
+
+.text .code-copy {
+  /* Wide enough for the longest word it ever shows ("Tersalin"), so the label
+     beside it does not slide when the word changes. */
+  min-width: 4.2rem;
+  padding: 0.05rem 0.38rem;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--bg1);
+  color: var(--fg-faint);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-align: center;
+  text-transform: uppercase;
+  line-height: 1.7;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.text .code-block:hover .code-copy,
+.text .code-block:focus-within .code-copy,
+.text .code-copy:focus-visible,
+.text .code-copy.is-copied,
+.text .code-copy.is-failed {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.text .code-copy:hover { color: var(--fg); border-color: var(--fg-faint); }
+.text .code-copy.is-copied { color: var(--green); border-color: var(--green); }
+.text .code-copy.is-failed { color: var(--red); border-color: var(--red); }
+
+@media (hover: none) {
+  .text .code-copy {
+    opacity: 1;
+    pointer-events: auto;
+    /* A finger needs more than a hairline to land on. */
+    padding: 0.3rem 0.5rem;
+  }
+}
+
+/* A block still being written has no finished text to take, so it offers no
+   button until the fence closes. */
+.text .code-block.streaming .code-copy { display: none; }
 
 /* Four colours, no more: a keyword, a string, a comment, a number. Anything
    the highlighter does not recognise keeps the block's own colour. */

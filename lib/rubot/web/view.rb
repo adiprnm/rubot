@@ -274,17 +274,27 @@ module Rubot
         end
       end
 
+      # A block is a wrapper plus the <pre>: the wrapper is what holds the
+      # corner — the language it was tagged with and the button that copies
+      # it — outside the scrolling box, so neither scrolls sideways with a
+      # long line. The button is written here rather than added by a script
+      # because a block that arrives mid-stream is already markup.
       def code_block(body, language, streaming: false)
         lang = language.to_s.downcase
         classes = [ "code" ]
         classes << "streaming" if streaming
+
+        top = +%(<div class="code-top">)
+        top << %(<button type="button" class="code-copy" data-copy aria-live="polite" aria-label="Salin isi blok kode" title="Salin isi blok kode">Salin</button>)
+        top << %(<span class="code-lang">#{lang}</span>) unless lang.empty?
+        top << "</div>"
 
         pre = +%(<pre class="#{classes.join(" ")}")
         pre << %( data-lang="#{lang}") unless lang.empty?
         pre << ">"
         code_class = lang.empty? ? "" : %( class="language-#{lang}")
         pre << "<code#{code_class}>#{highlight(body, lang)}</code></pre>"
-        pre
+        %(<div class="code-block#{streaming ? " streaming" : ""}">#{top}#{pre}</div>)
       end
 
       # A small highlighter, not a parser: comments, strings, numbers and

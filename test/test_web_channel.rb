@@ -32,6 +32,30 @@ module Rubot
         assert_includes html, %(<span class="tok-num">1</span>)
       end
 
+      def test_a_code_block_carries_a_copy_button
+        html = Format.markdown("```ruby\nputs 1\n```")
+
+        # The button is markup, not something a script adds afterwards: a
+        # block that streamed in has to arrive already copyable. The label
+        # follows it, so the language stays in the corner it was in.
+        assert_includes html, %(<div class="code-block"><div class="code-top"><button type="button" class="code-copy" data-copy)
+        assert_includes html, ">Salin</button>"
+        assert_includes html, %(<span class="code-lang">ruby</span>)
+      end
+
+      def test_a_block_without_a_language_still_offers_the_copy_button
+        html = Format.markdown("```\nplain\n```")
+
+        assert_includes html, %(<button type="button" class="code-copy" data-copy)
+        refute_includes html, "code-lang", "there is no language to name"
+      end
+
+      def test_a_streaming_block_is_marked_so_the_button_stays_hidden
+        html = Format.markdown("```ruby\nputs 1")
+
+        assert_includes html, %(<div class="code-block streaming">)
+      end
+
       def test_markdown_inline_code_and_bold
         assert_equal "<p><code>x</code> <strong>y</strong></p>", Format.markdown("`x` **y**")
       end
