@@ -1140,19 +1140,39 @@ module Rubot
                         "the button rides along at the end of the same row"
       end
 
-      # One button, two jobs: it sends when the session is free and stops the
-      # turn when it is not, in the same place under the same hand. There is
-      # one primary button, which is what this looks for.
-      def test_the_composer_has_one_button_that_stops_a_running_turn
+      # A phone has no Enter that sends: during a turn the only key the
+      # software keyboard offers makes a new line. So steering needs a button
+      # of its own, and so does stopping — one control cannot be both, which
+      # is what the send button used to be while a turn ran.
+      def test_the_composer_sends_and_stops_while_a_turn_runs
         html = View.render("_composer", session_id: "web_rubot", token_query: "")
         buttons = html.scan(/<button\b.*?<\/button>/m)
-        primary = buttons.find { |button| button.include?("btn primary") }
 
-        refute_nil primary, "the composer needs its send/stop button"
-        assert_equal 1, buttons.count { |button| button.include?("btn primary") },
-                     "the composer should carry a single primary button"
-        assert_includes primary, "sendOrStop()"
-        assert_includes primary, "buttonLabel"
+        send_button = buttons.find { |button| button.include?("btn primary") }
+        stop_button = buttons.find { |button| button.include?("composer-stop") }
+
+        refute_nil send_button, "the composer needs its send button"
+        refute_nil stop_button, "and a way out of the turn that is running"
+
+        assert_includes send_button, "send()"
+        refute_includes send_button, "stop()",
+                        "the send button must not stop the turn"
+        assert_includes stop_button, "stop()"
+        assert_includes stop_button, %(x-show="busy"),
+                        "the stop button only exists while there is something to stop"
+        assert_includes stop_button, %(x-bind:disabled="stopping")
+      end
+
+      # Steering is only reachable if the send button accepts text while the
+      # turn runs — the store decides what the press does with it, not whether
+      # the button works.
+      def test_the_send_button_can_steer_a_running_turn
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+
+        assert_includes js, "/steer", "the text goes to the running turn"
+        assert_includes js, "Alpine.store(\"turn\").active"
+        refute_includes js, "sendOrStop",
+                        "one button cannot both send and stop once a phone needs both"
       end
 
       # Stopping is a request, not a fact: the turn keeps running until the
@@ -1161,17 +1181,17 @@ module Rubot
       # the same request.
       def test_the_stop_button_says_it_is_stopping_and_locks_itself
         html = View.render("_composer", session_id: "web_rubot", token_query: "")
-        button = html[/<button\b[^>]*class="btn primary".*?<\/button>/m]
+        button = html[/<button\b[^>]*class="btn composer-stop".*?<\/button>/m]
 
-        refute_nil button, "the primary button is the one that sends and stops"
-        assert_includes button, "x-bind:disabled=\"stopping"
-        assert_includes button, "is-stopping"
+        refute_nil button, "the stop button is the one that ends the turn"
+        assert_includes button, %(x-bind:disabled="stopping")
+        assert_includes button, "stopLabel"
 
         js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
 
         assert_includes js, "Membatalkan…", "the button has to say what it is doing"
         assert_includes js, "this.stopping = true"
-        assert_includes js, "if (this.stopping) return;",
+        assert_includes js, "if (!active || this.stopping) return;",
                         "a second press while the first is in flight is a no-op"
       end
 

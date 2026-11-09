@@ -23,18 +23,28 @@
               placeholder="Tulis pesan… Enter mengirim, Shift+Enter baris baru"
               x-on:keydown="keydown($event)"></textarea>
     <div class="composer-actions">
-      <%# One button, two jobs: it sends when the session is free and stops the
-          turn when it is not. A turn that is running is exactly when a reader
-          wants a way out of it, so the same box stays where the hand already is.
-          Steering while a turn runs is Enter's job, which is why the button can
-          spend that moment being the way out. -%>
+      <%# Two buttons, and only while a turn is running: a phone has no Enter
+          that sends, so during a turn the reader has to be able to do both
+          things they might mean — hand the running turn another instruction,
+          or stop it. One button that turned into the other meant steering was
+          simply unavailable on a phone, which is exactly where the software
+          keyboard's Enter key can only make a new line.
+
+          While the session is free the second button is not in the page at
+          all: there is nothing to stop, and a control that does nothing is
+          worse than one that is absent. -%>
       <button type="button"
               class="btn primary"
-              x-bind:class="{ 'is-stop': $store.turn.active, 'is-stopping': stopping }"
+              x-on:click="send()"
+              x-bind:disabled="!text.trim()"
+              x-bind:title="busy ? 'Kirim sebagai arahan ke turn yang berjalan' : ''">Kirim</button>
+      <button type="button"
+              class="btn composer-stop"
+              x-show="busy"
               x-bind:disabled="stopping"
               x-bind:aria-busy="stopping"
-              x-on:click="sendOrStop()"
-              x-text="buttonLabel">Kirim</button>
+              x-on:click="stop()"
+              x-text="stopLabel">Batal</button>
     </div>
   </div>
 </form>
