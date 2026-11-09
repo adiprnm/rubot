@@ -15,7 +15,14 @@ module Rubot
     # through the agent loop: running the tools the model asked for, re-asking
     # after an empty reply, or asking for the rest of a cut-off answer. It is
     # not a tool-call count: one round can run several tools.
-    DEFAULT_MAX_ROUNDS = 50
+    #
+    # It is a last-resort net, not a workflow. At 50 it was neither: a real
+    # piece of work — read, edit, test, fix, test again — spent it, and the turn
+    # then ended with a notice asking the reader to type "continue", sometimes
+    # several turns in a row. A runaway loop is stopped by the reader's own
+    # Stop button and by the turn's cost figure; this number only exists to
+    # catch a model that would otherwise loop forever with nobody watching.
+    DEFAULT_MAX_ROUNDS = 1000
     # Old constant name, kept so existing callers keep working.
     DEFAULT_MAX_TOOL_ITERATIONS = DEFAULT_MAX_ROUNDS
     DEFAULT_AUTO_COMPACT = true

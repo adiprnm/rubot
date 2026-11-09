@@ -23,10 +23,13 @@ require_relative "tools/feedback_learner"
 module Rubot
   class Agent
     # How many times one turn may ask the model to carry on after the provider
-    # cut its answer off at the output budget. Two is enough for a long reply
-    # split across three requests; more usually means the budget itself is set
-    # too low for the model.
-    MAX_CONTINUATIONS = 2
+    # cut its answer off at the output budget. Each continuation buys another
+    # `max_tokens` worth of text, and only ever fires when the provider really
+    # did truncate — so a generous number costs nothing on ordinary answers and
+    # stops a long one from ending mid-sentence. Two was too few: a written
+    # document at 16k output tokens needs three or four requests, and at two the
+    # reader got a notice and a "continue" they had to type.
+    MAX_CONTINUATIONS = 4
 
     # How often a turn in flight may publish provisional cost/context figures.
     # Five times a second keeps the footer moving without turning every
@@ -608,10 +611,12 @@ module Rubot
         combined = fallback if fallback && !fallback.empty?
       end
 
-      # Say so when the run was cut short, instead of stopping silently.
+      # Say so when the run was cut short, instead of stopping silently. The
+      # wording matters here: this limit is a net under a runaway loop, so the
+      # reader is told what was done and what is left, not handed homework.
       if limit_hit
-        notice = "⚠️ Reached the round limit (#{limit}) before finishing. " \
-                 "Reply \"continue\" to resume, or raise `max_rounds` in config.yml."
+        notice = "⚠️ Turn stopped after #{limit} rounds without finishing. " \
+                 "Say \"lanjut\" to carry on from here — the work so far is saved."
         combined = combined.empty? ? notice : "#{combined}\n\n#{notice}"
       end
 

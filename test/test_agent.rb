@@ -183,10 +183,16 @@ class TestAgentRoundLimit < Minitest::Test
     response = agent.process("loop forever", stream: false)
 
     assert_equal 3, agent.provider.calls, "expected exactly 3 LLM round-trips"
-    assert_includes response, "round limit (3)"
+    assert_includes response, "stopped after 3 rounds",
+                    "the notice names the limit that was hit"
+    assert_includes response, "lanjut",
+                    "and says how to carry on, in the language the reader uses"
   end
 
-  def test_default_limit_is_fifty_when_unset
+  # The limit is a net under a runaway loop, not a budget for a piece of work.
+  # To ask for "continue" repeatedly is the failure this number is set high to
+  # avoid; a turn that really has gone wrong is stopped by the reader.
+  def test_the_default_limit_is_a_last_resort_not_a_budget
     @tmpdir = Dir.mktmpdir
     workspace = File.join(@tmpdir, "workspace")
     FileUtils.mkdir_p(workspace)
@@ -196,7 +202,11 @@ class TestAgentRoundLimit < Minitest::Test
       "models" => [ { "name" => "test", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ]
     }.to_yaml)
 
-    assert_equal 50, Rubot::Config.new(config_path).max_rounds
+    limit = Rubot::Config.new(config_path).max_rounds
+
+    assert_equal 1000, limit
+    assert_operator limit, :>=, 500,
+                    "a real read-edit-test cycle must not spend it"
   end
 
   def test_zero_or_negative_limit_falls_back_to_default
