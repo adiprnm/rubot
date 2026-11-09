@@ -15,22 +15,13 @@ module Rubot
       module_function
 
       # Line-oriented, because a list is a run of lines and a lone newline is
-      # just a line break inside one. Everything is escaped before this runs,
-      # so the only tags that can appear are the ones written here.
+      # just a line break inside one. Code fences are cut out of the raw text
+      # first, so their bodies can be highlighted before anything is escaped;
+      # everything else is escaped up front, so the only tags that can appear
+      # are the ones written here.
       def markdown(text)
         blocks = []
-        source = CGI.escapeHTML(text.to_s)
-
-        source = source.gsub(/```[a-zA-Z0-9+#-]*\n(.*?)```/m) do
-          blocks << %(<pre class="code"><code>#{Regexp.last_match(1)}</code></pre>)
-          "#{PLACEHOLDER}#{blocks.size - 1}#{PLACEHOLDER}"
-        end
-
-        # An unterminated fence is normal mid-stream: show the tail as code.
-        source = source.gsub(/```[a-zA-Z0-9+#-]*\n(.*)\z/m) do
-          blocks << %(<pre class="code streaming"><code>#{Regexp.last_match(1)}</code></pre>)
-          "#{PLACEHOLDER}#{blocks.size - 1}#{PLACEHOLDER}"
-        end
+        source = CGI.escapeHTML(extract_fences(text.to_s, blocks))
 
         paragraphs = []
         paragraph = []
@@ -43,20 +34,64 @@ module Rubot
           paragraph.clear
         end
 
+        # Closing a level emits the open item and the list together, which is
+        # why a parent's <li> is still open when a nested list starts inside
+        # it — and why the nested list's close writes "</li></ul>" before the
+        # parent's "</li>" follows.
+        close_level = lambda do |html, stack|
+          level = stack.pop
+          html << "</li>" if level[:open]
+          html << "</#{level[:tag]}>"
+        end
+
         flush_list = lambda do
           next if list.nil?
 
-          paragraphs << "<#{list[:tag]}>#{list[:items].join}</#{list[:tag]}>"
+          close_level.call(list[:html], list[:stack]) while list[:stack].any?
+          paragraphs << list[:html]
           list = nil
         end
 
-        # A list ends when a line that is not one of its items arrives; the
-        # two list kinds do not continue each other.
-        open_list = lambda do |tag, item|
-          flush_paragraph.call
-          flush_list.call if list && list[:tag] != tag
-          list ||= { tag: tag, items: [] }
-          list[:items] << "<li>#{inline(item)}</li>"
+        # Lists nest by indentation, so the open lists are kept on a stack: a
+        # deeper item opens a list inside the item above it, and a shallower
+        # one closes levels until it has a home.
+        add_item = lambda do |tag, indent, body, task|
+          list ||= { stack: [], html: +"" }
+          html = list[:html]
+          stack = list[:stack]
+
+          until stack.empty?
+            top = stack.last
+            if indent > top[:indent]
+              html << "<#{tag}>"
+              stack << { tag: tag, indent: indent, open: false }
+              break
+            elsif indent == top[:indent] && tag == top[:tag]
+              break
+            else
+              close_level.call(html, stack)
+            end
+          end
+
+          if stack.empty?
+            html << "<#{tag}>"
+            stack << { tag: tag, indent: indent, open: false }
+          end
+
+          top = stack.last
+          if top[:open]
+            html << "</li>"
+            top[:open] = false
+          end
+
+          html << (task ? %(<li class="task#{task == :done ? " is-done" : ""}">) : "<li>")
+          if task
+            done = task == :done
+            html << %(<span class="task-box" aria-hidden="true"></span>)
+            html << %(<span class="sr-only">#{done ? "selesai" : "belum"}: </span>)
+          end
+          html << inline(body)
+          top[:open] = true
         end
 
         lines = source.lines(chomp: true)
@@ -64,6 +99,7 @@ module Rubot
         while i < lines.length
           line = lines[i]
           stripped = line.strip
+          indent = line[/\A[ \t]*/].length
 
           if stripped.empty?
             flush_paragraph.call
@@ -72,6 +108,16 @@ module Rubot
             flush_paragraph.call
             flush_list.call
             paragraphs << blocks[block.to_i]
+          elsif (heading = heading_at(stripped))
+            # A heading is its own block: it ends the paragraph above it and
+            # the list, the way any other block-level line does.
+            flush_paragraph.call
+            flush_list.call
+            paragraphs << "<h#{heading[:level]}>#{inline(heading[:text])}</h#{heading[:level]}>"
+          elsif stripped.match?(/\A([-*_])(?:[ \t]*\1){2,}\z/)
+            flush_paragraph.call
+            flush_list.call
+            paragraphs << %(<hr class="rule">)
           elsif (table = table_at(lines, i))
             # A table is its own block: the paragraph and the list before it
             # are finished by it, exactly as a fenced code block would.
@@ -80,14 +126,27 @@ module Rubot
             paragraphs << table[:html]
             i = table[:next]
             next
+          elsif (task = stripped.match(/\A[-*+] +\[([ xX])\][ \t]*(.*)\z/))
+            add_item.call("ul", indent, task[2], task[1].strip.empty? ? :open : :done)
           elsif (item = stripped[/\A[-*+] +(.*)\z/, 1])
-            open_list.call("ul", item)
+            add_item.call("ul", indent, item, nil)
           elsif (item = stripped[/\A\d+[.)] +(.*)\z/, 1])
-            open_list.call("ol", item)
-          elsif (quote = stripped[/\A&gt; ?(.*)\z/, 1])
+            add_item.call("ol", indent, item, nil)
+          elsif (quote = stripped[/\A&gt;[ \t]?(.*)\z/, 1])
+            # One blockquote for the whole run, not one per line: a border per
+            # line is a stack of separate rules with a gap between each, which
+            # reads as several quotes rather than one.
             flush_paragraph.call
             flush_list.call
-            paragraphs << "<blockquote>#{inline(quote)}</blockquote>"
+            quoted = [ quote ]
+            cursor = i + 1
+            while cursor < lines.length && (next_quote = lines[cursor].strip[/\A&gt;[ \t]?(.*)\z/, 1])
+              quoted << next_quote
+              cursor += 1
+            end
+            paragraphs << "<blockquote>#{quoted.map { |q| inline(q) }.join("<br>")}</blockquote>"
+            i = cursor
+            next
           else
             flush_list.call
             paragraph << line
@@ -100,6 +159,141 @@ module Rubot
         flush_list.call
 
         paragraphs.join("\n")
+      end
+
+      # "#" opens a heading only when a space follows it: "#hashtag" is a word,
+      # and a line of "###" alone is the horizontal rule it looks like.
+      def heading_at(line)
+        match = /\A(\#{1,6})[ \t]+(.+?)\s*#*\z/.match(line)
+        return nil unless match
+
+        # A rule of hashes is matched by the rule branch, not here.
+        text = match[2].strip
+        return nil if text.empty?
+
+        { level: match[1].length, text: text }
+      end
+
+      # --- fenced code ----------------------------------------------------
+      #
+      # Fences are cut out of the raw text, before escaping, so the body of a
+      # block can be highlighted token by token: escaping first would turn
+      # every quote and ampersand into an entity and there would be nothing
+      # left to recognise.
+
+      def extract_fences(text, blocks)
+        source = text.gsub(/\r\n?/, "\n")
+
+        source = source.gsub(/^[ \t]*(`{3,}|~{3,})[ \t]*([a-zA-Z0-9+#._-]*)[^\n]*\n(.*?)^[ \t]*\1[ \t]*$/m) do
+          blocks << code_block(Regexp.last_match(3), Regexp.last_match(2), streaming: false)
+          "#{PLACEHOLDER}#{blocks.size - 1}#{PLACEHOLDER}"
+        end
+
+        # An unterminated fence is normal mid-stream: show the tail as code.
+        # The body may not have started yet — "```ruby" on its own, the first
+        # chunk of a block — so the newline is optional rather than the line
+        # falling through to the paragraph and showing its backticks.
+        source.gsub(/^[ \t]*(`{3,}|~{3,})[ \t]*([a-zA-Z0-9+#._-]*)[^\n]*(?:\n(.*))?\z/m) do
+          blocks << code_block(Regexp.last_match(3).to_s, Regexp.last_match(2), streaming: true)
+          "#{PLACEHOLDER}#{blocks.size - 1}#{PLACEHOLDER}"
+        end
+      end
+
+      def code_block(body, language, streaming: false)
+        lang = language.to_s.downcase
+        classes = ["code"]
+        classes << "streaming" if streaming
+
+        pre = +%(<pre class="#{classes.join(" ")}")
+        pre << %( data-lang="#{lang}") unless lang.empty?
+        pre << ">"
+        code_class = lang.empty? ? "" : %( class="language-#{lang}")
+        pre << "<code#{code_class}>#{highlight(body, lang)}</code></pre>"
+        pre
+      end
+
+      # A small highlighter, not a parser: comments, strings, numbers and
+      # keywords in four colours. A language it does not know is printed
+      # plain — a wrong colour is worse than none.
+      STRING_QUOTES = {
+        "ruby" => %w[" '], "python" => %w[" '], "bash" => %w[" '], "sh" => %w[" '],
+        "javascript" => %w[" ' `], "js" => %w[" ' `], "typescript" => %w[" ' `],
+        "ts" => %w[" ' `], "json" => %w["], "css" => %w[" '], "sql" => %w['],
+        "go" => %w[" `], "rust" => %w["], "yaml" => %w[" '], "yml" => %w[" '],
+        "html" => %w[" '], "php" => %w[" ']
+      }.freeze
+
+      # Languages whose comments run to the end of the line, and the marker
+      # that starts one.
+      LINE_COMMENTS = {
+        "ruby" => "#", "python" => "#", "bash" => "#", "sh" => "#", "yaml" => "#",
+        "yml" => "#", "dockerfile" => "#", "makefile" => "#", "toml" => "#",
+        "javascript" => "//", "js" => "//", "typescript" => "//", "ts" => "//",
+        "go" => "//", "rust" => "//", "java" => "//", "c" => "//", "cpp" => "//",
+        "php" => "//", "css" => "/*", "sql" => "--"
+      }.freeze
+
+      BLOCK_COMMENT_LANGS = %w[javascript js typescript ts go rust java c cpp php css sql].freeze
+
+      KEYWORDS = %w[
+        def end class module if elsif else unless while until for do return yield
+        begin rescue ensure raise break next redo then and or not in require
+        include extend attr_accessor attr_reader attr_writer nil true false self super
+        function const let var import export from default async await try catch
+        finally throw new this typeof instanceof of delete void
+        fn pub use mod match mut impl struct enum trait where loop
+        public private protected static final abstract override package namespace
+        int float double char bool boolean string void long short byte unsigned
+        interface implements extends new null true false
+        select insert update delete create table where join group by order limit
+        and or not null is in like between
+        echo cd ls mkdir rm cp mv export source sudo apt brew
+      ].uniq.freeze
+
+      LITERALS = %w[true false nil null undefined None True False yes no on off].freeze
+
+      # Group names become CSS classes: "str" is .tok-str, and so on.
+      TOKEN_CLASS = { "str" => "tok-str", "com" => "tok-com", "num" => "tok-num",
+                      "kw" => "tok-kw", "lit" => "tok-lit" }.freeze
+
+      def highlight(code, language)
+        quotes = STRING_QUOTES[language]
+        marker = LINE_COMMENTS[language]
+        return CGI.escapeHTML(code) if quotes.nil? && marker.nil?
+
+        patterns = []
+        if quotes && !quotes.empty?
+          strings = quotes.map do |q|
+            e = Regexp.escape(q)
+            # A string stops at the end of its line: an unterminated quote in
+            # mid-stream must not paint the rest of the block as a string.
+            "#{e}(?:\\\\.|[^#{e}\\n])*#{e}?"
+          end
+          patterns << "(?<str>#{strings.join("|")})"
+        end
+        if marker == "/*"
+          patterns << '(?<com>/\*.*?\*/)'
+        elsif marker
+          patterns << "(?<com>#{Regexp.escape(marker)}[^\\n]*)"
+        end
+        patterns << '(?<com>&lt;!--.*?--&gt;)' if language == "html"
+        patterns << '(?<num>\b\d+(?:\.\d+)?\b)'
+        patterns << "(?<lit>\\b(?:#{LITERALS.join("|")})\\b)"
+        patterns << "(?<kw>\\b(?:#{KEYWORDS.join("|")})\\b)"
+
+        regex = Regexp.new("(?:#{patterns.join("|")})", Regexp::MULTILINE)
+        out = +""
+        pos = 0
+
+        code.scan(regex) do
+          match = Regexp.last_match
+          out << CGI.escapeHTML(code[pos...match.begin(0)]) if match.begin(0) > pos
+          name = TOKEN_CLASS.find { |group, _| match[group] }&.last
+          out << %(<span class="#{name}">#{CGI.escapeHTML(match[0])}</span>)
+          pos = match.end(0)
+        end
+        out << CGI.escapeHTML(code[pos..].to_s) if pos < code.length
+        out
       end
 
       # --- tables ---------------------------------------------------------
@@ -192,10 +386,86 @@ module Rubot
         nil
       end
 
-      # Inline spans. Escaped input only, so these are safe to emit as-is.
+      # Inline spans. Escaped input only, so these are safe to emit as-is —
+      # except for a link or an image, whose URL is attacker-controlled text
+      # that lands in an attribute; `safe_url` is the gate for those.
+      #
+      # Marks nest (`**bold with `code`**`, `[**x**](url)`), so a body that
+      # carries marks is parsed again. The code span is the exception: its
+      # body is literally what the writer typed.
+      INLINE_RE = /
+          (?<code>`+)(?<code_body>.+?)\k<code>
+        | !\[(?<img_alt>[^\]\n]*)\]\((?<img_url>[^)\s]*)[^)]*\)
+        | \[(?<link_text>[^\]\n]*)\]\((?<link_url>[^)\s]*)[^)]*\)
+        | (?<!\*)\*\*\*(?![\s*])(?<bi>.+?)(?<![\s*])\*\*\*(?!\*)
+        | (?<![\w_])___(?![\s_])(?<bii>.+?)(?<![\s_])___(?![\w_])
+        | \*\*(?![\s*])(?<bold>.+?)(?<![\s*])\*\*
+        | (?<![\w_])__(?![\s_])(?<ibold>.+?)(?<![\s_])__(?![\w_])
+        | (?<!\*)\*(?![\s*])(?<em>.+?)(?<![\s*])\*(?!\*)
+        | (?<![\w_])_(?![\s_])(?<iem>.+?)(?<![\s_])_(?![\w_])
+        | ~~(?![\s~])(?<strike>.+?)(?<![\s~])~~
+      /x
+
+      # Only the schemes a chat message has any business carrying. A bare
+      # "javascript:" would otherwise run in the page, and "file:" would read
+      # the reader's disk. Anything else stays the literal text that was
+      # written, which is the honest thing to show.
+      SAFE_URL = %r{\A(?:https?|mailto|tel):}i
+      RELATIVE_URL = %r{\A(?:/|#|\?|\.{1,2}/)}
+      INLINE_IMAGE = %r{\Adata:image/(?:png|jpe?g|gif|webp|svg\+xml)[;,]}
+
+      def safe_url(raw)
+        url = raw.to_s.strip
+        return nil if url.empty?
+        return url if url.match?(RELATIVE_URL)
+        return url if url.match?(SAFE_URL)
+        return url if url.match?(INLINE_IMAGE)
+
+        nil
+      end
+
       def inline(text)
-        out = text.gsub(/`([^`\n]+)`/) { %(<code>#{Regexp.last_match(1)}</code>) }
-        out.gsub(/\*\*([^*\n]+)\*\*/) { %(<strong>#{Regexp.last_match(1)}</strong>) }
+        source = text.to_s
+        out = +""
+        pos = 0
+
+        source.scan(INLINE_RE) do
+          match = Regexp.last_match
+          out << source[pos...match.begin(0)] if match.begin(0) > pos
+          out << inline_token(match)
+          pos = match.end(0)
+        end
+
+        out << source[pos..].to_s if pos < source.length
+        out
+      end
+
+      def inline_token(match)
+        if match[:code_body]
+          %(<code>#{match[:code_body]}</code>)
+        elsif match[:img_url]
+          url = safe_url(match[:img_url])
+          url ? %(<img src="#{url}" alt="#{match[:img_alt]}" loading="lazy">) : match[0]
+        elsif match[:link_url]
+          url = safe_url(match[:link_url])
+          return match[0] unless url
+
+          %(<a href="#{url}" target="_blank" rel="noopener noreferrer">#{inline(match[:link_text])}</a>)
+        elsif match[:bi]
+          "<strong><em>#{inline(match[:bi])}</em></strong>"
+        elsif match[:bii]
+          "<strong><em>#{inline(match[:bii])}</em></strong>"
+        elsif match[:bold]
+          "<strong>#{inline(match[:bold])}</strong>"
+        elsif match[:ibold]
+          "<strong>#{inline(match[:ibold])}</strong>"
+        elsif match[:em]
+          "<em>#{inline(match[:em])}</em>"
+        elsif match[:iem]
+          "<em>#{inline(match[:iem])}</em>"
+        else
+          "<del>#{inline(match[:strike])}</del>"
+        end
       end
 
       # Same shape as the TUI's, so a duration reads the same in both channels:

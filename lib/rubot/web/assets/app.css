@@ -643,13 +643,96 @@ body {
   font-size: 1em;
 }
 
+/* The language a block was tagged with, said quietly in its corner: it is a
+   fact about the snippet, not a title for it. */
+.text pre.code { position: relative; }
+.text pre.code[data-lang]::before {
+  content: attr(data-lang);
+  position: absolute;
+  top: 0.3rem;
+  right: 0.55rem;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+/* Four colours, no more: a keyword, a string, a comment, a number. Anything
+   the highlighter does not recognise keeps the block's own colour. */
+.tok-kw { color: var(--green); }
+.tok-str { color: var(--yellow); }
+.tok-num { color: var(--red); }
+.tok-lit { color: var(--blue); }
+.tok-com { color: var(--fg-faint); font-style: italic; }
+
+/* A heading in an answer is not a page heading: the prose is the body, so a
+   heading steps out of it by weight and space before it does by size. */
+.text h1,
+.text h2,
+.text h3,
+.text h4,
+.text h5,
+.text h6 {
+  margin: 1.3em 0 0.45em;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+.text h1 { font-size: 1.34rem; }
+.text h2 { font-size: 1.18rem; }
+.text h3 { font-size: 1.04rem; }
+.text h4,
+.text h5,
+.text h6 {
+  font-size: 0.92rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+
+.text hr.rule {
+  margin: 1.15em 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.text em { font-style: italic; }
+.text del { color: var(--fg-faint); text-decoration: line-through; }
+
+.text a {
+  color: var(--blue);
+  text-decoration: underline;
+  text-decoration-color: var(--line);
+  text-underline-offset: 2px;
+}
+
+.text a:hover { text-decoration-color: var(--blue); }
+
+.text img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  vertical-align: bottom;
+}
+
 .text blockquote {
-  margin: 0.7em 0;
-  padding-left: 0.85rem;
-  border-left: 1px solid var(--line);
+  margin: 0.8em 0;
+  padding-left: 0.9rem;
+  border-left: 2px solid var(--line);
   color: var(--fg-dim);
   font-style: italic;
 }
+
+/* The whole run is one element, so its border is one line: drawn per line it
+   was a stack of short rules with a gap between each, which read as several
+   quotes rather than one. */
+.text blockquote p { margin: 0 0 0.5em; }
+.text blockquote > *:last-child { margin-bottom: 0; }
 
 /* A list is a block, and its marker is a column of its own — but a column
    inside the paragraph, not outside it. The marker starts on the paragraph's
@@ -700,6 +783,42 @@ body {
 
 .text ul > li::before { content: "•"; }
 .text ol > li::before { content: counter(rubot-item) "."; }
+
+/* A task item draws a box instead of a bullet, in the same marker column.
+   The box is empty markup with its own rule: a checkbox is a shape, and the
+   browser's own is a different size in every browser. */
+.text li.task::before { content: none; }
+
+.text li.task > .task-box {
+  position: absolute;
+  left: calc(-1 * var(--marker-gutter));
+  top: 0.36em;
+  width: 0.82em;
+  height: 0.82em;
+  border: 1px solid var(--fg-faint);
+  border-radius: 2px;
+}
+
+.text li.task.is-done > .task-box {
+  background: var(--green);
+  border-color: var(--green);
+}
+
+/* A tick, drawn from two borders rather than set in a font: at 9px no glyph
+   survives, and the box is smaller than a line of text. */
+.text li.task.is-done > .task-box::after {
+  content: "";
+  position: absolute;
+  left: 0.2em;
+  top: 0.06em;
+  width: 0.3em;
+  height: 0.13em;
+  border-left: 1.5px solid var(--bg0);
+  border-bottom: 1.5px solid var(--bg0);
+  transform: rotate(-45deg);
+}
+
+.text li.task.is-done { color: var(--fg-faint); }
 
 /* A nested list is the one place that indents twice: its items belong to the
    item above them, not to the column, and its markers must not land on the

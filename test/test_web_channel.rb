@@ -15,16 +15,21 @@ module Rubot
       def test_markdown_renders_fenced_code_without_escaped_newlines
         html = Format.markdown("before\n```ruby\nputs 1\n```\nafter")
 
-        assert_includes html, %(<pre class="code"><code>puts 1\n</code></pre>)
+        # The language is carried on both boxes: the <pre> for the label, the
+        # <code> for a highlighter to hook onto.
+        assert_includes html, %(<pre class="code" data-lang="ruby"><code class="language-ruby">)
+        assert_includes html, "</code></pre>"
+        refute_includes html, "&#10;", "a newline inside code is a newline, not an entity"
         assert_includes html, "before"
         assert_includes html, "after"
       end
 
       def test_markdown_keeps_unterminated_fence_as_streaming_code
-        html = Format.markdown("```ruby\nputs 1")
+        html = Format.markdown("```ruby\nx = 1")
 
         assert_includes html, "streaming"
-        assert_includes html, "puts 1"
+        assert_includes html, %(data-lang="ruby")
+        assert_includes html, %(<span class="tok-num">1</span>)
       end
 
       def test_markdown_inline_code_and_bold
@@ -208,15 +213,164 @@ module Rubot
       # `String#strip` deletes — the block then fell through and was printed
       # as a paragraph. The marker has to survive stripping.
       def test_a_code_block_between_lines_keeps_its_own_block
-        html = Format.markdown("sebelum\n```ruby\nputs 1\n```\n- sesudah")
+        html = Format.markdown("sebelum\n```ruby\nx = 1\n```\n- sesudah")
 
-        assert_includes html, %(<pre class="code"><code>puts 1\n</code></pre>)
+        assert_includes html, %(<pre class="code" data-lang="ruby">)
         assert_includes html, "<ul><li>sesudah</li></ul>"
         refute_includes html, "sebelum<br><pre", "the code block is its own block, not a line"
       end
 
       def test_blank_lines_separate_blocks_without_stray_breaks
         refute_includes Format.markdown("satu\n\ndua"), "<br><br>"
+      end
+
+      # --- headings -------------------------------------------------------
+
+      def test_hashes_open_a_heading_only_when_a_space_follows
+        assert_equal "<h1>Judul</h1>", Format.markdown("# Judul")
+        assert_equal "<h2>Sub</h2>", Format.markdown("## Sub")
+        assert_equal "<h3>Kecil</h3>", Format.markdown("### Kecil")
+
+        # A tag is not a heading, and a line of hashes alone is not one either.
+        assert_equal "#hashtag", Format.markdown("#hashtag")
+      end
+
+      def test_a_heading_ends_the_paragraph_and_the_list_above_it
+        html = Format.markdown("- satu\n# Bagian\nisi")
+
+        assert_includes html, "<ul><li>satu</li></ul>"
+        assert_includes html, "<h1>Bagian</h1>"
+        assert_includes html, "isi"
+      end
+
+      def test_marks_inside_a_heading_are_parsed
+        assert_equal "<h2>Halo <strong>dunia</strong></h2>", Format.markdown("## Halo **dunia**")
+      end
+
+      # --- task lists -----------------------------------------------------
+
+      def test_a_task_list_draws_a_box_and_says_which_one_it_is
+        html = Format.markdown("- [ ] belum\n- [x] sudah")
+
+        assert_includes html, %(<li class="task"><span class="task-box")
+        assert_includes html, %(<li class="task is-done"><span class="task-box")
+        assert_includes html, "belum"
+        assert_includes html, "sudah"
+        refute_includes html, "[ ]", "the box is drawn, not spelled"
+        refute_includes html, "[x]"
+      end
+
+      def test_a_task_list_closes_every_item
+        html = Format.markdown("- [ ] satu\n- [ ] dua")
+
+        assert_equal 2, html.scan("</li>").size
+        assert_includes html, "</li><li class=\"task\">"
+      end
+
+      def test_a_bare_box_is_still_a_task
+        assert_includes Format.markdown("- [ ]"), %(class="task")
+      end
+
+      # --- nested lists ---------------------------------------------------
+
+      def test_a_deeper_item_opens_a_list_inside_the_item_above_it
+        html = Format.markdown("- satu\n  - anak\n- dua")
+
+        assert_equal "<ul><li>satu<ul><li>anak</li></ul></li><li>dua</li></ul>", html
+      end
+
+      def test_a_nested_ordered_list_inside_a_bulleted_one_keeps_both_kinds
+        html = Format.markdown("1. satu\n   - a\n   - b\n2. dua")
+
+        assert_equal "<ol><li>satu<ul><li>a</li><li>b</li></ul></li><li>dua</li></ol>", html
+      end
+
+      # --- blockquotes ----------------------------------------------------
+
+      # One element for the whole run: a border drawn per line is a stack of
+      # separate rules with a gap between each, which reads as several quotes.
+      def test_a_multi_line_quote_is_one_blockquote
+        html = Format.markdown("> satu\n> dua\n> tiga")
+
+        assert_equal "<blockquote>satu<br>dua<br>tiga</blockquote>", html
+      end
+
+      def test_a_blank_line_still_ends_a_quote
+        html = Format.markdown("> satu\n\nbiasa")
+
+        assert_includes html, "<blockquote>satu</blockquote>"
+        assert_includes html, "biasa"
+      end
+
+      # --- inline marks ---------------------------------------------------
+
+      def test_bold_italic_bold_italic_and_strikethrough
+        assert_equal "<strong>b</strong>", Format.markdown("**b**")
+        assert_equal "<em>i</em>", Format.markdown("*i*")
+        assert_equal "<em>i</em>", Format.markdown("_i_")
+        assert_equal "<strong><em>x</em></strong>", Format.markdown("***x***")
+        assert_equal "<del>d</del>", Format.markdown("~~d~~")
+      end
+
+      def test_the_other_spelling_of_bold_and_italic
+        assert_equal "<strong>b</strong>", Format.markdown("__b__")
+        assert_equal "<em>i</em>", Format.markdown("_i_")
+      end
+
+      # An underscore inside a word is a name, not an emphasis: snake_case
+      # must survive a message about code.
+      def test_an_underscore_inside_a_word_is_not_italic
+        assert_equal "snake_case_name", Format.markdown("snake_case_name")
+      end
+
+      def test_marks_nest
+        assert_equal "<strong>bold with <code>code</code></strong>",
+                     Format.markdown("**bold with `code`**")
+      end
+
+      # --- links and images -----------------------------------------------
+
+      def test_a_link_becomes_an_anchor
+        html = Format.markdown("lihat [situs](https://kanyaah.com)")
+
+        assert_includes html, %(<a href="https://kanyaah.com")
+        assert_includes html, ">situs</a>"
+        assert_includes html, 'rel="noopener noreferrer"'
+      end
+
+      def test_an_image_becomes_an_img_with_its_alt_text
+        html = Format.markdown("![papan](/img/a.png)")
+
+        assert_includes html, %(<img src="/img/a.png" alt="papan")
+      end
+
+      # A link is text from the model landing in an attribute. Only the
+      # schemes a chat has business carrying get through; anything else is
+      # shown as the literal text that was written.
+      def test_a_dangerous_url_stays_literal_text
+        html = Format.markdown("[klik](javascript:alert(1))")
+
+        refute_includes html, "href="
+        assert_includes html, "javascript:alert(1)"
+      end
+
+      def test_an_image_cannot_smuggle_a_script_url
+        html = Format.markdown("![x](javascript:alert(1))")
+
+        refute_includes html, "<img"
+      end
+
+      def test_a_relative_link_and_a_mail_link_are_allowed
+        assert_includes Format.markdown("[a](/s/web_rubot)"), %(href="/s/web_rubot")
+        assert_includes Format.markdown("[m](mailto:a@b.c)"), %(href="mailto:a@b.c")
+      end
+
+      # --- rules ----------------------------------------------------------
+
+      def test_a_line_of_dashes_is_a_rule_not_a_list
+        assert_equal %(<hr class="rule">), Format.markdown("---")
+        assert_equal %(<hr class="rule">), Format.markdown("***")
+        assert_equal %(<hr class="rule">), Format.markdown("- - -")
       end
 
       # --- Turn -----------------------------------------------------------
