@@ -997,6 +997,11 @@ body {
 .row .label { color: var(--fg-dim); }
 .row.done { margin-bottom: 0.55rem; }
 
+/* A thought is a pause in the work, not a line of it: "Thinking…" and
+   "Thought for 12s" need room on both sides, or they read as a label glued to
+   whatever happens to sit above and below them. */
+.row.thinking { margin: 0.5rem 0 0.7rem; }
+
 /* The row that says the turn is not over. It is not part of the timeline any
    more: it sits in its own band above the field, and the stream's close empties
    that band, so a finished turn keeps no clock counting past the work it

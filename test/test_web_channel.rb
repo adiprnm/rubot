@@ -1883,6 +1883,22 @@ module Rubot
         assert_match(/margin: 0 auto 0\.75rem;/, rule)
       end
 
+      # "Thinking…" and "Thought for 12s" are pauses in the work, and a pause
+      # needs air on both sides: with no top margin the row sat hard against
+      # the text above it, which made it look like the end of that sentence.
+      def test_the_thinking_rows_have_room_above_and_below
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        rule = css[/^\.row\.thinking \{[^}]*\}/]
+
+        refute_nil rule, "the .row.thinking rule is missing from app.css"
+
+        margin = rule.match(/margin:\s*([\d.]+)rem\s+0\s+([\d.]+)rem/)
+
+        refute_nil margin, "the thinking row needs a margin shorthand with a top value"
+        assert_operator margin[1].to_f, :>, 0, "a thought needs room above it"
+        assert_operator margin[2].to_f, :>, 0, "and room below it"
+      end
+
       def turn_request(message)
         Struct.new(:query, :query_string) do
           def content_type = "application/x-www-form-urlencoded"
