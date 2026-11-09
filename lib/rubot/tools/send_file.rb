@@ -31,12 +31,16 @@ module Rubot
 
       def description
         <<~DESC.strip
-          Send a local file to the user.
+          Send one local file to the user.
           Use this when the user should receive a file you produced, such as a
           generated featured image (PNG). Images (.png, .jpg, .jpeg, .webp, .gif)
           are delivered as pictures so they display inline; other files are
           delivered as documents. The path may be relative to the workspace or
-          absolute. For more than one file, use send_files instead.
+          absolute.
+
+          If the user asked for several files — "send the five pictures in
+          Pictures" — use send_files once instead of calling this repeatedly:
+          one call sends the batch and the pictures arrive together.
         DESC
       end
 

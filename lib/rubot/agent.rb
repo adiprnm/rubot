@@ -55,10 +55,16 @@ module Rubot
 
     # Sent when the model finished a tool round without saying anything at all,
     # which leaves the user with silence and no images or files.
+    #
+    # It names both file tools on purpose. It used to name send_file alone, and
+    # a batch of five pictures then arrived as five separate calls: the model
+    # followed the one tool this sentence mentioned rather than the one meant
+    # for a batch.
     ANSWER_NOW_PROMPT = <<~PROMPT.strip.freeze
       You ran the tools above but produced no answer. Using their results,
       reply to the user now, in the user's language. If they asked for files or
-      images, send them with the send_file tool before you finish.
+      images, send them before you finish: send_files for several in one call,
+      send_file for one on its own.
     PROMPT
 
     # Sent when a reply came back with no visible text at all — on a reasoning

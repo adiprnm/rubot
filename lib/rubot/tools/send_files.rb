@@ -36,12 +36,14 @@ module Rubot
       def description
         <<~DESC.strip
           Send several local files to the user in one call.
-          Use this instead of calling send_file once per file when the user asks
-          for a batch — e.g. "send the five pictures in Pictures". Images (.png,
-          .jpg, .jpeg, .webp, .gif) are delivered as pictures so they display
-          inline; other files are delivered as documents. Paths may be relative
-          to the workspace or absolute. Up to #{MAX_FILES} files per call; a file
-          that cannot be sent is reported and the rest still go.
+          Use this whenever the user asks for more than one file at once — e.g.
+          "send the five pictures in Pictures" — rather than calling send_file
+          once per file: one call sends the whole batch and the pictures arrive
+          together instead of one after another. Images (.png, .jpg, .jpeg,
+          .webp, .gif) are delivered as pictures so they display inline; other
+          files are delivered as documents. Paths may be relative to the
+          workspace or absolute. Up to #{MAX_FILES} files per call; a file that
+          cannot be sent is reported and the rest still go.
         DESC
       end
 

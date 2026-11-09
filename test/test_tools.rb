@@ -379,6 +379,29 @@ class TestTools < Minitest::Test
     requests&.close
   end
 
+  # The reminder sent when a tool round produced no answer is the one piece of
+  # the prompt that tells the model how to hand files back. It named send_file
+  # alone, and a request for five pictures then arrived as five separate calls:
+  # the model followed the single tool that sentence mentioned. Both tools have
+  # to be named, and each has to point at the other.
+  def test_the_answer_now_prompt_names_both_file_tools
+    prompt = Rubot::Agent::ANSWER_NOW_PROMPT
+
+    assert_includes prompt, "send_files"
+    assert_includes prompt, "send_file"
+    assert_includes prompt, "several"
+  end
+
+  def test_the_file_tools_point_at_each_other
+    single = Rubot::Tools::SendFile.new.description
+    batch = Rubot::Tools::SendFiles.new.description
+
+    assert_includes single, "send_files",
+                    "send_file has to say where a batch belongs"
+    assert_includes batch, "send_file",
+                    "and send_files has to say what it replaces"
+  end
+
   def test_registry_registers_both_file_tools
     registry = Rubot::Tools::Registry.new
 
