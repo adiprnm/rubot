@@ -1607,6 +1607,38 @@ module Rubot
                         "an older page must not trigger the jump to the bottom"
       end
 
+      # A reader who has scrolled up is reading. A chunk that lands at the
+      # bottom of the thread — the next sentence of a turn, a tool row — must not
+      # drag the viewport back down, or the page argues with the scroll wheel for
+      # the whole turn. Only a thread already at its end follows the stream.
+      def test_a_streamed_chunk_does_not_move_a_reader_who_scrolled_up
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+
+        assert_includes js, "noteThreadPosition",
+                        "the position has to be measured, not assumed"
+        assert_includes js, "thread.dataset.pinned = distance <= BOTTOM_SLACK ? \"true\" : \"false\"",
+                        "\"at the end\" is a distance, not an exact match"
+        assert_includes js, "if (!thread || thread.dataset.pinned !== \"true\") return;",
+                        "a thread that is scrolled up must not follow"
+        assert_includes js, "{ capture: true, passive: true }",
+                        "scroll events do not bubble, so the listener has to capture"
+        refute_includes js, "document.addEventListener(\"htmx:sseMessage\", scrollToBottom)",
+                        "the unconditional jump on every chunk is gone"
+      end
+
+      # The two moments where the bottom is what the reader wants: opening a
+      # session, and their own prompt. Both are allowed to overrule the pin.
+      def test_opening_a_session_and_sending_a_prompt_go_to_the_bottom
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+
+        assert_match(/DOMContentLoaded", \(\) => \{.*?jumpToBottom\(\);/m, js,
+                     "a conversation is opened at its end")
+        assert_match(/send\(\) \{.*?jumpToBottom\(\);/m, js,
+                     "a prompt the reader wrote must land where they can see it")
+        assert_match(/htmx:beforeRequest", \(event\) => \{.*?jumpToBottom\(\);/m, js,
+                     "pressing the send button is the same act as Enter")
+      end
+
       def test_a_turn_renders_its_tool_rows_in_history
         html = View.render("_timeline", items: [
                              { kind: :text, text: "Saya cek dulu.", live: false },
