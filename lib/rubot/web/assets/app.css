@@ -109,13 +109,25 @@ body {
   grid-template-columns: auto minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   grid-template-areas: "dock chat";
+  /* Two heights, the older one first: a browser that does not know `dvh`
+     throws the second declaration away, and without the first the shell would
+     have no height at all — the thread would grow to fit the whole
+     conversation and push the composer, and the header with it, off the
+     screen. `overflow: hidden` is the belt to that suspender: nothing inside
+     the shell may ever make the page taller than the window, so the field
+     stays where it is even when a list or a thread misbehaves. */
+  height: 100vh;
   height: 100dvh;
+  overflow: hidden;
 }
 
 .side-dock {
   grid-area: dock;
   display: grid;
   grid-template-columns: 4.4rem 15rem;
+  /* One row, sized to the shell rather than to its content: the session list
+     scrolls inside it instead of stretching it. */
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   min-width: 0;
 }
@@ -498,6 +510,9 @@ body {
   grid-template-rows: auto minmax(0, 1fr) auto auto;
   min-width: 0;
   min-height: 0;
+  /* The thread is the only part allowed to scroll; anything that outgrows this
+     column is clipped here rather than handed to the page. */
+  overflow: hidden;
 }
 
 /* A strip, not a banner: the persona is already named in the sidebar, so this
