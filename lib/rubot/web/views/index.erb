@@ -160,11 +160,10 @@
         change height the moment a turn starts.
 
         A page that opens on a turn already in flight draws the row here, in
-        the one element that owns it. It used to be drawn inside the turn
-        fragment as well, and then the stream's out-of-band swap filled this
-        band too: one row beside the tool call, one above the field. -%>
+        the one element that owns it. The stream never touches this band again:
+        the row is drawn once and the clock inside it counts on its own. -%>
     <% if live_turn %>
-      <%= View.render("_working", since: live_turn.epoch, oob: false) %>
+      <%= View.render("_working", since: live_turn.epoch) %>
     <% else %>
       <div id="working" class="working-band"></div>
     <% end %>

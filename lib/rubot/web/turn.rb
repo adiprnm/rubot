@@ -48,9 +48,9 @@ module Rubot
         @epoch_clock = epoch_clock || -> { Time.now.to_f }
         # When the prompt was accepted, on the wall clock. The timeline rows
         # count from the moment their own work started; the row that says the
-        # turn is still running counts from here and nowhere else — a tool call
-        # re-sends it (which is what makes it blink) but never restarts the
-        # number.
+        # turn is still running counts from here and nowhere else. It is drawn
+        # once, when the turn starts, and a tool call does not re-send it: the
+        # row never changes, so a second copy would only make the text flash.
         @epoch = @epoch_clock.call
         @mutex = Mutex.new
         @cond = ConditionVariable.new
@@ -153,10 +153,6 @@ module Rubot
           seal_text_locked
           @items << { kind: :tool, name: name.to_s, detail: detail.to_s, state: :running,
                       started_at: @clock.call, epoch: epoch_now, elapsed: nil }
-          # The working row counts from the last thing the turn did, so a new
-          # call restarts it. Its own signal rather than a :turn re-render: the
-          # row lives outside the timeline, and only this event has to move it.
-          @events << [ :working, nil ]
           publish_locked
         end
       end

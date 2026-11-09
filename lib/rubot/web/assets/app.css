@@ -1369,21 +1369,11 @@ body {
    that band, so a finished turn keeps no clock counting past the work it
    measured — and a turn replayed from the session file never draws the row at
    all. */
-/* The clock in this row restarts on every tool call, and the restart is the
-   point: a number that drops back to zero is how the page says the turn is
-   still moving. The swap replaces the row, so the animation runs again by
-   itself — nothing has to remember to trigger it. */
-@keyframes working-blink {
-  from { opacity: 0.25; }
-  to   { opacity: 1; }
-}
-
-.row.working { animation: working-blink 0.32s ease-out; }
-
-@media (prefers-reduced-motion: reduce) {
-  .row.working { animation: none; }
-}
-
+/* The row does not blink on a tool call. It used to: the row was re-sent for
+   every call and the fresh node restarted an opacity flash, which read as the
+   text strobing while the reader was trying to read it — and it said nothing
+   the running clock does not already say. The row is drawn once, when the turn
+   starts, and the clock counting is the only motion it needs. */
 .row.working .mark { color: var(--yellow); }
 
 /* A clock that only exists past its threshold: an ordinary call says nothing

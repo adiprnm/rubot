@@ -1027,8 +1027,7 @@ module Rubot
       # The clock says how long the turn has been running, so a tool call must
       # not take it back to zero: a reader watching a slow call has that call's
       # own clock in the timeline, and a number that kept dropping answered
-      # nothing. The row is still re-sent on every call — that is the blink, and
-      # it is what says the turn is moving.
+      # nothing.
       def test_a_tool_call_keeps_the_working_clock_running
         epochs = [ 1000.0, 1012.0 ]
         turn = Turn.new(id: "t1", session_id: "s1", clock: FakeClock.new,
@@ -1039,22 +1038,13 @@ module Rubot
         turn.tool_started("shell_exec", "ls")
 
         assert_equal 1000.0, turn.epoch, "a tool call does not restart it"
-
-        channel = Rubot::Channels::Web.new(channel_config: {})
-        out = StringIO.new
-        channel.send(:write_event, out, turn, :working, nil)
-        body = out.string
-
-        assert_includes body, "event: working"
-        assert_includes body, %(data-since="1000.0"),
-                        "the row keeps the prompt's clock when it is re-sent"
-        assert_includes body, 'hx-swap-oob="true"',
-                        "the row is not in the timeline, so the swap is out of band"
       end
 
-      # The signal has to be in the log, or the band would keep the clock the
-      # first paint gave it and never restart.
-      def test_a_tool_call_signals_the_working_row
+      # The row is drawn once, at first paint. Re-sending it on every tool call
+      # put a fresh node in the band, and the fresh node restarted its own
+      # animation: the text the reader was looking at strobed on every call
+      # while carrying no new information. One row, drawn once.
+      def test_a_tool_call_does_not_re_send_the_working_row
         turn = build
         turn.tool_started("shell_exec", "ls")
         turn.finish("selesai")
@@ -1062,7 +1052,8 @@ module Rubot
         types = []
         turn.each_event { |type, _payload| types << type }
 
-        assert_includes types, :working
+        refute_includes types, :working,
+                        "the row never changes, so nothing has to swap it"
       end
 
       # A refresh during an answer must not look like a conversation whose last
