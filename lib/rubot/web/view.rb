@@ -59,7 +59,10 @@ module Rubot
           list[:items] << "<li>#{inline(item)}</li>"
         end
 
-        source.each_line(chomp: true) do |line|
+        lines = source.lines(chomp: true)
+        i = 0
+        while i < lines.length
+          line = lines[i]
           stripped = line.strip
 
           if stripped.empty?
@@ -69,6 +72,14 @@ module Rubot
             flush_paragraph.call
             flush_list.call
             paragraphs << blocks[block.to_i]
+          elsif (table = table_at(lines, i))
+            # A table is its own block: the paragraph and the list before it
+            # are finished by it, exactly as a fenced code block would.
+            flush_paragraph.call
+            flush_list.call
+            paragraphs << table[:html]
+            i = table[:next]
+            next
           elsif (item = stripped[/\A[-*+] +(.*)\z/, 1])
             open_list.call("ul", item)
           elsif (item = stripped[/\A\d+[.)] +(.*)\z/, 1])
@@ -81,12 +92,104 @@ module Rubot
             flush_list.call
             paragraph << line
           end
+
+          i += 1
         end
 
         flush_paragraph.call
         flush_list.call
 
         paragraphs.join("\n")
+      end
+
+      # --- tables ---------------------------------------------------------
+      #
+      # The same rule the TUI uses to recognise a pipe table: a header line
+      # with a pipe on either side of something, then a separator whose every
+      # cell is dashes with optional alignment colons. Rows continue while the
+      # lines keep having pipes. Mid-stream this degrades to plain text, since
+      # the header alone is a paragraph until its separator arrives.
+      SEPARATOR_CELL = /\A\s*:?-+(?::-?-+)*:?\s*\z/
+
+      def table_line?(line)
+        text = line.to_s
+        return false unless text.include?("|")
+
+        # A row is any line with a pipe that carries at least one non-empty
+        # cell. Requiring text on both sides of a pipe ("| a |") would drop
+        # single-column tables and, worse, the "| 1 |" row of a table whose
+        # header has more columns — the row would leak into the paragraph
+        # below it.
+        split_row(text).any? { |cell| !cell.empty? }
+      end
+
+      def table_separator?(line)
+        cells = split_row(line.to_s)
+        cells.any? && cells.all? { |cell| cell.match?(SEPARATOR_CELL) }
+      end
+
+      # Cells are split on a pipe that is not escaped, so a literal "\|" stays
+      # inside the cell it was written in instead of starting a new one.
+      def split_row(line)
+        line.strip.sub(/\A\|/, "").sub(/\|\s*\z/, "").split(/(?<!\\)\|/).map do |cell|
+          cell.strip.gsub("\\|", "|")
+        end
+      end
+
+      def table_at(lines, start)
+        return nil unless table_line?(lines[start])
+
+        separator = lines[start + 1]
+        return nil unless separator && table_separator?(separator)
+
+        rows = [ split_row(lines[start]) ]
+        cursor = start + 2
+        while cursor < lines.length && table_line?(lines[cursor])
+          rows << split_row(lines[cursor])
+          cursor += 1
+        end
+
+        { html: render_table(rows, split_row(separator)), next: cursor }
+      end
+
+      def render_table(rows, separator)
+        cols = rows.map(&:length).max.to_i
+        aligns = (0...cols).map { |c| alignment(separator[c]) }
+        header = rows.first
+        body = rows.drop(1)
+
+        out = [ %(<div class="md-table-wrap"><table class="md-table">), "<thead>" ]
+        out << table_row("th", header, cols, aligns)
+        out << "</thead>"
+        out << "<tbody>"
+        body.each { |row| out << table_row("td", row, cols, aligns) }
+        out << "</tbody>"
+        out << "</table></div>"
+        out.join
+      end
+
+      def table_row(tag, cells, cols, aligns)
+        parts = (0...cols).map do |c|
+          style = aligns[c] ? %( style="text-align:#{aligns[c]}") : ""
+          %(<#{tag}#{style}>#{inline(cells[c].to_s)}</#{tag}>)
+        end
+        "<tr>#{parts.join}</tr>"
+      end
+
+      # ":---:" centres, "---:" right-aligns, ":---" and "---" leave the
+      # column as it is. Alignment is the one table detail HTML can honour and
+      # a terminal cannot, so it is honoured here.
+      def alignment(cell)
+        cell = cell.to_s.strip
+        return nil unless cell.include?("-")
+
+        left = cell.start_with?(":")
+        right = cell.end_with?(":")
+        return "center" if left && right
+        return "left" if left
+        return "right" if right
+
+        nil
       end
 
       # Inline spans. Escaped input only, so these are safe to emit as-is.

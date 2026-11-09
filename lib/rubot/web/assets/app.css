@@ -430,6 +430,47 @@ body {
 .text li > ul,
 .text li > ol { margin: 0.25em 0; }
 
+/* A table is its own block and can be wider than the column; it scrolls
+   itself rather than pushing the whole conversation sideways. */
+.text .md-table-wrap {
+  margin: 0.9em 0;
+  overflow-x: auto;
+}
+
+.text .md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.93em;
+  line-height: 1.45;
+}
+
+/* The header is a label, not prose: mono caps in the quiet grey, ruled off
+   from the body the way every other machine string here is. */
+.text .md-table th {
+  padding: 0 0.7em 0.4em;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg-faint);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.text .md-table td {
+  padding: 0.42em 0.7em;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--fg);
+}
+
+.text .md-table tbody tr:last-child td { border-bottom: 0; }
+
+/* Tabular figures keep a column of prices from shifting on each row, and
+   the mono face is what the rest of the page uses for values. */
+.text .md-table td { font-variant-numeric: tabular-nums; }
+
 /* ---------- turn timeline ---------------------------------------- */
 
 /* Everything the turn did, in the order it did it: thought, narration, tool

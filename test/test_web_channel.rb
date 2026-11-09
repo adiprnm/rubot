@@ -60,6 +60,137 @@ module Rubot
         refute_includes html, "<li>catatan biasa"
       end
 
+      # --- tables ---------------------------------------------------------
+
+      def test_a_pipe_table_becomes_a_real_table
+        html = Format.markdown(<<~MD)
+          | Tier | Harga |
+          |------|------:|
+          | Signature | 179000 |
+          | Favorit | 129000 |
+        MD
+
+        assert_includes html, %(<table class="md-table">)
+        assert_includes html, "<thead><tr><th"
+        assert_includes html, "<tbody><tr><td"
+        assert_includes html, "Signature"
+        assert_includes html, "129000"
+
+        # The separator is decoration for the reader, never a row.
+        refute_includes html, "|------|"
+        refute_includes html, "<td>---"
+      end
+
+      def test_a_table_header_is_th_and_the_body_is_td
+        html = Format.markdown("| a | b |\n|---|---|\n| 1 | 2 |")
+
+        assert_equal 2, html.scan(/<th[ >]/).size
+        assert_equal 2, html.scan(/<td[ >]/).size
+        assert_includes html, "<th>a</th>"
+        assert_includes html, "<td>1</td>"
+      end
+
+      def test_the_separator_colons_set_the_column_alignment
+        html = Format.markdown("| kiri | tengah | kanan |\n|:---|:---:|---:|\n| a | b | c |")
+
+        assert_includes html, %(<th style="text-align:left">kiri</th>)
+        assert_includes html, %(<th style="text-align:center">tengah</th>)
+        assert_includes html, %(<th style="text-align:right">kanan</th>)
+        assert_includes html, %(<td style="text-align:right">c</td>)
+      end
+
+      def test_a_column_without_colons_carries_no_alignment
+        html = Format.markdown("| a |\n|---|\n| 1 |")
+
+        refute_includes html, "text-align"
+      end
+
+      # A row with fewer cells than the header still lines up instead of
+      # shifting the columns after it.
+      def test_a_ragged_row_is_padded_to_the_widest_row
+        html = Format.markdown("| a | b | c |\n|---|---|---|\n| 1 |")
+
+        assert_equal 3, html.scan(/<td/).size
+        assert_includes html, "<td></td>"
+      end
+
+      # Pipes inside a cell are written "\|"; splitting on them naively would
+      # turn one cell into two.
+      def test_an_escaped_pipe_stays_inside_its_cell
+        html = Format.markdown("| ekspresi | arti |\n|---|---|\n| a \\| b | atau |")
+
+        assert_equal 2, html.scan(/<td/).size
+        assert_includes html, "<td>a | b</td>"
+      end
+
+      def test_cell_markup_is_parsed_inside_the_table
+        html = Format.markdown("| nama | nilai |\n|---|---|\n| **tebal** | `kode` |")
+
+        assert_includes html, "<td><strong>tebal</strong></td>"
+        assert_includes html, "<td><code>kode</code></td>"
+        refute_includes html, "**tebal**"
+      end
+
+      # GFM does not require the outer pipes, and models write it both ways.
+      def test_a_table_without_the_outer_pipes_still_renders
+        html = Format.markdown("Tier | Harga\n--- | ---\nSignature | 179000")
+
+        assert_includes html, "<th>Tier</th>"
+        assert_includes html, "<td>179000</td>"
+      end
+
+      # Indentation is how a table sits inside a list item, and the leading
+      # spaces must not stop it being recognised.
+      def test_an_indented_table_still_renders
+        html = Format.markdown("- pilihan:\n\n  | a | b |\n  |---|---|\n  | 1 | 2 |")
+
+        assert_includes html, "<ul><li>pilihan:</li></ul>"
+        assert_includes html, "<th>a</th>"
+        assert_includes html, "<td>2</td>"
+      end
+
+      def test_a_table_ends_where_the_pipes_stop
+        html = Format.markdown("| a |\n|---|\n| 1 |\nsetelah tabel")
+
+        assert_includes html, "</table></div>"
+        assert_includes html, "setelah tabel"
+        refute_match(%r{<td>setelah tabel}, html)
+      end
+
+      # While streaming, the header arrives before its separator. Nothing is a
+      # table yet, and the half-written line must not vanish.
+      def test_a_header_without_its_separator_is_still_text
+        html = Format.markdown("| Tier | Harga |")
+
+        refute_includes html, "<table"
+        assert_includes html, "Tier"
+      end
+
+      # The separator alone is not a table either: a table needs a header.
+      def test_a_separator_without_a_header_is_not_a_table
+        html = Format.markdown("teks\n|---|---|")
+
+        refute_includes html, "<table"
+      end
+
+      def test_a_table_inside_a_message_keeps_its_own_block
+        html = Format.markdown("Harga:\n\n| a |\n|---|\n| 1 |\n\nSelesai.")
+
+        assert_includes html, "Harga:"
+        assert_includes html, "Selesai."
+        assert_operator html.index("Harga:"), :<, html.index("<table")
+        assert_operator html.index("Selesai."), :>, html.index("</table>")
+      end
+
+      # Cells are escaped before the block parser runs, so a table cannot
+      # smuggle a tag through.
+      def test_a_table_escapes_its_cells
+        html = Format.markdown("| a |\n|---|\n| <b>x</b> |")
+
+        assert_includes html, "&lt;b&gt;x&lt;/b&gt;"
+        refute_includes html, "<b>x</b>"
+      end
+
       def test_a_bullet_list_and_a_numbered_list_do_not_merge
         html = Format.markdown("- satu\n1. pertama")
 
