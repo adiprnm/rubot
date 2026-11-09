@@ -600,10 +600,35 @@ module Rubot
         assert_includes buttons.first, "'Batal'"
       end
 
+      # A prompt the server refuses keeps its text in the field and puts
+      # nothing in the thread, so the reason has to be said next to the field.
+      # Left unsaid, the reader presses a button that appears broken: the text
+      # is still there, no bubble came out of it, and nothing explains why.
+      def test_a_refused_prompt_has_a_place_to_say_why
+        html = View.render("index",
+                           personas: [], sessions: [],
+                           slug: "rubot", persona_label: "Rubot", persona_emoji: "🤖",
+                           persona_model: "m", session_id: "web_rubot",
+                           session_short: "web_rubot", session_label: "Sesi baru",
+                           document_title: "rubot · Rubot", messages: [],
+                           token_query: "",
+                           usage: { cost: "—", cache: "—", ctx: "—" })
+
+        assert_includes html, 'id="composer-notice"', "the composer needs a notice slot"
+        assert_match(/id="composer-notice"[^>]*hidden/, html,
+                     "the slot starts empty and unseen")
+
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+        assert_includes js, "htmx:responseError",
+                        "a response the server rejected has to reach the slot"
+        assert_includes js, "composer-notice"
+        assert_includes js, "htmx:beforeRequest",
+                        "a notice about the last attempt must not outlive the next one"
+      end
+
       # WEBrick hands form values back as ASCII-8BIT. Encoding them at the
       # edge is what keeps emoji and accented names from blowing up later
-      # when the persona is written to personas.json.
-      # --- history --------------------------------------------------------
+      # when the persona is written to personas.json.      # --- history --------------------------------------------------------
 
       # A refresh reads the session file, so the tool rows have to be rebuilt
       # from it — they are only stored as calls plus their results.

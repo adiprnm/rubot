@@ -103,6 +103,10 @@
       <% end %>
     </div>
 
+    <%# Where a refused prompt is repeated. The composer keeps its text when the
+        server says no, so the reason has to sit beside the field that held it. -%>
+    <div id="composer-notice" class="composer-notice" hidden></div>
+
     <%= View.render("_composer", session_id: session_id, token_query: token_query) %>
 
     <%# The footer is facts about the conversation, not about the moment: that

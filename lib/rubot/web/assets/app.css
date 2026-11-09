@@ -877,6 +877,21 @@ body {
 
 /* ---------- composer --------------------------------------------- */
 
+/* A prompt the server refused: the text stays in the field, so the reason
+   belongs on the edge of it rather than up in the thread. Kept to the
+   composer's own width so it reads as a note on the field. */
+.composer-notice {
+  width: calc(100% - 3.2rem);
+  max-width: 52rem;
+  margin: 0 auto 0.4rem;
+  color: var(--red);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.composer-notice[hidden] { display: none; }
+.composer-notice .notice, .composer-notice .error { margin: 0; }
+
 .composer {
   display: flex;
   align-items: flex-end;
