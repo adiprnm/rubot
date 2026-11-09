@@ -19,13 +19,15 @@
             placeholder="Tulis pesan… Enter mengirim, Shift+Enter baris baru"
             x-on:keydown="keydown($event)"></textarea>
   <div class="composer-actions">
+    <%# One button, two jobs: it sends when the session is free and stops the
+        turn when it is not. A turn that is running is exactly when a reader
+        wants a way out of it, so the same box stays where the hand already is.
+        Steering while a turn runs is Enter's job, which is why the button can
+        spend that moment being the way out. -%>
     <button type="button"
-            class="btn ghost"
-            x-show="$store.turn.active"
-            x-cloak
-            x-on:click="stop()">Stop</button>
-    <button type="submit"
             class="btn primary"
-            x-text="$store.turn.active ? 'Arahkan' : 'Kirim'">Kirim</button>
+            x-bind:class="{ 'is-stop': $store.turn.active }"
+            x-on:click="sendOrStop()"
+            x-text="$store.turn.active ? 'Batal' : 'Kirim'">Kirim</button>
   </div>
 </form>

@@ -897,6 +897,11 @@ body {
 .btn.primary { border-color: var(--green); color: var(--green); }
 .btn.primary:hover { background: var(--green); color: var(--bg0); }
 
+/* The same button while a turn is running: it stops instead of sending, and
+   wearing the send colour would promise the opposite of what it does. */
+.btn.primary.is-stop { border-color: var(--red); color: var(--red); }
+.btn.primary.is-stop:hover { background: var(--red); color: var(--bg0); }
+
 /* ---------- status line ------------------------------------------ */
 
 /* The same facts the TUI keeps pinned at its bottom edge: which model, which

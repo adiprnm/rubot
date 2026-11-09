@@ -589,6 +589,17 @@ module Rubot
         assert_includes form, 'hx-post="/s/web_rubot/turn"'
       end
 
+      # One button, two jobs: it sends when the session is free and stops the
+      # turn when it is not, in the same place under the same hand.
+      def test_the_composer_has_one_button_that_stops_a_running_turn
+        html = View.render("_composer", session_id: "web_rubot", token_query: "")
+        buttons = html.scan(/<button\b[^>]*>/m)
+
+        assert_equal 1, buttons.size, "the composer should carry a single button"
+        assert_includes buttons.first, "sendOrStop()"
+        assert_includes buttons.first, "'Batal'"
+      end
+
       # WEBrick hands form values back as ASCII-8BIT. Encoding them at the
       # edge is what keeps emoji and accented names from blowing up later
       # when the persona is written to personas.json.
