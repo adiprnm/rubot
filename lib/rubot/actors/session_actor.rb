@@ -201,6 +201,7 @@ module Rubot
         when :set_persona          then agent.set_persona(msg[:persona])
         when :clear_session        then agent.clear_session
         when :compact_session      then agent.compact_session
+        when :repin_prompt         then agent.repin_system_prompt
         when :context_window       then agent.context_window_tokens
         when :estimated_context    then agent.estimated_context_tokens
         when :tool_list            then agent.tools.all.map(&:name)

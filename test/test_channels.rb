@@ -385,6 +385,33 @@ module Rubot
       assert_includes result[1], "Tidak ada"
     end
 
+    # Telegram gets the same door as the TUI and the page: the prompt is pinned
+    # so the cache survives a memory write, and this is how a reader asks for the
+    # files as they are now. The reply carries the price, because it lands on the
+    # next request rather than this one.
+    def test_repin_command_rebuilds_the_pinned_prompt
+      handle = @tg.request_agent
+      handle.define_singleton_method(:repin_system_prompt) { @repinned = true }
+
+      result = @tg.before_process("/repin")
+
+      assert_kind_of Array, result
+      assert_equal :skip, result[0]
+      assert handle.instance_variable_get(:@repinned), "the pin has to actually be dropped"
+      assert_includes result[1], "dibangun ulang"
+      assert_includes result[1], "membayar penuh"
+    end
+
+    def test_repin_command_says_when_there_was_nothing_pinned
+      handle = @tg.request_agent
+      handle.define_singleton_method(:repin_system_prompt) { false }
+
+      result = @tg.before_process("/repin")
+
+      assert_equal :skip, result[0]
+      assert_includes result[1], "belum di-pin"
+    end
+
     def test_new_command_is_case_insensitive
       result = @tg.before_process("/NEW")
       assert_kind_of Array, result

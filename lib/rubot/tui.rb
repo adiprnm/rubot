@@ -78,6 +78,7 @@ module Rubot
       "/new"      => "Clear conversation and start a new session",
       "/stop"     => "Stop the task that is running",
       "/compact"  => "Summarize older messages to free context",
+      "/repin"    => "Rebuild the system prompt on the next message (picks up memory and skills, costs one uncached request)",
       "/clear"    => "Clear conversation history",
       "/session"  => "Show current session ID",
       "/session NAME" => "Switch to a new session",
@@ -1335,6 +1336,18 @@ module Rubot
           say("Nothing to compact yet (conversation is short or summarization failed).", :info)
         end
         refresh_usage
+      when "/repin"
+        # The prompt is pinned so the cached prefix survives a memory write, so
+        # a line added to MEMORY.md mid-session is invisible until the epoch
+        # moves. This is the door, and the price is on the tin: one request paid
+        # in full, because the prefix moves with the prompt.
+        if agent.repin_system_prompt
+          say("System prompt will be rebuilt on the next message.", :ok)
+          say_text("Memory, skills and AGENTS.md changed since this session started are picked up.")
+          say_text("Cost: the next request pays in full — the prefix moved, so the cache is gone once.")
+        else
+          say("The prompt is not pinned; the next message builds it from the latest files anyway.", :info)
+        end
       when "/session"
         if parts[1]
           switch_session(parts[1])

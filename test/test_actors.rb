@@ -630,6 +630,40 @@ class TestActors < Minitest::Test
     ractor&.join
   end
 
+# The web page and the TUI both ask the handle to drop the pinned prompt; the
+# op has to exist on the actor side too, or the request sits unanswered until
+# the caller times out.
+def test_session_handle_repins_the_prompt
+  ractor = Ractor.new do
+    agent = Class.new do
+      attr_reader :asked
+
+      def repin_system_prompt
+        @asked = true
+      end
+    end.new
+
+    loop do
+      msg = Ractor.receive
+      break if msg[:type] == :shutdown
+
+      Rubot::Actors::SessionActor.handle_request(agent, "repin", msg)
+    end
+  end
+
+  handle = Rubot::Actors::SessionHandle.new(ractor, "repin")
+
+  assert Timeout.timeout(5) { handle.repin_system_prompt },
+         "the actor must answer with what the agent said, not nil"
+ensure
+  begin
+    ractor&.send({ type: :shutdown })
+  rescue StandardError
+    nil
+  end
+  ractor&.join
+end
+
   # Regression: the confirmation port must be created by the session Ractor,
   # because Ractor::Port#receive only works in the Ractor that created it.
   def test_session_handle_confirm_round_trip

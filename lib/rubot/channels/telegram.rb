@@ -298,6 +298,20 @@ module Rubot
         [ :skip, lines.join("\n") ]
       end
 
+      def handle_repin_command
+        # The prompt is pinned so the cached prefix survives a memory write;
+        # this is the door, and the price is stated with the answer because it
+        # arrives on the next request, not this one.
+        changed = request_agent.respond_to?(:repin_system_prompt) &&
+                  request_agent.repin_system_prompt
+        unless changed
+          return [ :skip, "ℹ️ Prompt belum di-pin — pesan berikutnya memang sudah membangunnya dari memory dan skill terbaru." ]
+        end
+
+        [ :skip, "🧠 Prompt akan dibangun ulang pada pesan berikutnya — memory, skill, dan AGENTS.md yang berubah ikut masuk.\n\n" \
+                  "Ongkosnya: request berikutnya membayar penuh (prefix berubah, jadi cache sekali hangus)." ]
+      end
+
       def handle_model_command(args = nil)
         args = args.to_s.strip
         return handle_preset_list_command if args.empty?
@@ -624,9 +638,11 @@ module Rubot
           end
         when "/compact"
           handle_compact_command
+        when "/repin"
+          handle_repin_command
         when "/help"
           bot_name = @config.fetch("bot_name", "Rubot")
-          [ :skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help. While a task is still running, a plain message steers it instead of waiting behind it.\n\nBuilt-in commands:\n/start - Start the bot\n/new - Clear chat and start a new session\n/stop - Stop the task that is running\n/compact - Summarize older messages to free context\n/help - Show this help message\n/info - Show agent info\n/model - Show current model preset\n/model <preset> - Switch preset for this session\n/models - List model presets\n/preset - Manage model presets\n/preset set <name> <model> - Create/update a preset\n/preset default <name> - Preset for new sessions\n/preset models - List models supported by the provider\n/use_model <preset> - Alias for /model <preset>\n/persona - Setup persona for this forum topic\n/persona show - Show this topic's persona\n/persona reset - Remove this topic's persona\n/cancel - Cancel the persona setup\n/skills - List available skills\n/memory - Show persistent memory\n/soul - Show bot personality\n/agents - Show agent rules\n/cron - List scheduled cron jobs\n/context - Context usage, cache hit rate, and estimated cost\n/usage - OpenCode Go subscription usage\n/cron delete <id> - Delete a cron job\n/use <skill> - Force a skill for the next message\n/unuse - Clear the forced skill\n/auto on|off - Run non-destructive actions without asking (remembered)" ]
+          [ :skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help. While a task is still running, a plain message steers it instead of waiting behind it.\n\nBuilt-in commands:\n/start - Start the bot\n/new - Clear chat and start a new session\n/stop - Stop the task that is running\n/compact - Summarize older messages to free context\n/repin - Rebuild the system prompt on the next message (picks up memory and skills, costs one uncached request)\n/help - Show this help message\n/info - Show agent info\n/model - Show current model preset\n/model <preset> - Switch preset for this session\n/models - List model presets\n/preset - Manage model presets\n/preset set <name> <model> - Create/update a preset\n/preset default <name> - Preset for new sessions\n/preset models - List models supported by the provider\n/use_model <preset> - Alias for /model <preset>\n/persona - Setup persona for this forum topic\n/persona show - Show this topic's persona\n/persona reset - Remove this topic's persona\n/cancel - Cancel the persona setup\n/skills - List available skills\n/memory - Show persistent memory\n/soul - Show bot personality\n/agents - Show agent rules\n/cron - List scheduled cron jobs\n/context - Context usage, cache hit rate, and estimated cost\n/usage - OpenCode Go subscription usage\n/cron delete <id> - Delete a cron job\n/use <skill> - Force a skill for the next message\n/unuse - Clear the forced skill\n/auto on|off - Run non-destructive actions without asking (remembered)" ]
         when "/info"
           handle_info_command
         when "/context"

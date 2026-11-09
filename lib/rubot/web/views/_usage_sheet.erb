@@ -29,5 +29,17 @@
     <div id="usage-quota" class="usage-quota">
       <p class="usage-note">Memeriksa kuota…</p>
     </div>
+
+    <%# The door out of the pinned prompt. It sits behind a panel rather than in
+        the row for the same reason the allowance does: it is not a reading, it
+        is something a reader does once in a while, and it costs one request
+        without a cache. The note says so before the press, not after. -%>
+    <p class="panel-title">Prompt</p>
+    <div class="usage-repin">
+      <button type="button" class="btn"
+              hx-post="/s/<%= h(session_id) %>/repin<%= h(token_query) %>"
+              hx-target="#repin-note" hx-swap="innerHTML">Bangun ulang</button>
+      <p class="usage-note" id="repin-note">Memory, skill, dan AGENTS.md yang berubah di tengah sesi baru masuk setelah compaction — atau di sini, dengan ongkos satu request tanpa cache.</p>
+    </div>
   </div>
 </details>

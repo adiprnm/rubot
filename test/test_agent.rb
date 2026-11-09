@@ -458,6 +458,26 @@ class TestAgentProgressNarration < Minitest::Test
     refute_includes agent.build_system_prompt, "a fact learned after the session started"
   end
 
+  # The door out of the pin: memory written mid-session (or an edited skill)
+  # reaches the model only when the epoch moves or a reader asks. Asking must
+  # rebuild, and it must say whether there was anything to rebuild — the cost of
+  # the request is paid either way.
+  def test_repinning_the_prompt_picks_up_memory_written_mid_session
+    File.write(@config.global_memory_path, "## Facts\n\n- a fact from before\n")
+    agent = Rubot::Agent.new(config: @config, provider: NarratingProvider.new,
+                             session_id: "repin", tools: @tools)
+    agent.session.add("user", "Kerjakan nomor 6 dulu")
+    agent.build_system_prompt
+    agent.memory.append("Facts", "a fact learned after the session started")
+
+    refute_includes agent.build_system_prompt, "a fact learned after the session started"
+
+    assert agent.repin_system_prompt, "asking to repin must report that it did something"
+    refute agent.repin_system_prompt, "clearing twice with no rebuild in between is a no-op"
+    assert_includes agent.build_system_prompt, "a fact learned after the session started",
+                    "the next prompt is built from the files as they are now"
+  end
+
   # A restart must not throw the pin away: the whole point is that the bytes
   # stay the same, and a new process rebuilding them would undo it.
   def test_the_pin_survives_a_restart

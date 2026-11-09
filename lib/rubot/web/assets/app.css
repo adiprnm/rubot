@@ -2209,6 +2209,16 @@ body.lightbox-open { overflow: hidden; }
   line-height: 1.5;
 }
 
+/* The way out of the pinned prompt: the button sits beside the line that says
+   what pressing it costs, so the cost is read before the hand arrives. */
+.usage-repin {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+}
+
+.usage-repin .btn { flex: 0 0 auto; white-space: nowrap; }
+
 .status-line .sep { color: var(--line); }
 .status-line .status-slot { display: none; }
 

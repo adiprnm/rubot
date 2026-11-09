@@ -314,6 +314,39 @@ module Rubot
       assert_equal [ "$0.0040 · cache 90% · ctx 3.9%", "$0.0090 · cache 80% · ctx 7.0%" ], footers
     end
 
+# The TUI is where a long session lives, so it is where a reader is most
+# likely to want memory that was just written to reach the model. The
+# command says what it did and what it costs.
+def test_repin_command_rebuilds_the_prompt_and_says_what_it_costs
+  repl = build_repl
+  agent = repl.instance_variable_get(:@agent)
+  asked = 0
+  agent.define_singleton_method(:repin_system_prompt) { asked += 1; true }
+  log = repl.instance_variable_get(:@log)
+
+  repl.send(:handle_command, "/repin")
+  repl.send(:pump)
+
+  assert_equal 1, asked, "the command has to ask the agent, not just describe it"
+  texts = log.instance_variable_get(:@entries).map { |segments| segments.map(&:first).join }
+  assert texts.any? { |text| text.include?("rebuilt on the next message") }
+  assert texts.any? { |text| text.include?("pays in full") },
+         "the price is part of the answer, not a surprise on the next request"
+end
+
+def test_repin_command_reports_nothing_to_rebuild
+  repl = build_repl
+  agent = repl.instance_variable_get(:@agent)
+  agent.define_singleton_method(:repin_system_prompt) { false }
+  log = repl.instance_variable_get(:@log)
+
+  repl.send(:handle_command, "/repin")
+  repl.send(:pump)
+
+  texts = log.instance_variable_get(:@entries).map { |segments| segments.map(&:first).join }
+  assert texts.any? { |text| text.include?("not pinned") }
+end
+
     def test_command_output_gets_one_blank_line_above_and_below_and_left_padding
       repl = build_repl
       agent = repl.instance_variable_get(:@agent)

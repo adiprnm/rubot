@@ -1106,6 +1106,21 @@ module Rubot
       prompt
     end
 
+    # Drop the pinned prompt so the next request builds it again.
+    #
+    # This is the way out of the pin, and the only one a reader has: memory
+    # written since the session started, an edited skill file, a changed
+    # AGENTS.md — none of them reach a running session until the epoch moves
+    # (compaction, a model switch, a persona change). Asking for it costs one
+    # uncached request: the prefix changes, so nothing in front of the change is
+    # reusable. That is the trade, and it is why this is a deliberate request
+    # rather than something that happens on every memory write.
+    def repin_system_prompt
+      return false unless @session
+
+      @session.clear_system_prompt!
+    end
+
     # Fingerprint of the inputs that must reach the model the moment they
     # change. Anything not listed here (a new memory line, an edited skill
     # file, AGENTS.md) waits for the next epoch — that delay is the price of a

@@ -84,6 +84,7 @@ module Rubot
       SESSION_MEDIA_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/media/(#{MEDIA_NAME_SOURCE})\z}
       SESSION_DELETE_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/delete\z}
       SESSION_QUOTA_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/quota\z}
+      SESSION_REPIN_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/repin\z}
       PERSONA_SESSIONS_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/sessions\z}
       PERSONA_EDIT_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/edit\z}
 
@@ -344,6 +345,8 @@ module Rubot
           serve_media(res, match[1], match[2])
         elsif method == "GET" && (match = SESSION_QUOTA_PATH.match(path))
           render_quota(res, match[1])
+        elsif method == "POST" && (match = SESSION_REPIN_PATH.match(path))
+          repin_prompt(res, match[1])
         elsif method == "POST" && (match = SESSION_DELETE_PATH.match(path))
           delete_session(res, match[1], req)
         elsif method == "GET" && (match = %r{\A/turns/([\w-]+)/stream\z}.match(path))
@@ -572,6 +575,35 @@ module Rubot
         res["Content-Type"] = "text/html; charset=utf-8"
         res["Cache-Control"] = "no-store"
         res.body = quota_markup(sid)
+      end
+
+      # The reader asking for the pinned prompt to be rebuilt (see
+      # Agent#repin_system_prompt): memory written since the session started, an
+      # edited skill, a changed AGENTS.md — none of it reaches a running session
+      # until the epoch moves, and this is the door.
+      #
+      # Refused while a turn is running. The actor answers requests only between
+      # turns, so a call made now would sit in a queue and look like a hang; and
+      # the answer itself needs no repin.
+      def repin_prompt(res, sid)
+        return not_found(res) unless owner_slug(sid)
+
+        res["Content-Type"] = "text/html; charset=utf-8"
+        res["Cache-Control"] = "no-store"
+        res.body = View.render("_repin_note", state: repin_state(sid))
+      end
+
+      # :busy, :rebuilt or :unpinned — the three things the note can say.
+      def repin_state(sid)
+        return :busy if session_running?(sid)
+
+        handle = session_for(sid)
+        return :unpinned unless handle.respond_to?(:repin_system_prompt)
+
+        handle.repin_system_prompt ? :rebuilt : :unpinned
+      rescue StandardError => e
+        warn "[web] repin: #{e.class}: #{e.message}"
+        :unpinned
       end
 
       def render_session(res, sid)

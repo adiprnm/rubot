@@ -1808,6 +1808,56 @@ module Rubot
 
       # Each icon is a different drawing; a copy-paste slip would make two
       # figures indistinguishable at a glance.
+      # The button behind the usage panel is the page's door out of the pinned
+      # prompt (see Agent#repin_system_prompt). Three answers, because the repo
+      # has three states and a reader has to be able to tell them apart.
+      def test_the_repin_button_reports_what_it_did
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } },
+                                        sessions: { "web_kanyaah" => "Halo" })
+        channel.define_singleton_method(:owner_slug) { |_sid| "kanyaah" }
+
+        asked = 0
+        handle = Object.new
+        handle.define_singleton_method(:repin_system_prompt) { asked += 1; true }
+        channel.define_singleton_method(:session_for) { |_sid| handle }
+
+        res = FakeResponse.new
+        channel.send(:repin_prompt, res, "web_kanyaah")
+
+        assert_equal 1, asked, "the button has to ask, not just describe"
+        assert_includes res.body, "dibangun ulang"
+      end
+
+      # A turn owns the actor; a request queued behind it would look like a hang,
+      # and the running answer needs no repin.
+      def test_the_repin_button_refuses_while_a_turn_is_running
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } },
+                                        sessions: { "web_kanyaah" => "Halo" })
+        channel.define_singleton_method(:owner_slug) { |_sid| "kanyaah" }
+        channel.define_singleton_method(:session_running?) { |_sid| true }
+
+        res = FakeResponse.new
+        channel.send(:repin_prompt, res, "web_kanyaah")
+
+        assert_includes res.body, "Turn masih berjalan"
+        refute_includes res.body, "akan dibangun ulang"
+      end
+
+      def test_the_repin_button_says_when_there_was_nothing_pinned
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } },
+                                        sessions: { "web_kanyaah" => "Halo" })
+        channel.define_singleton_method(:owner_slug) { |_sid| "kanyaah" }
+
+        handle = Object.new
+        handle.define_singleton_method(:repin_system_prompt) { false }
+        channel.define_singleton_method(:session_for) { |_sid| handle }
+
+        res = FakeResponse.new
+        channel.send(:repin_prompt, res, "web_kanyaah")
+
+        assert_includes res.body, "belum di-pin"
+      end
+
       def test_each_usage_icon_draws_a_different_shape
         bodies = View::SVG_ICONS.values
 

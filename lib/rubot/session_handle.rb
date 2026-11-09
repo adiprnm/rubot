@@ -221,6 +221,13 @@ module Rubot
         call(:compact_session)
       end
 
+      # Rebuild the system prompt on the next request (see
+      # Agent#repin_system_prompt). The actor answers this like any other
+      # request, so a caller must not send it while a turn is running.
+      def repin_system_prompt
+        call(:repin_prompt)
+      end
+
       def context_window_tokens
         call(:context_window)
       end
