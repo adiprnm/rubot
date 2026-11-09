@@ -624,6 +624,12 @@ module Rubot
         assert_includes js, "composer-notice"
         assert_includes js, "htmx:beforeRequest",
                         "a notice about the last attempt must not outlive the next one"
+
+        # A crash answers with plain text, not markup: left as it came it would
+        # read as "internal error" on the page, which is not a sentence for a
+        # reader and says nothing about the text still in the field.
+        refute_includes js, "slot.innerHTML = event.detail.xhr.responseText",
+                        "a non-HTML error body has to be turned into words"
       end
 
       # WEBrick hands form values back as ASCII-8BIT. Encoding them at the
