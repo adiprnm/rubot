@@ -449,10 +449,12 @@ module Rubot
         res["Set-Cookie"] = "rubot_token=#{@token}; Path=/; HttpOnly; SameSite=Lax"
       end
 
-      # Static assets are cached for an hour, so the URL carries the file's
-      # mtime. Editing the stylesheet then reaches the browser immediately.
+      # Static assets are cached for an hour, so the URL carries the mtime of
+      # the newest of them. One stamp for both files: a JS-only change has to
+      # reach the browser just as a CSS change does, and the stylesheet alone
+      # as its version was a promise the stylesheet could not keep.
       def asset_version
-        File.mtime(File.join(ASSETS, "app.css")).to_i
+        %w[app.css app.js].map { |name| File.mtime(File.join(ASSETS, name)).to_i }.max
       rescue SystemCallError
         0
       end

@@ -721,6 +721,19 @@ module Rubot
         refute channel.send(:authorized?, request.new("", {}, []))
       end
 
+      # --- assets ---------------------------------------------------------
+
+      # Both files are served under one version, so the stamp has to move when
+      # either of them does. It was the stylesheet's mtime, which left a
+      # script change invisible to any browser that already had app.js cached.
+      def test_the_asset_stamp_follows_the_newer_file
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        assets = File.expand_path("../lib/rubot/web/assets", __dir__)
+        newest = %w[app.css app.js].map { |name| File.mtime(File.join(assets, name)).to_i }.max
+
+        assert_equal newest, channel.send(:asset_version)
+      end
+
       # --- sessions -------------------------------------------------------
 
       # A session id has to survive the trip back to a persona: the SessionPool
