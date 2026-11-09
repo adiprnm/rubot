@@ -3262,6 +3262,21 @@ module Rubot
         value.to_s.delete("rem").to_f
       end
 
+      # The page is drawn under the home indicator (`viewport-fit=cover`), so the
+      # last row and the field sat inside that strip on a phone: the field ended
+      # at the very edge of the screen, where a thumb rests. The inset belongs to
+      # the column that holds them, and it is zero everywhere else.
+      def test_a_phone_with_a_home_indicator_keeps_the_field_out_of_it
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        chat = css[/^\.chat \{[^}]*\}/]
+
+        refute_nil chat, "the .chat rule is missing from app.css"
+        assert_match(/padding-bottom: var\(--safe-bottom, env\(safe-area-inset-bottom, 0px\)\);/,
+                     chat, "the bottom of the column has to clear the indicator")
+        assert_match(/box-sizing: border-box/, css,
+                     "the inset is only free if the height includes it")
+      end
+
       # "Thinking…" and "Thought for 12s" are pauses in the work, and a pause
       # needs air on both sides: with no top margin the row sat hard against
       # the text above it, which made it look like the end of that sentence.

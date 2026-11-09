@@ -775,6 +775,12 @@ body {
   /* The thread is the only part allowed to scroll; anything that outgrows this
      column is clipped here rather than handed to the page. */
   overflow: hidden;
+  /* A phone with `viewport-fit=cover` draws under its own home indicator, so
+     the last row — the figures under the field — sat inside that strip and the
+     field was pushed to the very edge of the screen. The inset is zero on every
+     device that has none, and the custom property is only there so the strip
+     can be measured in a browser that has no notch. */
+  padding-bottom: var(--safe-bottom, env(safe-area-inset-bottom, 0px));
 }
 
 /* A strip, not a banner: the persona is already named in the sidebar, so this
