@@ -299,6 +299,14 @@ module Rubot
         method = req.request_method
 
         return serve_static(res, path) if path.start_with?("/assets/", "/vendor/")
+        # The installed app reads these before it has a page: the manifest is a
+        # description of the app and the worker is its cache, and neither holds
+        # anything about a conversation. The worker has to live at the root —
+        # its scope is its own path — so it is read out of the asset folder
+        # rather than served from under /assets.
+        return serve_manifest(res) if method == "GET" && path == "/manifest.webmanifest"
+        return serve_worker(res) if method == "GET" && path == "/sw.js"
+
         return deny(res) unless authorized?(req)
 
         if method == "GET" && path == "/"
@@ -385,6 +393,30 @@ module Rubot
 
         res["Content-Type"] = MIME[File.extname(file)] || "application/octet-stream"
         res["Cache-Control"] = "public, max-age=3600"
+        res.body = File.binread(file)
+      end
+
+      # The app's description, as the browser asks for it. Cached like any other
+      # asset: it changes only when the page does.
+      def serve_manifest(res)
+        file = File.join(ASSETS, "manifest.webmanifest")
+        return not_found(res) unless File.file?(file)
+
+        res["Content-Type"] = "application/manifest+json; charset=utf-8"
+        res["Cache-Control"] = "public, max-age=3600"
+        res.body = File.binread(file)
+      end
+
+      # The service worker. Served at "/" because a worker only controls the
+      # paths under its own, and never cached by the browser itself: a worker
+      # the browser keeps for an hour is a deploy that reached nobody.
+      def serve_worker(res)
+        file = File.join(ASSETS, "sw.js")
+        return not_found(res) unless File.file?(file)
+
+        res["Content-Type"] = "text/javascript; charset=utf-8"
+        res["Cache-Control"] = "no-cache"
+        res["Service-Worker-Allowed"] = "/"
         res.body = File.binread(file)
       end
 

@@ -1685,6 +1685,105 @@ module Rubot
 
       # --- assets ---------------------------------------------------------
 
+      # --- installed app --------------------------------------------------
+
+      # A phone installs what the manifest describes, so it has to name the app,
+      # open at the doorway rather than at one conversation, and run without a
+      # browser frame.
+      def test_the_manifest_describes_an_installed_app
+        manifest = JSON.parse(File.read(File.expand_path("../lib/rubot/web/assets/manifest.webmanifest", __dir__)))
+
+        assert_equal "rubot", manifest["short_name"]
+        assert_equal "standalone", manifest["display"]
+        assert_equal "/", manifest["start_url"], "the doorway, not one session id"
+        assert_equal "/", manifest["scope"]
+        assert_equal "#2b332f", manifest["theme_color"]
+
+        sizes = manifest["icons"].map { |icon| icon["sizes"] }
+        assert_includes sizes, "192x192"
+        assert_includes sizes, "512x512"
+        assert_includes manifest["icons"].map { |icon| icon["purpose"] }, "maskable",
+                        "Android crops a square icon, and the glyph has to survive it"
+      end
+
+      # Every icon the manifest promises has to exist, or the install offers the
+      # app and then shows a blank square.
+      def test_every_icon_the_manifest_names_is_on_disk
+        assets = File.expand_path("../lib/rubot/web/assets", __dir__)
+        manifest = JSON.parse(File.read(File.join(assets, "manifest.webmanifest")))
+
+        manifest["icons"].each do |icon|
+          name = File.basename(icon["src"])
+          path = File.join(assets, name)
+
+          assert File.file?(path), "#{name} is named in the manifest but missing"
+          assert_equal "PNG", File.binread(path, 8)[1, 3], "#{name} has to be a real PNG"
+        end
+        assert File.file?(File.join(assets, "apple-touch-icon.png")),
+               "iOS reads its own icon, not the manifest's"
+      end
+
+      # The page has to point at all of it: without the manifest link and the
+      # Apple metas a phone offers a bookmark instead of an app.
+      def test_the_page_points_at_the_installed_app
+        html = View.render("layout", title: "rubot · Rubot", content: "isi", asset_version: 1)
+
+        assert_includes html, %(<link rel="manifest" href="/manifest.webmanifest">)
+        assert_includes html, %(rel="apple-touch-icon")
+        assert_includes html, %(name="apple-mobile-web-app-capable" content="yes")
+        assert_includes html, %(name="theme-color")
+        assert_includes html, "viewport-fit=cover",
+                        "a standalone window runs to the notch"
+      end
+
+      # A worker only controls the paths under its own, so it is served at the
+      # root — and never cached by the browser, or a deploy reaches nobody.
+      def test_the_service_worker_is_served_from_the_root_and_not_cached
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        response = FakeResponse.new
+
+        channel.send(:serve_worker, response)
+
+        assert_equal 200, response.status
+        assert_equal "text/javascript; charset=utf-8", response.headers["Content-Type"]
+        assert_equal "no-cache", response.headers["Cache-Control"]
+        assert_equal "/", response.headers["Service-Worker-Allowed"]
+        assert_includes response.body, "rubot-shell-", "the worker has to know its own cache"
+      end
+
+      def test_the_manifest_is_served_with_its_own_type
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        response = FakeResponse.new
+
+        channel.send(:serve_manifest, response)
+
+        assert_equal 200, response.status
+        assert_includes response.headers["Content-Type"], "application/manifest+json"
+        assert_equal "rubot", JSON.parse(response.body)["name"]
+      end
+
+      # The shell is kept, the conversation is not: a cached answer would be
+      # handed to whoever opens the app next, and it would be a lie the moment
+      # the turn moved on.
+      def test_the_worker_keeps_the_shell_and_never_the_conversation
+        worker = File.read(File.expand_path("../lib/rubot/web/assets/sw.js", __dir__))
+
+        assert_includes worker, "/assets/app.css"
+        assert_includes worker, "/vendor/htmx.min.js"
+        assert_includes worker, %(/turns/), "the stream has to be excluded by path"
+        assert_includes worker, 'request.mode === "navigate"'
+        assert_includes worker, "caches.open(VERSION)"
+      end
+
+      # Registering is the only thing the page does about it, and it must not
+      # stand in front of the first paint.
+      def test_the_page_registers_the_worker_after_load
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+
+        assert_includes js, 'navigator.serviceWorker.register("/sw.js")'
+        assert_includes js, 'window.addEventListener("load"'
+      end
+
       # Both files are served under one version, so the stamp has to move when
       # either of them does. It was the stylesheet's mtime, which left a
       # script change invisible to any browser that already had app.js cached.
