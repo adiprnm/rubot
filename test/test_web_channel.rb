@@ -837,7 +837,8 @@ module Rubot
 
       # Only the prompt wears a bubble: it is a quotation. The answer is the
       # page speaking, so it takes the full column, with no avatar beside it.
-      def test_the_answer_is_full_width_and_the_prompt_is_quoted        answer = View.render("_timeline", items: [ { kind: :text, text: "jawaban", live: false } ])
+      def test_the_answer_is_full_width_and_the_prompt_is_quoted
+        answer = View.render("_timeline", items: [ { kind: :text, text: "jawaban", live: false } ])
         prompt = View.render("_message", role: "user", text: "pertanyaan")
         history = View.render("_message", role: "assistant", text: "jawaban lama")
 

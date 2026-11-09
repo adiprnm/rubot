@@ -420,7 +420,8 @@ class TestAgentProgressNarration < Minitest::Test
     assert_includes prompt, "You are Rubot, written in Ruby."
   end
 
-  def test_system_prompt_asks_for_file_tool_edits_instead_of_shell    prompt = @agent.build_system_prompt
+  def test_system_prompt_asks_for_file_tool_edits_instead_of_shell
+    prompt = @agent.build_system_prompt
     assert_includes prompt, "Editing Files"
     assert_includes prompt, "`edit` operation"
     assert_includes prompt, "Avoid shell commands that edit files in place"
