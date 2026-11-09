@@ -1,11 +1,5 @@
-<div class="msg user<%= Array(images).empty? ? "" : " has-attachments" %>">
-  <div class="bubble<%= Array(images).empty? ? "" : " has-attachments" %>">
-    <span class="sr-only">Kamu: </span>
-    <% unless text.to_s.strip.empty? -%>
-    <span class="bubble-text"><%= h(text) %></span>
-    <% end -%>
-    <%= View.render("_attachments", images: Array(images)) unless Array(images).empty? %>
-  </div>
+<div class="msg user">
+  <div class="bubble"><span class="sr-only">Kamu: </span><%= h(text) %></div>
 </div>
 
 <div class="turn"

@@ -1132,7 +1132,7 @@ module Rubot
         ]
 
         results = channel.send(:tool_results, messages)
-        item = channel.send(:history_tool_item, messages[1]["tool_calls"].first, results)
+        item = channel.send(:history_tool_items, messages[1]["tool_calls"].first, results, "web_rubot").first
 
         assert_equal :tool, item[:kind]
         assert_equal "shell_exec", item[:name]
@@ -1146,7 +1146,7 @@ module Rubot
         call = { "id" => "c1",
                  "function" => { "name" => "file_ops", "arguments" => %({"path":"x"}) } }
 
-        assert_equal :failed, channel.send(:history_tool_item, call, results)[:state]
+        assert_equal :failed, channel.send(:history_tool_items, call, results, "web_rubot").first[:state]
       end
 
       # A call whose result never arrived is neither a success nor a failure:
@@ -1155,14 +1155,14 @@ module Rubot
         channel = Rubot::Channels::Web.new(channel_config: {})
         call = { "id" => "c1", "function" => { "name" => "shell_exec", "arguments" => "{}" } }
 
-        assert_equal :unknown, channel.send(:history_tool_item, call, {})[:state]
+        assert_equal :unknown, channel.send(:history_tool_items, call, {}, "web_rubot").first[:state]
       end
 
       def test_history_tolerates_arguments_that_are_not_json
         channel = Rubot::Channels::Web.new(channel_config: {})
         call = { "id" => "c1", "function" => { "name" => "shell_exec", "arguments" => "bukan json" } }
 
-        assert_equal "", channel.send(:history_tool_item, call, {})[:detail]
+        assert_equal "", channel.send(:history_tool_items, call, {}, "web_rubot").first[:detail]
       end
 
       # --- paging through a long conversation -----------------------------
@@ -1659,92 +1659,91 @@ module Rubot
 
       # --- pictures -------------------------------------------------------
 
-      # The id the server writes is its own: a hex name, the reader's file name
-      # reduced to a slug, and a known extension — so a path typed by hand
-      # cannot name a file, while the download still reads like a file name.
-      def test_an_uploaded_picture_is_named_by_an_id_and_kept_per_session
+      # The agent hands a picture back through send_file. The web channel has
+      # no upload endpoint, so the tool copies the file into the conversation's
+      # own folder and says which name it wrote — that name is what the page
+      # draws, and what a refreshed page can draw again.
+      def test_send_file_hands_a_picture_into_the_conversation
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
-        res = FakeResponse.new
+        dir = channel.send(:attachments_dir, "web_kanyaah")
+        source = File.join(Dir.mktmpdir, "Desain Final (v2).png")
+        File.binwrite(source, png_bytes)
 
-        channel.send(:upload_image, upload_request(png_bytes), res, "web_kanyaah")
+        tool = Tools::SendFile.new
+        tool.delivery_context = { channel: "web", dir: dir }
+        result = tool.execute("path" => source)
 
-        assert_equal 200, res.status
-        payload = JSON.parse(res.body)
-        assert_match(/\A[0-9a-f]{32}-shot\.png\z/, payload["id"])
-        assert_equal "shot.png", payload["name"]
-        assert_includes payload["url"], "/s/web_kanyaah/images/#{payload["id"]}"
-
-        dir = channel.send(:images_dir, "web_kanyaah")
-        assert File.file?(File.join(dir, payload["id"])), "the bytes have to land on disk"
-        assert_equal png_bytes, File.binread(File.join(dir, payload["id"]))
+        stored = result[/\[web-attachment ([^\]]+)\]/, 1]
+        refute_nil stored, "the result has to name the file it stored: #{result}"
+        assert_match(/\A[0-9a-f]{32}-desain-final-v2\.png\z/, stored)
+        assert_equal png_bytes, File.binread(File.join(dir, stored))
       end
 
-      # A file name can be anything at all; what lands on disk is a slug.
-      def test_a_strange_file_name_is_reduced_to_a_slug
+      # Only pictures: the page has no way to offer anything else back, and a
+      # file stored where nothing draws it is worse than a refusal.
+      def test_send_file_refuses_what_the_page_cannot_draw
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
-        res = FakeResponse.new
+        source = File.join(Dir.mktmpdir, "catatan.pdf")
+        File.binwrite(source, "%PDF-1.4")
 
-        channel.send(:upload_image,
-                     upload_request(png_bytes, name: "../../Desain Final (v2)!.PNG"),
-                     res, "web_kanyaah")
+        tool = Tools::SendFile.new
+        tool.delivery_context = { channel: "web", dir: channel.send(:attachments_dir, "web_kanyaah") }
+        result = tool.execute("path" => source)
 
-        payload = JSON.parse(res.body)
-
-        assert_match(/\A[0-9a-f]{32}-desain-final-v2\.png\z/, payload["id"])
-        assert_equal "desain-final-v2.png", payload["name"]
+        assert result.start_with?("ERROR"), "a file the page cannot draw is refused, not stored"
+        assert_includes result, "pictures"
       end
 
-      # A declared type is only a claim. The bytes decide whether the file is
-      # served back as an image.
-      def test_an_upload_that_is_not_really_a_picture_is_refused
+      # The marker is read back out of the result the transcript keeps, which is
+      # how a conversation drawn a week later still knows which stored file that
+      # call produced.
+      def test_the_channel_reads_the_picture_back_out_of_the_tool_result
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
-        res = FakeResponse.new
+        stored = "e" * 32 + "-desain.png"
+        result = "Sent desain.png (12 bytes) as a picture. [web-attachment #{stored}]"
 
-        channel.send(:upload_image, upload_request("<html>hi</html>"), res, "web_kanyaah")
+        picture = channel.send(:sent_picture, "send_file", result, "web_kanyaah")
 
-        assert_equal 415, res.status
-        assert_empty Dir.glob(File.join(channel.send(:images_dir, "web_kanyaah").to_s, "*"))
+        assert_equal "desain.png", picture[:name]
+        assert_includes picture[:url], "/s/web_kanyaah/media/#{stored}"
+
+        assert_nil channel.send(:sent_picture, "shell", result, "web_kanyaah"),
+                   "only a send_file result names a picture"
+        assert_nil channel.send(:sent_picture, "send_file",
+                                "Sent x. [web-attachment ../../etc/passwd]", "web_kanyaah")
       end
 
-      def test_an_upload_of_an_unsupported_type_is_refused
-        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
-        res = FakeResponse.new
-
-        channel.send(:upload_image, upload_request("GIF89a....", type: "image/tiff"), res, "web_kanyaah")
-
-        assert_equal 415, res.status
-        assert_includes res.body, "PNG"
-      end
-
-      # A picture belongs to a conversation. Resolving an id looks only inside
-      # that conversation's own folder, so an id borrowed from another session
-      # simply does not resolve.
+      # A picture belongs to a conversation: the route looks only inside that
+      # conversation's folder, so a name borrowed from another session is a 404
+      # rather than a leak.
       def test_a_picture_from_another_session_does_not_resolve
         channel = channel_with_sessions(
           personas: { "kanyaah" => { "name" => "Kanyaah" } },
           sessions: { "web_kanyaah" => "Halo", "web_kanyaah~20261108-101010" => "Hai" }
         )
+        name = write_picture(channel, "web_kanyaah")
 
         res = FakeResponse.new
-        channel.send(:upload_image, upload_request(png_bytes), res, "web_kanyaah")
-        id = JSON.parse(res.body)["id"]
+        channel.send(:serve_media, res, "web_kanyaah~20261108-101010", name)
+        assert_equal 404, res.status
 
-        assert_equal 1, channel.send(:resolve_images, "web_kanyaah", [ id ]).size
-        assert_empty channel.send(:resolve_images, "web_kanyaah~20261108-101010", [ id ])
-        assert_empty channel.send(:resolve_images, "web_kanyaah", [ "../../etc/passwd" ])
+        res = FakeResponse.new
+        channel.send(:serve_media, res, "web_kanyaah", "../../etc/passwd")
+        assert_equal 404, res.status
       end
 
-      def test_a_picture_is_served_back_with_the_type_its_bytes_prove
+      # Served inline under the type of its extension, with the reader's own
+      # file name in the disposition rather than the stored id.
+      def test_a_picture_is_served_back_under_its_own_name
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
-        upload = FakeResponse.new
-        channel.send(:upload_image, upload_request(png_bytes), upload, "web_kanyaah")
-        id = JSON.parse(upload.body)["id"]
+        name = write_picture(channel, "web_kanyaah", "desain-final.png")
 
         res = FakeResponse.new
-        channel.send(:serve_image, res, "web_kanyaah", id)
+        channel.send(:serve_media, res, "web_kanyaah", name)
 
         assert_equal 200, res.status
         assert_equal "image/png", res.headers["Content-Type"]
+        assert_includes res.headers["Content-Disposition"], 'filename="desain-final.png"'
         assert_equal png_bytes, res.body
       end
 
@@ -1752,91 +1751,69 @@ module Rubot
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
         res = FakeResponse.new
 
-        channel.send(:serve_image, res, "web_kanyaah", "a" * 32 + ".png")
+        channel.send(:serve_media, res, "web_kanyaah", "a" * 32 + ".png")
 
         assert_equal 404, res.status
       end
 
-      # The note is what the model reads; the bubble is what the reader sees.
-      # The note names the file and how big it is, exactly as the Telegram
-      # channel says it.
-      def test_the_prompt_tells_the_agent_where_the_picture_is
-        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
-        upload = FakeResponse.new
-        channel.send(:upload_image, upload_request(png_bytes), upload, "web_kanyaah")
-        images = channel.send(:resolve_images, "web_kanyaah", [ JSON.parse(upload.body)["id"] ])
+      # A picture the agent sent sits in the timeline under the row that
+      # produced it, drawn by the same strip the answer's pictures use.
+      def test_a_picture_the_agent_sent_is_drawn_in_the_timeline
+        image = { url: "/s/web_kanyaah/media/x.png?token=t0k", name: "desain.png" }
 
-        prompt = channel.send(:prompt_with_images, "Ini desainnya", images)
+        html = View.render("_timeline", items: [ { kind: :images, list: [ image ] } ])
 
-        assert prompt.start_with?("Ini desainnya")
-        assert_includes prompt, "📎 User attached an image: #{images.first[:path]}"
-        assert_includes prompt, images.first[:path]
-      end
-
-      # A session file holds the note because that is what the agent was
-      # given. Drawn back, it becomes a picture again — and the paragraph the
-      # reader typed stays a paragraph of its own.
-      def test_history_turns_the_note_back_into_a_picture
-        sid = "web_kanyaah"
-        id = "b" * 32 + ".png"
-        prompt = "Lihat ini\n\n📎 User attached an image: /tmp/x/#{id} (10×10, 1 KB)"
-        channel = channel_with_sessions(
-          personas: { "kanyaah" => { "name" => "Kanyaah" } },
-          sessions: { sid => prompt }
-        )
-
-        entry = channel.send(:history, sid).first
-
-        assert_equal :prompt, entry[:kind]
-        assert_equal "Lihat ini", entry[:text]
-        assert_equal 1, entry[:images].size
-        assert_includes entry[:images].first[:url], "/s/#{sid}/images/#{id}"
-      end
-
-      # The bubble: the pictures are a strip inside the message, and each one
-      # is a button (open it larger) with a download beside it.
-      def test_a_message_with_pictures_draws_a_strip_with_a_download
-        image = { id: "c" * 32 + ".png", url: "/s/web_kanyaah/images/x.png", name: "shot.png" }
-
-        html = View.render("_message", role: "user", text: "Halo", images: [ image ])
-
-        assert_includes html, %(class="msg user has-attachments")
         assert_includes html, %(class="attachments")
         assert_includes html, %(data-lightbox="#{image[:url]}")
-        assert_includes html, %(download="shot.png")
+        assert_includes html, %(download="desain.png")
+      end
+
+      # The transcript holds the call and its result; drawn back, the picture is
+      # there again — the row first, the picture under it.
+      def test_history_draws_a_picture_the_agent_sent
+        sid = "web_kanyaah"
+        stored = "f" * 32 + "-desain.png"
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: { sid => "Buatkan gambar" }
+        )
+        write_messages(channel, sid, [
+          { "role" => "user", "content" => "Buatkan gambar" },
+          { "role" => "assistant", "content" => "Ini gambarnya.",
+            "tool_calls" => [ { "id" => "call_1",
+                                "function" => { "name" => "send_file",
+                                                "arguments" => JSON.generate({ "path" => "desain.png" }) } } ] },
+          { "role" => "tool", "tool_call_id" => "call_1",
+            "content" => "Sent desain.png (12 bytes) as a picture. [web-attachment #{stored}]" }
+        ])
+
+        items = channel.send(:history, sid).last[:items]
+
+        assert_equal %i[tool images], items.last(2).map { |item| item[:kind] }
+        assert_includes items.last[:list].first[:url], "/s/#{sid}/media/#{stored}"
+      end
+
+      # The prompt is what the reader typed, and nothing else: pictures from the
+      # composer are not part of this channel yet.
+      def test_a_prompt_is_drawn_as_text_only
+        html = View.render("_message", role: "user", text: "Halo")
+
+        assert_includes html, %(class="msg user")
+        refute_includes html, %(class="attachments")
         assert_includes html, "Halo"
       end
 
-      # A picture sent without a caption is a whole message: no empty bubble
-      # text above it.
-      def test_a_picture_without_text_is_a_message_of_its_own
-        image = { id: "d" * 32 + ".png", url: "/s/web_kanyaah/images/y.png", name: "y.png" }
-
-        html = View.render("_message", role: "user", text: "", images: [ image ])
-
-        refute_includes html, %(class="bubble-text")
-        assert_includes html, %(class="attachments")
-      end
-
-      # The composer uploads as soon as a file is chosen, and the form carries
-      # the ids that came back — not bytes, and not a path.
-      def test_the_composer_has_a_place_to_choose_pictures
+      # The composer is text and one button: no file picker, no drop target.
+      def test_the_composer_carries_no_picture_input
         html = View.render("_composer", session_id: "web_rubot", token_query: "?token=t0k")
 
-        assert_includes html, %(data-upload="/s/web_rubot/images?token=t0k")
-        assert_includes html, %(type="file")
-        assert_includes html, %(accept="image/*")
-        assert_includes html, %(name="images")
-        assert_includes html, "attachment-remove"
+        refute_includes html, %(type="file")
+        refute_includes html, "data-upload"
+        refute_includes html, %(name="images")
 
         js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
-
-        assert_includes js, "async attach(files)"
-        assert_includes js, "X-Filename"
-        assert_includes js, "if (!text && this.images.length === 0) return;",
-                        "a picture on its own is something to send"
-        assert_includes js, "body.append(\"images\", image.id)",
-                        "a picture sent mid-turn rides along with the steer"
+        refute_includes js, "async attach(files)"
+        refute_includes js, "X-Filename"
       end
 
       # One sheet per page, not one per picture. A thread can hold a hundred
@@ -1870,64 +1847,21 @@ module Rubot
         assert_includes html, %(download="papan")
       end
 
-      # "Still working" sits directly above the field, and at a quarter of a
-      # rem the two rows read as one line of text. The gap belongs to the band,
-      # not to the composer: the field's own spacing is already spoken for.
-      # Sending a prompt with a picture draws the bubble from the turn, not from
-      # the session file (which does not know about it yet), and hands the
-      # agent a prompt that names the file it can open.
-      def test_a_turn_with_a_picture_draws_it_and_tells_the_agent_where_it_is
-        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
-        upload = FakeResponse.new
-        channel.send(:upload_image, upload_request(png_bytes), upload, "web_kanyaah")
-        id = JSON.parse(upload.body)["id"]
-
-        seen = nil
-        channel.define_singleton_method(:run_turn) { |_turn, prompt| seen = prompt }
-        channel.define_singleton_method(:owner_slug) { |_sid| "kanyaah" }
-        channel.define_singleton_method(:process_message) { |*| nil }
-
-        res = FakeResponse.new
-        channel.send(:create_turn, turn_request("Ini desainnya", [ id ]), res, "web_kanyaah")
-        sleep 0.05
-
-        assert_equal 200, res.status
-        assert_includes res.body, %(class="msg user has-attachments")
-        assert_includes res.body, %(data-lightbox="/s/web_kanyaah/images/#{id}")
-        assert_includes res.body, "Ini desainnya"
-        assert_includes seen.to_s, "📎 User attached an image:"
-        assert_includes seen.to_s, id
-      end
-
-      # A picture on its own is a prompt: nothing typed, something sent.
-      def test_a_turn_can_be_a_picture_with_no_text
-        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
-        upload = FakeResponse.new
-        channel.send(:upload_image, upload_request(png_bytes), upload, "web_kanyaah")
-        id = JSON.parse(upload.body)["id"]
-
-        channel.define_singleton_method(:run_turn) { |*| }
-        channel.define_singleton_method(:owner_slug) { |_sid| "kanyaah" }
-
-        res = FakeResponse.new
-        channel.send(:create_turn, turn_request("", [ id ]), res, "web_kanyaah")
-
-        assert_equal 200, res.status
-        assert_includes res.body, "attachments"
-        refute_includes res.body, %(class="bubble-text")
-      end
-
-      def test_a_turn_that_is_neither_text_nor_picture_is_refused
+      # A prompt is text; anything else is not a prompt this channel can carry.
+      def test_a_turn_with_no_text_is_refused
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
         channel.define_singleton_method(:owner_slug) { |_sid| "kanyaah" }
 
         res = FakeResponse.new
-        channel.send(:create_turn, turn_request("   ", []), res, "web_kanyaah")
+        channel.send(:create_turn, turn_request("   "), res, "web_kanyaah")
 
         assert_equal 400, res.status
         assert_includes res.body, "Pesan kosong"
       end
 
+      # "Still working" sits directly above the field, and at a quarter of a
+      # rem the two rows read as one line of text. The gap belongs to the band,
+      # not to the composer: the field's own spacing is already spoken for.
       def test_the_working_row_has_room_under_it
         css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
         rule = css[/^\.working-band \{[^}]*\}/]
@@ -1936,31 +1870,33 @@ module Rubot
         assert_match(/margin: 0 auto 0\.75rem;/, rule)
       end
 
-      def upload_request(body, type: "image/png", name: "shot.png")
-        headers = name ? { "x-filename" => URI.encode_www_form_component(name) } : {}
-
-        Struct.new(:body, :content_type, :headers) do
-          def [](key)
-            headers[key.to_s]
-          end
-        end.new(body, type, headers)
-      end
-
-      # A form POST as WEBrick hands it over: repeated `images` fields arrive as
-      # an array, which is what form_list reads.
-      def turn_request(message, images)
-        query = { "message" => message }
-        query["images"] = images unless images.empty?
-
+      def turn_request(message)
         Struct.new(:query, :query_string) do
           def content_type = "application/x-www-form-urlencoded"
           def body = ""
           def [](_key) = nil
-        end.new(query, "")
+        end.new({ "message" => message }, "")
       end
 
-      # A real PNG signature: the upload is checked against the bytes, so a
-      # made-up string would be refused before the test got anywhere.
+      # A picture already in the conversation's folder, named the way the
+      # channel names what it serves.
+      def write_picture(channel, sid, basename = "shot.png")
+        name = "a" * 32 + "-#{File.basename(basename, File.extname(basename))}#{File.extname(basename)}"
+        dir = channel.send(:attachments_dir, sid)
+        FileUtils.mkdir_p(dir)
+        File.binwrite(File.join(dir, name), png_bytes)
+        name
+      end
+
+      def write_messages(channel, sid, messages)
+        dir = channel.instance_variable_get(:@app_config).sessions_dir
+        File.write(File.join(dir, "#{sid}.json"),
+                   JSON.generate({ "id" => sid, "updated_at" => Time.now.utc.iso8601,
+                                   "messages" => messages }))
+      end
+
+      # A real PNG signature: the page serves only what it can draw, and a
+      # made-up string would not prove the bytes came back unchanged.
       def png_bytes
         "\x89PNG\r\n\x1A\n".b + ("\x00".b * 64)
       end

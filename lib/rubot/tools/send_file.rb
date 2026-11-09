@@ -4,16 +4,22 @@ require "json"
 require "net/http"
 require "pathname"
 require "securerandom"
+require "fileutils"
 require_relative "../tool"
 
 module Rubot
   module Tools
     # Send a local file to the chat that asked for it.
     #
-    # The channel sets `delivery_context` ({ chat_id:, thread_id: }) before each
-    # request, the same way the cron tool receives its delivery target. Images
-    # are uploaded with sendPhoto so they render inline; everything else goes
-    # through sendDocument.
+    # The channel sets `delivery_context` before each request, the same way the
+    # cron tool receives its delivery target. Two channels deliver differently:
+    #
+    # * Telegram ({ chat_id:, thread_id: }) uploads with sendPhoto so pictures
+    #   render inline; everything else goes through sendDocument.
+    # * The web page ({ channel: "web", dir: ... }) has no upload endpoint: the
+    #   file is copied into the conversation's own attachment folder, which the
+    #   page already serves, and the result carries the stored name so the
+    #   browser can draw it.
     #
     # This is what lets the agent hand back artifacts it produced — e.g. the
     # PNG written by the adipurnm-brand featured-image generator — instead of
@@ -21,6 +27,14 @@ module Rubot
     class SendFile < Tool
       MAX_BYTES = 50 * 1024 * 1024 # Telegram bot upload limit
       PHOTO_EXTENSIONS = %w[.png .jpg .jpeg .webp].freeze
+      # The token the web channel reads back out of a tool result. It is how a
+      # conversation drawn from disk a week later still knows which stored file
+      # this call produced.
+      WEB_MARKER = "web-attachment"
+      WEB_MARKER_RE = /\[#{WEB_MARKER} ([^\]]+)\]/.freeze
+      # What the web page can draw. Anything else is refused rather than stored
+      # where nothing would ever show it.
+      WEB_EXTENSIONS = %w[.png .jpg .jpeg .gif .webp].freeze
 
       MIME_TYPES = {
         ".png" => "image/png",
@@ -48,11 +62,12 @@ module Rubot
 
       def description
         <<~DESC.strip
-          Send a local file to the user's chat.
+          Send a local file to the user.
           Use this when the user should receive a file you produced, such as a
           generated featured image (PNG). Images (.png, .jpg, .jpeg, .webp, .gif)
-          are delivered as photos so they display inline; other files are sent as
-          documents. The path may be relative to the workspace or absolute.
+          are delivered as pictures so they display inline; other files are
+          delivered as documents. The path may be relative to the workspace or
+          absolute.
         DESC
       end
 
@@ -78,18 +93,28 @@ module Rubot
         return "ERROR: no path provided" if path.empty?
 
         context = @delivery_context
-        return "ERROR: no delivery context — send_file only works in a chat channel (Telegram)" unless context
+        return "ERROR: no delivery context — send_file only works inside a chat channel" unless context
 
-        token = ENV["TELEGRAM_BOT_TOKEN"].to_s
-        return "ERROR: TELEGRAM_BOT_TOKEN is not set" if token.empty?
+        web = web?(context)
+        # The report order matters to whoever is reading it: a Telegram that
+        # cannot send at all is the first thing to say, before a path is
+        # discussed.
+        token = nil
+        unless web
+          token = ENV["TELEGRAM_BOT_TOKEN"].to_s
+          return "ERROR: TELEGRAM_BOT_TOKEN is not set" if token.empty?
+        end
 
         file = resolve(path)
         return "ERROR: file not found: #{path}" unless file.file?
 
         size = file.size
-        return "ERROR: file is too large for Telegram (#{size} bytes)" if size > MAX_BYTES
+        return "ERROR: file is too large to send (#{size} bytes, limit #{MAX_BYTES})" if size > MAX_BYTES
 
         @safety_guard&.check_path(file, operation: :read)
+
+        return deliver_web(file, size, context) if web
+
         upload(file, size, token, context, arguments["caption"].to_s)
       rescue Errno::ENOENT
         "ERROR: file not found: #{arguments["path"]}"
@@ -100,6 +125,40 @@ module Rubot
       end
 
       private
+
+      def web?(context)
+        context[:channel].to_s == "web"
+      end
+
+      # The web page has no upload endpoint to hand bytes to. What it does have
+      # is a folder it already serves for this one conversation, so the picture
+      # is copied there under a name the page can trust and the result says
+      # which name — that marker is the whole reason a refreshed page can draw
+      # the picture again.
+      def deliver_web(file, size, context)
+        dir = context[:dir].to_s
+        return "ERROR: this conversation has no attachment folder" if dir.empty?
+
+        extension = file.extname.downcase
+        return "ERROR: the web page can only send pictures (png, jpg, gif, webp)" unless WEB_EXTENSIONS.include?(extension)
+
+        FileUtils.mkdir_p(dir)
+        name = web_name(file)
+        File.binwrite(File.join(dir, name), file.binread)
+
+        "Sent #{file.basename} (#{size} bytes) as a picture. [#{WEB_MARKER} #{name}]"
+      end
+
+      # An id this process generated, the reader's own file name reduced to a
+      # slug, and the extension: a download still reads like a file, while a
+      # hand-typed path cannot name one.
+      def web_name(file)
+        extension = file.extname.downcase
+        extension = ".jpg" if extension == ".jpeg"
+        base = File.basename(file.basename, file.extname)
+                   .downcase.gsub(/[^a-z0-9]+/, "-").gsub(/\A-+|-+\z/, "")[0, 60].to_s
+        "#{SecureRandom.hex(16)}#{base.empty? ? "" : "-#{base}"}#{extension}"
+      end
 
       def resolve(path)
         candidate = Pathname.new(path)

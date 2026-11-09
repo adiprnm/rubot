@@ -1,19 +1,8 @@
 <%# Only the prompt is quoted in a bubble. The answer is the page speaking, so
-    it takes the full column with nothing around it.
-
-    A prompt with pictures in it keeps them inside the bubble: they were sent
-    as one message, so they stay one shape on the page. The text is drawn only
-    when there is text — a picture on its own is a whole message. -%>
-<% pictures = Array(images) -%>
+    it takes the full column with nothing around it. -%>
 <% if role == "user" -%>
-<div class="msg user<%= pictures.empty? ? "" : " has-attachments" %>">
-  <div class="bubble<%= pictures.empty? ? "" : " has-attachments" %>">
-    <span class="sr-only">Kamu: </span>
-    <% unless text.to_s.strip.empty? -%>
-    <span class="bubble-text"><%= h(text) %></span>
-    <% end -%>
-    <%= View.render("_attachments", images: pictures) unless pictures.empty? %>
-  </div>
+<div class="msg user">
+  <div class="bubble"><span class="sr-only">Kamu: </span><%= h(text) %></div>
 </div>
 <% else -%>
 <div class="text"><span class="sr-only">Rubot: </span><%= fmt(text) %></div>

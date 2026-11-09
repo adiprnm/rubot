@@ -703,10 +703,8 @@ module Rubot
           View.turn_body(turn)
         end
 
-        # A message drawn from a session file that predates attachments, or a
-        # partial rendered by a test, has no pictures — and the templates
-        # should not have to spell that out. A caller that passes `images:`
-        # replaces this.
+        # A partial rendered by a test has no pictures unless the caller passes
+        # them, and `_attachments` should not have to spell that out.
         def images
           []
         end

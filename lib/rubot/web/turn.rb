@@ -30,25 +30,20 @@ module Rubot
       # wonder whether it hung.
       SLOW_TOOL_SECONDS = 3.0
 
-      attr_reader :id, :session_id, :response, :epoch, :prompt, :images
+      attr_reader :id, :session_id, :response, :epoch, :prompt
 
       # `clock` is injectable so the timing rules can be tested without
       # sleeping through them. `epoch_clock` is the wall clock the timeline rows
       # stamp themselves with, injectable for the same reason: the working row
       # has to be shown restarting from a tool call, and microseconds are a
       # poor thing to assert on.
-      def initialize(id:, session_id:, prompt: nil, images: nil, clock: nil, epoch_clock: nil)
+      def initialize(id:, session_id:, prompt: nil, clock: nil, epoch_clock: nil)
         @id = id
         @session_id = session_id
         # The prompt is kept here because the session file only learns about it
         # when the turn is written at the end. A page refreshed mid-answer has
         # to draw the bubble it is answering, and this is the only copy.
         @prompt = prompt.to_s
-        # Attachments are part of the prompt's own fragment, not of the model's
-        # text: the transcript carries a note with the path, while the browser
-        # draws the picture. Kept here for the same reason the prompt is — a
-        # refresh has no other copy of them.
-        @images = Array(images).map { |image| image.transform_keys(&:to_sym) }
         @clock = clock || -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }
         @epoch_clock = epoch_clock || -> { Time.now.to_f }
         # When the prompt was accepted, on the wall clock. The timeline rows
@@ -96,6 +91,7 @@ module Rubot
           @items.map do |item|
             copy = item.dup
             copy[:text] = item[:text].dup if item[:text]
+            copy[:list] = item[:list].dup if item[:list]
             copy
           end
         end
@@ -164,6 +160,25 @@ module Rubot
           if entry
             entry[:state] = ok ? :ok : :failed
             entry[:elapsed] = @clock.call - entry[:started_at]
+          end
+          publish_locked
+        end
+      end
+
+      # A picture the agent handed back during this turn. It joins the answer
+      # where the tool that produced it finished, not above the whole turn: the
+      # reader sees it in the place the work happened.
+      #
+      # Consecutive pictures share one strip, so a turn that sends four of them
+      # scrolls sideways at one height instead of stacking four rows.
+      def add_image(url:, name:)
+        image = { url: url.to_s, name: name.to_s }
+        @mutex.synchronize do
+          last = @items.last
+          if last && last[:kind] == :images
+            last[:list] = last[:list] + [ image ]
+          else
+            @items << { kind: :images, list: [ image ], epoch: epoch_now }
           end
           publish_locked
         end

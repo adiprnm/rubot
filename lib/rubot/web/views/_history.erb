@@ -13,7 +13,7 @@
 <% end -%>
 <% entries.each do |msg| -%>
 <% if msg[:kind] == :prompt -%>
-<%= View.render("_message", role: "user", text: msg[:text], images: msg[:images]) %>
+<%= View.render("_message", role: "user", text: msg[:text]) %>
 <% else -%>
 <div class="turn is-done">
   <div class="turn-body"><%= View.render("_timeline", items: msg[:items]) %></div>

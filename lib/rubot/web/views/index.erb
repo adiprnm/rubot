@@ -113,7 +113,7 @@
           yet, so this fragment is the only record of it on a refreshed page. -%>
       <% if live_turn %>
         <%= View.render("_turn", turn: live_turn, text: live_turn.prompt,
-                        images: live_turn.images, token_query: token_query) %>
+                        token_query: token_query) %>
       <% end %>
     </div>
 

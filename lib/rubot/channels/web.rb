@@ -7,9 +7,9 @@ require "fileutils"
 require "json"
 
 require_relative "../channel"
-require_relative "../image_info"
 require_relative "../persona_store"
 require_relative "../session"
+require_relative "../tools/send_file"
 require_relative "../web/turn"
 require_relative "../web/view"
 
@@ -50,33 +50,24 @@ module Rubot
       # What a conversation is called before its first prompt has been saved.
       UNTITLED_SESSION = "Sesi baru"
 
-      # A picture is uploaded before the prompt is sent, so the turn itself
-      # stays a plain form POST. The size cap keeps one screenshot from
-      # becoming an unbounded body in memory.
-      MAX_IMAGE_BYTES = 12 * 1024 * 1024
-      # Only the formats a browser draws without a plugin. The extension is
-      # chosen from the type the browser declared, and then checked against the
-      # bytes: a declared JPEG that is really HTML must not be served back as
-      # an image.
-      IMAGE_TYPES = {
-        "image/png" => ".png",
-        "image/jpeg" => ".jpg",
-        "image/jpg" => ".jpg",
-        "image/gif" => ".gif",
-        "image/webp" => ".webp"
+      # What the page hands back: the pictures the agent sends through
+      # send_file. The name the server writes is a hex id this channel
+      # generated, an optional slug of the file's own name, and a known
+      # extension — the slug is what makes a download read like a file, the id
+      # is what makes it impossible to guess.
+      MEDIA_TYPES = {
+        ".png" => "image/png",
+        ".jpg" => "image/jpeg",
+        ".gif" => "image/gif",
+        ".webp" => "image/webp"
       }.freeze
-      # The name the server writes: a hex id this channel generated, an
-      # optional slug of the name the reader's file had, and a known
-      # extension. The slug is what makes the download under a thumbnail read
-      # like a file name — the id is what makes it impossible to guess.
-      IMAGE_NAME = /\A[0-9a-f]{32}(?:-[a-z0-9-]{1,60})?\.(?:png|jpg|gif|webp)\z/
+      MEDIA_NAME = /\A[0-9a-f]{32}(?:-[a-z0-9-]{1,60})?\.(?:png|jpg|gif|webp)\z/
 
       SLUG_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})\z}
       SESSION_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})\z}
       SESSION_HISTORY_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/history\z}
       SESSION_TURN_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/turn\z}
-      SESSION_IMAGES_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/images\z}
-      SESSION_IMAGE_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/images/([0-9a-f]{32}\.(?:png|jpg|gif|webp))\z}
+      SESSION_MEDIA_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/media/([0-9a-f]{32}(?:-[a-z0-9-]{1,60})?\.(?:png|jpg|gif|webp))\z}
       SESSION_DELETE_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/delete\z}
       PERSONA_SESSIONS_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/sessions\z}
 
@@ -323,10 +314,8 @@ module Rubot
           create_persona(req, res)
         elsif method == "POST" && (match = SESSION_TURN_PATH.match(path))
           create_turn(req, res, match[1])
-        elsif method == "POST" && (match = SESSION_IMAGES_PATH.match(path))
-          upload_image(req, res, match[1])
-        elsif method == "GET" && (match = SESSION_IMAGE_PATH.match(path))
-          serve_image(res, match[1], match[2])
+        elsif method == "GET" && (match = SESSION_MEDIA_PATH.match(path))
+          serve_media(res, match[1], match[2])
         elsif method == "POST" && (match = SESSION_DELETE_PATH.match(path))
           delete_session(res, match[1], req)
         elsif method == "GET" && (match = %r{\A/turns/([\w-]+)/stream\z}.match(path))
@@ -351,13 +340,6 @@ module Rubot
         return "" if raw.nil?
 
         utf8(raw)
-      end
-
-      # A field that may appear more than once, which is how a form carries
-      # several pictures: `<input name="images">` repeated, one id each.
-      def form_list(req, key)
-        raw = req.query[key]
-        Array(raw).map { |value| utf8(value) }.reject(&:empty?)
       end
 
       def utf8(raw)
@@ -621,16 +603,13 @@ module Rubot
             text = Session.text_content(msg["content"]).to_s.strip
             next if text.empty?
 
-            body, images = split_attachments(sid, text)
-            next if body.empty? && images.empty?
-
-            turns << { kind: :prompt, text: body, images: images }
+            turns << { kind: :prompt, text: text }
             current = nil
           when "assistant"
             items = []
             text = Session.text_content(msg["content"]).to_s.strip
             items << { kind: :text, text: text, live: false } unless text.empty?
-            Array(msg["tool_calls"]).each { |call| items << history_tool_item(call, results) }
+            Array(msg["tool_calls"]).each { |call| items.concat(history_tool_items(call, results, sid)) }
             next if items.empty?
 
             # Rounds of one prompt belong to one turn: the model answering,
@@ -657,17 +636,25 @@ module Rubot
         end
       end
 
-      def history_tool_item(call, results)
+      # The row for a call, plus the picture below it when send_file handed one
+      # back. Two items rather than one, because the picture is drawn as a
+      # picture and the row as a row.
+      def history_tool_items(call, results, sid)
         function = call["function"] || {}
+        name = function["name"].to_s
         result = results[call["id"].to_s]
 
-        {
+        items = [ {
           kind: :tool,
-          name: function["name"].to_s,
+          name: name,
           detail: summarize_arguments(parse_arguments(function["arguments"])),
           state: result.nil? ? :unknown : (tool_ok?(result) ? :ok : :failed),
           elapsed: nil
-        }
+        } ]
+
+        picture = sent_picture(name, result, sid)
+        items << { kind: :images, list: [ picture ] } if picture
+        items
       end
 
       def parse_arguments(raw)
@@ -675,33 +662,6 @@ module Rubot
         parsed.is_a?(Hash) ? parsed : {}
       rescue JSON::ParserError, TypeError
         {}
-      end
-
-      # The transcript keeps a prompt as one string, and a picture arrives in it
-      # as a note the model can read. Drawn back here as what it was: the typed
-      # text, and the pictures the note named. Splitting on blank lines is how
-      # the notes were joined, so one note never eats a paragraph above it.
-      ATTACHMENT_PREFIX = "📎 User attached an image:"
-
-      def split_attachments(sid, text)
-        images = []
-        kept = []
-
-        text.to_s.split(/\n{2,}/).each do |chunk|
-          chunk = chunk.strip.sub(/\s+\([^()]*\)\z/, "")
-          next if chunk.empty?
-
-          if chunk.start_with?(ATTACHMENT_PREFIX)
-            name = File.basename(chunk.delete_prefix(ATTACHMENT_PREFIX).strip)
-            next unless IMAGE_NAME.match?(name)
-
-            images << { id: name, url: image_url(sid, name), name: download_name(name) }
-          else
-            kept << chunk
-          end
-        end
-
-        [ kept.join("\n\n"), images ]
       end
 
       # --- usage ----------------------------------------------------------
@@ -752,13 +712,13 @@ module Rubot
         redirect(res, "/p/#{slug}", req)
       end
 
-      # --- images ---------------------------------------------------------
+      # --- pictures -------------------------------------------------------
 
-      # Where this conversation's pictures live. It is the same per-session
-      # folder the Telegram channel writes to, inside the persona's own
-      # workspace — which is what makes the path in the prompt one the agent
-      # can actually open.
-      def images_dir(sid)
+      # Where this conversation's pictures live: the folder that send_file
+      # copies into, inside the persona's own workspace. It is the same
+      # per-session folder the Telegram channel writes to, so a tool call that
+      # worked in one channel has somewhere to land in the other.
+      def attachments_dir(sid)
         store = persona_store
         slug = owner_slug(sid)
         return nil unless store && slug
@@ -767,61 +727,35 @@ module Rubot
         workspace && File.join(workspace, "attachments", sid)
       end
 
-      # The URL a picture is drawn from. The token rides in it like every other
+      # Where a picture is drawn from. The token rides in it like every other
       # URL the page writes: an <img> cannot send a cookie it was not given.
-      def image_url(sid, name)
-        "/s/#{sid}/images/#{name}#{token_query}"
+      def media_url(sid, name)
+        "/s/#{sid}/media/#{name}#{token_query}"
       end
 
-      # A picture the browser chose, written to disk and named by an id. The
-      # first bytes are checked against the type the browser declared, so a
-      # file that claims to be a PNG but is not never reaches the thread.
-      def upload_image(req, res, sid)
-        return not_found(res) unless owner_slug(sid)
+      # A picture the agent handed back through send_file, read out of the
+      # result that call left in the transcript. The marker is the only record
+      # of which stored file it produced, which is why a conversation drawn
+      # from disk a week later can still show the picture.
+      def sent_picture(name, result, sid)
+        return nil unless name.to_s == "send_file"
 
-        type = req.content_type.to_s.split(";").first.to_s.strip.downcase
-        extension = IMAGE_TYPES[type]
-        return unsupported_media(res) unless extension
+        stored = result.to_s[Rubot::Tools::SendFile::WEB_MARKER_RE, 1]
+        return nil unless stored && MEDIA_NAME.match?(stored)
 
-        body = req.body.to_s
-        return bad_request(res) if body.empty?
-        return too_large(res) if body.bytesize > MAX_IMAGE_BYTES
-
-        unless image_bytes?(body, extension)
-          res.status = 415
-          res["Content-Type"] = "text/plain; charset=utf-8"
-          res.body = "Isinya bukan gambar #{extension.delete('.')}."
-          return
-        end
-
-        dir = images_dir(sid)
-        return not_found(res) unless dir
-
-        FileUtils.mkdir_p(dir)
-        name = "#{SecureRandom.hex(16)}#{slug_part(req, extension)}#{extension}"
-        File.binwrite(File.join(dir, name), body)
-
-        res["Content-Type"] = "application/json; charset=utf-8"
-        res["Cache-Control"] = "no-store"
-        res.body = JSON.generate(
-          id: name,
-          url: image_url(sid, name),
-          name: download_name(name)
-        )
+        { url: media_url(sid, stored), name: download_name(stored) }
       end
 
-      # The name the reader's file had, reduced to something a URL can carry:
-      # lower case, letters and digits, single dashes. It rides along in the
-      # stored name, so a conversation read back a week later still offers the
-      # picture under the name it was sent with.
-      def slug_part(req, extension)
-        raw = req["x-filename"].to_s
-        base = raw.empty? ? "" : File.basename(URI.decode_www_form_component(raw))
-        base = File.basename(base, File.extname(base))
-        slug = base.to_s.downcase.gsub(/[^a-z0-9]+/, "-").gsub(/\A-+|-+\z/, "")[0, 60].to_s
-        slug.empty? ? "" : "-#{slug}"
-      rescue StandardError
-        ""
+      # Point the agent's send_file at this conversation, so a picture it hands
+      # back lands where the page can serve it. Telegram sets the same field
+      # with a chat id; here it is a folder. Plain strings only, because the
+      # value crosses into the session's Ractor.
+      def prepare_delivery(sid)
+        dir = attachments_dir(sid)
+        return unless dir
+
+        tool = session_for(sid).tools.get("send_file")
+        tool.delivery_context = { channel: "web", dir: dir } if tool
       end
 
       # What a picture is called when it is downloaded: the stored name minus
@@ -832,26 +766,14 @@ module Rubot
         base.empty? ? "gambar#{extension}" : "#{base}#{extension}"
       end
 
-      # Magic bytes, not the declared type: this is the check that keeps a
-      # response from being served back at the page as something it is not.
-      def image_bytes?(body, extension)
-        case extension
-        when ".png" then body.start_with?("\x89PNG\r\n\x1A\n".b)
-        when ".jpg" then body.start_with?("\xFF\xD8\xFF".b)
-        when ".gif" then body.start_with?("GIF87a".b) || body.start_with?("GIF89a".b)
-        when ".webp" then body.start_with?("RIFF".b) && body.byteslice(8, 4) == "WEBP".b
-        else false
-        end
-      end
+      def serve_media(res, sid, name)
+        return not_found(res) unless owner_slug(sid) && MEDIA_NAME.match?(name)
 
-      def serve_image(res, sid, name)
-        return not_found(res) unless owner_slug(sid) && IMAGE_NAME.match?(name)
-
-        dir = images_dir(sid)
+        dir = attachments_dir(sid)
         path = dir && File.join(dir, name)
         return not_found(res) unless path && File.file?(path)
 
-        res["Content-Type"] = IMAGE_TYPES.key(File.extname(name)) || "application/octet-stream"
+        res["Content-Type"] = MEDIA_TYPES.fetch(File.extname(name), "application/octet-stream")
         res["Content-Length"] = File.size(path).to_s
         res["Cache-Control"] = "private, max-age=3600"
         # The name the reader can download as is set by the `download`
@@ -859,65 +781,6 @@ module Rubot
         # from the conversation on browsers that ignore it.
         res["Content-Disposition"] = %(inline; filename="#{download_name(name)}")
         res.body = File.binread(path)
-      end
-
-      # The ids a form carried, resolved inside this session's own folder. A
-      # value that does not resolve is dropped: the turn still sends, it just
-      # sends without a picture it never had.
-      def resolve_images(sid, ids)
-        dir = images_dir(sid)
-        return [] unless dir
-
-        Array(ids).map(&:to_s).uniq.filter_map do |name|
-          next unless IMAGE_NAME.match?(name)
-
-          path = File.join(dir, name)
-          next unless File.file?(path)
-
-          { id: name, path: path, url: image_url(sid, name), name: download_name(name) }
-        end
-      end
-
-      # What the agent is told about a picture. It is the Telegram channel's
-      # note in the same words, so a model that has learned to read one has
-      # learned to read both: the file path, plus the facts the model cannot
-      # get from a path alone.
-      def attachment_note(image)
-        details = [ Rubot::ImageInfo.dimensions(image[:path]), human_size(File.size(image[:path])) ].compact
-        suffix = details.empty? ? "" : " (#{details.join(', ')})"
-        "📎 User attached an image: #{image[:path]}#{suffix}"
-      end
-
-      # The prompt the agent reads: what was typed, then one note per picture.
-      # The bubble on the page shows the typed text and the pictures; the notes
-      # exist only for the model.
-      def prompt_with_images(text, images)
-        notes = Array(images).map { |image| attachment_note(image) }
-        [ text.to_s, *notes ].reject { |part| part.to_s.strip.empty? }.join("\n\n")
-      end
-
-      def human_size(bytes)
-        return "0 B" unless bytes.to_i.positive?
-
-        if bytes >= 1024 * 1024
-          format("%.1f MB", bytes / (1024.0 * 1024.0))
-        elsif bytes >= 1024
-          format("%.0f KB", bytes / 1024.0)
-        else
-          "#{bytes} B"
-        end
-      end
-
-      def unsupported_media(res)
-        res.status = 415
-        res["Content-Type"] = "text/plain; charset=utf-8"
-        res.body = "Hanya gambar PNG, JPEG, GIF, atau WebP."
-      end
-
-      def too_large(res)
-        res.status = 413
-        res["Content-Type"] = "text/plain; charset=utf-8"
-        res.body = "Gambar terlalu besar (maksimal #{MAX_IMAGE_BYTES / (1024 * 1024)} MB)."
       end
 
       # --- turn lifecycle ------------------------------------------------
@@ -939,15 +802,13 @@ module Rubot
         return not_found(res) unless owner_slug(sid)
 
         text = form(req, "message").strip
-        images = resolve_images(sid, form_list(req, "images"))
-        if text.empty? && images.empty?
+        if text.empty?
           res.status = 400
           res.body = %(<div class="notice"><div class="error">Pesan kosong.</div></div>)
           return
         end
 
-        turn = Turn.new(id: "t#{SecureRandom.hex(6)}", session_id: sid, prompt: text,
-                        images: images.map { |image| image.slice(:id, :url, :name) })
+        turn = Turn.new(id: "t#{SecureRandom.hex(6)}", session_id: sid, prompt: text)
 
         @turns_mutex.synchronize do
           # A second POST while one turn is running must not queue behind it:
@@ -963,21 +824,25 @@ module Rubot
           prune_turns
         end
 
-        Thread.new { run_turn(turn, prompt_with_images(text, images)) }
+        Thread.new { run_turn(turn, text) }
 
         res["Content-Type"] = "text/html; charset=utf-8"
-        res.body = View.render("_turn", turn: turn, text: text, images: turn.images,
-                              token_query: token_query)
+        res.body = View.render("_turn", turn: turn, text: text, token_query: token_query)
       end
 
+      # The turn the browser is following, in one place: the agent reads the
+      # prompt, and everything it hands back lands in the timeline. `send_file`
+      # is aimed at this conversation first — a picture the agent sends is the
+      # whole point of this channel's attachment folder.
       def run_turn(turn, text)
         Thread.current[:rubot_web_turn] = turn
+        prepare_delivery(turn.session_id)
 
         response = process_message(
           text,
           session_id: turn.session_id,
           on_tool_call: ->(name, args, _snapshot) { turn.tool_started(name, summarize_arguments(args)) },
-          on_tool_result: ->(name, result, _diff) { turn.tool_finished(name, tool_ok?(result)) },
+          on_tool_result: ->(name, result, _diff) { tool_finished(turn, name, result) },
           on_reasoning: ->(delta) { turn.thinking(delta) },
           on_confirm: ->(name, _args, reason) { turn.ask_confirm(name, reason) }
         )
@@ -1049,6 +914,14 @@ module Rubot
 
       def tool_ok?(result)
         !result.to_s.start_with?("ERROR")
+      end
+
+      # A tool row, and — when the tool was send_file — the picture it handed
+      # back, drawn under the row that produced it.
+      def tool_finished(turn, name, result)
+        turn.tool_finished(name, tool_ok?(result))
+        picture = sent_picture(name, result, turn.session_id)
+        turn.add_image(**picture) if picture
       end
 
       def summarize_arguments(args)
@@ -1138,11 +1011,9 @@ module Rubot
         case action
         when "steer"
           text = form(req, "text").strip
-          images = resolve_images(turn.session_id, form_list(req, "images"))
-          prompt = prompt_with_images(text, images)
-          return bad_request(res) if prompt.empty?
+          return bad_request(res) if text.empty?
 
-          res.status = steer_session(turn.session_id, prompt) ? 204 : 409
+          res.status = steer_session(turn.session_id, text) ? 204 : 409
         when "stop"
           cancel_session(turn.session_id)
           res.status = 204

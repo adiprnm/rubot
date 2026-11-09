@@ -1163,17 +1163,8 @@ body {
   transition: border-color .12s, background .12s;
 }
 
-/* A file dragged over the field is about to become an attachment; saying so
-   before the drop is the only feedback a drag has. */
-.composer.is-dragging {
-  border-color: var(--green);
-  background: var(--bg2);
-}
-
 .composer:focus-within { border-color: var(--fg-faint); }
 
-/* The text and its buttons are one line; the attachments above them are a row
-   of their own, so a screenshot never narrows the field it was sent with. */
 .composer-row {
   display: flex;
   align-items: flex-end;
@@ -1201,23 +1192,10 @@ body {
 
 .composer-actions { display: flex; gap: 0.4rem; }
 
-/* The paperclip is a square the height of the text line it sits beside, so
-   the two buttons read as one row rather than as a tall and a short one. */
-.btn.attach {
-  display: grid;
-  place-items: center;
-  padding: 0.34rem 0.5rem;
-  color: var(--fg-faint);
-}
-
-.btn.attach svg { display: block; }
-
-.btn.attach:hover { color: var(--fg); }
-
 /* ---------- pictures --------------------------------------------- */
 
-/* A message's pictures are a strip, not a column: several screenshots are
-   wider than the bubble, so they scroll sideways at one height instead of
+/* The agent's pictures are a strip, not a column: several screenshots are
+   wider than the column, so they scroll sideways at one height instead of
    stacking the conversation out of view. `scroll-snap` keeps a picture from
    settling half-drawn at the edge. */
 .attachments {
@@ -1230,21 +1208,9 @@ body {
   scrollbar-color: var(--line) transparent;
 }
 
-.composer-attachments {
-  display: flex;
-  gap: 0.4rem;
-  overflow-x: auto;
-  padding: 0.1rem 0.1rem 0;
-  scroll-snap-type: x proximity;
-  scrollbar-width: thin;
-  scrollbar-color: var(--line) transparent;
-}
+.attachments::-webkit-scrollbar { height: 6px; }
 
-.attachments::-webkit-scrollbar,
-.composer-attachments::-webkit-scrollbar { height: 6px; }
-
-.attachments::-webkit-scrollbar-thumb,
-.composer-attachments::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+.attachments::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
 
 .attachment {
   position: relative;
@@ -1273,20 +1239,18 @@ body {
   object-fit: cover;
 }
 
-.attachment.is-draft img { height: 3.6rem; max-width: 7rem; }
-
 .attachment-open:hover,
 .attachment-open:focus-visible,
 .md-image-open:hover,
 .md-image-open:focus-visible { border-color: var(--fg-faint); }
 
-/* Download and remove sit on the picture, appearing when the pointer is on it
-   (or when a keyboard reaches them). On a touch screen there is no hover, so
-   they are simply always visible there. */
-.attachment-download,
-.attachment-remove {
+/* The download sits on the picture, appearing when the pointer is on it (or
+   when a keyboard reaches it). On a touch screen there is no hover, so it is
+   simply always visible there. */
+.attachment-download {
   position: absolute;
   top: 0.25rem;
+  right: 0.25rem;
   display: grid;
   place-items: center;
   width: 1.35rem;
@@ -1304,26 +1268,16 @@ body {
   transition: opacity .12s;
 }
 
-.attachment-download { right: 0.25rem; }
-.attachment-remove { right: 1.75rem; color: var(--red); font-size: 0.95rem; }
-
 .attachment:hover .attachment-download,
-.attachment:hover .attachment-remove,
-.attachment-download:focus-visible,
-.attachment-remove:focus-visible { opacity: 1; }
+.attachment-download:focus-visible { opacity: 1; }
 
 @media (hover: none) {
-  .attachment-download,
-  .attachment-remove { opacity: 1; }
+  .attachment-download { opacity: 1; }
 }
 
-/* A bubble with pictures is wider than a line of text needs to be, but still
-   narrower than the column: the strip is what has to have room to scroll. */
-.bubble.has-attachments { width: min(86%, 34rem); }
-
-.bubble-text { display: block; white-space: pre-wrap; }
-
-.bubble-text + .attachments { margin-top: 0.45rem; }
+/* A picture the agent sent sits under the row that produced it, one step in
+   from the text it belongs to. */
+.turn-body > .attachments { margin: 0.5rem 0 0.2rem; }
 
 /* An image written in an answer (markdown) keeps its prose position: inline
    with the paragraph, with the same download affordance as an attachment. */

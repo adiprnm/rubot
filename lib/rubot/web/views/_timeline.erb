@@ -17,6 +17,8 @@
   <span class="tool-detail"><%= h(item[:detail]) %></span>
   <span class="live-clock"><%= slow ? dur(item[:elapsed]) : "" %></span>
 </div>
+<% when :images -%>
+<%= View.render("_attachments", images: item[:list]) %>
 <% when :text -%>
 <div class="text<%= item[:live] ? " is-live" : "" %>"><%= fmt(item[:text]) %></div>
 <% end -%>
