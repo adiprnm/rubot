@@ -3,14 +3,27 @@
     without asking the store again.
 
     Re-rendered as an out-of-band swap at the end of a turn: a session opened
-    from the "+" button has no name until its first prompt is in the file. -%>
+    from the "+" button has no name until its first prompt is in the file.
+
+    The row is a div, not a link, because it holds two actions: opening the
+    conversation and deleting it. Deleting is a POST — it takes something away
+    — and asks first, since a conversation is a day's work and its file is the
+    only copy. -%>
 <nav class="sessions" id="sessions">
   <% sessions.each do |row| %>
-    <a class="session<%= row[:active] ? " is-active" : "" %>"
-       href="/s/<%= h(row[:id]) %><%= h(token_query) %>"
-       <%= row[:active] ? 'aria-current="page"' : "" %>>
-      <span class="label"><%= h(row[:label]) %></span>
-      <span class="meta"><%= h(row[:meta]) %></span>
-    </a>
+    <div class="session<%= row[:active] ? " is-active" : "" %>">
+      <a class="session-link"
+         href="/s/<%= h(row[:id]) %><%= h(token_query) %>"
+         <%= row[:active] ? 'aria-current="page"' : "" %>>
+        <span class="label"><%= h(row[:label]) %></span>
+        <span class="meta"><%= h(row[:meta]) %></span>
+      </a>
+      <form class="session-delete"
+            method="post"
+            action="/s/<%= h(row[:id]) %>/delete<%= h(token_query) %>"
+            onsubmit="return confirm('Hapus sesi ini? Seluruh percakapannya ikut hilang.')">
+        <button type="submit" title="Hapus sesi" aria-label="Hapus sesi">&times;</button>
+      </form>
+    </div>
   <% end %>
 </nav>

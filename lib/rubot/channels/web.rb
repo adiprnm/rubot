@@ -45,6 +45,7 @@ module Rubot
       SLUG_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})\z}
       SESSION_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})\z}
       SESSION_TURN_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/turn\z}
+      SESSION_DELETE_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/delete\z}
       PERSONA_SESSIONS_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/sessions\z}
 
       ASSETS = File.expand_path("../web/assets", __dir__)
@@ -288,6 +289,8 @@ module Rubot
           create_persona(req, res)
         elsif method == "POST" && (match = SESSION_TURN_PATH.match(path))
           create_turn(req, res, match[1])
+        elsif method == "POST" && (match = SESSION_DELETE_PATH.match(path))
+          delete_session(res, match[1], req)
         elsif method == "GET" && (match = %r{\A/turns/([\w-]+)/stream\z}.match(path))
           stream_turn(res, match[1])
         elsif method == "POST" && (match = %r{\A/turns/([\w-]+)/(steer|stop|confirm)\z}.match(path))
@@ -405,6 +408,35 @@ module Rubot
         return not_found(res) unless known_slug?(slug)
 
         redirect(res, "/s/#{new_session_id(slug)}", req)
+      end
+
+      # Removing a conversation from the sidebar. The session file is the whole
+      # record — messages, title, usage — so the file is what gets deleted; the
+      # pool is told to forget the id as well, or an actor holding the old
+      # messages would write them back at the end of its next turn. A turn
+      # still running is stopped first for the same reason.
+      def delete_session(res, sid, req)
+        slug = owner_slug(sid)
+        return not_found(res) unless slug
+
+        cancel_session(sid)
+        @pool&.invalidate(sid)
+
+        path = session_path(sid)
+        File.delete(path) if path && File.exist?(path)
+
+        # Land on what is left: the persona's next newest conversation, or the
+        # persona itself when this was the last one. Either way the browser is
+        # sent somewhere that still exists.
+        remaining = sessions_for(slug).first
+        redirect(res, remaining ? "/s/#{remaining[:id]}" : "/p/#{slug}", req)
+      end
+
+      # Where a conversation lives on disk. One directory holds every session,
+      # so the id alone finds the file.
+      def session_path(sid)
+        dir = @app_config&.sessions_dir
+        dir && File.join(dir, "#{sid}.json")
       end
 
       # The name the browser tab carries. A session that has no name yet does

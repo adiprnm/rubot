@@ -354,20 +354,64 @@ body {
   border: 2px solid var(--bg-dim);
 }
 
+/* A row is a conversation plus the one action that removes it. The link keeps
+   the name and the stamp on a grid so a long name stays cut to one line and
+   the age stays flush right; the delete button is a column of its own and
+   appears on the row's edge. */
 .session {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  border-radius: 3px;
+  color: var(--fg-dim);
+}
+
+.session-link {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.5rem;
   align-items: baseline;
-  padding: 0.42rem 0.5rem;
-  border-radius: 3px;
+  padding: 0.42rem 0 0.42rem 0.5rem;
+  min-width: 0;
   text-decoration: none;
-  color: var(--fg-dim);
+  color: inherit;
 }
 
 .session:hover { background: var(--bg1); color: var(--fg); }
 
 .session.is-active { background: var(--bg2); color: var(--fg); }
+
+/* Quiet until the row is touched: the button exists for the row, not for the
+   list, and a column of crosses would read as the point of the sidebar. Its
+   box is a tap target, not the glyph, so it stays reachable on a phone. */
+.session-delete {
+  margin: 0;
+  display: flex;
+  align-items: center;
+}
+
+.session-delete button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--fg-faint);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: color .12s, background .12s, opacity .12s;
+}
+
+.session:hover .session-delete button,
+.session-delete button:focus-visible { opacity: 1; }
+
+.session-delete button:hover { color: var(--red); background: var(--bg2); }
 
 /* The prompt that started the conversation, cut to one line: this is a name,
    not a preview. Hovering still gives the whole thing through the title. */
@@ -928,7 +972,8 @@ body {
     overflow-y: hidden;
   }
 
-  .session { grid-template-columns: auto; padding: 0.3rem 0.5rem; }
+  .session { grid-template-columns: auto auto; }
+  .session-link { grid-template-columns: auto; padding: 0.3rem 0 0.3rem 0.5rem; }
   .session .label { max-width: 11rem; font-size: 12.5px; }
   .session .meta { display: none; }
 

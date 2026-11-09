@@ -867,6 +867,66 @@ module Rubot
         assert_equal "Kanyaah", channel.send(:document_title, "Kanyaah", nil)
       end
 
+      # A conversation is a file: deleting the row deletes the file, and the
+      # browser is sent to whatever is left instead of a page that is now gone.
+      def test_deleting_a_conversation_removes_its_file_and_lands_on_what_is_left
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: {
+            "web_kanyaah" => "Lama",
+            "web_kanyaah~20261108-101010" => "Baru"
+          }
+        )
+        res = FakeResponse.new
+        dir = channel.instance_variable_get(:@app_config).sessions_dir
+
+        channel.send(:delete_session, res, "web_kanyaah~20261108-101010", nil)
+
+        refute File.exist?(File.join(dir, "web_kanyaah~20261108-101010.json"))
+        assert File.exist?(File.join(dir, "web_kanyaah.json"))
+        assert_equal 303, res.status
+        assert_equal "/s/web_kanyaah", res.headers["Location"]
+      end
+
+      # The last conversation of a persona leaves the sidebar empty, so there is
+      # no row to land on: the persona itself opens a fresh one.
+      def test_deleting_the_last_conversation_lands_on_the_persona
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: { "web_kanyaah" => "Lama" }
+        )
+        res = FakeResponse.new
+
+        channel.send(:delete_session, res, "web_kanyaah", nil)
+
+        assert_equal 303, res.status
+        assert_equal "/p/kanyaah", res.headers["Location"]
+      end
+
+      # The delete URL is a bare id, so it has to be checked against the
+      # personas that exist just as any other route is.
+      def test_deleting_a_session_of_an_unknown_persona_is_not_found
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        res = FakeResponse.new
+
+        channel.send(:delete_session, res, "web_ghost", nil)
+
+        assert_equal 404, res.status
+      end
+
+      def test_each_session_row_carries_a_way_to_delete_it
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: { "web_kanyaah" => "Halo" }
+        )
+        rows = channel.send(:session_rows, "kanyaah", "web_kanyaah")
+
+        html = View.render("_sessions", sessions: rows, token_query: "?token=t0k")
+
+        assert_includes html, %(action="/s/web_kanyaah/delete?token=t0k")
+        assert_includes html, %(aria-label="Hapus sesi")
+      end
+
       def test_opening_a_persona_lands_on_its_newest_conversation
         channel = channel_with_sessions(
           personas: { "kanyaah" => { "name" => "Kanyaah" } },
