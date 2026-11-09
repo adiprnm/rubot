@@ -1088,9 +1088,12 @@ module Rubot
       delivery_rule = file_delivery_rule
       parts << delivery_rule if delivery_rule
 
-      # 2. SOUL.md (personality and identity)
+      # 2. SOUL.md (personality and identity). SOUL.md ships with its own
+      # "# Soul" heading (see Soul::DEFAULT_SOUL), so the file's copy is
+      # stripped and the prompt supplies the one heading.
       if @soul.enabled?
-        parts << "# Soul\n\n#{@soul}"
+        soul = @soul.to_s.sub(/\A#\s+Soul\s*\n+/, "")
+        parts << "# Soul\n\n#{soul}" unless soul.strip.empty?
       end
 
       # 2b. Persona (per Telegram forum topic)

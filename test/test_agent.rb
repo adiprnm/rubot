@@ -391,8 +391,26 @@ class TestAgentProgressNarration < Minitest::Test
     refute_includes prompt, "send_files", "prompt names a tool the model cannot call"
   end
 
-  def test_system_prompt_asks_for_file_tool_edits_instead_of_shell
-    prompt = @agent.build_system_prompt
+  # SOUL.md is written with its own "# Soul" heading (Soul::DEFAULT_SOUL has
+  # one), and the prompt adds another — the heading was sent twice, one above
+  # the other, which reads as two sections.
+  def test_system_prompt_sends_the_soul_heading_once
+    File.write(File.join(@config.assets_workspace, "SOUL.md"),
+               "# Soul\n\nYou are Rubot, written in Ruby.\n")
+
+    agent = Rubot::Agent.new(
+      config: @config,
+      provider: NarratingProvider.new,
+      session_id: "soul-heading",
+      tools: @tools
+    )
+
+    prompt = agent.build_system_prompt
+    assert_equal 1, prompt.scan(/^#\s+Soul$/).size, "the soul heading is repeated"
+    assert_includes prompt, "You are Rubot, written in Ruby."
+  end
+
+  def test_system_prompt_asks_for_file_tool_edits_instead_of_shell    prompt = @agent.build_system_prompt
     assert_includes prompt, "Editing Files"
     assert_includes prompt, "`edit` operation"
     assert_includes prompt, "Avoid shell commands that edit files in place"
