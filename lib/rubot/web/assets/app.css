@@ -1100,15 +1100,30 @@ body {
 }
 
 /* A tool row and the answer under it are two different things: the row is
-   machine output, the text is what the person reads. Without this the answer
-   sat 6px under the last call and read as part of the log. */
-.tool-row + .text { margin-top: 0.7rem; }
+   machine output, the text is what the person reads. Without air the answer
+   sits 6px under the last call and reads as part of the log.
 
-/* The same distance going the other way. The narration the model writes
-   before reaching for a tool is the person's text too, so the row under it
-   keeps the same air it keeps under itself: the call is fenced in on both
-   sides instead of touching the sentence that announced it. */
-.text + .tool-row { margin-top: 0.7rem; }
+   `.turn-body` is a flex column, so a sibling's margins never collapse into
+   its neighbour's: they add up. The row keeps 0.4rem under itself for the next
+   row, so the answer only brings the rest of the 1.05rem a paragraph gets. */
+.tool-row + .text { margin-top: calc(1.05rem - 0.4rem); }
+
+/* The same distance going the other way, and it has to be claimed once. The
+   narration the model writes before reaching for a tool is the person's text
+   too, so the row belongs inside the turn's own rhythm — but with a margin on
+   both sides the two added up, and the call sat 28px under the sentence that
+   announced it while the answer under it kept 17.6px. The paragraph above
+   already brings the 1.05rem, so the row brings none of its own. */
+.text + .tool-row { margin-top: 0; }
+
+/* Pictures the agent sent are machine output as well: the strip is the result
+   of a call, not the answer. Its own small bottom margin left the paragraph
+   starting 3px under the last picture, where it read like a caption — and the
+   same doubled margin pushed the strip 25px under the sentence introducing it.
+   One side claims the rhythm, as above. */
+.turn-body > .text + .attachments { margin-top: 0; }
+
+.turn-body > .attachments + .text { margin-top: calc(1.05rem - 0.2rem); }
 
 /* ---------- confirm prompt --------------------------------------- */
 
