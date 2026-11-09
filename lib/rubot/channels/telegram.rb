@@ -1058,9 +1058,12 @@ module Rubot
         cron_tool = session_for(session_id).tools.get("cron")
         cron_tool.delivery_context = { chat_id: chat_id, thread_id: thread_id } if cron_tool
 
-        # Let the agent send files back to this chat (e.g. generated images).
-        send_file_tool = session_for(session_id).tools.get("send_file")
-        send_file_tool.delivery_context = { chat_id: chat_id, thread_id: thread_id } if send_file_tool
+        # Let the agent send files back to this chat (e.g. generated images),
+        # one at a time or as a batch in a single call.
+        %w[send_file send_files].each do |name|
+          tool = session_for(session_id).tools.get(name)
+          tool.delivery_context = { chat_id: chat_id, thread_id: thread_id } if tool
+        end
 
         warn "[telegram] #{username} (#{user_id})#{thread_id ? " [topic:#{thread_id}]" : ""}: #{prompt[0..120]}" if Rubot.debug?
 

@@ -1707,6 +1707,84 @@ module Rubot
         assert_includes result, "pictures"
       end
 
+      # "Kirim 5 gambar" is one instruction; one call stores all five and names
+      # each of them, so the page draws the batch as one strip under one row.
+      def test_send_files_hands_a_batch_into_the_conversation
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        dir = channel.send(:attachments_dir, "web_kanyaah")
+        sources = %w[satu dua tiga empat lima].map do |base|
+          path = File.join(Dir.mktmpdir, "#{base}.png")
+          File.binwrite(path, png_bytes)
+          path
+        end
+
+        tool = Tools::SendFiles.new
+        tool.delivery_context = { channel: "web", dir: dir }
+        result = tool.execute("paths" => sources)
+
+        stored = result.scan(/\[web-attachment ([^\]]+)\]/).flatten
+
+        assert_equal 5, stored.size, "every picture in the batch is named: #{result}"
+        assert_equal %w[dua empat lima satu tiga], stored.map { |n| n[/-([a-z]+)\.png\z/, 1] }.sort
+        stored.each { |name| assert_equal png_bytes, File.binread(File.join(dir, name)) }
+      end
+
+      # A batch is not all-or-nothing: the file that is missing is said out
+      # loud, and the rest still arrive.
+      def test_send_files_sends_the_rest_when_one_path_is_missing
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        dir = channel.send(:attachments_dir, "web_kanyaah")
+        good = File.join(Dir.mktmpdir, "ada.png")
+        File.binwrite(good, png_bytes)
+
+        tool = Tools::SendFiles.new
+        tool.delivery_context = { channel: "web", dir: dir }
+        result = tool.execute("paths" => [ good, File.join(Dir.mktmpdir, "hilang.png") ])
+
+        assert_equal 1, result.scan(/\[web-attachment /).size
+        assert_includes result, "hilang.png"
+        assert_includes result, "not found"
+        refute result.start_with?("ERROR"), "one good file still makes the call a success"
+      end
+
+      # Nothing sent, nothing to show: the call has to read as a failure.
+      def test_send_files_reports_a_batch_that_sent_nothing
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        dir = channel.send(:attachments_dir, "web_kanyaah")
+
+        tool = Tools::SendFiles.new
+        tool.delivery_context = { channel: "web", dir: dir }
+        result = tool.execute("paths" => [ "/nowhere/a.png", "/nowhere/b.png" ])
+
+        assert result.start_with?("ERROR"), result
+        assert_includes result, "a.png"
+        assert_includes result, "b.png"
+      end
+
+      def test_send_files_refuses_more_than_it_can_send_in_one_call
+        tool = Tools::SendFiles.new
+        tool.delivery_context = { channel: "web", dir: Dir.mktmpdir }
+
+        count = Tools::SendFiles::MAX_FILES + 1
+        result = tool.execute("paths" => Array.new(count) { |i| "x#{i}.png" })
+
+        assert result.start_with?("ERROR"), result
+        assert_includes result, Tools::SendFiles::MAX_FILES.to_s
+      end
+
+      def test_send_files_accepts_a_single_path_key
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        dir = channel.send(:attachments_dir, "web_kanyaah")
+        source = File.join(Dir.mktmpdir, "satu.png")
+        File.binwrite(source, png_bytes)
+
+        tool = Tools::SendFiles.new
+        tool.delivery_context = { channel: "web", dir: dir }
+        result = tool.execute("path" => source)
+
+        assert_equal 1, result.scan(/\[web-attachment /).size, result
+      end
+
       # The marker is read back out of the result the transcript keeps, which is
       # how a conversation drawn a week later still knows which stored file that
       # call produced.
@@ -1715,17 +1793,33 @@ module Rubot
         stored = "e" * 32 + "-desain.png"
         result = "Sent desain.png (12 bytes) as a picture. [web-attachment #{stored}]"
 
-        picture = channel.send(:sent_picture, "send_file", result, "web_kanyaah")
+        picture = channel.send(:sent_pictures, "send_file", result, "web_kanyaah").first
 
         assert_equal "desain.png", picture[:name]
         assert_includes picture[:url], "/s/web_kanyaah/media/#{stored}"
         assert_equal "e" * 32, picture[:id],
                      "the stored id is what lets the page keep the picture's node"
 
-        assert_nil channel.send(:sent_picture, "shell", result, "web_kanyaah"),
-                   "only a send_file result names a picture"
-        assert_nil channel.send(:sent_picture, "send_file",
-                                "Sent x. [web-attachment ../../etc/passwd]", "web_kanyaah")
+        assert_empty channel.send(:sent_pictures, "shell", result, "web_kanyaah"),
+                     "only a file-sending result names a picture"
+        assert_empty channel.send(:sent_pictures, "send_file",
+                                  "Sent x. [web-attachment ../../etc/passwd]", "web_kanyaah")
+      end
+
+      # One call, several pictures: the result of send_files carries a marker
+      # per file, and the page turns every one of them into a picture in the
+      # same strip.
+      def test_a_batch_result_names_every_picture_it_sent
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        names = %w[satu dua tiga].map { |base| "#{SecureRandom.hex(16)}-#{base}.png" }
+        result = "Sent 3 files as pictures (png, jpg, gif, webp). " +
+                 names.map { |name| "[web-attachment #{name}]" }.join(" ")
+
+        pictures = channel.send(:sent_pictures, "send_files", result, "web_kanyaah")
+
+        assert_equal 3, pictures.size, "every marker becomes a picture"
+        assert_equal names.size, pictures.map { |p| p[:url] }.uniq.size
+        assert_equal %w[tiga.png satu.png dua.png], pictures.map { |p| p[:name] }.sort.reverse
       end
 
       # A picture belongs to a conversation: the route looks only inside that

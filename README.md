@@ -31,7 +31,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 🎯 **Skills system** — pluggable skill definitions via SKILL.md files in the workspace; loading one shows up in the TUI transcript as its own `✦ skill <name>` row, and flips to `✓` once read
 - 📡 **Multi-channel** — REPL, Telegram and a browser UI, with a pluggable channel architecture
 - 🌐 **Browser channel** — an HTMX page streamed over Server-Sent Events: token streaming, live tool rows and a confirmation card, with no frontend build step
-- 🖼️ **Pictures in the browser chat** — a picture the agent sends with `send_file` is drawn in the thread under the tool row that produced it, opens into a lightbox, and can be downloaded from either the thumbnail or the sheet
+- 🖼️ **Pictures in the browser chat** — a picture the agent sends with `send_file` is drawn in the thread under the tool row that produced it, opens into a lightbox, and can be downloaded from either the thumbnail or the sheet; `send_files` sends a batch in one call and draws it as one strip
 - 📎 **Inbound attachments** — screenshots and files sent to Telegram are saved to the workspace, with dimensions and size added to the prompt
 - 🔈 **Progress narration** — the model explains what it is doing between tool calls ("Let me check the structure first."), sent as normal chat messages
 - 🧭 **Steering** — type while a turn is running (TUI, or a plain message in Telegram) and it reaches the model between rounds, without stopping the turn
@@ -957,9 +957,11 @@ showing a conversation whose last prompt appears never to have been sent.
 Pictures go one way here: the agent hands one back through `send_file`, and the
 page draws it in the thread under the tool row that produced it — a strip that
 scrolls sideways, each picture opening into a sheet with a download beside it.
-The channel aims the tool at `<workspace>/attachments/<session>/`, so the tool
-call that already works in Telegram needs no second path; it serves nothing but
-the formats a browser draws (`png`, `jpg`, `gif`, `webp`).
+A batch goes through `send_files`, which delivers up to ten paths in one call
+and lands them in one strip rather than one row per picture. The channel aims
+both tools at `<workspace>/attachments/<session>/`, so the tool calls that
+already work in Telegram need no second path; the page serves nothing but the
+formats a browser draws (`png`, `jpg`, `gif`, `webp`).
 
 No build step: `htmx`, `htmx-ext-sse` and `alpinejs` are vendored under
 `vendor/web/`, templates are ERB from the standard library, and the only

@@ -24,8 +24,9 @@ class TestTools < Minitest::Test
     assert_includes names, "web_fetch"
     assert_includes names, "cron"
     assert_includes names, "send_file"
+    assert_includes names, "send_files"
     assert_includes names, "search"
-    assert_equal 6, @registry.count
+    assert_equal 7, @registry.count
   end
 
   def test_registry_get_tool
@@ -287,6 +288,104 @@ class TestTools < Minitest::Test
     saved.each { |k, v| v.nil? ? ENV.delete(k) : ENV[k] = v }
   end
 
+  # A batch is several requests, so the stub has to answer each one. Every
+  # connection is read the same way as the single-shot stub above.
+  def start_multi_telegram_stub(count, response_body: '{"ok":true,"result":{}}')
+    server = TCPServer.new("127.0.0.1", 0)
+    requests = Queue.new
+    thread = Thread.new do
+      count.times do
+        client = server.accept
+        data = +""
+        data << client.readpartial(1024) until data.include?("\r\n\r\n")
+        head, body = data.split("\r\n\r\n", 2)
+        length = head[/Content-Length:\s*(\d+)/i, 1].to_i
+        body = body.to_s
+        body << client.read(length - body.bytesize) while body.bytesize < length
+        requests << [ head, body ]
+        client.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" \
+                     "Content-Length: #{response_body.bytesize}\r\nConnection: close\r\n\r\n#{response_body}")
+        client.close
+      end
+    end
+    [ server, thread, requests ]
+  end
+
+  def test_send_files_requires_delivery_context
+    tool = Rubot::Tools::SendFiles.new
+    assert_includes tool.execute({ "paths" => [ "image.png" ] }), "no delivery context"
+  end
+
+  # A caption belongs to one message, so only the first file of a batch carries
+  # it — repeated under every picture it stops being a caption.
+  def test_send_files_uploads_each_file_and_captions_only_the_first
+    files = %w[satu.png dua.png].map do |base|
+      path = File.join(@tmpdir, base)
+      File.binwrite(path, "\x89PNG\r\n\x1a\nfake")
+      path
+    end
+
+    server, thread, requests = start_multi_telegram_stub(2)
+    port = server.addr[1]
+
+    result = with_env(
+      "RUBOT_TELEGRAM_API_BASE" => "http://127.0.0.1:#{port}",
+      "TELEGRAM_BOT_TOKEN" => "123:abc"
+    ) do
+      tool = Rubot::Tools::SendFiles.new
+      tool.delivery_context = { chat_id: 42 }
+      tool.execute({ "paths" => files, "caption" => "Judul post" })
+    end
+
+    assert_includes result, "Sent 2 files"
+    refute result.start_with?("ERROR"), result
+
+    bodies = 2.times.map { Timeout.timeout(5) { requests.pop } }.map(&:last)
+
+    assert_includes bodies[0], "Judul post"
+    refute_includes bodies[1], "Judul post"
+    assert_includes bodies[0], 'filename="satu.png"'
+    assert_includes bodies[1], 'filename="dua.png"'
+  ensure
+    server&.close
+    thread&.join(2)
+    requests&.close
+  end
+
+  # Half of what was asked for beats none of it, but the file that did not go
+  # has to be named.
+  def test_send_files_reports_the_file_it_could_not_send
+    good = File.join(@tmpdir, "ada.png")
+    File.binwrite(good, "\x89PNG\r\n\x1a\nfake")
+
+    server, thread, requests = start_telegram_stub
+    port = server.addr[1]
+
+    result = with_env(
+      "RUBOT_TELEGRAM_API_BASE" => "http://127.0.0.1:#{port}",
+      "TELEGRAM_BOT_TOKEN" => "123:abc"
+    ) do
+      tool = Rubot::Tools::SendFiles.new
+      tool.delivery_context = { chat_id: 42 }
+      tool.execute({ "paths" => [ good, File.join(@tmpdir, "hilang.png") ] })
+    end
+
+    assert_includes result, "Sent 1 file"
+    assert_includes result, "hilang.png"
+    assert_includes result, "not found"
+  ensure
+    server&.close
+    thread&.join(2)
+    requests&.close
+  end
+
+  def test_registry_registers_both_file_tools
+    registry = Rubot::Tools::Registry.new
+
+    refute_nil registry.get("send_file")
+    refute_nil registry.get("send_files"), "a batch needs its own tool to be one call"
+  end
+
   def test_send_file_requires_delivery_context
     tool = Rubot::Tools::SendFile.new
     assert_includes tool.execute({ "path" => "image.png" }), "no delivery context"
@@ -398,13 +497,13 @@ class TestTools < Minitest::Test
     end.new
 
     @registry.register(custom)
-    assert_equal 7, @registry.count
+    assert_equal 8, @registry.count
     assert_equal "done: {}", @registry.execute("custom_tool", {})
   end
 
   def test_registry_provider_definitions
     defs = @registry.to_provider_definitions("openai")
-    assert_equal 6, defs.size
+    assert_equal 7, defs.size
     assert defs.all? { |d| d["type"] == "function" }
     assert defs.all? { |d| d["function"]["name"] }
     assert defs.all? { |d| d["function"]["description"] }

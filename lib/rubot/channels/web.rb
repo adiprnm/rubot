@@ -652,8 +652,8 @@ module Rubot
           elapsed: nil
         } ]
 
-        picture = sent_picture(name, result, sid)
-        items << { kind: :images, list: [ picture ] } if picture
+        pictures = sent_pictures(name, result, sid)
+        items << { kind: :images, list: pictures } unless pictures.empty?
         items
       end
 
@@ -733,32 +733,37 @@ module Rubot
         "/s/#{sid}/media/#{name}#{token_query}"
       end
 
-      # A picture the agent handed back through send_file, read out of the
-      # result that call left in the transcript. The marker is the only record
-      # of which stored file it produced, which is why a conversation drawn
-      # from disk a week later can still show the picture.
-      def sent_picture(name, result, sid)
-        return nil unless name.to_s == "send_file"
+      # The pictures a call handed back, read out of the result the call left in
+      # the transcript. The markers are the only record of which stored files it
+      # produced — that is how a conversation drawn from disk a week later can
+      # still show them. One result can name several: `send_files` sends a batch
+      # in a single call and writes a marker per picture.
+      def sent_pictures(name, result, sid)
+        return [] unless %w[send_file send_files].include?(name.to_s)
 
-        stored = result.to_s[Rubot::Tools::SendFile::WEB_MARKER_RE, 1]
-        return nil unless stored && MEDIA_NAME.match?(stored)
+        result.to_s.scan(Rubot::Tools::SendFile::WEB_MARKER_RE).flatten.filter_map do |stored|
+          next unless MEDIA_NAME.match?(stored)
 
-        # The stored file's own id is the picture's stable identity on the page:
-        # the timeline is redrawn on every token, and a picture that kept its
-        # node is not fetched or decoded again while the answer grows under it.
-        { url: media_url(sid, stored), name: download_name(stored), id: stored[/\A[0-9a-f]{32}/] }
+          # The stored file's own id is the picture's stable identity on the
+          # page: the timeline is redrawn on every token, and a picture that
+          # kept its node is not fetched or decoded again while the answer grows
+          # under it.
+          { url: media_url(sid, stored), name: download_name(stored), id: stored[/\A[0-9a-f]{32}/] }
+        end.uniq { |picture| picture[:id] }
       end
 
-      # Point the agent's send_file at this conversation, so a picture it hands
-      # back lands where the page can serve it. Telegram sets the same field
-      # with a chat id; here it is a folder. Plain strings only, because the
-      # value crosses into the session's Ractor.
+      # Point the agent's file tools at this conversation, so a picture they
+      # hand back lands where the page can serve it. Telegram sets the same
+      # field with a chat id; here it is a folder. Plain strings only, because
+      # the value crosses into the session's Ractor.
       def prepare_delivery(sid)
         dir = attachments_dir(sid)
         return unless dir
 
-        tool = session_for(sid).tools.get("send_file")
-        tool.delivery_context = { channel: "web", dir: dir } if tool
+        %w[send_file send_files].each do |name|
+          tool = session_for(sid).tools.get(name)
+          tool.delivery_context = { channel: "web", dir: dir } if tool
+        end
       end
 
       # What a picture is called when it is downloaded: the stored name minus
@@ -919,12 +924,12 @@ module Rubot
         !result.to_s.start_with?("ERROR")
       end
 
-      # A tool row, and — when the tool was send_file — the picture it handed
-      # back, drawn under the row that produced it.
+      # A tool row, and — when the tool handed pictures back — the pictures
+      # themselves, drawn under the row that produced them. `send_files` names
+      # several in one result; they land in the same strip, in the order sent.
       def tool_finished(turn, name, result)
         turn.tool_finished(name, tool_ok?(result))
-        picture = sent_picture(name, result, turn.session_id)
-        turn.add_image(**picture) if picture
+        sent_pictures(name, result, turn.session_id).each { |picture| turn.add_image(**picture) }
       end
 
       def summarize_arguments(args)
