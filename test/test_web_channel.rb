@@ -848,6 +848,52 @@ module Rubot
         assert_equal "Saya", turn.items.first[:text]
       end
 
+      # A steering message lands in the middle of a round, and a round is not
+      # over because the reader spoke. Both blocks used to be found by looking
+      # at the last row, which the bubble now *was*: the thought that was open
+      # above it never got closed — its clock spun for the rest of the turn —
+      # and the next fragment opened a second thought row under the bubble.
+      def test_steering_during_a_thought_closes_that_thought_and_opens_no_other
+        clock = FakeClock.new
+        turn = build(clock)
+        turn.thinking("mulai")
+        clock.advance(1.0)
+        turn.add_steer("Pakai template Grey")
+        clock.advance(4.0)
+        turn.append_chunk("jawaban")
+
+        assert_equal [ :thinking, :steer, :text ], kinds(turn)
+        thought = turn.items.first
+        refute_nil thought[:closed_at], "the thought the reader interrupted must still end"
+        assert_in_delta 5.0, thought[:elapsed], 0.001
+      end
+
+      # The same seam, seen on the answer: a chunk that arrives after the bubble
+      # belongs to the block that was already being written, not to a new one
+      # below it — otherwise the sentence breaks at the moment the reader typed.
+      def test_steering_mid_answer_keeps_the_answer_in_one_block
+        turn = build
+        turn.append_chunk("Saya ")
+        turn.add_steer("Pakai template Grey")
+        turn.append_chunk("pakai yang Grey.")
+
+        assert_equal [ :text, :steer ], kinds(turn)
+        assert_equal "Saya pakai yang Grey.", turn.items.first[:text]
+      end
+
+      # A bubble is not a shield for content it sits above: a tool row still
+      # ends the round, and the answer that follows the tool opens below it.
+      def test_a_steer_does_not_join_an_answer_to_the_block_above_a_tool
+        turn = build
+        turn.append_chunk("mau jalankan")
+        turn.tool_started("shell_exec", "ls")
+        turn.tool_finished("shell_exec", true)
+        turn.add_steer("pakai yang Grey")
+        turn.append_chunk("selesai")
+
+        assert_equal [ :text, :tool, :steer, :text ], kinds(turn)
+      end
+
       # The seal still means what it says: once a tool has run, the answer that
       # follows is a new block below the row, not more of the narration above it.
       def test_a_tool_call_still_separates_the_answer_that_follows_it

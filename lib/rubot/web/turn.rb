@@ -99,7 +99,7 @@ module Rubot
           # rather than at the end of the turn: a long answer must not keep a
           # clock running over a thought that already stopped.
           close_thinking_locked
-          block = @items.last
+          block = tail_locked
           if block && block[:kind] == :text
             # A sealed block is still where the answer was written: sealing only
             # means a *later* round may open a block below it. A provider that
@@ -120,7 +120,7 @@ module Rubot
       # the wait is ever recorded — never the thought itself.
       def thinking(_delta = nil)
         @mutex.synchronize do
-          last = @items.last
+          last = tail_locked
           return if last && last[:kind] == :thinking && last[:closed_at].nil?
 
           # A thought that arrives while the answer is still being written is
@@ -393,15 +393,25 @@ module Rubot
 
       # No more chunks will be appended to the block being written.
       def seal_text_locked
-        block = @items.last
+        block = tail_locked
         block[:live] = false if block && block[:kind] == :text
+      end
+
+      # The last row that belongs to a round. A steering message is the reader
+      # talking, not the turn moving on: it is drawn where it was typed, and it
+      # must not stand between a block and its own continuation. Read from the
+      # end rather than trusted to be `@items.last`, because the reader can
+      # speak at any moment — including in the middle of a thought.
+      def tail_locked
+        index = @items.rindex { |item| item[:kind] != :steer }
+        index && @items[index]
       end
 
       # Finish the thinking block. A wait worth noticing collapses to one row,
       # "Thought for 12s"; a quick one is dropped outright, so the timeline
       # only records pauses the reader could feel.
       def close_thinking_locked
-        block = @items.last
+        block = tail_locked
         return unless block && block[:kind] == :thinking && block[:closed_at].nil?
 
         block[:elapsed] = @clock.call - block[:started_at]
