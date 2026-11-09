@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "base64"
+require "open3"
 require "shellwords"
 require "tmpdir"
 
@@ -93,6 +94,7 @@ module Rubot
       "/memory"   => "Show persistent memory (MEMORY.md)",
       "/agents"   => "Show agent rules (AGENTS.md)",
       "/cron"     => "List scheduled cron jobs",
+      "/web-restart" => "Restart the web channel (bin/rubot web)",
       "/auto on|off" => "Auto mode: run non-destructive actions without asking (remembered)",
       "/stream on|off" => "Toggle streaming output",
       "/use SKILL" => "Force a specific skill for the next message",
@@ -1410,6 +1412,8 @@ module Rubot
         else
           say("Cron tool not available.", :warn)
         end
+      when "/web-restart"
+        restart_web_channel
       when "/auto"
         handle_auto_command(parts[1])
       when "/stream"
@@ -1441,6 +1445,27 @@ module Rubot
     # /auto with no argument flips the current mode, so the common case is one
     # word. The choice is persisted by the agent (config.yml), which is why the
     # next launch starts the same way.
+    # The script that owns the web channel's process: stopping the server and
+    # starting it again, with the "did it actually come up" check. Kept in a
+    # method of its own so a test can point it at a stub instead of taking the
+    # real listener down.
+    def web_restart_command
+      [ RbConfig.ruby, File.expand_path("../../bin/web-restart", __dir__) ]
+    end
+
+    def restart_web_channel
+      output, status = Open3.capture2e(*web_restart_command)
+      if status.success?
+        say("Web server restarted.", :ok)
+        # The script reports one line on success: the pid and the address.
+        line = output.lines.map(&:strip).reject(&:empty?).last
+        say_text(line) if line
+      else
+        say("Web server restart failed.", :err)
+        output.lines.map(&:strip).reject(&:empty?).last(3).each { |line| say_text(line) }
+      end
+    end
+
     def handle_auto_command(argument)
       word = argument.to_s.strip.downcase
       wanted = if word.empty?

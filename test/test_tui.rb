@@ -351,6 +351,47 @@ module Rubot
       assert_equal first + 2, second, "only the shared blank line sits between them"
     end
 
+    def test_web_restart_command_reports_the_line_the_script_prints
+      Dir.mktmpdir do |dir|
+        script = File.join(dir, "stub-restart.rb")
+        File.write(script, <<~RUBY)
+          puts "[web-restart] stopping 1 process: 4242"
+          puts "[web-restart] up: pid 4343 on http://127.0.0.1:4567"
+        RUBY
+
+        repl = build_repl
+        repl.define_singleton_method(:web_restart_command) { [ RbConfig.ruby, script ] }
+        repl.send(:handle_command, "/web-restart")
+        repl.send(:pump)
+
+        texts = log_texts(repl)
+        assert_includes texts, "#{TUI::MARK[:ok]} Web server restarted."
+        assert_includes texts, "[web-restart] up: pid 4343 on http://127.0.0.1:4567"
+        refute texts.any? { |text| text.include?("stopping 1 process") },
+               "only the last line is quoted, not the whole log"
+      end
+    end
+
+    def test_web_restart_command_surfaces_a_failed_restart
+      Dir.mktmpdir do |dir|
+        script = File.join(dir, "stub-restart.rb")
+        File.write(script, <<~RUBY)
+          warn "[web-restart] ERROR: port 4567 is still in use by another process"
+          exit 1
+        RUBY
+
+        repl = build_repl
+        repl.define_singleton_method(:web_restart_command) { [ RbConfig.ruby, script ] }
+        repl.send(:handle_command, "/web-restart")
+        repl.send(:pump)
+
+        texts = log_texts(repl)
+        assert_includes texts, "#{TUI::MARK[:err]} Web server restart failed."
+        assert(texts.any? { |text| text.include?("still in use by another process") },
+               "the reason is quoted: #{texts.inspect}")
+      end
+    end
+
     def test_plain_command_output_is_padded_with_blanks_and_two_spaces
       Dir.mktmpdir do |dir|
         repl = build_resume_repl(File.join(dir, "workspace"))

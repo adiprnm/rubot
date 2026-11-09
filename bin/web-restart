@@ -1,0 +1,182 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Restart the web channel (bin/rubot web) without leaving a half-swapped
+# process behind.
+#
+# Why a script instead of `pkill -f "bin/rubot web"`: that pattern matches the
+# shell running it, so the kill takes out the caller too, and it happily hits
+# the `sh -c` wrapper that launched the server. This walks /proc, keeps only
+# processes whose *executable* is ruby and whose command line is this repo's
+# `bin/rubot web`, and refuses to touch anything else.
+#
+# The restart is a full stop-then-start: the ERB views are cached per process
+# and read lazily, so a process left running with new templates on disk renders
+# a mix of both and can raise NoMethodError mid-page.
+
+require "fileutils"
+require "net/http"
+require "rbconfig"
+require "socket"
+require "uri"
+require_relative "../lib/rubot"
+
+ROOT = File.expand_path("..", __dir__)
+SERVE_ARGS = %w[bin/rubot web].freeze
+STOP_TIMEOUT = 8.0
+BOOT_TIMEOUT = 20.0
+
+def log(message)
+  puts "[web-restart] #{message}"
+end
+
+def die(message, code: 1)
+  warn "[web-restart] ERROR: #{message}"
+  exit code
+end
+
+# Every process started from this repo as `bin/rubot web`. /proc/<pid>/cmdline
+# is NUL-separated; the match requires the last two words to be exactly
+# "bin/rubot" and "web", so `bin/rubot -C telegram` and the `sh -c` wrapper
+# (whose cmdline carries the whole shell line) never match.
+def server_pids
+  Dir.glob("/proc/[0-9]*/cmdline").filter_map do |path|
+    pid = path[%r{/proc/(\d+)/}, 1].to_i
+    next if pid == Process.pid
+
+    argv = begin
+      File.binread(path).split("\0")
+    rescue SystemCallError
+      next
+    end
+    next unless argv.length >= 2
+    next unless argv[-2, 2] == SERVE_ARGS
+
+    # The interpreter has to be ruby, not some editor that has the file open.
+    exe = begin
+      File.readlink("/proc/#{pid}/exe")
+    rescue SystemCallError
+      ""
+    end
+    next unless File.basename(exe).start_with?("ruby")
+
+    pid
+  end.uniq
+end
+
+def port_open?(port, host = "127.0.0.1")
+  TCPSocket.new(host, port).close
+  true
+rescue SystemCallError
+  false
+end
+
+def wait_until(timeout)
+  deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+  loop do
+    return true if yield
+    return false if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+
+    sleep 0.2
+  end
+end
+
+def stop(pids, port)
+  log "stopping #{pids.size} process#{'es' if pids.size != 1}: #{pids.join(', ')}"
+  pids.each do |pid|
+    Process.kill("TERM", pid)
+  rescue Errno::ESRCH
+    # already gone
+  end
+
+  still = pids.reject do |pid|
+    wait_until(STOP_TIMEOUT) do
+      begin
+        Process.kill(0, pid)
+        false
+      rescue Errno::ESRCH
+        true
+      end
+    end
+  end
+
+  unless still.empty?
+    log "#{still.join(', ')} ignored TERM, sending KILL"
+    still.each do |pid|
+      Process.kill("KILL", pid)
+    rescue Errno::ESRCH
+      # already gone
+    end
+  end
+
+  # A port still held after the processes are gone means something else owns
+  # it; starting a second server would only fail to bind.
+  return if wait_until(5) { !port_open?(port) }
+
+  die "port #{port} is still in use by another process"
+end
+
+def channel_config
+  config = Rubot::Config.new(ENV["RUBOT_CONFIG"])
+  web = config.data.dig("channels", "web") || {}
+  {
+    host: (web["host"] || "127.0.0.1").to_s,
+    port: (web["port"] || 4567).to_i,
+    token: web["token"]&.to_s
+  }
+end
+
+def start(port)
+  log "starting: ruby -Ilib bin/rubot web"
+  log_path = "/tmp/rubot-web.log"
+  previous = "#{log_path}.prev"
+  FileUtils.cp(log_path, previous) if File.exist?(log_path)
+
+  # setsid: the server must outlive this script and its terminal, or a closed
+  # window would take the web channel with it.
+  pid = Process.spawn(
+    RbConfig.ruby, "-Ilib", "bin/rubot", "web",
+    chdir: ROOT,
+    out: [ log_path, "w" ],
+    err: [ :child, :out ],
+    in: File::NULL,
+    pgroup: true
+  )
+  Process.detach(pid)
+  pid
+end
+
+def healthy?(host, port, token)
+  uri = URI("http://#{host == '0.0.0.0' ? '127.0.0.1' : host}:#{port}/")
+  uri.query = URI.encode_www_form(token: token) if token && !token.empty?
+  response = Net::HTTP.start(uri.host, uri.port, open_timeout: 2, read_timeout: 5) do |http|
+    http.request(Net::HTTP::Get.new(uri))
+  end
+  # 200 or a redirect both mean the channel served the route rather than
+  # refusing the request.
+  [ 200, 301, 302, 303, 307, 308 ].include?(response.code.to_i)
+rescue StandardError
+  false
+end
+
+config = channel_config
+pids = server_pids
+
+if pids.empty?
+  log "no server running"
+else
+  stop(pids, config[:port])
+end
+
+pid = start(config[:port])
+
+listening = wait_until(BOOT_TIMEOUT) { port_open?(config[:port]) }
+unless listening
+  die "process #{pid} did not open port #{config[:port]} within #{BOOT_TIMEOUT.to_i}s — see /tmp/rubot-web.log"
+end
+
+unless wait_until(5) { healthy?(config[:host], config[:port], config[:token]) }
+  die "server is listening but did not answer a request — see /tmp/rubot-web.log"
+end
+
+log "up: pid #{pid} on http://#{config[:host]}:#{config[:port]} (log /tmp/rubot-web.log)"
