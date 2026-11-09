@@ -491,6 +491,7 @@ class TestAgentProgressNarration < Minitest::Test
     assert_equal @agent.active_model_name.to_s, epoch["model"]
     refute_empty epoch["task"], "a session with a task still fingerprints it"
     assert_equal "", epoch["summary"], "no summary yet, so nothing to pin it to"
+    assert_equal "", epoch["persona"], "no persona, so nothing to fingerprint"
 
     @agent.session.summary = "Ringkasan"
     @agent.session.forced_skill = "review"
@@ -596,6 +597,56 @@ class TestAgentPersona < Minitest::Test
 
     refute_includes prompt, "# Persona"
     assert_includes prompt, "GLOBAL DEFAULT PROMPT"
+  end
+
+  # A persona is identity, not context. Switching to another one that keeps the
+  # same model used to leave the pinned prompt alone — the epoch tracked only
+  # the model — so the old persona went on answering for the rest of the
+  # session while /persona said it had changed.
+  def test_switching_persona_with_the_same_model_rebuilds_the_prompt
+    agent = build_agent(persona: persona_at("model-a", "Kamu adalah asisten trading.").to_h)
+    assert_includes agent.build_system_prompt, "asisten trading"
+
+    agent.apply_persona(persona_at("model-a", "Kamu adalah asisten marketing.").to_h)
+
+    assert_equal "gpt-4o-mini", agent.active_model_name,
+                 "the model must not be what carries this change"
+    prompt = agent.build_system_prompt
+    assert_includes prompt, "asisten marketing"
+    refute_includes prompt, "asisten trading"
+  end
+
+  # The same hole, seen from the other side: removing a persona while staying
+  # on the model it chose left the persona's words in the pinned prompt.
+  def test_resetting_a_persona_with_the_same_model_drops_its_prompt
+    agent = build_agent(persona: persona_at("model-a", "Kamu adalah asisten trading.").to_h)
+    assert_includes agent.build_system_prompt, "asisten trading"
+
+    agent.apply_persona(nil)
+
+    assert_equal "gpt-4o-mini", agent.active_model_name, "only the persona moved"
+    prompt = agent.build_system_prompt
+    refute_includes prompt, "asisten trading"
+    assert_includes prompt, "GLOBAL DEFAULT PROMPT"
+  end
+
+  # The skills a persona exists to use are quoted in the prompt, so they belong
+  # in the fingerprint beside its instructions.
+  def test_switching_the_skills_of_a_persona_rebuilds_the_prompt
+    agent = build_agent(persona: { "name" => "kanyaah", "model" => "model-a",
+                                   "skills" => %w[kanyaah-brand] }.to_h)
+    assert_includes agent.build_system_prompt, "kanyaah-brand"
+
+    agent.apply_persona({ "name" => "kanyaah", "model" => "model-a",
+                          "skills" => %w[marketing-strategist] }.to_h)
+
+    prompt = agent.build_system_prompt
+    assert_includes prompt, "marketing-strategist"
+    refute_includes prompt, "kanyaah-brand"
+  end
+
+  def persona_at(model, prompt)
+    Rubot::Persona.new(name: "trading", model: model, system_prompt: prompt)
   end
 
   def test_persona_with_unknown_model_falls_back_to_default

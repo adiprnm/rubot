@@ -754,6 +754,10 @@ module Rubot
         @session.model_override = nil
         @session.model_preset = nil
         apply_initial_preset!
+        # The epoch below is what actually rebuilds the prompt, but the pin is
+        # dropped here too: a persona change must never depend on every future
+        # persona field remembering to join the fingerprint.
+        @session.clear_system_prompt!
         @session.save!
         return nil
       end
@@ -786,6 +790,9 @@ module Rubot
         apply_initial_preset!
       end
 
+      # A different persona is a different prompt, and the pin is dropped even
+      # when the model it landed on happens to be the same one.
+      @session.clear_system_prompt!
       @session.save!
       persona_info
     end
@@ -1113,6 +1120,13 @@ module Rubot
     def system_prompt_epoch
       {
         "model" => active_model_name.to_s,
+        # A persona is identity, not context: switching to another one (or
+        # removing it) changes who is answering, so the prompt has to move on
+        # that exact request. Leaving it out meant /persona reset reported the
+        # persona gone while the bot kept speaking as the old one — visible
+        # whenever the new persona kept the same model, invisible when it did
+        # not (the model field moved instead, by luck).
+        "persona" => digest_of(persona_identity),
         # Compaction rewrites the summary that the prompt quotes verbatim.
         "summary" => digest_of(@session&.summary_text),
         "skill" => @session&.forced_skill.to_s,
@@ -1120,6 +1134,15 @@ module Rubot
         # arrival (early calls build the prompt before any message exists).
         "task" => digest_of(@session&.task_statement)
       }
+    end
+
+    # The persona parts that reach the prompt: its own instructions and the
+    # skills it works with. The name is included because it is how the reader
+    # is told who they are talking to — a renamed persona is another one.
+    def persona_identity
+      return "" unless @persona
+
+      [@persona.name, @persona.system_prompt, Array(@persona.skills).join(",")].join("\u0000")
     end
 
     # Stable identity for a piece of text across restarts: String#hash is
