@@ -739,13 +739,34 @@ module Rubot
         assert_equal [ :thinking ], kinds(turn)
       end
 
-      def test_a_thought_after_an_answer_seals_the_answer
+      # An answer that is still being written is not interrupted by a thought:
+      # see below. Once the answer is closed, a thought is a real pause between
+      # rounds, and it earns its row — and the answer that follows opens a new
+      # block under it rather than continuing the sealed one.
+      def test_a_thought_after_a_finished_answer_opens_its_own_row
         turn = build
         turn.append_chunk("awal")
+        turn.tool_started("shell_exec", "ls")
+        turn.tool_finished("shell_exec", true)
         turn.thinking("lagi")
 
-        assert_equal [ :text, :thinking ], kinds(turn)
+        assert_equal [ :text, :tool, :thinking ], kinds(turn)
         refute turn.items.first[:live]
+      end
+
+      # The same reasoning fragment, arriving mid-answer: a provider that
+      # interleaves its reasoning between two chunks of one word used to split
+      # the answer there, and the page drew the seam as a newline ("S", then
+      # "aya"). The fragment is dropped, the answer keeps its block.
+      def test_a_thought_does_not_interrupt_an_answer_being_written
+        turn = build
+        turn.append_chunk("S")
+        turn.thinking("lagi")
+        turn.append_chunk("aya")
+
+        assert_equal [ :text ], kinds(turn)
+        assert_equal "Saya", turn.items.first[:text]
+        assert turn.items.first[:live], "the answer is still arriving"
       end
 
       # A provider can interleave its reasoning with the answer, so a thought

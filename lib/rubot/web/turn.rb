@@ -123,9 +123,20 @@ module Rubot
           last = @items.last
           return if last && last[:kind] == :thinking && last[:closed_at].nil?
 
-          # A thought that arrives after an answer belongs to a new round: the
-          # block above is finished, so the answer continues below this one
-          # instead of being split in half by it.
+          # A thought that arrives while the answer is still being written is
+          # an out-of-band fragment: some gateways interleave their reasoning
+          # with the answer, and it lands between two chunks of one word. It is
+          # dropped rather than recorded, because opening a block here would
+          # seal the answer and split it — "S" above the row, "aya" below it,
+          # which the reader sees as a newline in the middle of a word. The TUI
+          # reached the same rule for the same reason: only a pause *between*
+          # rounds deserves a row, and a real one always starts with the answer
+          # closed, since a tool call and the end of a round both close it.
+          return if last && last[:kind] == :text && last[:live]
+
+          # A thought that arrives after a finished answer belongs to a new
+          # round: the block above is done, so the answer continues below this
+          # one instead of being split in half by it.
           seal_text_locked
           @items << { kind: :thinking, started_at: @clock.call, epoch: epoch_now,
                       closed_at: nil, elapsed: nil }
