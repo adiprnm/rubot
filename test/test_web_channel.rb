@@ -594,6 +594,29 @@ module Rubot
         end
       end
 
+      # A session stand-in that only has to hand out tools: the delivery bind
+      # reads nothing else.
+      class FakeToolAgent
+        def initialize(*tools)
+          @tools = Rubot::Tools::Registry.new
+          tools.each { |tool| @tools.register(tool) }
+        end
+
+        attr_reader :tools
+      end
+
+      # Says where a conversation is rooted, which is all the channel asks of
+      # the pool when it binds the cron tool.
+      class FakeWorkspacePool
+        def initialize(workspace)
+          @workspace = workspace
+        end
+
+        def workspace_for_session(_sid)
+          @workspace
+        end
+      end
+
       def setup
         @fixtures = []
       end
@@ -2325,6 +2348,36 @@ module Rubot
         channel.send(:delete_session, res, "web_ghost", nil)
 
         assert_equal 404, res.status
+      end
+
+      # A reminder written in a persona's web conversation must be filed with
+      # that persona, exactly as in a Telegram topic — otherwise it fires into
+      # an agent that never had the persona's memory.
+      def test_a_turn_tells_the_cron_tool_which_workspace_it_runs_in
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        config = channel.instance_variable_get(:@app_config)
+        cron = Rubot::Tools::Cron.new
+        agent = FakeToolAgent.new(cron)
+        channel.define_singleton_method(:session_for) { |_sid| agent }
+
+        channel.send(:bind_cron_delivery, "web_kanyaah")
+
+        assert_equal config.workspace, cron.delivery_context[:workspace]
+        assert_equal "web", cron.delivery_context[:channel]
+      end
+
+      def test_a_personas_conversation_files_its_reminders_with_the_persona
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        pool = FakeWorkspacePool.new(File.join(Dir.tmpdir, "personas", "kanyaah"))
+        channel.instance_variable_set(:@pool, pool)
+
+        cron = Rubot::Tools::Cron.new
+        agent = FakeToolAgent.new(cron)
+        channel.define_singleton_method(:session_for) { |_sid| agent }
+
+        channel.send(:bind_cron_delivery, "web_kanyaah")
+
+        assert_equal File.join(Dir.tmpdir, "personas", "kanyaah"), cron.delivery_context[:workspace]
       end
 
       def test_each_session_row_carries_a_way_to_delete_it

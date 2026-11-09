@@ -18,11 +18,32 @@ module Rubot
       when "detail"   then detail_job(scheduler, arguments)
       when "remove"   then remove_job(scheduler, arguments)
       when "enable", "disable" then toggle_job(scheduler, arguments, enable: operation == "enable")
+      when "register", "unregister" then toggle_workspace(scheduler, arguments, register: operation == "register")
       else
         "ERROR: Unknown operation '#{operation}'. Use: add, list, remove, enable, disable"
       end
     rescue StandardError => e
       "ERROR: #{e.class}: #{e.message}"
+    end
+
+    # Open or close a workspace's job store.
+    #
+    # The CronActor owning this scheduler keeps every registered workspace's
+    # jobs in one Ractor, so a persona's directory holds its own cron/jobs.json
+    # without needing a scheduler object (and a firing thread) of its own.
+    def toggle_workspace(scheduler, arguments, register:)
+      return "ERROR: this scheduler does not manage multiple workspaces" unless scheduler.respond_to?(:register_workspace)
+
+      path = arguments["workspace"].to_s
+      return "ERROR: 'workspace' is required" if path.empty?
+
+      if register
+        scheduler.register_workspace(path)
+        "OK: workspace registered (#{path})"
+      else
+        count = scheduler.unregister_workspace(path)
+        "OK: workspace unregistered (#{path}, #{count} reminder#{count == 1 ? '' : 's'} removed)"
+      end
     end
 
     def add_job(scheduler, arguments, delivery_context)
@@ -37,7 +58,8 @@ module Rubot
         command: arguments["command"],
         description: arguments["description"] || "",
         target_chat_id: arguments["target_chat_id"] || context_value(delivery_context, :chat_id),
-        target_thread_id: arguments["target_thread_id"] || context_value(delivery_context, :thread_id)
+        target_thread_id: arguments["target_thread_id"] || context_value(delivery_context, :thread_id),
+        workspace: arguments["workspace"] || context_value(delivery_context, :workspace)
       )
 
       job = scheduler.get(id)

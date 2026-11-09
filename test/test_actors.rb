@@ -396,6 +396,120 @@ class TestActors < Minitest::Test
     end
   end
 
+  # A reminder written from a persona's topic is filed in that persona's
+  # directory, so the reminder and the specialist that wrote it live together.
+  def test_a_personas_cron_store_lives_in_its_own_directory
+    config = write_config
+    File.write(File.join(@workspace, "personas.json"), JSON.generate(
+      "trainer" => { "slug" => "trainer", "name" => "Trainer" },
+      "-100123:42" => { "ref" => "trainer" }
+    ))
+    pool = Rubot::Actors::SessionPool.new(config: config)
+
+    begin
+      persona_dir = File.join(File.dirname(config.config_path), "personas", "trainer")
+      cron = pool.cron_for(persona_dir)
+
+      refute_nil cron
+      assert_same pool.cron, cron, "one CronActor serves every workspace"
+
+      cron.call(
+        operation: "add",
+        arguments: {
+          "operation" => "add", "message" => "Latihan 16.30",
+          "every_seconds" => 3600, "workspace" => persona_dir
+        }
+      )
+
+      on_disk = JSON.parse(File.read(File.join(persona_dir, "cron", "jobs.json")))
+      assert_equal [ "Latihan 16.30" ], on_disk["jobs"].values.map { |job| job["message"] }
+      refute File.exist?(File.join(@workspace, "cron", "jobs.json")),
+             "the install's store must stay clean"
+    ensure
+      pool.shutdown
+    end
+  end
+
+  def test_closing_a_persona_store_drops_its_reminders
+    config = write_config
+    pool = Rubot::Actors::SessionPool.new(config: config)
+
+    begin
+      persona_dir = File.join(File.dirname(config.config_path), "personas", "trainer")
+      pool.cron_for(persona_dir)
+      added = pool.cron.call(
+        operation: "add",
+        arguments: {
+          "operation" => "add", "message" => "Latihan",
+          "every_seconds" => 3600, "workspace" => persona_dir
+        }
+      )
+      job_id = added[/`([^`]+)`/, 1]
+
+      dropped = pool.unregister_cron_workspace(persona_dir)
+
+      assert_equal 1, dropped
+      assert_includes pool.cron.call(operation: "list", arguments: { "operation" => "list" }),
+                      "No scheduled jobs"
+      assert_includes pool.cron.call(operation: "detail", arguments: { "operation" => "detail", "job_id" => job_id }),
+                      "not found"
+    ensure
+      pool.shutdown
+    end
+  end
+
+  def test_reminders_of_one_topic_can_be_cleared
+    config = write_config
+    pool = Rubot::Actors::SessionPool.new(config: config)
+
+    begin
+      pool.cron.call(
+        operation: "add",
+        arguments: {
+          "operation" => "add", "message" => "topic", "every_seconds" => 60,
+          "target_chat_id" => 42, "target_thread_id" => 7
+        }
+      )
+
+      assert_equal 1, pool.remove_cron_jobs_for(chat_id: 42, thread_id: 7)
+      assert_includes pool.cron.call(operation: "list", arguments: { "operation" => "list" }),
+                      "No scheduled jobs"
+    ensure
+      pool.shutdown
+    end
+  end
+
+  # A reminder may be due while nobody is talking to the persona. If its store
+  # is only opened when the topic is used, the reminder waits for a message
+  # that may never come.
+  def test_persona_stores_with_jobs_are_reopened_at_boot
+    config = write_config
+    persona_dir = File.join(File.dirname(config.config_path), "personas", "trainer")
+    FileUtils.mkdir_p(File.join(persona_dir, "cron"))
+    File.write(File.join(persona_dir, "cron", "jobs.json"), JSON.generate(
+      "jobs" => {
+        "bootjob" => {
+          "id" => "bootjob", "message" => "Latihan 16.30", "mode" => "agent_turn",
+          "enabled" => true, "schedule_type" => "every", "every_seconds" => 3600,
+          "next_run" => (Time.now + 3600).iso8601, "one_time" => false,
+          "workspace" => persona_dir
+        }
+      }
+    ))
+    File.write(File.join(@workspace, "personas.json"), JSON.generate(
+      "trainer" => { "slug" => "trainer", "name" => "Trainer" }
+    ))
+
+    pool = Rubot::Actors::SessionPool.new(config: config)
+
+    begin
+      list = pool.cron.call(operation: "list", arguments: { "operation" => "list" })
+      assert_includes list, "Latihan 16.30", "a persona's reminder must be live at boot"
+    ensure
+      pool.shutdown
+    end
+  end
+
   def test_set_persona_op_updates_a_live_session
     config = write_config
     pool = Rubot::Actors::SessionPool.new(config: config)

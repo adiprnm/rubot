@@ -67,8 +67,20 @@ module Rubot
         operation = msg[:operation].to_s
         arguments = (msg[:arguments] || {}).merge("operation" => operation)
 
-        if operation == "fire_due"
+        case operation
+        when "fire_due"
           scheduler.fire_due_jobs
+        when "register"
+          scheduler.register_workspace(arguments["workspace"])
+        when "unregister"
+          scheduler.unregister_workspace(arguments["workspace"])
+        when "merge"
+          scheduler.merge_workspace(arguments["workspace"], to: arguments["to"])
+        when "remove_by_target"
+          scheduler.remove_by_target(
+            chat_id: arguments["chat_id"],
+            thread_id: arguments["thread_id"]
+          )
         else
           CronCommands.execute(
             scheduler,

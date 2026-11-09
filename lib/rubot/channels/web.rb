@@ -1037,7 +1037,16 @@ module Rubot
       # hand back lands where the page can serve it. Telegram sets the same
       # field with a chat id; here it is a folder. Plain strings only, because
       # the value crosses into the session's Ractor.
+      #
+      # The cron tool is told which workspace the conversation runs in, so a
+      # reminder written in a persona's chat is filed with that persona — the
+      # same thing a Telegram topic does.
       def prepare_delivery(sid)
+        bind_file_delivery(sid)
+        bind_cron_delivery(sid)
+      end
+
+      def bind_file_delivery(sid)
         dir = attachments_dir(sid)
         return unless dir
 
@@ -1045,6 +1054,23 @@ module Rubot
           tool = session_for(sid).tools.get(name)
           tool.delivery_context = { channel: "web", dir: dir } if tool
         end
+      end
+
+      def bind_cron_delivery(sid)
+        cron = session_for(sid).tools.get("cron")
+        return unless cron
+
+        cron.delivery_context = {
+          channel: "web",
+          workspace: workspace_for_session(sid)
+        }
+      end
+
+      def workspace_for_session(sid)
+        rooted = @pool.workspace_for_session(sid) if actor_mode? && @pool.respond_to?(:workspace_for_session)
+        rooted || @app_config&.workspace
+      rescue StandardError
+        @app_config&.workspace
       end
 
       # What a file is called when it is downloaded: the stored name minus the

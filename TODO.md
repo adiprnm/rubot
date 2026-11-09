@@ -181,3 +181,42 @@ Perubahan setelah fitur ini jalan:
 
 Sisa catatan lama yang masih berlaku: `CronActor` tetap satu per pool (dibuat
 dari workspace utama), jadi job cron tidak ikut workspace persona.
+
+## Update 2026-11-10 — cron per workspace
+
+Sisa catatan "CronActor masih satu per pool" sudah dikerjakan, dengan bentuk yang
+berbeda dari rencana awal: bukan satu `CronActor` per workspace, tapi satu
+`CronActor` dengan satu store per direktori.
+
+1. **Store per direktori.** `CronScheduler` memegang `@jobs` (workspace utama)
+   plus `@extra_workspaces` (satu `cron/jobs.json` per direktori persona).
+   `register_workspace` / `unregister_workspace` / `merge_workspace` membuka dan
+   menutup store; `list`, `get`, `remove`, `toggle`, `fire_due_jobs` dan
+   `remove_by_target` mencakup semuanya. Satu scheduler, satu firing thread.
+2. **Job tahu direktori asalnya.** `Scheduler#add` menerima `workspace:` dan
+   menyimpannya di job. `CronCommands#add_job` mengambilnya dari
+   `delivery_context[:workspace]`; Telegram mengisinya lewat
+   `bind_delivery_context` (`session_workspace(session_id)`), web lewat
+   `prepare_delivery`.
+3. **Event membawa workspace.** Payload `[:cron_fire, …]` menyertakan
+   `:workspace`, sehingga channel bisa merutekan `agent_turn` ke agent yang
+   benar.
+4. **Dibuka saat boot.** `SessionPool#register_persona_cron_stores` membuka store
+   persona yang punya `cron/jobs.json`, jadi reminder tetap menyala walau
+   topic-nya belum dipakai lagi.
+5. **Reset = hapus.** `/persona reset` memanggil `remove_cron_jobs_for`, dan
+   `unregister_cron_workspace(keep: false)` (default) membuang job persona saat
+   direktorinya ditinggalkan. `merge_workspace(from, to:)` memindahkan job bila
+   memang ingin disimpan (`keep: true`).
+6. **Jebakan yang ditemukan saat mengerjakan:** `File.expand_path("")`
+   menghasilkan direktori kerja, bukan error — jadi target kosong sempat
+   diam-diam memindahkan job ke direktori proses. `normalize_workspace` sekarang
+   memperlakukan string kosong sebagai nil.
+7. **Deadlock:** `SessionPool#for` memanggil `cron_for` di dalam
+   `@mutex.synchronize`, dan `cron_for` mengambil mutex yang sama. Workspace dan
+   store sekarang di-resolve sebelum lock diambil.
+
+Test: `test/test_cron.rb` (store per workspace, merge, remove_by_target),
+`test/test_actors.rb` (store persona, reopen saat boot, clear per topic),
+`test/test_channels.rb` (reset menghapus reminder, delivery context membawa
+workspace).

@@ -141,6 +141,84 @@ class TestCronScheduler < Minitest::Test
     assert job["one_time"]
   end
 
+  # --- Per-persona job stores ---
+
+  # A reminder written from a persona's topic is filed in that persona's
+  # directory, not in the install's own store, so deleting the persona can take
+  # its reminders with it.
+  def test_a_job_can_be_filed_in_another_workspace
+    persona_dir = File.join(@tmpdir, "personas", "trainer")
+    id = @scheduler.add(message: "Latihan 16.30", every_seconds: 3600, workspace: persona_dir)
+
+    assert_equal "Latihan 16.30", @scheduler.get(id)["message"]
+    assert_equal persona_dir, @scheduler.get(id)["workspace"]
+
+    persona_store = JSON.parse(File.read(File.join(persona_dir, "cron", "jobs.json")))
+    assert persona_store["jobs"].key?(id), "the job belongs to the persona's store"
+    refute File.exist?(File.join(@tmpdir, "cron", "jobs.json")),
+           "the install's store must not gain a persona's reminder"
+  end
+
+  def test_list_and_remove_span_every_store
+    persona_dir = File.join(@tmpdir, "personas", "trainer")
+    own = @scheduler.add(message: "own", every_seconds: 60)
+    theirs = @scheduler.add(message: "theirs", every_seconds: 60, workspace: persona_dir)
+
+    assert_equal %w[own theirs], @scheduler.list.map { |job| job["message"] }.sort
+
+    assert @scheduler.remove(theirs)
+    assert_nil @scheduler.get(theirs)
+    assert_equal [ "own" ], @scheduler.list.map { |job| job["message"] }
+    assert_equal own, @scheduler.list.first["id"]
+  end
+
+  def test_a_registered_workspace_loads_jobs_it_did_not_write
+    persona_dir = File.join(@tmpdir, "personas", "trainer")
+    FileUtils.mkdir_p(File.join(persona_dir, "cron"))
+    File.write(File.join(persona_dir, "cron", "jobs.json"), JSON.generate(
+      "jobs" => { "abc123" => { "id" => "abc123", "message" => "dari disk", "enabled" => true } }
+    ))
+
+    @scheduler.register_workspace(persona_dir)
+
+    assert_equal "dari disk", @scheduler.get("abc123")["message"]
+    assert_includes @scheduler.registered_workspaces, File.expand_path(persona_dir)
+  end
+
+  def test_merging_a_workspace_moves_its_reminders_to_the_default_store
+    persona_dir = File.join(@tmpdir, "personas", "trainer")
+    id = @scheduler.add(message: "pindah", every_seconds: 60, workspace: persona_dir)
+
+    moved = @scheduler.merge_workspace(persona_dir, to: @tmpdir)
+
+    assert_equal 1, moved
+    assert_equal "pindah", @scheduler.get(id)["message"]
+    assert JSON.parse(File.read(File.join(@tmpdir, "cron", "jobs.json")))["jobs"].key?(id)
+    assert_empty JSON.parse(File.read(File.join(persona_dir, "cron", "jobs.json")))["jobs"]
+  end
+
+  def test_merging_without_a_target_drops_the_reminders
+    persona_dir = File.join(@tmpdir, "personas", "trainer")
+    id = @scheduler.add(message: "hilang", every_seconds: 60, workspace: persona_dir)
+
+    assert_equal 1, @scheduler.merge_workspace(persona_dir)
+
+    assert_nil @scheduler.get(id)
+    assert_empty @scheduler.list
+  end
+
+  def test_remove_by_target_clears_one_topic_only
+    keep = @scheduler.add(message: "general", every_seconds: 60, target_chat_id: 42)
+    drop = @scheduler.add(message: "topic", every_seconds: 60, target_chat_id: 42, target_thread_id: 7)
+    other = @scheduler.add(message: "lain", every_seconds: 60, target_chat_id: 99)
+
+    assert_equal 1, @scheduler.remove_by_target(chat_id: 42, thread_id: 7)
+
+    assert @scheduler.get(keep)
+    assert_nil @scheduler.get(drop)
+    assert @scheduler.get(other)
+  end
+
   def test_add_requires_schedule
     assert_raises(RuntimeError) do
       @scheduler.add(message: "No schedule")

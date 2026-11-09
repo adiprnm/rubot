@@ -1309,6 +1309,18 @@ Schedule reminders, recurring tasks, and timed alerts. The LLM can:
 
 Jobs are stored in the workspace and checked each time the agent processes a message.
 
+A job remembers which directory wrote it. A reminder created in a persona's
+conversation is filed in that persona's own `cron/jobs.json` and runs with that
+persona's agent, so it answers in the voice — and with the memory — it was
+written with. The install's own store holds everything written outside a
+persona. All the stores share one scheduler and one firing thread.
+
+When a Telegram topic loses its persona with `/persona reset`, the reminders
+aimed at that topic go with it: they were written with a memory the topic no
+longer has. Deleting a persona's directory by hand has the same effect — its
+store is simply no longer opened, and `SessionPool#unregister_cron_workspace`
+drops the jobs if you want them gone while the process is still running.
+
 ### Adding Custom Tools
 
 Create a new file in `lib/rubot/tools/` and subclass `Rubot::Tool`:
@@ -1397,7 +1409,10 @@ Rubot separates I/O from agent execution:
   actor, so requests to the same conversation are serialized by the
   actor's mailbox instead of by mutexes.
 - **Cron actor** (`lib/rubot/actors/cron_actor.rb`) owns the scheduler and
-  the persisted job store, and delivers fired jobs as messages.
+  the persisted job stores, and delivers fired jobs as messages. One actor
+  serves every workspace: its scheduler keeps a store per directory, so a
+  persona's reminders live in the persona's own folder without a firing
+  thread per persona.
 - **Message passing** replaces callbacks across Ractor boundaries: tool
   events, streaming chunks, progress, and confirmation requests are
   sent as messages on `Ractor::Port` objects. Procs and mutexes never

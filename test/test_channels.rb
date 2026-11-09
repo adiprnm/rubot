@@ -1302,6 +1302,27 @@ module Rubot
         end
       end
 
+      # Stands in for the SessionPool when a test needs the actor-mode cron
+      # paths without booting Ractors.
+      class FakeCronPool
+        attr_reader :removals
+
+        def initialize(dropped: 0, rooted: {})
+          @dropped = dropped
+          @rooted = rooted
+          @removals = []
+        end
+
+        def remove_cron_jobs_for(chat_id:, thread_id: nil)
+          @removals << [ chat_id, thread_id ]
+          @dropped
+        end
+
+        def workspace_for_session(session_id)
+          @rooted[session_id]
+        end
+      end
+
       attr_reader :sent, :keyboards, :deleted, :sessions, :answers
 
       def initialize(**kwargs)
@@ -1502,6 +1523,59 @@ module Rubot
       text = @tg.sent.last[1]
       assert_includes text, "Memakai : Trainer (trainer)"
       assert_includes text, "dipakai bersama"
+    end
+
+    # A reminder written with a trainer's memory must not outlive the persona:
+    # after a reset it would fire into a session that can no longer answer in
+    # the same voice.
+    def test_reset_drops_the_topics_reminders
+      pool = PersonaTelegram::FakeCronPool.new(dropped: 2)
+      @tg.instance_variable_set(:@pool, pool)
+      @tg.send(:persona_store).set("42:7", Rubot::Persona.new(name: "trading"))
+
+      @tg.send(:process_update, topic_message(text: "/persona reset"))
+
+      assert_equal [ [ 42, 7 ] ], pool.removals
+      assert_includes @tg.sent.last[1], "2 reminder"
+    end
+
+    def test_reset_without_reminders_says_nothing_extra
+      @tg.send(:persona_store).set("42:7", Rubot::Persona.new(name: "trading"))
+
+      @tg.send(:process_update, topic_message(text: "/persona reset"))
+
+      refute_includes @tg.sent.last[1], "reminder"
+    end
+
+    # The cron tool must be told which directory the turn is running in, or a
+    # reminder written here would be filed in the install's own store.
+    def test_a_message_tells_the_cron_tool_its_workspace
+      persona_dir = File.join(@tmpdir, "personas", "trainer")
+      pool = PersonaTelegram::FakeCronPool.new(rooted: { "tg_42_7" => persona_dir })
+      @tg.instance_variable_set(:@pool, pool)
+      # The real session hands out its own tool registry; the fake session the
+      # wizard tests use has none.
+      @tg.define_singleton_method(:session_for) { |_session_id| @agent }
+
+      cron_tool = @agent.tools.get("cron")
+      refute_nil cron_tool, "the agent needs a cron tool for this test"
+
+      @tg.send(:bind_delivery_context, "tg_42_7", 42, 7)
+
+      assert_equal persona_dir, cron_tool.delivery_context[:workspace]
+      assert_equal 42, cron_tool.delivery_context[:chat_id]
+      assert_equal 7, cron_tool.delivery_context[:thread_id]
+    end
+
+    def test_a_topic_without_a_persona_files_reminders_in_the_main_workspace
+      pool = PersonaTelegram::FakeCronPool.new(rooted: {})
+      @tg.instance_variable_set(:@pool, pool)
+      @tg.define_singleton_method(:session_for) { |_session_id| @agent }
+
+      cron_tool = @agent.tools.get("cron")
+      @tg.send(:bind_delivery_context, "tg_42_7", 42, 7)
+
+      assert_equal @config.workspace, cron_tool.delivery_context[:workspace]
     end
 
     def test_prompt_can_be_skipped_to_use_the_default

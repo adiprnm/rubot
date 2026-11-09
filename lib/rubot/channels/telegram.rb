@@ -1054,16 +1054,9 @@ module Rubot
         @last_thread_id = thread_id
 
         # Set delivery context on the session's cron tool so new jobs are
-        # tied to this chat/topic. Each session actor owns its own tool.
-        cron_tool = session_for(session_id).tools.get("cron")
-        cron_tool.delivery_context = { chat_id: chat_id, thread_id: thread_id } if cron_tool
-
-        # Let the agent send files back to this chat (e.g. generated images),
-        # one at a time or as a batch in a single call.
-        %w[send_file send_files].each do |name|
-          tool = session_for(session_id).tools.get(name)
-          tool.delivery_context = { chat_id: chat_id, thread_id: thread_id } if tool
-        end
+        # tied to this chat/topic, and on the file tools so a generated image
+        # comes back here.
+        bind_delivery_context(session_id, chat_id, thread_id)
 
         warn "[telegram] #{username} (#{user_id})#{thread_id ? " [topic:#{thread_id}]" : ""}: #{prompt[0..120]}" if Rubot.debug?
 
@@ -1110,6 +1103,25 @@ module Rubot
       # In legacy (in-process agent) mode, rebuild the per-session agent with
       # the persona stored for that topic. In actor mode the SessionPool reads
       # the persona when it spawns the actor.
+      # Tell this turn's tools where they are: the chat and topic for delivery,
+      # and for cron the directory whose store should hold a new reminder. Each
+      # session actor owns its own tools, so this does not leak across topics.
+      def bind_delivery_context(session_id, chat_id, thread_id)
+        context = { chat_id: chat_id, thread_id: thread_id }
+
+        cron_tool = session_for(session_id).tools.get("cron")
+        if cron_tool
+          cron_tool.delivery_context = context.merge(workspace: session_workspace(session_id))
+        end
+
+        # Let the agent send files back to this chat (e.g. generated images),
+        # one at a time or as a batch in a single call.
+        %w[send_file send_files].each do |name|
+          tool = session_for(session_id).tools.get(name)
+          tool.delivery_context = context if tool
+        end
+      end
+
       def session_for(session_id)
         return super if actor_mode? || @agent.nil?
 
@@ -1147,6 +1159,14 @@ module Rubot
         return @agent.config.workspace if @agent.respond_to?(:config) && @agent.config
 
         File.join(Dir.home, ".rubot", "workspace")
+      end
+
+      # The directory a session's agent actually runs in: the persona's own
+      # when it has one, the default workspace otherwise. The cron tool needs
+      # it to file a reminder where it was written.
+      def session_workspace(session_id)
+        rooted = @pool.workspace_for_session(session_id) if actor_mode? && @pool.respond_to?(:workspace_for_session)
+        rooted || persona_workspace
       end
 
       def persona_config
@@ -1310,12 +1330,26 @@ module Rubot
 
         removed = persona_store.delete(persona_topic_key(chat_id, thread_id))
         apply_persona_to_session(topic_session_id(chat_id, thread_id), nil)
+        dropped = drop_topic_reminders(chat_id, thread_id)
 
         text = removed ? "✅ Persona topic ini dihapus. Model kembali ke default." : "ℹ️ Topic ini memang belum punya persona."
+        text += "\n⏰ #{dropped} reminder topic ini ikut dihapus — reminder itu ditulis dengan memory persona yang sekarang sudah tidak dipakai." if dropped.positive?
         send_message(chat_id, text, thread_id)
       rescue StandardError => e
         warn "[persona] reset failed: #{e.class}: #{e.message}"
         send_message(chat_id, "❌ Gagal menghapus persona: #{e.message}", thread_id)
+      end
+
+      # A reminder written from a persona's topic was written with that
+      # persona's memory. Once the persona is gone it would fire into a session
+      # that can no longer answer in the same voice, so it goes too.
+      def drop_topic_reminders(chat_id, thread_id)
+        return 0 unless actor_mode? && @pool.respond_to?(:remove_cron_jobs_for)
+
+        @pool.remove_cron_jobs_for(chat_id: chat_id, thread_id: thread_id)
+      rescue StandardError => e
+        warn "[persona] could not clear reminders: #{e.class}: #{e.message}"
+        0
       end
 
       def handle_cancel_command(chat_id, thread_id)
