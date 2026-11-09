@@ -104,12 +104,19 @@
           </div>
         <% end %>
       <% end %>
-      <% if messages.empty? %>
+      <% if messages.empty? && live_turn.nil? %>
         <p class="empty">
           <%= h(persona_label) %> punya SOUL, skills, dan memory sendiri.
           Apa pun yang dijalankannya lewat tool tampil di atas jawabannya.
           Sesi baru mulai dari percakapan kosong, dengan persona yang sama.
         </p>
+      <% end %>
+      <%# A turn still in flight is drawn after the history and opens its own
+          stream again: the prompt it is answering is not in the session file
+          yet, so this fragment is the only record of it on a refreshed page. -%>
+      <% if live_turn %>
+        <%= View.render("_turn", turn: live_turn, text: live_turn.prompt,
+                        token_query: token_query) %>
       <% end %>
     </div>
 

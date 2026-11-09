@@ -30,16 +30,20 @@ module Rubot
       # wonder whether it hung.
       SLOW_TOOL_SECONDS = 3.0
 
-      attr_reader :id, :session_id, :response, :epoch
+      attr_reader :id, :session_id, :response, :epoch, :prompt
 
       # `clock` is injectable so the timing rules can be tested without
       # sleeping through them. `epoch_clock` is the wall clock the timeline rows
       # stamp themselves with, injectable for the same reason: the working row
       # has to be shown restarting from a tool call, and microseconds are a
       # poor thing to assert on.
-      def initialize(id:, session_id:, clock: nil, epoch_clock: nil)
+      def initialize(id:, session_id:, prompt: nil, clock: nil, epoch_clock: nil)
         @id = id
         @session_id = session_id
+        # The prompt is kept here because the session file only learns about it
+        # when the turn is written at the end. A page refreshed mid-answer has
+        # to draw the bubble it is answering, and this is the only copy.
+        @prompt = prompt.to_s
         @clock = clock || -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }
         @epoch_clock = epoch_clock || -> { Time.now.to_f }
         # When the prompt was accepted, on the wall clock. The timeline rows
@@ -242,8 +246,32 @@ module Rubot
 
       # Yields [type, payload] pairs in order and blocks while the turn is
       # still producing. Returns once the closing :done event was yielded.
-      def each_event
+      #
+      # A reader that joins a turn already in flight asks for `from_now`: what
+      # it needs is the state the turn is in, not the log that produced it. The
+      # log is written for the reader who was there — every :turn in it is a
+      # whole re-render, and replayed one by one with the flush pause between
+      # them a long answer would take minutes to catch up with itself. The
+      # first paint after a refresh is the latest state, and the events that
+      # follow are the live ones.
+      def each_event(from_now: false)
         index = 0
+
+        if from_now
+          closed = false
+          @mutex.synchronize do
+            # Taken under the lock, so an event produced between here and the
+            # first read below is not skipped.
+            index = @events.size
+            closed = @closed
+          end
+          yield [ :turn, nil ]
+          if closed
+            yield [ :done, nil ]
+            return
+          end
+        end
+
         loop do
           pending = nil
           done = false

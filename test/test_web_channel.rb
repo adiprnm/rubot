@@ -880,7 +880,7 @@ module Rubot
                            persona_model: "m", session_id: "web_rubot",
                            session_short: "web_rubot", session_label: "Sesi baru",
                            document_title: "rubot · Rubot", messages: [],
-                           token_query: "",
+                           live_turn: nil, token_query: "",
                            usage: { cost: "—", cache: "—", ctx: "—" })
 
         band = html[/<div id="working"[^>]*>.*?<\/div>/m]
@@ -930,6 +930,94 @@ module Rubot
         turn.each_event { |type, _payload| types << type }
 
         assert_includes types, :working
+      end
+
+      # A refresh during an answer must not look like a conversation whose last
+      # prompt was never sent. Nothing is written to the session file until a
+      # turn ends, so the page has to find the turn in memory and draw it —
+      # prompt, timeline and the stream that reconnects to it.
+      def test_a_refreshed_page_draws_the_turn_that_is_still_running
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: { "web_kanyaah" => "Halo" }
+        )
+        turn = Turn.new(id: "tabc", session_id: "web_kanyaah", prompt: "Berapa harga template?")
+        turn.append_chunk("Aku cek katalog dulu.")
+        channel.instance_variable_get(:@turns)["tabc"] = turn
+        channel.instance_variable_get(:@active)["web_kanyaah"] = "tabc"
+
+        res = FakeResponse.new
+        channel.send(:render_session, res, "web_kanyaah")
+        html = res.body
+
+        assert_includes html, "Berapa harga template?",
+                        "the prompt the turn is answering is drawn from the turn itself"
+        assert_includes html, "Aku cek katalog dulu.",
+                        "and so is the text it has written so far"
+        assert_includes html, %(sse-connect="/turns/tabc/stream"),
+                        "the page has to join the stream again, not sit on a frozen copy"
+      end
+
+      # A turn that has ended is in the session file, where the history loop
+      # draws it. Drawing it again would show every answer twice.
+      def test_a_page_does_not_draw_a_turn_that_has_already_ended
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        turn = Turn.new(id: "tabc", session_id: "web_kanyaah", prompt: "Halo")
+        turn.finish("Siap.")
+        channel.instance_variable_get(:@turns)["tabc"] = turn
+        channel.instance_variable_get(:@active)["web_kanyaah"] = "tabc"
+
+        assert_nil channel.send(:live_turn, "web_kanyaah")
+
+        res = FakeResponse.new
+        channel.send(:render_session, res, "web_kanyaah")
+
+        refute_includes res.body, %(sse-connect="/turns/tabc/stream")
+      end
+
+      # A confirmation that was already waiting when the page refreshed would
+      # otherwise strand the turn behind a question nobody can see: its event
+      # is in the part of the log the reconnecting reader skips.
+      def test_a_refreshed_page_shows_a_confirmation_that_is_still_waiting
+        turn = build
+        turn.instance_variable_set(:@confirm, { name: "shell_exec", reason: "rm -rf build" })
+
+        html = View.render("_turn", turn: turn, text: "hi", token_query: "")
+
+        assert_includes html, "Lanjutkan"
+        assert_includes html, "rm -rf build"
+      end
+
+      # The stream a refreshed page joins starts at the state the turn is in,
+      # not at the beginning of the log. Replaying every :turn in it would be
+      # one whole re-render per flush pause, and a long answer would take
+      # minutes to catch up with itself.
+      def test_a_reader_joining_in_flight_gets_the_latest_state_once
+        turn = build
+        turn.append_chunk("Bagian pertama.")
+        turn.tool_started("shell_exec", "ls")
+        turn.append_chunk("Bagian kedua.")
+
+        events = []
+        turn.each_event(from_now: true) do |type, _payload|
+          events << type
+          break
+        end
+
+        assert_equal [ :turn ], events,
+                     "one paint of the current state, not a replay of how it got there"
+        assert_equal [ "Bagian pertama.", "Bagian kedua." ], texts(turn),
+                     "the paint carries the whole timeline, in the order it happened"
+      end
+
+      def test_joining_a_turn_that_just_ended_still_closes_the_stream
+        turn = build
+        turn.finish("selesai")
+
+        events = []
+        turn.each_event(from_now: true) { |type, _payload| events << type }
+
+        assert_equal [ :turn, :done ], events
       end
 
       def test_the_composer_form_carries_the_ref_enter_submits_through
@@ -982,7 +1070,7 @@ module Rubot
                            persona_model: "m", session_id: "web_rubot",
                            session_short: "web_rubot", session_label: "Sesi baru",
                            document_title: "rubot · Rubot", messages: [],
-                           token_query: "",
+                           live_turn: nil, token_query: "",
                            usage: { cost: "—", cache: "—", ctx: "—" })
 
         assert_includes html, 'id="composer-notice"', "the composer needs a notice slot"

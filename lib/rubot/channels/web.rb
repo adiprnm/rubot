@@ -449,6 +449,7 @@ module Rubot
         slug = owner_slug(sid)
         return not_found(res) unless slug
 
+        live = live_turn(sid)
         persona = persona_store&.[](slug)
         persona_label = persona ? persona.label : slug.capitalize
         session_label = named_session_label(slug, sid)
@@ -465,6 +466,7 @@ module Rubot
           session_label: session_label,
           document_title: document_title(persona_label, session_label),
           messages: history(sid),
+          live_turn: live,
           usage: usage_locals(sid),
           token_query: token_query
         )
@@ -635,6 +637,19 @@ module Rubot
 
       # --- turn lifecycle ------------------------------------------------
 
+      # The turn this session is running right now, if any. Nothing is written
+      # to the session file until a turn ends, so without this a page opened —
+      # or refreshed — mid-answer would show a conversation that looks as if
+      # the last prompt was never sent. The fragment it draws opens the stream
+      # again, so the reader is back on the same turn rather than watching a
+      # frozen copy of it.
+      def live_turn(sid)
+        @turns_mutex.synchronize do
+          turn = @turns[@active[sid]]
+          turn && !turn.closed? ? turn : nil
+        end
+      end
+
       def create_turn(req, res, sid)
         return not_found(res) unless owner_slug(sid)
 
@@ -645,7 +660,7 @@ module Rubot
           return
         end
 
-        turn = Turn.new(id: "t#{SecureRandom.hex(6)}", session_id: sid)
+        turn = Turn.new(id: "t#{SecureRandom.hex(6)}", session_id: sid, prompt: text)
 
         @turns_mutex.synchronize do
           # A second POST while one turn is running must not queue behind it:
@@ -769,7 +784,10 @@ module Rubot
         res.chunked = true
 
         res.body = proc do |out|
-          turn.each_event do |type, payload|
+          # A page that has just been painted already shows the turn's current
+          # state, so the stream continues from here instead of replaying the
+          # log: a refresh mid-answer lands on the latest text at once.
+          turn.each_event(from_now: true) do |type, payload|
             break unless @running
 
             write_event(out, turn, type, payload)
