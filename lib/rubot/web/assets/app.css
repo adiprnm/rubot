@@ -2043,9 +2043,12 @@ body.lightbox-open { overflow: hidden; }
   text-align: right;
 }
 
+/* The reset line starts where the bar starts: its grid area already begins at
+   the bar's column, so it needs no gutter of its own — the name column is
+   behind it, not beside it. Indenting it by that column as well pushed the
+   words three quarters of an inch past the bar they describe. */
 .usage-meter .meter-reset {
   grid-area: reset;
-  padding-left: calc(4.2rem + 0.5rem);
   color: var(--fg-faint);
   font-size: 10.5px;
 }
@@ -2154,6 +2157,32 @@ body.lightbox-open { overflow: hidden; }
 
   /* Same reason: a glyph in the status row needs a target bigger than itself. */
   .status-line .usage-toggle { padding: 0.35rem 0.3rem; }
+
+  /* The report was drawn for a 24rem panel with room to spare; a phone hands
+     it 82vw of a much smaller screen, where the same type reads a size larger
+     and the block below it doubles in height. Everything steps down one notch,
+     and the name column gives the bar back the width the screen took: that is
+     what keeps "reset dalam …" on a single line instead of splitting a meter
+     across two and making the allowance look twice its size. */
+  .usage-panel { padding: 0.85rem 0.9rem; }
+
+  .usage-panel .panel-title { font-size: 9.5px; }
+
+  .usage-facts {
+    grid-template-columns: 4.9rem minmax(0, 1fr);
+    font-size: 12px;
+  }
+
+  .usage-meter {
+    grid-template-columns: 3.3rem minmax(0, 1fr) auto;
+    font-size: 11px;
+  }
+
+  .usage-meter .meter-name,
+  .usage-meter .meter-left { font-size: 9.5px; }
+  .usage-meter .meter-reset { font-size: 10px; }
+
+  .usage-note { font-size: 11px; }
 
   .nav-scrim {
     display: block;
