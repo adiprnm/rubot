@@ -445,6 +445,58 @@ body {
 .rail-panel textarea:focus,
 .rail-panel select:focus { border-color: var(--green); }
 
+/* The slug cannot be edited, so it is shown rather than asked for: a field
+   that refuses every keystroke reads as a bug, a line of text does not. */
+.panel-hint {
+  margin: 0 0 0.1rem;
+  font-size: 11.5px;
+  color: var(--fg-faint);
+}
+
+.panel-hint code {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: -0.03em;
+  color: var(--fg-dim);
+}
+
+/* ---------- edit persona ----------------------------------------- */
+
+/* A pencil sits at the end of the persona's name and opens the same dialog the
+   "+" in the rail does. It is the persona's own row, so the way to change it
+   belongs there rather than behind a settings page. */
+.side-edit { margin-left: auto; flex: 0 0 auto; }
+
+.side-edit summary {
+  display: grid;
+  place-items: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 3px;
+  color: var(--fg-faint);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  list-style: none;
+}
+
+.side-edit summary::-webkit-details-marker { display: none; }
+
+/* Above the backdrop it draws, so the button that opened the dialog also
+   closes it. */
+.side-edit[open] summary { position: relative; z-index: 41; }
+
+.side-edit summary:hover,
+.side-edit[open] summary { color: var(--green); background: var(--bg2); }
+
+.side-edit[open]::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 39;
+  background: var(--shadow-deep);
+}
+
 .form-error { margin: 0; font-size: 12.5px; color: var(--red); }
 .form-error:empty { display: none; }
 
@@ -2254,6 +2306,11 @@ body.lightbox-open { overflow: hidden; }
 
   .rail-new[open]::before { z-index: 79; }
   .rail-new[open] summary { z-index: 81; }
+
+  /* The pencil lives in the drawer too, so its dialog needs the same climb
+     the rail's "+" got. */
+  .side-edit[open]::before { z-index: 79; }
+  .side-edit[open] summary { z-index: 81; }
 }
 
 @media (prefers-reduced-motion: reduce) {

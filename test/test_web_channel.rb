@@ -562,10 +562,11 @@ module Rubot
 
       # The shell of the page with nothing in it but what these view tests need:
       # a persona, one open session, and whatever turn is still in flight.
-      def render_page(live_turn: nil)
+      def render_page(live_turn: nil, persona_prompt: "")
         View.render("index",
                     personas: [], sessions: [],
                     slug: "rubot", persona_label: "Rubot", persona_emoji: "🤖",
+                    persona_prompt: persona_prompt,
                     persona_model: "m", session_id: "web_rubot",
                     session_short: "web_rubot", session_label: "Sesi baru",
                     document_title: "rubot · Rubot", live_turn: live_turn, token_query: "",
@@ -1279,6 +1280,7 @@ module Rubot
         html = View.render("index",
                            personas: [], sessions: [],
                            slug: "rubot", persona_label: "Rubot", persona_emoji: "🤖",
+                           persona_prompt: "",
                            persona_model: "m", session_id: "web_rubot",
                            session_short: "web_rubot", session_label: "Sesi baru",
                            document_title: "rubot · Rubot", live_turn: nil, token_query: "",
@@ -1882,6 +1884,8 @@ module Rubot
                      "the dialog has to be centred on its own box, not its corner")
         assert_match(/rail-new\[open\]::before \{[^}]*position: fixed/m, css,
                      "an open dialog dims the page behind it")
+        assert_match(/side-edit\[open\]::before \{[^}]*position: fixed/m, css,
+                     "the edit dialog dims it the same way")
       end
 
       # Dragging the corner of the prompt used to resize the whole dialog and
@@ -1895,13 +1899,125 @@ module Rubot
       end
 
       # The dimmed page is a way out: a click on it, or Escape, closes the
-      # dialog. Without that the only close button is the one it covered.
+      # dialog. Without that the only close button is the one it covered. Both
+      # persona dialogs — the new one in the rail, the edit one in the sidebar
+      # — are the same mechanism, so both have to be wired.
       def test_the_persona_dialog_can_be_dismissed_from_the_page_behind_it
         js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
 
         assert_includes js, %(details.rail-new[open])
+        assert_includes js, %(details.side-edit[open])
         assert_includes js, "open.open = false"
         assert_includes js, %(event.key !== "Escape")
+      end
+
+      # A persona that already exists had no way to change its name, face or
+      # prompt: the only form on the page made a new one. The edit form writes
+      # the same record in place.
+      def test_a_persona_can_be_edited_in_place
+        created = "2026-01-02T03:04:05Z"
+        channel = channel_with_sessions(
+          personas: {
+            "kanyaah" => { "slug" => "kanyaah", "name" => "Kanyaah", "emoji" => "🧠",
+                           "preset" => "primary", "system_prompt" => "Lama",
+                           "created_at" => created }
+          },
+          sessions: { "web_kanyaah" => "Halo" }
+        )
+
+        res = FakeResponse.new
+        channel.send(:edit_persona, edit_request(
+                                      "name" => "Kanyaah ID", "emoji" => "✍️",
+                                      "system_prompt" => "Baru", "session_id" => "web_kanyaah"
+                                    ), res, "kanyaah")
+
+        persona = channel.send(:persona_store)["kanyaah"]
+
+        assert_equal "Kanyaah ID", persona.name
+        assert_equal "✍️", persona.emoji
+        assert_equal "Baru", persona.system_prompt
+        assert_equal "primary", persona.preset, "the model is not one of the form's fields"
+        assert_equal created, persona.created_at, "the roster is ordered by creation time"
+        assert_equal 303, res.status
+        assert_equal "/s/web_kanyaah", res.headers["Location"],
+                     "the editor lands back on the conversation it was opened from"
+      end
+
+      # Emptying the prompt is how a persona goes back to the default voice:
+      # the field means "no prompt of my own", not "keep the old one".
+      def test_clearing_the_prompt_gives_the_persona_the_default_voice
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah", "emoji" => "🧠",
+                                     "system_prompt" => "Lama" } }
+        )
+
+        channel.send(:edit_persona, edit_request("name" => "", "emoji" => "",
+                                                 "system_prompt" => ""),
+                     FakeResponse.new, "kanyaah")
+
+        persona = channel.send(:persona_store)["kanyaah"]
+
+        assert_nil persona.system_prompt
+        assert_nil persona.name, "an emptied name falls back to the slug"
+        assert_equal "🧠", persona.emoji, "an empty face keeps the one it had"
+      end
+
+      # An id from another persona must not send the editor into a conversation
+      # it does not own; the persona's own page is the safe landing.
+      def test_an_edit_ignores_a_session_id_that_belongs_to_someone_else
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" },
+                      "rubot" => { "name" => "Rubot" } }
+        )
+
+        res = FakeResponse.new
+        channel.send(:edit_persona, edit_request("name" => "Kanyaah", "session_id" => "web_rubot"),
+                     res, "kanyaah")
+
+        assert_equal "/p/kanyaah", res.headers["Location"]
+      end
+
+      def test_editing_a_persona_that_does_not_exist_is_not_found
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+
+        res = FakeResponse.new
+        channel.send(:edit_persona, edit_request("name" => "Hilang"), res, "hilang")
+
+        assert_equal 404, res.status
+      end
+
+      # The form's action is a route like any other, so the page it was written
+      # into and the handler behind it have to agree on the path.
+      def test_the_edit_form_posts_to_a_route_that_reaches_the_handler
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        request = Object.new
+        request.define_singleton_method(:path) { "/p/kanyaah/edit" }
+        request.define_singleton_method(:request_method) { "POST" }
+        request.define_singleton_method(:query) { { "name" => "Kanyaah Baru" } }
+        request.define_singleton_method(:[]) { |_key| nil }
+
+        channel.send(:dispatch, request, FakeResponse.new)
+
+        assert_equal "Kanyaah Baru", channel.send(:persona_store)["kanyaah"].name
+      end
+
+      # The dialog has to open with what is already saved, or saving would
+      # overwrite a prompt with an empty field.
+      def test_the_edit_dialog_arrives_with_what_is_already_saved
+        html = render_page(persona_prompt: "Kamu spesialis undangan.")
+
+        assert_includes html, %(class="side-edit")
+        assert_includes html, %(hx-post="/p/rubot/edit")
+        assert_includes html, "Kamu spesialis undangan."
+        assert_includes html, %(name="session_id" value="web_rubot")
+        assert_includes html, %(class="panel-hint"), "the slug is shown, not asked for"
+      end
+
+      def edit_request(values)
+        request = Object.new
+        request.define_singleton_method(:query) { values }
+        request.define_singleton_method(:[]) { |_key| nil }
+        request
       end
 
       def test_form_value_is_forced_to_utf8
@@ -2713,6 +2829,7 @@ module Rubot
         html = View.render("index",
                            personas: [], sessions: [],
                            slug: "rubot", persona_label: "Rubot", persona_emoji: "🤖",
+                           persona_prompt: "",
                            persona_model: "m", session_id: "web_rubot",
                            session_short: "web_rubot", session_label: "Sesi baru",
                            document_title: "rubot · Rubot", live_turn: nil, token_query: "",

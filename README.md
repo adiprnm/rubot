@@ -976,6 +976,17 @@ rather than injected, so a block that streamed in mid-answer is already
 copyable, and it stays hidden while the fence is still open because the text is
 not finished yet.
 
+Personas are the left column: one round avatar per specialist, chosen there and
+created with the `+` beneath them. Each one owns a workspace of its own, so its
+`SOUL.md`, skills and memory are not shared with the next. A persona is edited
+where its name is shown: the pencil in the sidebar opens the same dialog with
+the name, the face and the system prompt already filled in, and saving keeps the
+slug, creation time and model choice untouched — the slug is the key in
+`personas.json` and the workspace directory's name, so it is shown rather than
+asked for. An edit reaches the conversation's next turn: idle actors are rebuilt
+from the store, and a turn already in flight is left to finish in the voice it
+started with.
+
 | Setting | Default | Meaning |
 |---------|---------|---------|
 | `host` | `127.0.0.1` | Bind address. `0.0.0.0` requires a `token`. |

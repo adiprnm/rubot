@@ -73,6 +73,7 @@ module Rubot
       SESSION_DELETE_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/delete\z}
       SESSION_QUOTA_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/quota\z}
       PERSONA_SESSIONS_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/sessions\z}
+      PERSONA_EDIT_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/edit\z}
 
       ASSETS = File.expand_path("../web/assets", __dir__)
       VENDOR = File.expand_path("../../../vendor/web", __dir__)
@@ -323,6 +324,8 @@ module Rubot
           render_history(res, match[1], req)
         elsif method == "POST" && path == "/personas"
           create_persona(req, res)
+        elsif method == "POST" && (match = PERSONA_EDIT_PATH.match(path))
+          edit_persona(req, res, match[1])
         elsif method == "POST" && (match = SESSION_TURN_PATH.match(path))
           create_turn(req, res, match[1])
         elsif method == "GET" && (match = SESSION_MEDIA_PATH.match(path))
@@ -577,6 +580,7 @@ module Rubot
           session_short: sid.delete_prefix("web_"),
           persona_label: persona_label,
           persona_emoji: persona ? persona.emoji_or : "🤖",
+          persona_prompt: persona ? persona.system_prompt.to_s : "",
           persona_model: persona_model(persona),
           session_label: session_label,
           document_title: document_title(persona_label, session_label),
@@ -878,7 +882,7 @@ module Rubot
         ""
       end
 
-      # --- personas (create) ---------------------------------------------
+      # --- personas (create, edit) ---------------------------------------
 
       def create_persona(req, res)
         store = persona_store
@@ -901,6 +905,67 @@ module Rubot
         store.prepare_workspace(slug, seed_from: @app_config&.workspace)
 
         redirect(res, "/p/#{slug}", req)
+      end
+
+      # Changing a persona that already exists: its face, its name and the
+      # prompt it speaks with. The slug is not one of the fields — it is the
+      # key in personas.json and the name of the workspace directory, so
+      # renaming it would strand the SOUL.md, skills and memory the persona
+      # already owns.
+      def edit_persona(req, res, slug)
+        store = persona_store
+        return bad_request(res) unless store
+        return not_found(res) unless known_slug?(slug)
+
+        current = store[slug]
+        return not_found(res) unless current
+
+        name = form(req, "name").strip
+        emoji = form(req, "emoji").strip
+        prompt = form(req, "system_prompt").strip
+
+        store.set(slug, Persona.new(
+          slug: slug,
+          name: name.empty? ? nil : name,
+          emoji: emoji.empty? ? current.emoji : emoji,
+          accent: current.accent,
+          preset: current.preset,
+          model: current.model,
+          system_prompt: prompt.empty? ? nil : prompt,
+          created_at: current.created_at
+        ))
+        reload_persona_actors(slug)
+
+        redirect(res, return_to(slug, form(req, "session_id").strip), req)
+      end
+
+      # Back to the conversation the form was opened from, as long as it is
+      # still this persona's; otherwise to the persona's newest one.
+      def return_to(slug, sid)
+        return "/s/#{sid}" if sid.match?(/\A[a-z0-9][a-z0-9_~-]{0,90}\z/) && owner_slug(sid) == slug
+
+        "/p/#{slug}"
+      end
+
+      # An actor that is already spawned holds the old prompt in its agent, so
+      # the next turn would still answer in the old voice. Idle sessions are
+      # dropped and rebuilt from the store on their next message; a session
+      # with a turn in flight is left alone, because invalidating it would kill
+      # the answer being written — its next turn picks the edit up instead.
+      def reload_persona_actors(slug)
+        pool = @pool
+        return unless pool
+
+        pool.session_ids.each do |sid|
+          next unless owner_slug(sid) == slug
+          next if @active[sid]
+
+          begin
+            pool.invalidate(sid)
+          rescue StandardError => e
+            warn "[persona] could not reload #{sid}: #{e.class}: #{e.message}"
+          end
+        end
       end
 
       # --- pictures -------------------------------------------------------

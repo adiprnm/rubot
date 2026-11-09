@@ -59,6 +59,36 @@
     <header class="side-head">
       <span class="emoji" aria-hidden="true"><%= h(persona_emoji) %></span>
       <b><%= h(persona_label) %></b>
+
+      <%# The persona is editable where it is named, not in a settings page of
+          its own: name, face and the prompt it speaks with are the whole of
+          what a persona is from this side. The slug stays out — it is the key
+          and the workspace directory's name. -%>
+      <details class="side-edit">
+        <summary title="Edit persona" aria-label="Edit persona">✎</summary>
+        <form class="rail-panel" hx-post="/p/<%= h(slug) %>/edit<%= h(token_query) %>"
+              hx-target=".edit-error" hx-swap="innerHTML">
+          <p class="panel-title">Edit persona</p>
+          <p class="panel-hint">slug: <code><%= h(slug) %></code></p>
+          <label>Nama
+            <input name="name" value="<%= h(persona_label) %>" placeholder="<%= h(slug) %>">
+          </label>
+          <label>Emoji
+            <select name="emoji">
+              <% (%w[🤖 🧭 ✍️ 📚 🧪 🎨 🛠️ 🔍 🧠 💼] | [ persona_emoji ]).each do |choice| %>
+                <option value="<%= h(choice) %>"<%= " selected" if choice == persona_emoji %>><%= h(choice) %></option>
+              <% end %>
+            </select>
+          </label>
+          <label>System prompt
+            <textarea name="system_prompt" rows="6"
+                      placeholder="Kosongkan untuk memakai prompt bawaan"><%= h(persona_prompt) %></textarea>
+          </label>
+          <input type="hidden" name="session_id" value="<%= h(session_id) %>">
+          <button class="btn primary" type="submit">Simpan</button>
+          <p class="form-error edit-error"></p>
+        </form>
+      </details>
     </header>
 
     <%# A plain form, not an htmx request: a new session is a new URL, so the
