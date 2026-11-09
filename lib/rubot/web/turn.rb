@@ -171,8 +171,9 @@ module Rubot
       #
       # Consecutive pictures share one strip, so a turn that sends four of them
       # scrolls sideways at one height instead of stacking four rows.
-      def add_image(url:, name:)
+      def add_image(url:, name:, id: nil)
         image = { url: url.to_s, name: name.to_s }
+        image[:id] = id.to_s unless id.to_s.empty?
         @mutex.synchronize do
           last = @items.last
           if last && last[:kind] == :images

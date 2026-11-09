@@ -1719,6 +1719,8 @@ module Rubot
 
         assert_equal "desain.png", picture[:name]
         assert_includes picture[:url], "/s/web_kanyaah/media/#{stored}"
+        assert_equal "e" * 32, picture[:id],
+                     "the stored id is what lets the page keep the picture's node"
 
         assert_nil channel.send(:sent_picture, "shell", result, "web_kanyaah"),
                    "only a send_file result names a picture"
@@ -1779,6 +1781,34 @@ module Rubot
         assert_includes html, %(class="attachments")
         assert_includes html, %(data-lightbox="#{image[:url]}")
         assert_includes html, %(download="desain.png")
+      end
+
+      # A running turn redraws the whole timeline on every event. A picture
+      # given a stable id and hx-preserve keeps the node it already has, so it
+      # is not fetched and decoded again under a growing answer — which is what
+      # made a strip of them blink.
+      def test_a_picture_keeps_its_node_when_the_timeline_is_redrawn
+        first = { url: "/s/web_kanyaah/media/#{"a" * 32}-satu.png", name: "satu.png", id: "a" * 32 }
+        second = { url: "/s/web_kanyaah/media/#{"b" * 32}-dua.png", name: "dua.png", id: "b" * 32 }
+
+        html = View.render("_timeline", items: [ { kind: :images, list: [ first, second ] } ])
+
+        assert_equal 2, html.scan(/hx-preserve="true"/).size,
+                     "every picture asks to be kept across a redraw"
+        assert_includes html, %(id="picture-#{"a" * 32}")
+        assert_includes html, %(id="picture-#{"b" * 32}"),
+                        "two pictures must not answer to the same id"
+      end
+
+      # A caller that names no id — an older session file, or a bare partial in
+      # a test — must still render: there is simply nothing to preserve by.
+      def test_a_picture_without_an_id_is_drawn_without_a_preserve_marker
+        image = { url: "/s/web_kanyaah/media/x.png", name: "x.png" }
+
+        html = View.render("_attachments", images: [ image ])
+
+        refute_includes html, "hx-preserve"
+        assert_includes html, %(class="attachment")
       end
 
       # The transcript holds the call and its result; drawn back, the picture is

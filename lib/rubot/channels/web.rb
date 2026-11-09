@@ -743,7 +743,10 @@ module Rubot
         stored = result.to_s[Rubot::Tools::SendFile::WEB_MARKER_RE, 1]
         return nil unless stored && MEDIA_NAME.match?(stored)
 
-        { url: media_url(sid, stored), name: download_name(stored) }
+        # The stored file's own id is the picture's stable identity on the page:
+        # the timeline is redrawn on every token, and a picture that kept its
+        # node is not fetched or decoded again while the answer grows under it.
+        { url: media_url(sid, stored), name: download_name(stored), id: stored[/\A[0-9a-f]{32}/] }
       end
 
       # Point the agent's send_file at this conversation, so a picture it hands

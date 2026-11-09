@@ -7,10 +7,17 @@
     Each picture is a button, not a link: opening it is a moment in the page,
     not a navigation. The download anchor beside it is a link, because that is
     what a download is — the same URL the lightbox offers, so both paths hand
-    back the file the reader is looking at. -%>
+    back the file the reader is looking at.
+
+    The whole timeline is redrawn on every event of a running turn, and a
+    picture that is rebuilt with it is fetched and decoded again — five of them
+    blink in step with the answer. So each one carries its stored id and asks
+    htmx to keep the node it already has: the picture stays exactly as drawn
+    while the text under it grows. -%>
 <div class="attachments" role="group" aria-label="Gambar dari Rubot">
   <% images.each do |image| -%>
-  <figure class="attachment">
+  <figure class="attachment"
+          <% if image[:id] %>id="picture-<%= h(image[:id]) %>" hx-preserve="true"<% end %>>
     <button type="button"
             class="attachment-open"
             data-lightbox="<%= h(image[:url]) %>"
