@@ -263,12 +263,24 @@ module Rubot
     #
     # `max_tokens` additionally drops the oldest messages until the remaining
     # block fits that approximate budget (0/nil disables it).
+    #
+    # Both limits land a block below the threshold instead of exactly on it, and
+    # are allowed to grow a block past it before cutting again (see
+    # TRIM_BLOCK_FRACTION). A window that slides one message per append moves the
+    # front of every request with it, and nothing in front of the change is
+    # reusable: the cached prefix is exactly the part that moved.
     def safe_history(limit: nil, max_tokens: nil, reasoning_tail: nil)
       history = conversation_history(reasoning_tail: reasoning_tail)
 
       limit = limit.to_i
       if limit.positive? && history.size > limit
-        trim_index = history.size - limit
+        # Cut in whole blocks once a block has grown past the limit, so the front
+        # of the window stands still for the block of appends that follows.
+        # A boundary that moved on every append carried the cached prefix with
+        # it, which is the whole reason the pin exists.
+        block = trim_block_size(limit)
+        trim_index = ((history.size - limit) / block + 1) * block
+        trim_index = history.size - 1 if trim_index >= history.size
 
         # If the first kept message is a tool result, its parent assistant was
         # trimmed out. Skip all consecutive tool results to avoid orphaned IDs.
@@ -287,6 +299,12 @@ module Rubot
           tokens -= self.class.message_tokens(history[trim_index])
           trim_index += 1
         end
+        # The same block rule, in messages: the boundary only moves when a whole
+        # block of growth has pushed the budget over, so the prefix survives the
+        # appends in between.
+        block = trim_block_size(history.size)
+        trim_index = ((trim_index + block - 1) / block) * block
+        trim_index = history.size - 1 if trim_index >= history.size
         # Same orphan rule as the count limit above.
         trim_index += 1 while trim_index < history.size && history[trim_index]["role"] == "tool"
         history = history[trim_index..] if trim_index.positive?

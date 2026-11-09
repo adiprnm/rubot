@@ -776,6 +776,50 @@ class TestSessionHistoryWindowing < Minitest::Test
     assert_operator Rubot::Session.message_tokens(msg), :>, Rubot::Session.message_tokens(msg, reasoning: false)
   end
 
+  # A limit that slides one message per append carries the cached prefix with it:
+  # every request starts one message later than the last one, so nothing in front
+  # of the change is reusable. The window lands a block below the limit and is
+  # allowed to grow a block past it, which changes the front once per block of
+  # appends instead of once per append.
+  def test_a_message_limit_keeps_its_front_for_a_block_of_appends
+    limit = 100
+    block = (limit * Rubot::Session::TRIM_BLOCK_FRACTION).round
+    fronts = []
+
+    150.times do |i|
+      @session.add("user", "pesan #{i}")
+      history = @session.safe_history(limit: limit)
+      fronts << history.first["content"]
+
+      next unless i + 1 > limit # the window is still filling
+
+      assert_operator history.size, :<=, limit,
+                      "a cut lands inside the limit, not past it"
+      assert_operator history.size, :>=, limit - block,
+                      "and leaves a block's worth of room under it"
+    end
+
+    assert_operator fronts.uniq.size, :<=, 20,
+                    "the front of the window must move in blocks, not on every append"
+  end
+
+  # The same rule for the token budget, counted in messages: the boundary rounds
+  # up to a block, so the front stands still for the appends that grow the window
+  # towards the next block.
+  def test_a_token_budget_moves_the_front_in_blocks_too
+    fronts = []
+
+    100.times do |i|
+      @session.add("user", "pesan #{i} #{'x' * 200}")
+      fronts << @session.safe_history(max_tokens: 2_000).first["content"]
+    end
+
+    changes = fronts.each_cons(2).count { |before, now| before != now }
+
+    assert_operator changes, :<=, 30,
+                    "a boundary that moves on most appends throws the prefix away every time"
+  end
+
   def test_safe_history_respects_the_token_budget
     @session.add("user", "a" * 400)
     @session.add("assistant", "b" * 400)
