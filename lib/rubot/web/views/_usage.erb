@@ -7,13 +7,13 @@
     This element is also the out-of-band target the end of a turn swaps, so it
     keeps the same id and shape when it is re-rendered. -%>
 <span class="metrics" id="usage">
-  <span class="metric" title="Biaya percakapan ini">
+  <span class="metric" title="Total biaya sesi ini, akumulatif sejak permintaan pertama">
     <%= usage_icon(:cost) %><span class="value"><%= h(cost) %></span>
   </span>
-  <span class="metric" title="Porsi prompt yang diambil dari cache">
+  <span class="metric" title="Porsi prompt yang diambil dari cache pada permintaan terakhir — bukan rata-rata sesi">
     <%= usage_icon(:cache) %><span class="value"><%= h(cache) %></span>
   </span>
-  <span class="metric" title="Porsi context window yang terpakai">
+  <span class="metric" title="Porsi context window model yang terpakai permintaan berikutnya">
     <%= usage_icon(:context) %><span class="value"><%= h(ctx) %></span>
   </span>
 </span>

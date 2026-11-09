@@ -425,6 +425,29 @@ class TestSessionSummarization < Minitest::Test
     refute session.context_anchored?
   end
 
+  # A transcript parked at the cap used to drop one message per append, which
+  # moved the front of the conversation on every request. Prompt caching
+  # matches on the prefix, so a capped session missed the cache every time and
+  # paid the full input price for its whole transcript again: measured on this
+  # repo's own sessions, 5x the cost per request of an uncapped one.
+  def test_the_hard_trim_cuts_a_block_so_the_prefix_stays_put
+    session = Rubot::Session.new("trim-block", workspace: @workspace, max_messages: 100)
+    100.times { |i| session.add("user", "Message #{i}") }
+
+    session.add("user", "past the cap")
+
+    # 10% of the cap goes in one cut, so the next 9 appends keep the prefix.
+    assert_equal 90, session.message_count
+  end
+
+  def test_the_hard_trim_never_empties_the_transcript
+    session = Rubot::Session.new("trim-tiny", workspace: @workspace, max_messages: 1)
+
+    5.times { |i| session.add("user", "Message #{i}") }
+
+    assert_equal 1, session.message_count
+  end
+
   # --- Task statement ---------------------------------------------------
 
   def test_the_first_user_message_is_kept_as_the_task
@@ -562,6 +585,64 @@ class TestSessionSummarization < Minitest::Test
 
     assert_equal anchor, session.last_usage.prompt_tokens
     assert_in_delta 0.000165, session.cost["total"], 0.0000001
+  end
+
+  # A single number for the latest request cannot tell a broken cache from one
+  # cold request. The history can: a run of zeros means the prefix moves every
+  # time, while one zero after a compaction is expected.
+  def test_the_cache_history_keeps_the_shape_of_the_last_requests
+    session = Rubot::Session.new("cache-history", workspace: @workspace)
+    session.add("user", "hi")
+
+    session.record_usage({ "prompt_tokens" => 1_000, "completion_tokens" => 10,
+                           "prompt_tokens_details" => { "cached_tokens" => 990 } })
+    session.record_usage({ "prompt_tokens" => 1_000, "completion_tokens" => 10,
+                           "prompt_tokens_details" => { "cached_tokens" => 0 } })
+
+    assert_equal [ 0.99, 0.0 ], session.cache_history
+
+    (Rubot::Session::CACHE_HISTORY_LIMIT + 3).times do
+      session.record_usage({ "prompt_tokens" => 100, "completion_tokens" => 1,
+                             "prompt_tokens_details" => { "cached_tokens" => 50 } })
+    end
+
+    assert_equal Rubot::Session::CACHE_HISTORY_LIMIT, session.cache_history.size
+    assert_equal 0.5, session.cache_history.last
+  end
+
+  def test_the_cache_history_round_trips_through_the_session_file
+    session = Rubot::Session.new("cache-history-persist", workspace: @workspace)
+    session.add("user", "hi")
+    session.record_usage({ "prompt_tokens" => 1_000, "completion_tokens" => 10,
+                           "prompt_tokens_details" => { "cached_tokens" => 250 } })
+
+    reloaded = Rubot::Session.new("cache-history-persist", workspace: @workspace)
+
+    assert_equal [ 0.25 ], reloaded.cache_history
+  end
+
+  # The prompt is pinned on the session, so it has to survive a restart: a new
+  # process rebuilding it would change the bytes and undo the whole point.
+  def test_the_pinned_system_prompt_round_trips_and_expires_on_epoch_change
+    session = Rubot::Session.new("prompt-pin", workspace: @workspace)
+    session.add("user", "hi")
+
+    session.store_system_prompt("pinned prompt", { "model" => "m1" })
+
+    reloaded = Rubot::Session.new("prompt-pin", workspace: @workspace)
+    assert_equal "pinned prompt", reloaded.system_prompt_for({ "model" => "m1" })
+    assert_nil reloaded.system_prompt_for({ "model" => "m2" }),
+               "a different epoch must not reuse the old pin"
+  end
+
+  def test_clearing_the_pin_forces_a_rebuild
+    session = Rubot::Session.new("prompt-clear", workspace: @workspace)
+    session.add("user", "hi")
+    session.store_system_prompt("pinned prompt", { "model" => "m1" })
+
+    assert session.clear_system_prompt!
+    assert_nil session.system_prompt_for({ "model" => "m1" })
+    refute session.clear_system_prompt!, "clearing twice is a no-op"
   end
 
   class FakeSummarizeProvider

@@ -807,8 +807,21 @@ module Rubot
           tokens_out: Rubot::UsageReport.tokens(report[:completion_tokens]),
           reasoning: report[:reasoning_tokens].to_i.zero? ? "" : Rubot::UsageReport.tokens(report[:reasoning_tokens]),
           cache: cache_fact(report),
+          cache_history: cache_history_fact(report),
           ctx: context_fact(report)
         }
+      end
+
+      # The share of each recent request, in order. This is the line that
+      # answers "is the cache actually broken?": a run of zeros means the
+      # prefix moves on every request, while a single zero after a compaction
+      # is expected. Without it a reader sees one number and cannot tell which
+      # of the two they are looking at.
+      def cache_history_fact(report)
+        history = Array(report[:cache_history])
+        return "" if history.size < 2
+
+        history.map { |rate| format("%.0f%%", rate.to_f * 100) }.join(" ")
       end
 
       # The four parts that add up to the total. A reader who sees $0.04 and no
@@ -831,8 +844,14 @@ module Rubot
         total = Rubot::UsageReport.tokens(report[:cached_tokens])
         return "#{total} token dari cache" if report[:prompt_tokens].to_i.zero?
 
-        format("%.1f%% dari permintaan terakhir · %s token total",
-               report[:cache_hit_rate].to_f * 100, total)
+        # Two shares, both labelled. The cost above this line is cumulative,
+        # so a lone latest-request figure under it reads as if the session had
+        # never cached anything — which is how a $2 bill next to "cache 4%"
+        # came to look like a bug in the arithmetic.
+        format("%.1f%% permintaan terakhir · %.1f%% rata-rata sesi · %s token total",
+               report[:cache_hit_rate].to_f * 100,
+               report[:cache_hit_rate_session].to_f * 100,
+               total)
       end
 
       def context_fact(report)

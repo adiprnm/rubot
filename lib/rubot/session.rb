@@ -33,8 +33,13 @@ module Rubot
     DEFAULT_MAX_MESSAGES = 400
 
     attr_reader :id, :messages, :workspace, :usage, :last_usage, :cost
-    attr_reader :task, :cwd
+    attr_reader :task, :cwd, :cache_history
     attr_accessor :summary, :forced_skill, :model_override, :model_preset, :title
+
+    # How many recent requests keep their cache share. Enough to see a pattern
+    # (a run of zeros is a busted cache, a stray zero is a compaction), short
+    # enough that the session file does not grow for it.
+    CACHE_HISTORY_LIMIT = 12
 
     def initialize(id = "default", workspace: nil, sessions_dir: nil, cwd: nil,
                    max_messages: DEFAULT_MAX_MESSAGES)
@@ -72,6 +77,12 @@ module Rubot
       # Message count at the moment the last usage was recorded. nil disables
       # the usage anchor for context estimates (see #context_tokens).
       @last_usage_watermark = nil
+      # The system prompt this session was started with, and the epoch that
+      # says whether it is still the right one (see #system_prompt).
+      @system_prompt = nil
+      @system_prompt_epoch = nil
+      # Cache share of the last few requests, oldest first.
+      @cache_history = []
       @memory_backlog = []
       load!
     end
@@ -88,9 +99,20 @@ module Rubot
       @last_usage = delta
       @last_usage_watermark = @messages.size
       @usage = @usage.merge(delta)
+      push_cache_history(delta)
       add_cost(delta, rates)
       save!
       delta
+    end
+
+    # Keep the cache share of this request so a reader can tell a broken cache
+    # from a single cold request. A run of zeros is the shape of a prefix that
+    # moves on every request; one zero after a compaction is expected.
+    def push_cache_history(delta)
+      return unless delta.requests.positive?
+
+      @cache_history << delta.cache_hit_rate.round(4)
+      @cache_history.shift while @cache_history.size > CACHE_HISTORY_LIMIT
     end
 
     # Same as #record_usage, but for requests that are not the user-facing turn
@@ -204,6 +226,21 @@ module Rubot
       # that has already finished is never needed again: only the reasoning
       # produced inside the turn still being executed has to survive (a tool
       # loop continues from it). nil keeps the old behaviour (send everything).
+      #
+      # A reasoning block on a tool-call round is kept regardless of age. That
+      # is not about the model needing it — it is about the prompt staying the
+      # same from one request to the next. Recency is not a property the
+      # provider's cache can follow: dropping a turn's reasoning the moment the
+      # next turn starts rewrites the front of the transcript, and everything
+      # after it is re-read uncached. Keeping them makes the payload
+      # append-only, which the cache rewards: measured on a 135-message
+      # session, the stable rule held a 99.8% cache hit where the recency rule
+      # dropped to 0% at every turn boundary.
+      #
+      # The reasoning of a finished *answer* (an assistant message with no
+      # tool calls) is still dropped: it is one message at the end of the turn
+      # that ended, so the divergence it causes sits at the tail, where it
+      # costs almost nothing.
       reasoning_from = if reasoning_tail.nil?
         0
       else
@@ -214,7 +251,8 @@ module Rubot
         entry = { "role" => msg["role"], "content" => msg["content"] }
         entry["tool_calls"] = msg["tool_calls"] if msg["tool_calls"]
         entry["tool_call_id"] = msg["tool_call_id"] if msg["tool_call_id"]
-        entry["reasoning_content"] = msg["reasoning_content"] if msg["reasoning_content"] && index >= reasoning_from
+        keeps_reasoning = index >= reasoning_from || !msg["tool_calls"].nil?
+        entry["reasoning_content"] = msg["reasoning_content"] if msg["reasoning_content"] && keeps_reasoning
         entry
       end
       remove_orphaned_tool_messages(history)
@@ -261,6 +299,49 @@ module Rubot
     # front: the last usage no longer describes this transcript.
     def invalidate_context_anchor!
       @last_usage_watermark = nil
+    end
+
+    # The system prompt is pinned for the life of a session instead of being
+    # rebuilt on every request.
+    #
+    # Rebuilding it is what made prompt caching useless here. The system prompt
+    # sits at the front of every request, so one changed character there
+    # dropped the entire cached prefix: measured against the same gateway, an
+    # edit anywhere inside the system message took the cache hit from 99% to
+    # 0%. Memory extraction rewrites MEMORY.md after most turns and the
+    # composed prompt included it, so the prefix moved constantly — which is
+    # how a session that was never trimmed still ran at a 0% cache hit on a
+    # 54k-token prompt.
+    #
+    # `epoch` is the fingerprint of the inputs whose change *must* reach the
+    # model: the model itself, the summary rewritten by compaction, and a
+    # forced skill. Everything else (a new memory line, an edited skill file)
+    # waits for the next epoch instead of costing a full re-read every request.
+    def system_prompt_for(epoch)
+      return nil unless @system_prompt
+      return nil unless @system_prompt_epoch == epoch
+
+      @system_prompt
+    end
+
+    def store_system_prompt(prompt, epoch)
+      changed = @system_prompt != prompt || @system_prompt_epoch != epoch
+      @system_prompt = prompt
+      @system_prompt_epoch = epoch
+      save! if changed
+      changed
+    end
+
+    # Forget the pinned prompt so the next request rebuilds it. Compaction
+    # calls this because it rewrites the summary, and a user-facing refresh can
+    # call it to pick up memory written since the session started.
+    def clear_system_prompt!
+      return false if @system_prompt.nil?
+
+      @system_prompt = nil
+      @system_prompt_epoch = nil
+      save!
+      true
     end
 
     def add_cost(delta, rates)
@@ -637,6 +718,9 @@ module Rubot
       data["cost"] = @cost if @cost
       data["cost_partial"] = true if @cost_partial
       data["last_usage_watermark"] = @last_usage_watermark if @last_usage_watermark
+      data["cache_history"] = @cache_history if @cache_history && !@cache_history.empty?
+      data["system_prompt"] = @system_prompt if @system_prompt
+      data["system_prompt_epoch"] = @system_prompt_epoch if @system_prompt_epoch
       data["memory_backlog"] = @memory_backlog if @memory_backlog && !@memory_backlog.empty?
 
       # Generate before opening the file: JSON.pretty_generate can raise (e.g.
@@ -785,11 +869,32 @@ module Rubot
       @cost = load_cost(data["cost"])
       @cost_partial = data["cost_partial"] == true
       @last_usage_watermark = data["last_usage_watermark"].is_a?(Integer) ? data["last_usage_watermark"] : nil
+      @cache_history = Array(data["cache_history"]).map(&:to_f).last(CACHE_HISTORY_LIMIT)
+      @system_prompt = data["system_prompt"].to_s.empty? ? nil : data["system_prompt"].to_s
+      @system_prompt_epoch = data["system_prompt_epoch"].is_a?(Hash) ? data["system_prompt_epoch"] : nil
       @memory_backlog = Array(data["memory_backlog"]).map(&:to_s)
     rescue JSON::ParserError => e
       # A truncated/corrupt session must not take the bot down: start fresh.
       warn "[session] ignoring unreadable session #{file_path}: #{e.message}"
       @messages = []
+    end
+
+    # Share of the cap dropped in a single cut once the transcript reaches it.
+    #
+    # Dropping one message per append keeps the transcript at the cap, and that
+    # costs real money: every append moves the front of the conversation, and a
+    # provider's prompt cache matches on the prefix, so a session parked at the
+    # cap misses it on every request and pays the full input price for its whole
+    # transcript again. Measured on this repo's own sessions, a capped one cost
+    # 5x per request ($0.0056 vs $0.0011) with a 45% cache hit next to 98% for
+    # sessions below the cap. Cutting a block at a time leaves the prefix stable
+    # for many requests, so the cache stays warm between cuts.
+    TRIM_BLOCK_FRACTION = 0.1
+
+    # How many messages one cut removes. Always at least one, and never more
+    # than the cap itself, so a small `max_messages` still behaves.
+    def trim_block_size(limit)
+      [ (limit * TRIM_BLOCK_FRACTION).round, 1 ].max
     end
 
     def trim!
@@ -800,7 +905,12 @@ module Rubot
       limit = @max_messages
       return unless limit.positive? && @messages.size > limit
 
-      trim_index = @messages.size - limit
+      # Land below the cap instead of exactly on it (see TRIM_BLOCK_FRACTION):
+      # the next `limit - block` appends then leave the prefix untouched.
+      trim_index = @messages.size - limit + trim_block_size(limit)
+      trim_index = 0 if trim_index.negative?
+      # A cut must never empty the transcript the turn is still being built on.
+      trim_index = @messages.size - 1 if trim_index >= @messages.size
 
       # If the first kept message is a tool result, its parent assistant message
       # (with tool_calls) was trimmed out. Skip all consecutive tool results to

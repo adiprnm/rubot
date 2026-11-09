@@ -28,6 +28,11 @@
   <dt>cache</dt>
   <dd><%= h(cache) %></dd>
 
+  <% unless cache_history.to_s.empty? -%>
+    <dt>riwayat cache</dt>
+    <dd title="Porsi cache tiap permintaan, terlama dulu. Deretan 0% berarti prefix prompt berubah terus; satu 0% setelah compaction itu wajar."><%= h(cache_history) %></dd>
+  <% end -%>
+
   <dt>context</dt>
   <dd><%= h(ctx) %></dd>
 </dl>

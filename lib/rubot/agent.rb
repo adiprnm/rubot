@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "json"
+require "digest"
 require_relative "cancellation"
 require_relative "config"
 require_relative "model_info"
@@ -917,6 +918,16 @@ module Rubot
         # the session total: that is what shows whether the cache is working
         # now instead of on average since the conversation started.
         cache_hit_rate: last.requests.positive? ? last.cache_hit_rate : 0.0,
+        # The session-wide share, published next to the latest-request one
+        # because the cost beside them is cumulative. A lone "cache 4%" under a
+        # $2 total reads as a contradiction; the pair shows the history that
+        # produced the bill and the request that is running now.
+        cache_hit_rate_session: usage.requests.positive? ? usage.cache_hit_rate : 0.0,
+        # Cache share of the last few requests, oldest first. A run of zeros is
+        # the signature of a prefix that moves on every request; a single zero
+        # after a compaction is expected. Without this a reader can only see the
+        # latest request and has to guess which one it is looking at.
+        cache_history: @session.cache_history.dup,
         last_prompt_tokens: last.prompt_tokens,
         total_tokens: usage.total_tokens + live_prompt + live_output,
         # Priced per request when it was recorded, so switching model mid-way
@@ -1072,7 +1083,59 @@ module Rubot
       nil
     end
 
+    # The system prompt for this request.
+    #
+    # Pinned for the life of the session rather than rebuilt every time (see
+    # Session#system_prompt_for): it sits at the front of every request, so
+    # rebuilding it meant a one-line memory edit cost a full uncached re-read
+    # of the whole conversation. #compose_system_prompt does the actual work.
     def build_system_prompt
+      epoch = system_prompt_epoch
+      pinned = @session&.system_prompt_for(epoch)
+      return pinned if pinned
+
+      prompt = compose_system_prompt
+      @session&.store_system_prompt(prompt, epoch)
+      prompt
+    end
+
+    # Fingerprint of the inputs that must reach the model the moment they
+    # change. Anything not listed here (a new memory line, an edited skill
+    # file, AGENTS.md) waits for the next epoch — that delay is the price of a
+    # cacheable prefix, and it is paid once instead of on every request.
+    #
+    # Memory being frozen for the life of a session is not a loss: memory is
+    # how a fact survives into the *next* session, and inside this one the
+    # transcript already carries everything that was learned from it. The one
+    # moment the transcript stops carrying it is compaction, which rewrites the
+    # summary and therefore moves this epoch — so the refresh lands exactly
+    # when it is needed.
+    def system_prompt_epoch
+      {
+        "model" => active_model_name.to_s,
+        # Compaction rewrites the summary that the prompt quotes verbatim.
+        "summary" => digest_of(@session&.summary_text),
+        "skill" => @session&.forced_skill.to_s,
+        # Set from the first user message, so the pin must not survive its
+        # arrival (early calls build the prompt before any message exists).
+        "task" => digest_of(@session&.task_statement)
+      }
+    end
+
+    # Stable identity for a piece of text across restarts: String#hash is
+    # salted per process and would make every launch look like a change.
+    def digest_of(text)
+      value = text.to_s
+      return "" if value.empty?
+
+      Digest::SHA1.hexdigest(value)
+    end
+
+    # Compose the prompt from its sources. Order is deliberate: the parts that
+    # cannot change during a session come first and the volatile ones last, so
+    # that when the pin does move (compaction, model switch) the provider still
+    # finds a cached prefix in front of the changed block.
+    def compose_system_prompt
       @skill_registry.reload!
       parts = []
 
@@ -1121,16 +1184,19 @@ module Rubot
                  "request looks small enough to answer without one."
       end
 
-      # 3. Memory: global (~/.rubot/MEMORY.md) merged with this workspace's.
-      if @memory.enabled?
-        parts << @memory.to_s
-      end
+      # 2d. Current model identity (so the bot knows which model it's using)
+      model_name = active_model_name
+      model_entry = @config.model_entry_by_name(model_name) || @config.active_model_entry
+      model_provider = model_entry["model"] || @config.model
+      parts << "# Current Model\n\nYou are currently running as model: **#{model_name}** (#{model_provider}).\nWhen asked about which model you are, respond with: #{model_name}."
 
-      # 3b. Learned Corrections already live in MEMORY.md above, so they are
-      # not injected a second time here — that duplicated ~200 tokens per
-      # request for no extra information.
+      # 2e. Default/config system prompt. A persona prompt replaces it.
+      config_prompt = persona_prompt.empty? ? @config.system_prompt : ""
+      parts << config_prompt unless config_prompt.empty?
 
-      # 3c. The instruction that started this session. Stored outside the
+      # --- Everything below is volatile: it changes while a session runs. ---
+
+      # 3. The instruction that started this session. Stored outside the
       # transcript so the hard message trim and compaction cannot delete the
       # goal of a long, multi-step task.
       task = @session&.task_statement
@@ -1139,30 +1205,29 @@ module Rubot
         parts << "# Task\n\nThe user's original request for this session:\n\n#{shown}"
       end
 
-      # 3d. Conversation Summary (from session summarization)
-      if @session&.summary_text
-        parts << "# Previous Conversation Summary\n\n#{@session.summary_text}"
-      end
+      # 4. Skills (specialized instruction sets). The list grows as skills are
+      # loaded, so it belongs after the stable block.
+      skill_prompt = @skill_registry.to_system_prompt
+      parts << skill_prompt unless skill_prompt.empty?
 
-      # 3e. Forced skill — injected directly to skip LLM tool-call overhead
+      # 5. Forced skill — injected directly to skip LLM tool-call overhead
       forced = resolve_forced_skill
       if forced
         parts << "# Active Skill: #{forced[:name]}\n\nYou MUST follow the instructions below for this response:\n\n#{forced[:content]}"
       end
 
-      # 4. Skills (specialized instruction sets)
-      skill_prompt = @skill_registry.to_system_prompt
-      parts << skill_prompt unless skill_prompt.empty?
+      # 6. Conversation Summary (from session summarization)
+      if @session&.summary_text
+        parts << "# Previous Conversation Summary\n\n#{@session.summary_text}"
+      end
 
-      # 4b. Current model identity (so the bot knows which model it's using)
-      model_name = active_model_name
-      model_entry = @config.model_entry_by_name(model_name) || @config.active_model_entry
-      model_provider = model_entry["model"] || @config.model
-      parts << "# Current Model\n\nYou are currently running as model: **#{model_name}** (#{model_provider}).\nWhen asked about which model you are, respond with: #{model_name}."
-
-      # 5. Default/config system prompt. A persona prompt replaces it.
-      config_prompt = persona_prompt.empty? ? @config.system_prompt : ""
-      parts << config_prompt unless config_prompt.empty?
+      # 7. Memory: global (~/.rubot/MEMORY.md) merged with this workspace's.
+      # Last because extraction rewrites it after most turns; keeping it at the
+      # tail means a refresh costs the tail and not the whole prefix.
+      # Learned Corrections already live in MEMORY.md, so they are not injected
+      # a second time here — that duplicated ~200 tokens per request for no
+      # extra information.
+      parts << @memory.to_s if @memory.enabled?
 
       parts.join("\n\n---\n\n")
     end
@@ -1435,13 +1500,34 @@ module Rubot
     end
 
     # Shorten all but the newest `tool_result_keep` tool outputs in place.
+    #
+    # The boundary moves in blocks of `keep`, not one result at a time. A
+    # boundary that advances on every request rewrites a message in the middle
+    # of the transcript each time, and everything from that point on has to be
+    # re-read uncached — in a tool-heavy turn that is a new request every few
+    # seconds. Rounding the count down to a multiple of `keep` keeps the
+    # payload byte-for-byte identical between advances, so the same cached
+    # prefix survives roughly `keep` requests instead of one. The cost is up to
+    # `2 * keep` recent results kept verbatim instead of `keep`.
     def trim_old_tool_results!(messages)
       keep = @config.tool_result_keep
       max_chars = @config.tool_result_max_chars
       return if max_chars.zero?
 
       indexes = messages.each_index.select { |i| messages[i]["role"] == "tool" }
-      older = keep.positive? ? indexes[0...-keep].to_a : indexes
+      return if keep.positive? && indexes.size <= keep
+
+      older = if keep.positive?
+        # How many results are past the keep window, rounded down to a block.
+        surplus = indexes.size - keep
+        truncate_count = (surplus / keep) * keep
+        return if truncate_count.zero?
+
+        indexes[0, truncate_count].to_a
+      else
+        indexes
+      end
+
       older.each do |i|
         content = messages[i]["content"].to_s
         next if content.length <= max_chars

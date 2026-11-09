@@ -237,6 +237,9 @@ class TestUsage < Minitest::Test
 
       # Cumulative would be 50%, but the latest request only hit 10%.
       assert_in_delta 0.1, report[:cache_hit_rate]
+      # The session-wide share travels beside it: the cost under it is
+      # cumulative, so the reader needs the history that produced it.
+      assert_in_delta 0.5, report[:cache_hit_rate_session]
       assert_equal 1_000, report[:last_prompt_tokens]
       assert_equal 2_000, report[:prompt_tokens]
     end

@@ -574,7 +574,8 @@ module Rubot
                     usage: { cost: "—", cache: "—", ctx: "—" },
                     usage_facts: { model: "m · openai", cost: "—", breakdown: "",
                                    requests: "0", messages: "0", tokens_in: "0",
-                                   tokens_out: "0", reasoning: "", cache: "—", ctx: "—" })
+                                   tokens_out: "0", reasoning: "", cache: "—",
+                                   cache_history: "", ctx: "—" })
       end
 
       # Enough of a WEBrick::HTTPResponse for the channel's rendering paths: it
@@ -1302,7 +1303,8 @@ module Rubot
                            usage: { cost: "—", cache: "—", ctx: "—" },
                            usage_facts: { model: "m", cost: "—", breakdown: "", requests: "0",
                                           messages: "0", tokens_in: "0", tokens_out: "0",
-                                          reasoning: "", cache: "—", ctx: "—" })
+                                          reasoning: "", cache: "—",
+                                          cache_history: "", ctx: "—" })
 
         assert_includes html, 'id="composer-notice"', "the composer needs a notice slot"
         assert_match(/id="composer-notice"[^>]*hidden/, html,
@@ -1664,8 +1666,13 @@ module Rubot
         assert_includes html, "2.5%"
         assert_includes html, %(id="usage")
 
-        # The label must live in the tooltip, not in the row.
-        assert_includes html, "Biaya percakapan ini"
+        # The label must live in the tooltip, not in the row. The tooltip also
+        # has to say which scope each figure covers: the cost is the session
+        # total while the cache share is the latest request, and a reader who
+        # does not know that reads the pair as a contradiction.
+        assert_includes html, "Total biaya sesi ini, akumulatif"
+        assert_includes html, "permintaan terakhir — bukan rata-rata sesi"
+        assert_includes html, "context window model"
         refute_match(%r{class="value">cost}, html)
         refute_includes html, "cache 99"
       end
@@ -1786,7 +1793,8 @@ module Rubot
         facts = channel.send(:usage_facts, {
           model: "claude-sonnet-4", provider: "anthropic", messages: 42, requests: 17,
           prompt_tokens: 128_400, completion_tokens: 9_120, cached_tokens: 96_000,
-          cache_hit_rate: 0.7477, context_used: 41_200, context_window: 200_000,
+          cache_hit_rate: 0.7477, cache_hit_rate_session: 0.9531,
+          context_used: 41_200, context_window: 200_000,
           context_percent: 20.6,
           cost: { "total" => 0.0412, "input" => 0.0098, "cached_input" => 0.0028,
                   "cache_creation" => 0.0011, "output" => 0.0275 }
@@ -1798,8 +1806,47 @@ module Rubot
         assert_includes html, "128,400", "tokens are grouped, not a wall of digits"
         assert_includes html, "9,120"
         assert_includes html, "74.8%", "the cache share of the latest request"
+        assert_includes html, "95.3%", "the session-wide share sits beside it"
+        assert_includes html, "rata-rata sesi", "and says which one it is"
         assert_includes html, "41,200 / 200,000"
         assert_includes html, "cache baca", "the breakdown answers \"why this cost\""
+      end
+
+      # The panel is where a broken cache becomes visible. One figure cannot
+      # tell a prefix that moves every request from a single cold request; the
+      # run of zeros can, and that is what turns "cache 4%?" into an answer.
+      def test_the_panel_shows_the_cache_share_of_each_recent_request
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        facts = channel.send(:usage_facts, {
+          model: "m", provider: "openai", messages: 4, requests: 4,
+          prompt_tokens: 4_000, completion_tokens: 40, cached_tokens: 90,
+          cache_hit_rate: 0.0, cache_hit_rate_session: 0.0225,
+          cache_history: [ 0.0, 0.0, 0.0, 0.09 ],
+          context_used: 900, context_window: 128_000, context_percent: 0.7,
+          cost: { "total" => 0.01 }
+        })
+        html = View.render("_usage_facts", **facts)
+
+        assert_includes html, "riwayat cache"
+        assert_includes html, "0% 0% 0% 9%", "oldest first, so the shape is readable"
+        assert_includes html, "prefix prompt berubah terus",
+                        "the line explains what a run of zeros means"
+      end
+
+      # One request is not a history, and a panel row holding a single number
+      # would repeat the line above it.
+      def test_the_panel_omits_the_history_row_until_there_is_one
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        facts = channel.send(:usage_facts, {
+          model: "m", provider: "openai", messages: 1, requests: 1,
+          prompt_tokens: 100, completion_tokens: 10, cached_tokens: 0,
+          cache_hit_rate: 0.0, cache_hit_rate_session: 0.0, cache_history: [ 0.0 ],
+          context_used: 100, context_window: 128_000, context_percent: 0.1,
+          cost: { "total" => 0.001 }
+        })
+        html = View.render("_usage_facts", **facts)
+
+        refute_includes html, "riwayat cache"
       end
 
       # A launch has spent nothing and knows nothing yet. It says so rather
@@ -3054,7 +3101,8 @@ module Rubot
                            usage: { cost: "—", cache: "—", ctx: "—" },
                            usage_facts: { model: "m", cost: "—", breakdown: "", requests: "0",
                                           messages: "0", tokens_in: "0", tokens_out: "0",
-                                          reasoning: "", cache: "—", ctx: "—" })
+                                          reasoning: "", cache: "—",
+                                          cache_history: "", ctx: "—" })
 
         assert_equal 1, html.scan(%(id="lightbox")).size
         assert_match(/id="lightbox"[^>]*hidden/, html)

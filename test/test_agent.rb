@@ -435,6 +435,87 @@ class TestAgentProgressNarration < Minitest::Test
     assert_includes prompt, "no +/- diff lines"
     assert_includes prompt, "report it briefly"
   end
+
+  # The system prompt sits at the front of every request, so rebuilding it is
+  # not free: measured against the same gateway, an edit anywhere inside the
+  # system message took the prompt cache from 99% to 0%. Memory extraction
+  # rewrites MEMORY.md after most turns and the composed prompt quoted it, so
+  # the prefix moved constantly and a session that was never trimmed could
+  # still run at a 0% cache hit on a 54k-token prompt.
+  def test_the_system_prompt_is_pinned_instead_of_rebuilt_every_request
+    File.write(@config.global_memory_path, "## Facts\n\n- a fact from before\n")
+    agent = Rubot::Agent.new(config: @config, provider: NarratingProvider.new,
+                             session_id: "pin", tools: @tools)
+    agent.session.add("user", "Kerjakan nomor 6 dulu")
+
+    first = agent.build_system_prompt
+    assert_includes first, "a fact from before"
+
+    agent.memory.append("Facts", "a fact learned after the session started")
+
+    assert_equal first, agent.build_system_prompt,
+                 "the prompt must not move when memory changes mid-session"
+    refute_includes agent.build_system_prompt, "a fact learned after the session started"
+  end
+
+  # A restart must not throw the pin away: the whole point is that the bytes
+  # stay the same, and a new process rebuilding them would undo it.
+  def test_the_pin_survives_a_restart
+    agent = Rubot::Agent.new(config: @config, provider: NarratingProvider.new,
+                             session_id: "pin-restart", tools: @tools)
+    agent.session.add("user", "Kerjakan nomor 6 dulu")
+    first = agent.build_system_prompt
+
+    reopened = Rubot::Agent.new(config: @config, provider: NarratingProvider.new,
+                                session_id: "pin-restart", tools: @tools)
+
+    assert_equal first, reopened.build_system_prompt
+  end
+
+  # The pin has to move for the inputs the model cannot go without.
+  def test_compaction_moves_the_pin_so_the_new_summary_reaches_the_model
+    @agent.session.add("user", "Kerjakan nomor 6 dulu")
+    before = @agent.build_system_prompt
+
+    @agent.session.summary = "Ringkasan percakapan yang baru"
+
+    refute_equal before, @agent.build_system_prompt
+    assert_includes @agent.build_system_prompt, "Ringkasan percakapan yang baru"
+  end
+
+  # The model name is quoted in the prompt, so a switch has to rebuild it.
+  def test_the_epoch_tracks_the_model_the_summary_and_the_forced_skill
+    @agent.session.add("user", "Kerjakan nomor 6 dulu")
+    epoch = @agent.send(:system_prompt_epoch)
+
+    assert_equal @agent.active_model_name.to_s, epoch["model"]
+    refute_empty epoch["task"], "a session with a task still fingerprints it"
+    assert_equal "", epoch["summary"], "no summary yet, so nothing to pin it to"
+
+    @agent.session.summary = "Ringkasan"
+    @agent.session.forced_skill = "review"
+
+    moved = @agent.send(:system_prompt_epoch)
+    refute_equal epoch["summary"], moved["summary"]
+    assert_equal "review", moved["skill"]
+  end
+
+  # Volatile content lives at the tail so that when the pin does move, the
+  # provider still finds a cached prefix in front of the changed block.
+  def test_memory_is_the_last_section_of_the_prompt
+    File.write(@config.global_memory_path, "## Facts\n\n- a fact that changes often\n")
+    agent = Rubot::Agent.new(config: @config, provider: NarratingProvider.new,
+                             session_id: "pin-tail", tools: @tools)
+    agent.session.add("user", "Kerjakan nomor 6 dulu")
+
+    prompt = agent.build_system_prompt
+
+    assert_operator prompt.index("# Current Model"), :<, prompt.index("a fact that changes often"),
+                    "memory must come after the stable sections"
+    assert_equal prompt.rindex("a fact that changes often"),
+                 prompt.index("a fact that changes often"),
+                 "memory is quoted once"
+  end
 end
 
 class TestAgentPersona < Minitest::Test
@@ -1411,6 +1492,29 @@ class TestAgentHistoryTrimming < Minitest::Test
     assert_equal "fresh thinking", assistants[1]["reasoning_content"]
   end
 
+  # Reasoning on a tool-call round survives the end of its turn. Recency is not
+  # something the provider's prefix cache can follow: dropping a turn's
+  # reasoning the moment the next turn starts rewrites the front of the
+  # transcript and everything after it is re-read uncached. Keeping it makes
+  # the payload append-only, which is what the cache rewards.
+  def test_reasoning_on_a_tool_round_survives_the_turn_that_produced_it
+    @agent.session.add("assistant", "", reasoning_content: "why I ran the tool", tool_calls: [
+      { "id" => "call-1", "type" => "function", "function" => { "name" => "shell_exec" } }
+    ])
+    @agent.session.add("tool", "output", tool_call_id: "call-1")
+    @agent.session.add("assistant", "old answer", reasoning_content: "old thinking")
+
+    # A new turn starts: the answer's reasoning from the finished turn is
+    # dropped, the tool round's is not.
+    @agent.instance_variable_set(:@turn_start_index, @agent.session.messages.size)
+    @agent.session.add("user", "new question")
+
+    assistants = @agent.send(:build_messages).select { |m| m["role"] == "assistant" }
+
+    assert_equal "why I ran the tool", assistants[0]["reasoning_content"]
+    assert_nil assistants[1]["reasoning_content"]
+  end
+
   def test_old_tool_results_are_truncated_but_the_newest_is_kept
     @agent.session.add("assistant", "round 1", tool_calls: [
       { "id" => "call-1", "type" => "function", "function" => { "name" => "shell_exec" } }
@@ -1464,6 +1568,53 @@ class TestAgentHistoryTrimming < Minitest::Test
     @agent.send(:build_messages)
 
     assert_equal "1" * 200, @agent.session.messages[1]["content"]
+  end
+
+  # The truncation boundary has to move in whole blocks. When it advanced one
+  # result per request it rewrote a message in the middle of the transcript on
+  # every request, and the provider had to re-read everything after it: in a
+  # tool-heavy turn that is a new uncached request every few seconds.
+  def test_the_tool_truncation_boundary_moves_in_blocks
+    Dir.mktmpdir do |dir|
+      workspace = File.join(dir, "workspace")
+      FileUtils.mkdir_p(workspace)
+      path = File.join(dir, "config.yml")
+      File.write(path, {
+        "agents" => { "defaults" => {
+          "workspace" => workspace,
+          "history" => { "tool_result_keep" => 4, "tool_result_max_chars" => 10 }
+        } },
+        "models" => [
+          { "name" => "gpt-4o-mini", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" }
+        ],
+        "provider" => "openai"
+      }.to_yaml)
+      agent = Rubot::Agent.new(config: Rubot::Config.new(path), session_id: "blocks",
+                               tools: Rubot::Tools::Registry.new)
+      add_result = lambda do |index|
+        agent.session.add("assistant", "round #{index}", tool_calls: [
+          { "id" => "call-#{index}", "type" => "function",
+            "function" => { "name" => "shell_exec" } }
+        ])
+        agent.session.add("tool", "#{index}" * 100, tool_call_id: "call-#{index}")
+      end
+      truncated = lambda do |messages|
+        messages.count { |m| m["content"].to_s.include?("older tool output truncated") }
+      end
+
+      # Exactly one full block past the keep window.
+      8.times { |i| add_result.call(i) }
+      payload = agent.send(:build_messages)
+      assert_equal 4, truncated.call(payload)
+
+      # The next result is still inside the block: the boundary must not move.
+      add_result.call(8)
+      grown = agent.send(:build_messages)
+
+      assert_equal 4, truncated.call(grown), "a partial block must not move the boundary"
+      assert_equal payload[0...payload.size], grown[0...payload.size],
+                   "the messages already in the transcript must stay byte-identical"
+    end
   end
 end
 
