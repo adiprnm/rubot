@@ -709,11 +709,12 @@ module Rubot
           template.result(Scope.new(locals).context)
         end
 
-        # The body of a live turn: everything it has done, plus the row that
-        # says it is not done. The first render and every later one go through
-        # here, so the row cannot go missing because one of them forgot it.
+        # The body of a live turn: everything it has done, and nothing else.
+        # The row that says the turn is still running is not part of it — it
+        # lives in the band above the composer, so the timeline stays a record
+        # of the work rather than a place the last row keeps sliding down.
         def turn_body(turn)
-          render("_timeline", items: turn.items) + render("_working", since: turn.epoch)
+          render("_timeline", items: turn.items)
         end
 
         private

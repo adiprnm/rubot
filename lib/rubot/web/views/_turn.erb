@@ -17,4 +17,10 @@
   <%# Same for the sidebar and the header: the conversation gains its name when
       this turn is written to disk. -%>
   <div class="sidebar-slot" sse-swap="sidebar" hidden></div>
+  <%# The working row is not part of the timeline: it is drawn in the band
+      above the composer, so this fragment carries it out of band. Its own
+      `working` event keeps that band current while a tool call resets the
+      clock. -%>
+  <div class="working-slot" sse-swap="working" hidden></div>
+  <%= View.render("_working", since: turn.epoch) %>
 </div>

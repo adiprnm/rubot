@@ -507,7 +507,8 @@ body {
 .chat {
   grid-area: chat;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  /* head · thread · working band · notice · field · status */
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto auto;
   min-width: 0;
   min-height: 0;
   /* The thread is the only part allowed to scroll; anything that outgrows this
@@ -981,12 +982,12 @@ body {
 .row .label { color: var(--fg-dim); }
 .row.done { margin-bottom: 0.55rem; }
 
-/* The row that says the turn is not over. It is hidden by the class the
-   stream's close puts on the turn, so a finished turn keeps no clock counting
-   past the work it measured — and a turn replayed from the session file never
-   draws the row at all. */
+/* The row that says the turn is not over. It is not part of the timeline any
+   more: it sits in its own band above the field, and the stream's close empties
+   that band, so a finished turn keeps no clock counting past the work it
+   measured — and a turn replayed from the session file never draws the row at
+   all. */
 .row.working .mark { color: var(--yellow); }
-.turn.is-done .row.working { display: none; }
 
 /* A clock that only exists past its threshold: an ordinary call says nothing
    about its duration, and a thought worth noticing says how long it ran. The
@@ -1084,6 +1085,20 @@ body {
 }
 
 /* ---------- composer --------------------------------------------- */
+
+/* The band the working row lands in: the same column as the field, one row
+   tall, and reserved even when empty so the thread above it does not shrink
+   and grow every time a turn starts or ends. Nothing is centred here — the
+   row starts at the field's own left edge, where its mark can line up with
+   the one in the status line below. */
+.working-band {
+  width: calc(100% - 3.2rem);
+  max-width: 52rem;
+  min-height: 1.05rem;
+  margin: 0 auto 0.25rem;
+}
+
+.working-band .row { margin: 0; }
 
 /* A prompt the server refused: the text stays in the field, so the reason
    belongs on the edge of it rather than up in the thread. Kept to the

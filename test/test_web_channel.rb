@@ -850,14 +850,45 @@ module Rubot
         refute_includes html, "Working…"
       end
 
-      def test_the_working_row_follows_the_last_thing_the_turn_did
+      # The working row is the page saying "not finished", not an entry in the
+      # conversation, so it is drawn in its own band above the composer. In the
+      # flow it slid the last tool row up every time the answer grew a line, and
+      # it read as something the turn had done rather than something it still
+      # had to do.
+      def test_the_working_row_lives_in_the_band_above_the_composer
         turn = build
         turn.tool_started("shell_exec", "ls")
 
-        html = View.turn_body(turn)
+        timeline = View.turn_body(turn)
+        fragment = View.render("_turn", turn: turn, text: "hi", token_query: "")
 
-        assert html.index("shell_exec") < html.index("Working…"),
-               "the working row has to sit under the work it is describing"
+        refute_includes timeline, "Working…",
+                        "the timeline is a record of the work, not of the waiting"
+        assert_includes fragment, 'id="working"',
+                        "the turn fragment has to put the row in the band"
+        assert_includes fragment, 'hx-swap-oob="true"',
+                        "the band lives outside the thread, so the swap is out of band"
+        assert timeline.index("shell_exec"), "the tool row is still the timeline's"
+      end
+
+      # The band is in the page from the first paint, empty: the row appears
+      # inside it, so the thread never changes height the moment a turn starts.
+      def test_the_page_carries_an_empty_band_for_the_working_row
+        html = View.render("index",
+                           personas: [], sessions: [],
+                           slug: "rubot", persona_label: "Rubot", persona_emoji: "🤖",
+                           persona_model: "m", session_id: "web_rubot",
+                           session_short: "web_rubot", session_label: "Sesi baru",
+                           document_title: "rubot · Rubot", messages: [],
+                           token_query: "",
+                           usage: { cost: "—", cache: "—", ctx: "—" })
+
+        band = html[/<div id="working"[^>]*>.*?<\/div>/m]
+
+        refute_nil band, "the page needs a place for the row to land"
+        refute_includes band, "Working…", "the band starts empty"
+        assert html.index('id="working"') < html.index('class="composer"'),
+               "the band sits above the field, not in the thread"
       end
 
       def test_the_composer_form_carries_the_ref_enter_submits_through

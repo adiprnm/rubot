@@ -2,10 +2,18 @@
     nor a slow tool says anything about itself while it is happening. This row
     is the page's "still working" — the state the TUI pins to its own edge.
 
-    It is drawn for a live turn and hidden by class once the stream closes, so
-    the last frame of a finished turn keeps no clock that goes on counting. -%>
-<p class="row working" data-since="<%= h(since) %>" data-threshold="0">
-  <span class="mark working" aria-hidden="true">◐</span>
-  <span class="label">Working…</span>
-  <span class="live-clock"></span>
-</p>
+    It belongs to the band above the composer, not to the timeline: the
+    timeline is the record of what the turn did, and this row is the page
+    saying it is not finished yet. In the flow it also pushed the last tool
+    row up the screen every time the answer grew a line.
+
+    The payload carries an out-of-band marker because it always arrives inside
+    a swap aimed somewhere else — the turn fragment #thread receives, or a
+    `working` event — and it has to land on #working instead. -%>
+<div class="working-band" id="working" hx-swap-oob="true">
+  <p class="row working" data-since="<%= h(since) %>" data-threshold="0">
+    <span class="mark working" aria-hidden="true">◐</span>
+    <span class="label">Working…</span>
+    <span class="live-clock"></span>
+  </p>
+</div>

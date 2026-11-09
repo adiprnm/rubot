@@ -113,6 +113,13 @@
       <% end %>
     </div>
 
+    <%# The band the working row lands in. It sits between the thread and the
+        field on purpose: "still working" is a state of the page, not an entry
+        in the conversation, and the composer is where the eye already is when
+        a turn is slow. Kept in the DOM while empty so the thread does not
+        change height the moment a turn starts. -%>
+    <div id="working" class="working-band"></div>
+
     <%# Where a refused prompt is repeated. The composer keeps its text when the
         server says no, so the reason has to sit beside the field that held it. -%>
     <div id="composer-notice" class="composer-notice" hidden></div>
@@ -120,7 +127,8 @@
     <%= View.render("_composer", session_id: session_id, token_query: token_query) %>
 
     <%# The footer is facts about the conversation, not about the moment: that
-        a turn is running is said in the thread, where the work is. -%>
+        a turn is running is said in the band above the field, where the work
+        is, and never here. -%>
     <div class="status-line">
       <%= View.render("_usage", **usage) %>
     </div>
