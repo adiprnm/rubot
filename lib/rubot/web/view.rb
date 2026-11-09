@@ -279,13 +279,21 @@ module Rubot
       # it — outside the scrolling box, so neither scrolls sideways with a
       # long line. The button is written here rather than added by a script
       # because a block that arrives mid-stream is already markup.
+      #
+      # The button is drawn, not written: a sheet laid over another says copy
+      # in a corner that also has to hold a language name, where a word would
+      # have crowded it. All three marks sit in the markup and the class on
+      # the button decides which one is seen, so a confirmation costs a class
+      # and no new markup. The word that is left out stays for a screen
+      # reader — it is the button's name, and the one thing a mark cannot say
+      # on its own.
       def code_block(body, language, streaming: false)
         lang = language.to_s.downcase
         classes = [ "code" ]
         classes << "streaming" if streaming
 
         top = +%(<div class="code-top">)
-        top << %(<button type="button" class="code-copy" data-copy aria-live="polite" aria-label="Salin isi blok kode" title="Salin isi blok kode">Salin</button>)
+        top << copy_button
         top << %(<span class="code-lang">#{lang}</span>) unless lang.empty?
         top << "</div>"
 
@@ -295,6 +303,31 @@ module Rubot
         code_class = lang.empty? ? "" : %( class="language-#{lang}")
         pre << "<code#{code_class}>#{highlight(body, lang)}</code></pre>"
         %(<div class="code-block#{streaming ? " streaming" : ""}">#{top}#{pre}</div>)
+      end
+
+      # Three marks on one 12px grid, stroked in the current colour so the
+      # button's own colour is what tells a copy from a failure.
+      COPY_ICONS = {
+        copy: %(<rect x="4.2" y="4.2" width="7" height="7" rx="1.2"/>) +
+              %(<path d="M9.4 4.2V3a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v5.4a1 1 0 0 0 1 1h1.2"/>),
+        done: %(<path d="M2.4 6.3 4.9 8.8 9.6 3.3"/>),
+        failed: %(<path d="M3.2 3.2l5.6 5.6M8.8 3.2 3.2 8.8"/>)
+      }.freeze
+
+      COPY_LABEL = "Salin isi blok kode"
+
+      def copy_button
+        icons = COPY_ICONS.map do |name, body|
+          %(<svg class="code-copy-icon #{name}" viewBox="0 0 12 12" width="12" height="12" ) +
+            %(fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" ) +
+            %(stroke-linejoin="round" aria-hidden="true" focusable="false">#{body}</svg>)
+        end.join
+
+        # The label is live: the button says nothing visible any more, so the
+        # confirmation a sighted reader gets from the mark a screen reader has
+        # to get from the words behind it.
+        %(<button type="button" class="code-copy" data-copy title="#{COPY_LABEL}">) +
+          %(#{icons}<span class="sr-only" aria-live="polite">#{COPY_LABEL}</span></button>)
       end
 
       # A small highlighter, not a parser: comments, strings, numbers and

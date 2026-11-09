@@ -935,26 +935,33 @@ body {
   pointer-events: none;
 }
 
+/* A 12px mark, not a word: the corner already carries the language, and a
+   square button reads at a glance where a small uppercase label had to be
+   read. The three marks are stacked; the class on the button picks one. */
 .text .code-copy {
-  /* Wide enough for the longest word it ever shows ("Tersalin"), so the label
-     beside it does not slide when the word changes. */
-  min-width: 4.2rem;
-  padding: 0.05rem 0.38rem;
+  display: grid;
+  place-items: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  padding: 0;
   border: 1px solid var(--line);
   border-radius: 2px;
   background: var(--bg1);
   color: var(--fg-faint);
-  font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  text-align: center;
-  text-transform: uppercase;
-  line-height: 1.7;
+  line-height: 0;
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
   transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
 }
+
+.text .code-copy-icon { grid-area: 1 / 1; }
+.text .code-copy-icon.done,
+.text .code-copy-icon.failed,
+.text .code-copy.is-copied .code-copy-icon.copy,
+.text .code-copy.is-failed .code-copy-icon.copy { display: none; }
+.text .code-copy.is-copied .code-copy-icon.done,
+.text .code-copy.is-failed .code-copy-icon.failed { display: block; }
 
 .text .code-block:hover .code-copy,
 .text .code-block:focus-within .code-copy,
@@ -974,7 +981,8 @@ body {
     opacity: 1;
     pointer-events: auto;
     /* A finger needs more than a hairline to land on. */
-    padding: 0.3rem 0.5rem;
+    width: 1.9rem;
+    height: 1.9rem;
   }
 }
 

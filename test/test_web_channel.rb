@@ -39,8 +39,23 @@ module Rubot
         # block that streamed in has to arrive already copyable. The label
         # follows it, so the language stays in the corner it was in.
         assert_includes html, %(<div class="code-block"><div class="code-top"><button type="button" class="code-copy" data-copy)
-        assert_includes html, ">Salin</button>"
         assert_includes html, %(<span class="code-lang">ruby</span>)
+      end
+
+      def test_the_copy_button_is_a_mark_with_its_words_kept_for_a_reader
+        html = Format.markdown("```ruby\nputs 1\n```")
+
+        # A mark says nothing out loud, so the name stays behind it: the
+        # button is the thing a screen reader announces, and the three marks
+        # are decorative — one of them is shown, the CSS picks which.
+        assert_includes html, %(<svg class="code-copy-icon copy")
+        assert_includes html, %(<svg class="code-copy-icon done")
+        assert_includes html, %(<svg class="code-copy-icon failed")
+        html.scan(/<svg class="code-copy-icon[^>]*>/) do |tag|
+          assert_includes tag, %(aria-hidden="true"), "a drawn mark must not be read out"
+        end
+        assert_includes html, %(<span class="sr-only" aria-live="polite">Salin isi blok kode</span>)
+        refute_includes html, ">Salin</button>", "the word is no longer what is seen"
       end
 
       def test_a_block_without_a_language_still_offers_the_copy_button
