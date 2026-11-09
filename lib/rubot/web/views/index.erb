@@ -121,8 +121,17 @@
         field on purpose: "still working" is a state of the page, not an entry
         in the conversation, and the composer is where the eye already is when
         a turn is slow. Kept in the DOM while empty so the thread does not
-        change height the moment a turn starts. -%>
-    <div id="working" class="working-band"></div>
+        change height the moment a turn starts.
+
+        A page that opens on a turn already in flight draws the row here, in
+        the one element that owns it. It used to be drawn inside the turn
+        fragment as well, and then the stream's out-of-band swap filled this
+        band too: one row beside the tool call, one above the field. -%>
+    <% if live_turn %>
+      <%= View.render("_working", since: live_turn.epoch, oob: false) %>
+    <% else %>
+      <div id="working" class="working-band"></div>
+    <% end %>
 
     <%# Where a refused prompt is repeated. The composer keeps its text when the
         server says no, so the reason has to sit beside the field that held it. -%>

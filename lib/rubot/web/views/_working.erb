@@ -10,7 +10,7 @@
     The payload carries an out-of-band marker because it always arrives inside
     a swap aimed somewhere else — the turn fragment #thread receives, or a
     `working` event — and it has to land on #working instead. -%>
-<div class="working-band" id="working" hx-swap-oob="true">
+<div class="working-band" id="working"<%= oob ? %( hx-swap-oob="true") : "" %>>
   <p class="row working" data-since="<%= h(since) %>" data-threshold="0">
     <span class="mark working" aria-hidden="true"><%= mark(:working) %></span>
     <span class="label">Working…</span>

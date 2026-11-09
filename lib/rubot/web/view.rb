@@ -704,6 +704,13 @@ module Rubot
           MARKS.fetch(kind, "")
         end
 
+        # The working row always arrives from the stream, where it has to be
+        # swapped out of band into the band above the field. The first paint
+        # puts the same row in the page directly, so it passes `oob: false`.
+        def oob
+          true
+        end
+
         # A 10px stroked mark. Decorative: the row's title carries the meaning,
         # so the drawing is hidden from a screen reader.
         def usage_icon(name)

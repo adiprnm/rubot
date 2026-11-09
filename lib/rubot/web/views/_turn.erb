@@ -24,7 +24,7 @@
   <%# The working row is not part of the timeline: it is drawn in the band
       above the composer, so this fragment carries it out of band. Its own
       `working` event keeps that band current while a tool call resets the
-      clock. -%>
+      clock. The row itself is not drawn here — one element owns it, and a
+      second copy inside the turn was what made it appear twice. -%>
   <div class="working-slot" sse-swap="working" hidden></div>
-  <%= View.render("_working", since: turn.epoch) %>
 </div>

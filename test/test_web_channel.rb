@@ -521,6 +521,19 @@ module Rubot
         Turn.new(id: "t1", session_id: "s1", clock: clock)
       end
 
+      # The shell of the page with nothing in it but what these view tests need:
+      # a persona, one open session, and whatever turn is still in flight.
+      def render_page(live_turn: nil)
+        View.render("index",
+                    personas: [], sessions: [],
+                    slug: "rubot", persona_label: "Rubot", persona_emoji: "🤖",
+                    persona_model: "m", session_id: "web_rubot",
+                    session_short: "web_rubot", session_label: "Sesi baru",
+                    document_title: "rubot · Rubot", live_turn: live_turn, token_query: "",
+                    page: { entries: [], more: false, before: 0 }, older_url: "",
+                    usage: { cost: "—", cache: "—", ctx: "—" })
+      end
+
       # Enough of a WEBrick::HTTPResponse for the channel's rendering paths: it
       # only ever writes a status, a body and a header or two.
       class FakeResponse
@@ -874,13 +887,15 @@ module Rubot
       # working row is what fills that silence, and it counts from the prompt —
       # not from whenever the fragment was rendered, which would restart the
       # clock on every chunk.
-      def test_a_running_turn_says_it_is_working
+      def test_a_page_that_opens_on_a_running_turn_says_it_is_working
         turn = build
-        html = View.render("_turn", turn: turn, text: "hi", token_query: "")
+        html = render_page(live_turn: turn)
 
         assert_includes html, "Working…"
         assert_includes html, %(data-since="#{turn.epoch}")
         assert_includes html, %(data-threshold="0")
+        assert_equal 1, html.scan('id="working"').size,
+                     "one element owns the row, or the swap fills a second copy"
       end
 
       # The row belongs to the turn, not to the timeline: a turn read back from
@@ -896,33 +911,33 @@ module Rubot
       # flow it slid the last tool row up every time the answer grew a line, and
       # it read as something the turn had done rather than something it still
       # had to do.
+      #
+      # The turn fragment carries only the slot the stream swaps through: it
+      # used to render the row as well, and a page opened on a live turn then
+      # held two elements called #working — the one beside the tool call and
+      # the one above the field.
       def test_the_working_row_lives_in_the_band_above_the_composer
         turn = build
         turn.tool_started("shell_exec", "ls")
 
         timeline = View.turn_body(turn)
         fragment = View.render("_turn", turn: turn, text: "hi", token_query: "")
+        page = render_page(live_turn: turn)
 
         refute_includes timeline, "Working…",
                         "the timeline is a record of the work, not of the waiting"
-        assert_includes fragment, 'id="working"',
-                        "the turn fragment has to put the row in the band"
-        assert_includes fragment, 'hx-swap-oob="true"',
-                        "the band lives outside the thread, so the swap is out of band"
+        refute_includes fragment, 'id="working"',
+                        "the turn fragment must not draw a second band"
+        assert_equal 1, page.scan('id="working"').size
+        assert page.index('id="working"') < page.index('class="composer"'),
+               "the band sits above the field, not in the thread"
         assert timeline.index("shell_exec"), "the tool row is still the timeline's"
       end
 
       # The band is in the page from the first paint, empty: the row appears
       # inside it, so the thread never changes height the moment a turn starts.
       def test_the_page_carries_an_empty_band_for_the_working_row
-        html = View.render("index",
-                           personas: [], sessions: [],
-                           slug: "rubot", persona_label: "Rubot", persona_emoji: "🤖",
-                           persona_model: "m", session_id: "web_rubot",
-                           session_short: "web_rubot", session_label: "Sesi baru",
-                           document_title: "rubot · Rubot", live_turn: nil, token_query: "",
-                           page: { entries: [], more: false, before: 0 }, older_url: "",
-                           usage: { cost: "—", cache: "—", ctx: "—" })
+        html = render_page
 
         band = html[/<div id="working"[^>]*>.*?<\/div>/m]
 
