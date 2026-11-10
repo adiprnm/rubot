@@ -144,8 +144,10 @@
 </div>
 
 <%# Tapping beside the drawer closes it, the way a sheet does. Hidden on wide
-    screens, where the dock is part of the page and there is nothing to close. -%>
-<div class="nav-scrim" x-show="nav" x-cloak @click="nav = false" aria-hidden="true"></div>
+    screens, where the dock is part of the page and there is nothing to close.
+    It is drawn from the `.nav-open` class (see app.css) so that it can fade out
+    after the drawer rather than vanish under it. -%>
+<div class="nav-scrim" @click="nav = false" aria-hidden="true"></div>
 
   <main class="chat">
     <%= View.render("_chathead",

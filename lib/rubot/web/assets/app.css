@@ -2684,12 +2684,21 @@ body.lightbox-open { overflow: hidden; }
     border-right: 1px solid var(--line);
     box-shadow: 0 0 40px var(--shadow);
     transform: translateX(-101%);
-    transition: transform 210ms ease;
+    /* `visibility` is not a value the browser can tween, so on its own it is
+       the thing that made closing a disappearance: the panel went hidden on the
+       first frame of the slide and the 210ms after it animated nothing. Holding
+       the switch until the travel is over makes the way out look like the way
+       in. Opening needs no delay, so it drops the clock again. */
+    transition: transform 210ms ease, visibility 0s linear 210ms;
     /* Kept out of the tab order and off the screen readers' path while shut. */
     visibility: hidden;
   }
 
-  .app.nav-open .side-dock { transform: none; visibility: visible; }
+  .app.nav-open .side-dock {
+    transform: none;
+    visibility: visible;
+    transition: transform 210ms ease;
+  }
 
   /* The roster turns on its side: a face is enough to pick a persona, and the
      row costs one line instead of a column of the drawer's width. */
@@ -2781,12 +2790,24 @@ body.lightbox-open { overflow: hidden; }
 
   .usage-note { font-size: 11px; }
 
+  /* Drawn from the drawer's own class rather than from `x-show`, which would
+     have taken it out of the page on the first frame: a sheet that fades in has
+     to fade out too, and a `display` toggle has no time in it. */
   .nav-scrim {
     display: block;
     position: fixed;
     inset: 0;
     z-index: 55;
     background: var(--shadow);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 210ms ease, visibility 0s linear 210ms;
+  }
+
+  .app.nav-open .nav-scrim {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 210ms ease;
   }
 
   .nav-toggle {
