@@ -773,9 +773,9 @@ module Rubot
 
         # A tool row's mark. A call that is open gets the same turning arc as the
         # rows above it instead of the half disc, which was a fallback font's
-        # shape — a live row's ring turns, and the sweep is a second thing
-        # happening to the row, not a replacement for the mark's meaning. A
-        # finished call keeps ✓ or ✗.
+        # shape. The ring is the row's only motion: a sweep across the whole row
+        # was tried beside it and taken out, because two things saying "still
+        # running" in the same 16px is one of them too many.
         def state_mark(state)
           state == :running ? MARKS[:running] : icon(state)
         end

@@ -3555,20 +3555,31 @@ module Rubot
         refute_includes thought, "label glow"
       end
 
-      # Motion belongs only where a redraw cannot restart it: the thought while
-      # nothing else is being drawn, and a tool row while its call is open. The
-      # timeline is rewritten on every chunk of an answer, and a redraw begins
-      # every animation in it again — so a finished row that kept sweeping would
-      # sit frozen at the start of the sweep.
-      def test_the_glow_travels_and_only_a_running_call_sweeps
+      # Motion belongs only where a redraw cannot restart it. The timeline is
+      # rewritten on every chunk of an answer — twenty times a second — and a
+      # redraw begins every animation in it again, so a thought is the row that
+      # can carry one: it is drawn when the wait starts and nothing redraws it
+      # until tokens arrive, which is when it is replaced anyway.
+      def test_the_glow_travels_across_the_word
         css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
 
         assert_match(/@keyframes label-glow/, css, "the glow keyframes are missing")
         assert_match(/\.row \.label\.glow span \{[^}]*animation: label-glow/, css)
         assert_match(/animation-delay: calc\(var\(--i/, css, "each letter needs its own phase")
-        assert_match(/\.tool-row\.running::after \{[^}]*tool-sweep/, css)
-        assert_match(/@keyframes tool-sweep/, css)
-        refute_match(/\.tool-row::after/, css, "a row that is not running must not keep sweeping")
+      end
+
+      # A row gets one thing that moves. An open call already has the turning
+      # ring on its left, so the sweep that crossed the row was taken back out —
+      # two motions saying "still running" sixteen pixels apart is one too many.
+      def test_an_open_call_moves_once
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        running = View.render("_timeline",
+                              items: [ { kind: :tool, name: "shell", detail: "ls",
+                                         state: :running, epoch: 2.0, elapsed: 1.0 } ])
+
+        assert_includes running, "mark-svg spin", "the ring is the row's motion"
+        refute_match(/@keyframes tool-sweep/, css, "the sweep is gone")
+        refute_match(/\.tool-row\.running::after/, css)
       end
 
       # The thought wears the half disc and keeps it still: a shape that means
