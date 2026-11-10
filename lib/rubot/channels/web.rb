@@ -326,7 +326,12 @@ module Rubot
       # --- routing -------------------------------------------------------
 
       def dispatch(req, res)
-        path = req.path
+        # WEBrick hands over the request line as ASCII-8BIT, so every capture
+        # from `path` inherits that encoding. A session id built from one was
+        # bound to SQLite as a BLOB, and a BLOB never equals the TEXT id of the
+        # same bytes: the conversation got a second row that no lookup found.
+        # Decode once, here, so every route works with plain UTF-8 text.
+        path = utf8(req.path)
         method = req.request_method
 
         return serve_static(res, path) if path.start_with?("/assets/", "/vendor/")

@@ -7,9 +7,9 @@ module Rubot
   class TUI
     # The session list opened by /resume. It writes its rows straight into the
     # transcript, right below the echoed command, instead of floating a modal:
-    # the last prompt on the left, the message count and age pinned to the
-    # right edge. ↑/↓ move the highlight, enter resumes the session, and esc
-    # removes the list again.
+    # the name of the conversation on the left, the message count and age pinned
+    # to the right edge. ↑/↓ move the highlight, enter resumes the session, and
+    # esc removes the list again.
     class SessionList
       ROWS = 10
       INDENT = "  "
@@ -168,8 +168,8 @@ module Rubot
         end
 
         left_width = width - right_width
-        prompt = ::TUI::Text.truncate(entry[:last_prompt].to_s, [ left_width - 1, 0 ].max)
-        left = ::TUI::Text.pad(prompt, left_width)
+        name = ::TUI::Text.truncate(Rubot::Session.label(entry), [ left_width - 1, 0 ].max)
+        left = ::TUI::Text.pad(name, left_width)
 
         [ indent, [ left, selected ? :selection : :text ], [ right, selected ? :selection : :dim ] ]
       end

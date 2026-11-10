@@ -1621,7 +1621,7 @@ module Rubot
         marker = session[:id] == current ? MARK[:ok] : " "
         say_text(format("  %s %-2d %-28s %4d msgs · %-10s %s",
                         marker, index + 1, session[:id], session[:messages],
-                        relative_time(session[:updated_at]), session[:last_prompt]))
+                        relative_time(session[:updated_at]), Rubot::Session.label(session)))
       end
       blank
       say_text("Resume one with /resume <number> or /resume <id>.")

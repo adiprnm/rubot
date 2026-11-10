@@ -72,6 +72,7 @@ module Rubot
     def append_messages(session_id, messages, start_index: 0)
       return 0 if messages.nil? || messages.empty?
 
+      session_id = text_id(session_id)
       inserted = 0
       in_transaction do
         statement = @db.prepare(<<~SQL)
@@ -110,6 +111,7 @@ module Rubot
     # title must not wipe the summary or move the window.
     def upsert_session(id:, title: "", created_at: nil, updated_at: nil, cwd: nil, bytes: 0,
                        meta: nil, messages_start: nil)
+      id = text_id(id)
       meta_json = meta.nil? ? nil : JSON.generate(meta)
       # meta and messages_start appear twice: once for the insert, once for the
       # conflict update, where a nil must keep what is already stored.
@@ -134,7 +136,7 @@ module Rubot
     # because a reader asked while looking at it (the web client's delete
     # button). Trimming never takes this path: it moves `messages_start`.
     def delete_session(session_id)
-      id = session_id.to_s
+      id = text_id(session_id)
       in_transaction do
         @db.execute("DELETE FROM messages WHERE session_id = ?", [id])
         @db.execute("DELETE FROM sessions WHERE id = ?", [id])
@@ -147,9 +149,10 @@ module Rubot
     # Whether an id is already in use. Cheaper than loading the transcript: the
     # web client asks this before handing out a fresh id.
     def session?(session_id)
-      return false if session_id.to_s.empty?
+      id = text_id(session_id)
+      return false if id.empty?
 
-      !@db.get_first_value("SELECT 1 FROM sessions WHERE id = ? LIMIT 1", [session_id.to_s]).nil?
+      !@db.get_first_value("SELECT 1 FROM sessions WHERE id = ? LIMIT 1", [id]).nil?
     end
 
     # What the sidebar shows, newest first. Three columns and no JSON parsing:
@@ -162,7 +165,7 @@ module Rubot
         LIMIT ?
       SQL
         {
-          id: id,
+          id: text_id(id),
           title: title.to_s,
           updated_at: updated_at,
           timestamp: timestamp_of(updated_at),
@@ -180,12 +183,13 @@ module Rubot
     # projection and content is read back out of the payload rather than kept as
     # a third copy (which cost 4 MB on 7k messages).
     def load_session(session_id)
+      id = text_id(session_id)
       row = @db.execute(
-        "SELECT meta, messages_start FROM sessions WHERE id = ?", [session_id.to_s]
+        "SELECT meta, messages_start FROM sessions WHERE id = ?", [id]
       ).first
       start = row ? row[1].to_i : 0
 
-      rows = @db.execute(<<~SQL, [session_id.to_s, start])
+      rows = @db.execute(<<~SQL, [id, start])
         SELECT payload, diff, text, role, created_at FROM messages
         WHERE session_id = ? AND idx >= ? ORDER BY idx
       SQL
@@ -201,22 +205,22 @@ module Rubot
         message["timestamp"] ||= created_at if created_at
         message
       end
-      { id: session_id.to_s, messages: messages, meta: decode_meta(row && row[0]), start: start }
+      { id: id, messages: messages, meta: decode_meta(row && row[0]), start: start }
     end
 
     def session_ids
-      @db.execute("SELECT id FROM sessions ORDER BY COALESCE(updated_at, '') DESC").map(&:first)
+      @db.execute("SELECT id FROM sessions ORDER BY COALESCE(updated_at, '') DESC").map { |row| text_id(row.first) }
     end
 
     def message_count(session_id)
-      @db.get_first_value("SELECT COUNT(*) FROM messages WHERE session_id = ?", [session_id.to_s]).to_i
+      @db.get_first_value("SELECT COUNT(*) FROM messages WHERE session_id = ?", [text_id(session_id)]).to_i
     end
 
     # Index of the newest message stored for a session, or -1 when there is none.
     # The actor uses it to append only what is new instead of rewriting the whole
     # transcript every turn.
     def last_index(session_id)
-      @db.get_first_value("SELECT COALESCE(MAX(idx), -1) FROM messages WHERE session_id = ?", [session_id.to_s]).to_i
+      @db.get_first_value("SELECT COALESCE(MAX(idx), -1) FROM messages WHERE session_id = ?", [text_id(session_id)]).to_i
     end
 
     def counts
@@ -388,7 +392,8 @@ module Rubot
     end
 
     def refresh_count(session_id)
-      @db.execute(<<~SQL, [session_id.to_s, session_id.to_s])
+      id = text_id(session_id)
+      @db.execute(<<~SQL, [id, id])
         UPDATE sessions
         SET msg_count = (SELECT COUNT(*) FROM messages WHERE session_id = ?)
         WHERE id = ?
@@ -401,7 +406,7 @@ module Rubot
     # never backwards, so an append carrying an old timestamp cannot reorder the
     # list.
     def touch_session(session_id, messages)
-      id = session_id.to_s
+      id = text_id(session_id)
       newest = messages.filter_map { |m| m.is_a?(Hash) ? m["timestamp"] : nil }.max
       newest = newest.to_s.empty? ? Time.now.iso8601 : newest.to_s
 
@@ -409,6 +414,21 @@ module Rubot
       @db.execute(<<~SQL, [newest, id, newest])
         UPDATE sessions SET updated_at = ? WHERE id = ? AND (updated_at IS NULL OR updated_at < ?)
       SQL
+    end
+
+    # A session id that is always the same value in SQLite.
+    #
+    # Ids come from HTTP paths (WEBrick hands those over as ASCII-8BIT), form
+    # fields and Ractor ports. sqlite3 binds a string with that encoding as a
+    # BLOB, and a BLOB is not equal to the TEXT row of the same bytes — so the
+    # same conversation could be stored twice, once under each type, with the
+    # BLOB copy invisible to every `WHERE id = ?` and missing from the sidebar's
+    # name and timestamp. One normalisation at the edge of the store keeps every
+    # write and every lookup on the same row.
+    def text_id(value)
+      id = value.to_s
+      id = id.dup.force_encoding(Encoding::UTF_8) if id.encoding == Encoding::ASCII_8BIT
+      id.valid_encoding? ? id : id.scrub
     end
 
     def timestamp_of(iso)

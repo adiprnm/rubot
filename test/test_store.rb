@@ -297,6 +297,56 @@ class TestStore < Minitest::Test
     assert_equal "todotxt", meta["forced_skill"]
   end
 
+  # WEBrick hands over request paths as ASCII-8BIT, and sqlite3 binds such a
+  # string as a BLOB. A BLOB is not the TEXT row of the same bytes, so the
+  # conversation would land in a second row that no lookup by id finds — this
+  # is the shape of the bug that left sessions without a name or a timestamp.
+  def test_a_binary_session_id_writes_to_the_text_row
+    binary = "web_rubot~20261110-030626".dup.force_encoding(Encoding::ASCII_8BIT)
+
+    @store.append_messages(binary, [build_message("user", "halo")])
+    @store.upsert_session(id: binary, title: "Konsumsi memori rubot web", updated_at: "2026-11-10T03:06:00Z")
+
+    assert_equal 1, @store.message_count("web_rubot~20261110-030626")
+    assert @store.session?("web_rubot~20261110-030626"), "a lookup by the text id must find it"
+    assert_equal [ "web_rubot~20261110-030626" ], @store.session_ids
+    assert_equal "Konsumsi memori rubot web", @store.sidebar.first[:title]
+    assert_equal "text", @store.instance_variable_get(:@db)
+                              .execute("SELECT typeof(id) FROM sessions").first.first
+  end
+
+  def test_a_session_is_written_once_under_either_encoding
+    @store.append_messages("web_rubot", [build_message("user", "halo")])
+    binary = "web_rubot".dup.force_encoding(Encoding::ASCII_8BIT)
+    @store.append_messages(binary, [build_message("assistant", "hai")], start_index: 1)
+
+    assert_equal 1, @store.session_ids.length, "one conversation, one row"
+    assert_equal 2, @store.message_count("web_rubot")
+  end
+
+  # /resume printed an empty name and "unknown" for every conversation once the
+  # archive answered instead of the files: the sidebar row had the timestamp and
+  # the title, but the entry handed to the channels dropped them.
+  def test_index_entries_carry_the_name_and_the_timestamp
+    @store.append_messages("web_rubot~1", [build_message("user", "halo")])
+    @store.upsert_session(id: "web_rubot~1", title: "Konsumsi memori rubot web",
+                          updated_at: "2026-11-10T03:06:00Z")
+    Rubot::Session.store = @store
+
+    entry = Rubot::Session.index(nil, cwd: :all, dir: @sessions).first
+
+    assert_equal "2026-11-10T03:06:00Z", entry[:updated_at]
+    assert_equal "Konsumsi memori rubot web", Rubot::Session.label(entry)
+  ensure
+    Rubot::Session.store = nil
+  end
+
+  def test_label_falls_back_from_name_to_prompt_to_id
+    assert_equal "Nama dari model", Rubot::Session.label(title: "Nama dari model", last_prompt: "prompt", id: "s1")
+    assert_equal "prompt", Rubot::Session.label(title: "  ", last_prompt: "prompt", id: "s1")
+    assert_equal "s1", Rubot::Session.label(title: nil, last_prompt: nil, id: "s1")
+  end
+
   private
 
   def write_session(id, messages, title: nil)

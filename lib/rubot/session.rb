@@ -686,15 +686,33 @@ module Rubot
       []
     end
 
-    # The list shape the channels already expect from #describe.
+    # The list shape the channels already expect from #describe. `updated_at` is
+    # what a list prints as the age of a conversation; leaving it out made every
+    # entry read as "unknown" once the archive answered instead of the files.
+    # `last_prompt` stays nil here: the archive keeps the name in `title` and the
+    # newest prompt would cost one query per session to dig back out.
     def self.entry_from_row(row)
       {
         id: row[:id],
         title: row[:title].to_s,
+        updated_at: row[:updated_at],
         timestamp: row[:timestamp],
         messages: row[:messages].to_i,
-        cwd: row[:cwd]
+        cwd: row[:cwd],
+        last_prompt: nil
       }
+    end
+
+    # What a session list prints as the name of one entry: the name the model
+    # gave it, the prompt it was opened with, its last prompt, or the id when
+    # none of those are there. The archive only has the first two, the JSON
+    # files have all of them, so the chain is what keeps the two paths looking
+    # the same.
+    def self.label(entry)
+      [ entry[:title], entry[:last_prompt], entry[:id] ]
+        .map { |value| value.to_s.strip }
+        .find { |value| !value.empty? }
+        .to_s
     end
 
     # Read one session file into the summary used by #index and #find.
