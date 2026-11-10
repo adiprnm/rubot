@@ -649,6 +649,26 @@ module Rubot
         attr_reader :tools
       end
 
+      # Stands in for a session actor when only the cron call matters.
+      class RecordingCronSession
+        attr_reader :calls, :titles
+
+        def initialize
+          @calls = []
+          @titles = []
+        end
+
+        def process_cron(text, fresh: false)
+          @calls << { text: text, fresh: fresh }
+          "done"
+        end
+
+        def set_session_title(title)
+          @titles << title
+          title
+        end
+      end
+
       # Says where a conversation is rooted, which is all the channel asks of
       # the pool when it binds the cron tool.
       class FakeWorkspacePool
@@ -2734,6 +2754,84 @@ module Rubot
         assert_equal File.join(Dir.tmpdir, "personas", "kanyaah"), cron.delivery_context[:workspace]
       end
 
+      # The job names the persona it was written in, so a fired reminder is
+      # answered by that persona instead of by whichever one comes first.
+      def test_a_reminder_remembers_the_persona_it_was_written_in
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        cron = Rubot::Tools::Cron.new
+        agent = FakeToolAgent.new(cron)
+        channel.define_singleton_method(:session_for) { |_sid| agent }
+
+        channel.send(:bind_cron_delivery, "web_kanyaah")
+
+        assert_equal "kanyaah", cron.delivery_context[:slug]
+      end
+
+      # A daily prompt wants its own conversation: the sidebar shows it as a new
+      # chat each day instead of one transcript that grows forever.
+      def test_a_fired_job_that_asks_for_a_new_conversation_gets_one
+        channel = channel_with_sessions(personas: { "english-tutor" => { "name" => "English Tutor" } })
+        session = RecordingCronSession.new
+        opened = []
+        channel.define_singleton_method(:new_session_id) { |slug| "web_#{slug}~20261110-210000" }
+        channel.define_singleton_method(:prepare_delivery) { |_sid| nil }
+        channel.define_singleton_method(:session_for) do |sid|
+          opened << sid
+          session
+        end
+
+        channel.send(:deliver_cron_turn,
+                     mode: "agent_turn", slug: "english-tutor", new_session: true,
+                     description: "Practice", result: { agent_message: "Practice!" })
+
+        assert_equal [ "web_english-tutor~20261110-210000" ], opened
+        assert_equal "Practice!", session.calls.first[:text]
+        assert session.calls.first[:fresh], "a new conversation should not inherit the old history"
+        # Untitled sessions would be impossible to tell apart a week later.
+        assert_equal 1, session.titles.size
+        assert_includes session.titles.first, "Practice"
+        assert_includes session.titles.first, Time.now.strftime("%Y-%m-%d")
+      end
+
+      # Without `new_session` the job is one more turn in the conversation the
+      # persona already has, which is what a reminder wants.
+      def test_a_fired_job_without_a_new_conversation_lands_in_the_personas_chat
+        channel = channel_with_sessions(personas: { "english-tutor" => { "name" => "English Tutor" } })
+        session = RecordingCronSession.new
+        opened = []
+        channel.define_singleton_method(:prepare_delivery) { |_sid| nil }
+        channel.define_singleton_method(:session_for) do |sid|
+          opened << sid
+          session
+        end
+
+        channel.send(:deliver_cron_turn,
+                     mode: "agent_turn", slug: "english-tutor", new_session: false,
+                     result: { agent_message: "Minum air" })
+
+        assert_equal [ "web_english-tutor" ], opened
+        refute session.calls.first[:fresh]
+        assert_empty session.titles, "a reminder must not rename the conversation it lands in"
+      end
+
+      # A job whose persona was deleted must still have somewhere to land.
+      def test_a_fired_job_with_an_unknown_persona_falls_back_to_the_default
+        channel = channel_with_sessions(personas: { "english-tutor" => { "name" => "English Tutor" } })
+        session = RecordingCronSession.new
+        opened = []
+        channel.define_singleton_method(:prepare_delivery) { |_sid| nil }
+        channel.define_singleton_method(:session_for) do |sid|
+          opened << sid
+          session
+        end
+
+        channel.send(:deliver_cron_turn,
+                     mode: "agent_turn", slug: "ghost", new_session: false,
+                     result: { agent_message: "Halo" })
+
+        assert_equal [ channel.send(:session_id) ], opened
+      end
+
       def test_each_session_row_carries_a_way_to_delete_it
         channel = channel_with_sessions(
           personas: { "kanyaah" => { "name" => "Kanyaah" } },
@@ -3499,6 +3597,25 @@ module Rubot
         assert_includes js, "--vvh"
         assert_includes js, "view.scale > 1.01",
                         "a pinch-zoom shrinks the visual viewport too, and the shell must not follow it"
+      end
+
+      # `dvh` is a dynamic unit, and a browser is free to publish it before it
+      # has settled the things that make it dynamic. Installed as an app it did:
+      # opening a session laid the shell out at the height of a window that was
+      # no longer there, and the field and the figures under it fell past the
+      # bottom edge until the browser recounted — which touching the field did.
+      # So the height is measured, always, and measured again once the browser
+      # has had a paint to settle.
+      def test_the_shell_measures_itself_rather_than_trusting_dvh
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+
+        assert_includes js, "function fitToViewport"
+        assert_includes js, 'window.addEventListener("pageshow", fitToViewport)',
+                        "a page back out of the cache was laid out for another window"
+        assert_includes js, "requestAnimationFrame(fitToViewport)",
+                        "a toolbar still moving at `load` reports its old height"
+        refute_match(/KEYBOARD_SLACK/, js,
+                     "a threshold is what let a viewport the shell had outgrown stand uncorrected")
       end
 
       # A phone keeps the browser's hover state on whatever was tapped last, so a

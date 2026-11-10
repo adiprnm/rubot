@@ -230,12 +230,12 @@ body {
      hidden` is the belt to that suspender: nothing inside the shell may ever
      make the page taller than the window, so the field stays where it is even
      when a list or a thread misbehaves.
-     The last one is the keyboard: a phone's keys shrink the *visual* viewport,
-     and the shell has to end where the keys begin or the field sits behind
-     them. app.js writes the visible height there (see fitToKeyboard); on the
-     browsers whose keyboard resizes the layout viewport instead — the ones
-     that understand `interactive-widget=resizes-content` — `dvh` is already
-     right and nothing is written. */
+     The last one is not a fallback at all: app.js writes the height of the box
+     the reader can actually see (see fitToViewport). The keyboard is one reason
+     — the keys shrink the *visual* viewport and the shell has to end where they
+     begin, or the field sits behind them — and the other is that `dvh` is only
+     as current as the browser's last recount, which in an installed app is not
+     always the one that comes with the first paint. */
   height: 100vh;
   height: 100dvh;
   height: var(--vvh, 100dvh);
