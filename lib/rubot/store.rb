@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 require "json"
 require "fileutils"
+require "digest"
+require "set"
 require "time"
 require "zlib"
 require "sqlite3"
@@ -47,6 +49,26 @@ module Rubot
     # store is already the thing that knows a message was written. 500 is about a
     # week of ordinary use.
     FTS_OPTIMIZE_EVERY = 500
+    # How much of a tool result is searchable. A `cat` of a large file is not
+    # more findable past its first pages, and indexing all of it turned the index
+    # into a second copy of the repository.
+    TOOL_INDEX_LIMIT = 8_192
+    # How far back the dedupe of a repeated tool result looks: a session that
+    # reads the same file twice in a row is the case worth catching, and a window
+    # keeps the lookup bounded.
+    TOOL_DEDUPE_WINDOW = 200
+    # bm25 weights, in the order the columns are declared: what the person said,
+    # what the assistant answered, what a tool printed.
+    SEARCH_WEIGHTS = [ 10.0, 5.0, 1.0 ].freeze
+    # How many words of the query are used. A query longer than this is a
+    # paragraph, and every extra word only narrows the answer.
+    SEARCH_TERMS = 8
+    # Markers around the matched words. Control characters rather than `<mark>`
+    # because the snippet is text until the last step: it is escaped first and
+    # only then turned into markup, so a message containing a tag cannot become
+    # one.
+    SNIPPET_OPEN = "\u0002"
+    SNIPPET_CLOSE = "\u0003"
 
     attr_reader :path, :migrations_dir
 
@@ -65,6 +87,7 @@ module Rubot
       @db.busy_timeout = BUSY_TIMEOUT_MS
       apply_pragmas(cache_kb)
       migrate!
+      rebuild_index_if_stale
     end
 
     # --- writing -------------------------------------------------------
@@ -79,16 +102,21 @@ module Rubot
 
       session_id = text_id(session_id)
       inserted = 0
+      # The tool outputs this session already indexes, so a repeated `cat` of the
+      # same file does not fill the index with a second copy of itself.
+      seen_tool = recent_tool_digests(session_id)
       in_transaction do
         statement = @db.prepare(<<~SQL)
-          INSERT OR IGNORE INTO messages(session_id, idx, role, text, created_at, payload, diff)
-          VALUES(?, ?, ?, ?, ?, ?, ?)
+          INSERT OR IGNORE INTO messages(session_id, idx, role, text, created_at, payload, diff,
+                                         user_text, assistant_text, tool_text)
+          VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         SQL
         messages.each_with_index do |message, offset|
           next unless message.is_a?(Hash)
 
           content = message["content"]
           payload, diff = split_display_field(message)
+          indexable = index_columns(message, seen_tool)
           statement.execute(
             session_id.to_s,
             start_index + offset,
@@ -96,7 +124,10 @@ module Rubot
             Session.text_content(content),
             message["timestamp"],
             payload,
-            diff
+            diff,
+            indexable[:user_text],
+            indexable[:assistant_text],
+            indexable[:tool_text]
           )
           # INSERT OR IGNORE affects zero rows when the (session_id, idx) pair is
           # already there, which is exactly the case that must not be counted.
@@ -240,6 +271,78 @@ module Rubot
         messages: @db.get_first_value("SELECT COUNT(*) FROM messages").to_i,
         chars: @db.get_first_value("SELECT COALESCE(SUM(LENGTH(text)), 0) FROM messages").to_i
       }
+    end
+
+    # Full-text search over every message ever stored — including the turns a
+    # compacted session no longer shows the model, which is the whole point of
+    # keeping the archive.
+    #
+    # The weights are the ranking, and they are the reason the index has three
+    # columns: search for "cache hit" and the conversation where the person
+    # asked about it comes before the twenty where the phrase appeared inside a
+    # grep result.
+    #
+    # Returns [{ session_id:, idx:, role:, created_at:, title:, snippet:, html:,
+    # score: }, ...], best first.
+    def search(text, limit: 20)
+      expression = search_expression(text)
+      return [] if expression.nil? || fts_table.nil?
+
+      weights = SEARCH_WEIGHTS.join(", ")
+      @db.execute(<<~SQL, [ expression, limit.to_i ]).map do |row|
+        SELECT m.session_id, m.idx, m.role, m.created_at, s.title,
+               snippet(fts, -1, '#{SNIPPET_OPEN}', '#{SNIPPET_CLOSE}', '…', 24),
+               bm25(fts, #{weights})
+        FROM fts
+        JOIN messages m ON m.id = fts.rowid
+        LEFT JOIN sessions s ON s.id = m.session_id
+        WHERE fts MATCH ?
+        ORDER BY bm25(fts, #{weights})
+        LIMIT ?
+      SQL
+        raw = row[5].to_s
+        {
+          session_id: text_id(row[0]),
+          idx: row[1].to_i,
+          role: row[2].to_s,
+          created_at: row[3],
+          title: row[4].to_s,
+          snippet: raw.delete(SNIPPET_OPEN).delete(SNIPPET_CLOSE),
+          html: snippet_html(raw),
+          score: row[6].to_f
+        }
+      end
+    end
+
+    # Rebuilds the searchable projection of the whole archive. Reset first and
+    # then rebuilt, so a run always leaves the index agreeing with the
+    # transcript.
+    #
+    # Runs once by itself on an archive that predates the index (see
+    # rebuild_index_if_stale), and is safe to run again at any time.
+    def rebuild_index!
+      table = fts_table
+      return 0 unless table
+
+      rewrite = @db.prepare(<<~SQL)
+        UPDATE messages SET user_text = ?, assistant_text = ?, tool_text = ? WHERE id = ?
+      SQL
+      rows = @db.execute("SELECT id, session_id, role, text FROM messages ORDER BY session_id, idx")
+      seen = Hash.new { |hash, key| hash[key] = Set.new }
+      in_transaction do
+        rows.each do |(id, session_id, role, text)|
+          columns = index_columns({ "role" => role, "content" => text }, seen[text_id(session_id)])
+          rewrite.execute(columns[:user_text], columns[:assistant_text], columns[:tool_text], id)
+        end
+        rewrite.close
+        # The update trigger kept the index in step row by row, but a row whose
+        # projection was wrong before this run cannot be repaired by deleting
+        # what the index thinks it holds: only a rebuild rereads every row from
+        # the content table, which is what makes this function's promise —
+        # "leaves the index agreeing with the transcript" — true.
+        @db.execute(%(INSERT INTO #{table}(#{table}) VALUES('rebuild')))
+      end
+      rows.size
     end
 
     def close
@@ -487,11 +590,73 @@ module Rubot
       warn "[store] fts optimize: #{e.class}: #{e.message}"
     end
 
+    # The searchable projection of one message: exactly one of the three columns
+    # is filled, chosen by who said it. A tool result is clipped and, if this
+    # session already indexes the same text, dropped — a second identical grep
+    # adds nothing to a search but its own weight.
+    def index_columns(message, seen_tool)
+      text = Session.text_content(message["content"]).to_s
+      case message["role"].to_s
+      when "user"
+        { user_text: text, assistant_text: "", tool_text: "" }
+      when "assistant"
+        { user_text: "", assistant_text: text, tool_text: "" }
+      when "tool"
+        clipped = text[0, TOOL_INDEX_LIMIT].to_s
+        digest = Digest::SHA256.hexdigest(clipped)
+        return { user_text: "", assistant_text: "", tool_text: "" } if clipped.empty? || seen_tool.include?(digest)
 
+        seen_tool << digest
+        { user_text: "", assistant_text: "", tool_text: clipped }
+      else
+        { user_text: "", assistant_text: "", tool_text: "" }
+      end
+    end
 
+    # The tool outputs this session already has in the index, as digests. Bounded
+    # by TOOL_DEDUPE_WINDOW so a long session does not turn every append into a
+    # scan of its whole history.
+    def recent_tool_digests(session_id)
+      rows = @db.execute(<<~SQL, [ text_id(session_id), TOOL_DEDUPE_WINDOW ])
+        SELECT tool_text FROM messages
+        WHERE session_id = ? AND tool_text <> ''
+        ORDER BY idx DESC
+        LIMIT ?
+      SQL
+      rows.each_with_object(Set.new) { |(text), set| set << Digest::SHA256.hexdigest(text.to_s) }
+    end
 
+    # What the person typed, turned into an FTS5 expression that cannot be a
+    # syntax error: the words are found in it, quoted, and made prefix matches,
+    # so "cach" still finds "cache". A query with no words in it matches nothing
+    # rather than everything.
+    def search_expression(text)
+      terms = text.to_s.downcase.scan(/[[:alnum:]_]+/).first(SEARCH_TERMS)
+      return nil if terms.empty?
 
+      terms.map { |term| %("#{term}"*) }.join(" AND ")
+    end
 
+    # Escape first, mark up second: the snippet is a piece of a message the model
+    # wrote or a tool printed, and it reaches the page as text.
+    def snippet_html(raw)
+      CGI.escapeHTML(raw.to_s)
+         .gsub(SNIPPET_OPEN, "<mark>")
+         .gsub(SNIPPET_CLOSE, "</mark>")
+    end
+
+    # An archive that predates the index has three empty columns and an empty
+    # index. Rebuilding is the only expensive thing this class does, so it
+    # happens once — on the first open that finds the work undone — and never
+    # again.
+    def rebuild_index_if_stale
+      table = fts_table
+      return if table.nil?
+      return if @db.get_first_value("SELECT COUNT(*) FROM #{table}").to_i.positive?
+      return if @db.get_first_value("SELECT COUNT(*) FROM messages").to_i.zero?
+
+      rebuild_index!
+    end
 
     def decode_payload(payload)
       return nil if payload.nil? || payload.empty?

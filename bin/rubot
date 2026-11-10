@@ -192,8 +192,21 @@ if ARGV.first == "store"
       puts "Optimized: #{ran.empty? ? 'nothing to do' : ran.join(', ')}"
     when "counts"
       store.counts.each { |key, value| puts format("%-10s %d", key, value) }
+    when "search"
+      query = ARGV.join(" ")
+      hits = store.search(query, limit: 10)
+      if hits.empty?
+        puts "Tidak ada hasil untuk #{query.inspect}"
+      else
+        hits.each do |hit|
+          puts "#{hit[:session_id]} ##{hit[:idx]} (#{hit[:role]}) #{hit[:created_at]}"
+          puts "  #{hit[:snippet].gsub(/\s+/, ' ').strip}"
+        end
+      end
+    when "reindex"
+      puts "Reindexed #{store.rebuild_index!} messages"
     else
-      warn "Usage: rubot store [backup [path] | export [dir] | optimize | counts]"
+      warn "Usage: rubot store [backup [path] | export [dir] | optimize | counts | search <query> | reindex]"
       exit 1
     end
   ensure

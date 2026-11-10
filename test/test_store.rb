@@ -404,24 +404,23 @@ class TestStore < Minitest::Test
     assert_operator File.size(destination), :>, 100
   end
 
-  # The planner stats are always worth refreshing. The full-text index only
-  # exists once the schema has one, and the answer to "is it there" is asked
-  # rather than assumed — the archive works without search.
+  # The planner stats are always worth refreshing. The full-text index is asked
+  # for rather than assumed — the archive works without search, and a schema that
+  # never got the index must still get the statistics.
   def test_optimize_runs_the_planner_and_whatever_index_exists
-    assert_equal [ :planner ], @store.optimize!
+    assert_equal [ :planner, :fts ], @store.optimize!
 
-    indexed_path = File.join(@dir, "indexed.db")
-    indexed = Rubot::Store.new(indexed_path)
-    indexed.close
-    db = SQLite3::Database.new(indexed_path)
-    db.execute("CREATE VIRTUAL TABLE fts USING fts5(body)")
+    bare_path = File.join(@dir, "bare.db")
+    Rubot::Store.new(bare_path).close
+    db = SQLite3::Database.new(bare_path)
+    db.execute("DROP TABLE fts")
     db.close
 
-    indexed = Rubot::Store.new(indexed_path)
+    bare = Rubot::Store.new(bare_path)
     begin
-      assert_includes indexed.optimize!, :fts
+      assert_equal [ :planner ], bare.optimize!
     ensure
-      indexed.close
+      bare.close
     end
   end
 
@@ -461,6 +460,101 @@ class TestStore < Minitest::Test
     ensure
       restored.close
     end
+  end
+
+  # The feature the archive exists for. A conversation trimmed out of the live
+  # window is still searchable, because the archive keeps what the model no
+  # longer sees.
+  def test_search_finds_a_message_that_was_archived
+    @store.append_messages("s1", [build_message("user", "kenapa cache hit anjlok?")])
+    @store.append_messages("s2", [build_message("user", "halo, apa kabar")])
+
+    hits = @store.search("cache")
+
+    assert_equal 1, hits.size
+    assert_equal "s1", hits.first[:session_id]
+    assert_includes hits.first[:snippet], "cache"
+  end
+
+  # The weights are the ranking: a conversation where the person asked is worth
+  # more than the twenty where the words appeared inside a tool result.
+  def test_the_person_s_words_outrank_a_tool_result
+    @store.append_messages("asked", [build_message("user", "bagaimana cara membaca diff queued?")])
+    @store.append_messages("printed", [ build_message("user", "cek file"),
+                                        build_message("tool", "grep: queued ada di 12 tempat") ])
+
+    hits = @store.search("queued")
+
+    assert_equal %w[asked printed], hits.map { |hit| hit[:session_id] }
+  end
+
+  # A prefix index is what makes typing three letters useful: the word does not
+  # have to be finished to be found.
+  def test_a_half_typed_word_still_matches
+    @store.append_messages("s1", [build_message("user", "the compaction ran")])
+
+    refute_empty @store.search("compact")
+  end
+
+  # What a person types is not an FTS5 query, and it must never be one: a stray
+  # quote or a `-` would raise instead of returning nothing.
+  def test_a_query_that_would_be_a_syntax_error_returns_nothing_instead
+    @store.append_messages("s1", [build_message("user", "halo")])
+
+    assert_equal [], @store.search(%(he said "hi AND))
+    assert_equal [], @store.search("   ")
+  end
+
+  # The snippet is the model's own text wrapped in markers of our choosing, so it
+  # has to be escaped before it is marked up.
+  def test_the_snippet_is_escaped_before_the_match_is_marked
+    @store.append_messages("s1", [build_message("user", "cari <script> jahat")])
+
+    hit = @store.search("script").first
+    refute_nil hit
+    refute_includes hit[:html], "<script>"
+    assert_includes hit[:html], "&lt;"
+    assert_includes hit[:html], "<mark>script</mark>"
+  end
+
+  # A tool that prints the same 40 KB twice must not double the index, and a
+  # tool that prints a novel is only searchable up to the bound.
+  def test_a_repeated_tool_result_is_indexed_once
+    long = "x" * 20_000
+    @store.append_messages("s1", [ build_message("tool", long),
+                                   build_message("tool", long),
+                                   build_message("tool", "berbeda") ])
+
+    rows = @store.instance_variable_get(:@db)
+                  .execute("SELECT tool_text FROM messages ORDER BY idx").map(&:first)
+
+    assert_equal Rubot::Store::TOOL_INDEX_LIMIT, rows[0].length
+    assert_equal "", rows[1], "the same output twice adds nothing to a search"
+    assert_equal "berbeda", rows[2]
+  end
+
+  # The index follows the table it mirrors; an external-content FTS5 table does
+  # not do that on its own.
+  def test_a_message_written_after_the_index_was_built_is_searchable
+    @store.append_messages("s1", [build_message("user", "satu")])
+    @store.append_messages("s1", [build_message("user", "dua tentang wanderer")], start_index: 1)
+
+    assert_equal 1, @store.search("wanderer").size
+  end
+
+  # The migration projects the rows that were already stored; the dedupe and the
+  # 8 KB bound are Ruby's rules, so a rebuild applies them to the whole archive.
+  def test_a_rebuild_reindexes_the_whole_archive
+    @store.append_messages("s1", [ build_message("user", "halo"),
+                                   build_message("tool", "y" * 20_000) ])
+    @store.instance_variable_get(:@db).execute("UPDATE messages SET tool_text = text")
+
+    rebuilt = @store.rebuild_index!
+
+    assert_equal 2, rebuilt
+    assert_equal Rubot::Store::TOOL_INDEX_LIMIT,
+                 @store.instance_variable_get(:@db)
+                       .get_first_value("SELECT LENGTH(tool_text) FROM messages WHERE role = 'tool'")
   end
 
   private
