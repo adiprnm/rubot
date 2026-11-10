@@ -12,6 +12,7 @@ require_relative "../persona_store"
 require_relative "../session"
 require_relative "../tools/send_file"
 require_relative "../web/diff"
+require_relative "../web/highlight"
 require_relative "../web/turn"
 require_relative "../web/view"
 

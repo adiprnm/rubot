@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "cgi"
+require_relative "highlight"
 
 module Rubot
   module Web
@@ -25,7 +26,7 @@ module Rubot
 
       # Returns the fragment, or nil when there is nothing to show.
       def render(before, after, path: nil)
-        rows = body(before, after)
+        rows = body(before, after, path: path)
         return nil if rows.nil?
 
         summary, hunk_rows = rows
@@ -35,8 +36,8 @@ module Rubot
       end
 
       # [summary_html, [row_html, ...]] or nil.
-      def body(before, after)
-        spec = structure(before, after)
+      def body(before, after, path: nil)
+        spec = structure(before, after, path: path)
         return nil unless spec
 
         [ summary(spec), spec[:rows] ]
@@ -44,7 +45,7 @@ module Rubot
 
       # The diff itself: { adds:, dels:, hunks:, line:, rows: [...] }. Public
       # so the shape can be checked without parsing HTML.
-      def structure(before, after)
+      def structure(before, after, path: nil)
         return nil if before.nil? && after.nil?
 
         before = before.to_s
@@ -63,12 +64,17 @@ module Rubot
         return nil if adds.zero? && dels.zero?
 
         hunks = clusters(ops)
+        # The language is decided once for the whole file: rows are drawn one
+        # at a time, and a row that guessed its own language would disagree
+        # with the row above it.
+        language = Highlight.language(path, new_lines.first || old_lines.first)
         {
           adds: adds,
           dels: dels,
           hunks: hunks.count { |hunk| hunk[:ops] },
           line: first_changed_line(ops),
-          rows: hunk_rows(hunks)
+          language: language,
+          rows: hunk_rows(hunks, language: language)
         }
       end
 
@@ -212,13 +218,13 @@ module Rubot
         parts.join(%(<span class="diff-sep" aria-hidden="true">·</span>))
       end
 
-      def hunk_rows(hunks)
+      def hunk_rows(hunks, language: nil)
         rows = []
         body = hunks.flat_map do |hunk|
           if hunk[:gap]
             [ %(<div class="diff-gap">#{hunk[:gap]} baris tidak berubah</div>) ]
           else
-            hunk[:ops].map { |op| row(op) }
+            hunk[:ops].map { |op| row(op, language: language) }
           end
         end
 
@@ -232,7 +238,7 @@ module Rubot
         rows
       end
 
-      def row(op)
+      def row(op, language: nil)
         text = clip(op[:text].to_s.gsub("\t", "  "))
         sign = if op[:kind] == :add
           "+"
@@ -245,7 +251,7 @@ module Rubot
         cls = op[:kind] == :add ? "is-add" : (op[:kind] == :del ? "is-del" : "is-ctx")
         %(<div class="diff-row #{cls}"><span class="diff-no">#{number}</span>) +
           %(<span class="diff-sign" aria-hidden="true">#{sign}</span>) +
-          %(<code>#{CGI.escapeHTML(text)}</code></div>)
+          %(<code>#{Highlight.line(text, language: language)}</code></div>)
       end
 
       def clip(text)

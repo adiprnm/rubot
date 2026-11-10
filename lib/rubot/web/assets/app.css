@@ -1597,6 +1597,23 @@ body {
 .diff-row.is-del .diff-sign { color: var(--red); }
 .diff-row.is-ctx { color: var(--fg-dim); }
 
+/* The tokens inside a row. These six are palette names rather than hex, so
+   every theme gets syntax colour without restating it — and a token that is
+   not one of the six stays in the row's own colour, which is what keeps a
+   highlighted diff readable instead of a rainbow: punctuation, operators and
+   plain identifiers carry no colour at all. */
+.tok-key { color: var(--blue); }
+.tok-str { color: var(--green); }
+.tok-num { color: var(--yellow); }
+.tok-com { color: var(--fg-faint); font-style: italic; }
+.tok-sym { color: var(--red); }
+
+/* A name followed by an open paren is a call. It takes the reading colour —
+   the brightest in the row — because "this now calls that" is usually the
+   thing the change was about. No weight change: the face carries no bold in
+   a diff, and a synthesized one shifts every glyph beside it. */
+.tok-call { color: var(--fg); }
+
 /* "12 baris tidak berubah" between two hunks, and "… 40 baris lagi" at the
    bottom: both are the block saying it is not showing everything, so neither
    wears the frame. */
