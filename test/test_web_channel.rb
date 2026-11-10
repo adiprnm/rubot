@@ -3503,10 +3503,43 @@ module Rubot
                                           closed_at: nil, elapsed: nil } ])
         working = View.render("_working", since: 1.0)
 
-        assert_includes thinking, %(class="mark-svg")
-        assert_includes working, %(class="mark-svg")
+        assert_includes thinking, "mark-svg"
+        assert_includes working, "mark-svg"
         refute_includes thinking, "◌", "the ring is no longer a borrowed glyph"
         refute_includes working, "◐", "nor is the half disc"
+      end
+
+      # A ring sitting still says nothing about time, and "still running" is a
+      # statement about time: the two live marks spin. The finished thought
+      # does not — "Thought for 12s" is something that already happened, so a
+      # spinner beside it would claim the opposite.
+      def test_the_live_marks_spin_and_the_finished_thought_does_not
+        thinking = View.render("_timeline",
+                               items: [ { kind: :thinking, epoch: 1.0, started_at: 0.0,
+                                          closed_at: nil, elapsed: nil } ])
+        working = View.render("_working", since: 1.0)
+        thought = View.render("_timeline",
+                              items: [ { kind: :thinking, epoch: 1.0, started_at: 0.0,
+                                         closed_at: 4.0, elapsed: 12.0 } ])
+
+        assert_includes thinking, %(class="mark-svg spin")
+        assert_includes working, %(class="mark-svg spin")
+        assert_includes thought, "Thought for 12s"
+        refute_includes thought, "spin", "a finished thought must not keep turning"
+      end
+
+      # Spinning a full ring would look exactly like a still ring, so the mark
+      # is an arc: the gap is what the eye reads as motion.
+      def test_the_spinning_mark_is_an_arc_and_it_turns
+        thinking = View.render("_timeline",
+                               items: [ { kind: :thinking, epoch: 1.0, started_at: 0.0,
+                                          closed_at: nil, elapsed: nil } ])
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+
+        assert_includes thinking, "stroke-dasharray", "a full ring cannot show that it turns"
+        assert_match(/@keyframes mark-spin/, css, "the spin keyframes are missing")
+        assert_match(/\.row \.mark \.mark-svg\.spin \{[^}]*animation: mark-spin/,
+                     css, "the live marks have to be the ones that turn")
       end
 
       # Centring is the box's job: the mark has no baseline to sit on, so the

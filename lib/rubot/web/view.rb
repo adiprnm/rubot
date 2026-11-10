@@ -721,13 +721,27 @@ module Rubot
       # "Thinking…" depending on the system that painted it. An SVG in a square
       # box is the same size everywhere and centres by construction (see
       # `.row .mark`), which is what a mark beside a line of text has to do.
+      #
+      # Both are spinners now, not a static ring and a half disc: the shape is
+      # the same ring with a gap in it, on a 10px grid. The circle is r=3.5, so
+      # one turn is 2πr ≈ 22 units — a 15-unit stroke leaves a 7-unit gap, and
+      # CSS turns the whole mark once a second. The three-quarter arc is what
+      # makes the rotation legible: a full ring spinning looks exactly like a
+      # ring sitting still, which was the thing this mark was replacing.
+      def self.spinner_mark(class_names)
+        %(<svg class="#{class_names}" viewBox="0 0 10 10" fill="none" stroke="currentColor" ) +
+          %(stroke-width="1.2" stroke-linecap="round" aria-hidden="true" focusable="false">) +
+          %(<circle cx="5" cy="5" r="3.5" stroke-dasharray="15 7"/></svg>)
+      end
+
+      # The finished thought keeps a still mark: "Thought for 12s" is a thing
+      # that happened, and a spinner beside it would claim it is still going.
       MARKS = {
-        think: %(<svg class="mark-svg" viewBox="0 0 10 10" fill="none" stroke="currentColor" ) +
-               %(stroke-width="1.2" stroke-linecap="round" aria-hidden="true" focusable="false">) +
-               %(<circle cx="5" cy="5" r="3.5" stroke-dasharray="1.7 1.5"/></svg>),
-        working: %(<svg class="mark-svg" viewBox="0 0 10 10" aria-hidden="true" focusable="false">) +
-                 %(<circle cx="5" cy="5" r="3.5" fill="none" stroke="currentColor" stroke-width="1.2"/>) +
-                 %(<path d="M5 1.5a3.5 3.5 0 0 1 0 7z" fill="currentColor"/></svg>)
+        think: spinner_mark("mark-svg spin").freeze,
+        working: spinner_mark("mark-svg spin").freeze,
+        thought: %(<svg class="mark-svg" viewBox="0 0 10 10" fill="none" stroke="currentColor" ) +
+                 %(stroke-width="1.2" stroke-linecap="round" aria-hidden="true" focusable="false">) +
+                 %(<circle cx="5" cy="5" r="3.5" stroke-dasharray="1.7 1.5"/></svg>).freeze
       }.freeze
 
       class Scope

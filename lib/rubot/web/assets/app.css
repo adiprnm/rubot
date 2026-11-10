@@ -1373,6 +1373,17 @@ body {
   height: 100%;
 }
 
+/* The two live marks turn. The arc already carries a gap, so the rotation is
+   readable at 10px — a full ring would spin invisibly. One turn a second: fast
+   enough to read as "still going", slow enough not to pull the eye off the
+   answer. Under `prefers-reduced-motion` the global rule stops it, and the
+   frozen arc still reads as a mark rather than a gap. */
+.row .mark .mark-svg.spin { animation: mark-spin 1s linear infinite; }
+
+@keyframes mark-spin {
+  to { transform: rotate(1turn); }
+}
+
 .row {
   display: flex;
   /* The label and the clock are text and align on their baselines; the mark
