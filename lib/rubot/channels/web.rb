@@ -569,6 +569,13 @@ module Rubot
       # The service worker. Served at "/" because a worker only controls the
       # paths under its own, and never cached by the browser itself: a worker
       # the browser keeps for an hour is a deploy that reached nobody.
+      #
+      # The stamp is what keeps the shell cache honest: the worker names its
+      # cache from the mtime of the assets it installs, so a stylesheet or
+      # script that changed renames it, and an installed app rebuilds the shell
+      # instead of serving the copy it kept. That used to be a constant someone
+      # had to remember to bump, which is a promise that only holds until it is
+      # forgotten.
       def serve_worker(res)
         file = File.join(ASSETS, "sw.js")
         return not_found(res) unless File.file?(file)
@@ -576,7 +583,7 @@ module Rubot
         res["Content-Type"] = "text/javascript; charset=utf-8"
         res["Cache-Control"] = "no-cache"
         res["Service-Worker-Allowed"] = "/"
-        res.body = File.binread(file)
+        res.body = File.binread(file).sub("__VERSION__", asset_version.to_s)
       end
 
       def deny(res)
@@ -999,11 +1006,13 @@ module Rubot
       end
 
       # Static assets are cached for an hour, so the URL carries the mtime of
-      # the newest of them. One stamp for both files: a JS-only change has to
-      # reach the browser just as a CSS change does, and the stylesheet alone
-      # as its version was a promise the stylesheet could not keep.
+      # the newest of them. One stamp for the whole shell: a JS-only change has
+      # to reach the browser just as a CSS change does, and the stylesheet alone
+      # as its version was a promise the stylesheet could not keep. The worker
+      # takes the same stamp as its cache name, which is why it is in the list:
+      # a change to the worker is a change to the shell.
       def asset_version
-        %w[app.css app.js].map { |name| File.mtime(File.join(ASSETS, name)).to_i }.max
+        %w[app.css app.js sw.js].map { |name| File.mtime(File.join(ASSETS, name)).to_i }.max
       rescue SystemCallError
         0
       end

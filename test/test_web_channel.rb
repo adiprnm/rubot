@@ -2450,6 +2450,20 @@ module Rubot
         assert_includes response.body, "rubot-shell-", "the worker has to know its own cache"
       end
 
+      # The cache name is the asset stamp, not a constant: a stylesheet that
+      # changed renames the cache, and the installed app rebuilds the shell
+      # instead of answering with the copy it kept. A version someone has to
+      # remember to bump is a promise that holds only until it is forgotten.
+      def test_the_worker_names_its_cache_after_the_assets_it_installs
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        response = FakeResponse.new
+
+        channel.send(:serve_worker, response)
+
+        refute_includes response.body, "__VERSION__", "the placeholder has to be replaced"
+        assert_includes response.body, %(const VERSION = "rubot-shell-#{channel.send(:asset_version)}")
+      end
+
       def test_the_manifest_is_served_with_its_own_type
         channel = Rubot::Channels::Web.new(channel_config: {})
         response = FakeResponse.new
@@ -2502,13 +2516,14 @@ module Rubot
         assert_includes js, 'window.addEventListener("load"'
       end
 
-      # Both files are served under one version, so the stamp has to move when
-      # either of them does. It was the stylesheet's mtime, which left a
-      # script change invisible to any browser that already had app.js cached.
+      # Every file in the shell is served under one version, so the stamp has to
+      # move when any of them changes. It was the stylesheet's mtime, which left
+      # a script change invisible to any browser that already had app.js cached;
+      # the worker is in the list for the same reason.
       def test_the_asset_stamp_follows_the_newer_file
         channel = Rubot::Channels::Web.new(channel_config: {})
         assets = File.expand_path("../lib/rubot/web/assets", __dir__)
-        newest = %w[app.css app.js].map { |name| File.mtime(File.join(assets, name)).to_i }.max
+        newest = %w[app.css app.js sw.js].map { |name| File.mtime(File.join(assets, name)).to_i }.max
 
         assert_equal newest, channel.send(:asset_version)
       end
