@@ -132,6 +132,63 @@ class TestStore < Minitest::Test
     assert_equal 1, @store.message_count("s1")
   end
 
+  def test_ui_diff_round_trips_through_its_own_column
+    diff = { "path" => "lib/rubot/store.rb", "before" => "a\nb\n", "after" => "a\nc\n" }
+    tool_message = build_message("tool", "[ok] edit", "ui_diff" => diff)
+    @store.append_messages("s1", [tool_message])
+
+    loaded = @store.load_session("s1")[:messages].first
+
+    assert_equal diff, loaded["ui_diff"]
+    assert_equal "[ok] edit", loaded["content"]
+  end
+
+  def test_payload_does_not_contain_the_diff
+    diff = { "path" => "x.rb", "before" => "y" * 500, "after" => "z" * 500 }
+    @store.append_messages("s1", [build_message("tool", "hasil", "ui_diff" => diff)])
+
+    payload = @store.instance_variable_get(:@db).get_first_value("SELECT payload FROM messages")
+    blob = @store.instance_variable_get(:@db).get_first_value("SELECT diff FROM messages")
+
+    refute_includes payload, "ui_diff", "the render-only field is not in the payload"
+    refute_includes payload, "y" * 100
+    assert blob.bytesize < JSON.generate(diff).bytesize, "the diff is stored compressed"
+  end
+
+  def test_message_without_diff_stores_no_blob
+    @store.append_messages("s1", [build_message("user", "biasa saja")])
+
+    blob = @store.instance_variable_get(:@db).get_first_value("SELECT diff FROM messages")
+
+    assert_nil blob
+  end
+
+  def test_row_from_schema_one_still_loads_its_diff
+    # A row written before schema 2: the diff is still inside the payload and the
+    # diff column is empty. Load must return it either way.
+    diff = { "path" => "lama.rb", "before" => "1", "after" => "2" }
+    legacy = JSON.generate(build_message("tool", "hasil lama", "ui_diff" => diff))
+    db = @store.instance_variable_get(:@db)
+    db.execute(
+      "INSERT INTO messages(session_id, idx, role, text, created_at, payload) VALUES(?,?,?,?,?,?)",
+      ["s1", 0, "tool", "hasil lama", "2026-11-10T03:00:00Z", legacy]
+    )
+
+    loaded = @store.load_session("s1")[:messages].first
+
+    assert_equal diff, loaded["ui_diff"]
+  end
+
+  def test_corrupt_diff_blob_does_not_stop_the_transcript
+    @store.append_messages("s1", [build_message("tool", "hasil")])
+    @store.instance_variable_get(:@db).execute("UPDATE messages SET diff = ?", ["bukan zlib"])
+
+    loaded = @store.load_session("s1")[:messages].first
+
+    assert_equal "hasil", loaded["content"]
+    refute loaded.key?("ui_diff")
+  end
+
   private
 
   def write_session(id, messages, title: nil)

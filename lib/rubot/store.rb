@@ -2,6 +2,7 @@
 require "json"
 require "fileutils"
 require "time"
+require "zlib"
 require "sqlite3"
 require_relative "session"
 
@@ -20,16 +21,18 @@ module Rubot
   #   * messages are append-only. Nothing in this class deletes a row. A session
   #     trimmed to fit the model's context window keeps its archive, which is
   #     what makes "find that conversation from last week" possible at all.
-  #   * `content` is the message exactly as the JSON file held it and `text` is
-  #     its flattened text. Losing `content` would lose tool calls and reasoning;
-  #     `text` is only the searchable and displayable projection.
+  #   * `payload` is the message as the JSON file held it, minus `ui_diff`, and
+  #     `text` is its flattened text. The diff lives compressed in its own column
+  #     because it is 69% of the bytes (21.7 MB over 527 messages) and no model
+  #     ever sees it — dropping it from the payload took the archive from 38.9 MB
+  #     to 22.6 MB with every message still coming back byte for byte.
   #
   # Ractor safety: SQLite3::Database is not Ractor-safe — SQLite3 raises
   # Ractor::UnsafeError from open_v2 inside a non-main Ractor (verified, not
   # assumed). A Store is therefore opened in the main Ractor and reached from a
   # SessionActor through a port, never instantiated inside one.
   class Store
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
     DB_FILENAME = "sessions.db"
     # Small on purpose: the sidebar reads three short columns and the archive is
     # read once per turn, so a large page cache would only cost resident memory
@@ -68,20 +71,22 @@ module Rubot
       inserted = 0
       in_transaction do
         statement = @db.prepare(<<~SQL)
-          INSERT OR IGNORE INTO messages(session_id, idx, role, text, created_at, payload)
-          VALUES(?, ?, ?, ?, ?, ?)
+          INSERT OR IGNORE INTO messages(session_id, idx, role, text, created_at, payload, diff)
+          VALUES(?, ?, ?, ?, ?, ?, ?)
         SQL
         messages.each_with_index do |message, offset|
           next unless message.is_a?(Hash)
 
           content = message["content"]
+          payload, diff = split_display_field(message)
           statement.execute(
             session_id.to_s,
             start_index + offset,
             message["role"].to_s,
             Session.text_content(content),
             message["timestamp"],
-            JSON.generate(message)
+            payload,
+            diff
           )
           # INSERT OR IGNORE affects zero rows when the (session_id, idx) pair is
           # already there, which is exactly the case that must not be counted.
@@ -132,19 +137,24 @@ module Rubot
 
     # The transcript, in order, with every message reconstructed as it was.
     #
-    # `payload` is the whole message, so a tool call, its reasoning and its
-    # parts array all survive the round trip. Nothing is stored twice: the
-    # searchable projection lives in `text`, and content is read back out of the
-    # payload rather than kept as a third copy (which cost 4 MB on 7k messages).
+    # `payload` is the message without `ui_diff`, so a tool call, its reasoning
+    # and its parts array all survive the round trip; the diff comes back from
+    # its own column. Nothing is stored twice: `text` is the searchable
+    # projection and content is read back out of the payload rather than kept as
+    # a third copy (which cost 4 MB on 7k messages).
     def load_session(session_id)
       rows = @db.execute(<<~SQL, [session_id.to_s])
-        SELECT payload, text, role, created_at FROM messages
+        SELECT payload, diff, text, role, created_at FROM messages
         WHERE session_id = ? ORDER BY idx
       SQL
       return nil if rows.empty?
 
-      messages = rows.map do |(payload, text, role, created_at)|
+      messages = rows.map do |(payload, diff, text, role, created_at)|
         message = decode_payload(payload) || { "role" => role.to_s, "content" => text.to_s }
+        # Rows written before schema 2 still carry the diff inside the payload;
+        # only attach when it was moved out, so a legacy row is not overwritten.
+        diff = inflate(diff)
+        message["ui_diff"] = diff if diff
         message["timestamp"] ||= created_at if created_at
         message
       end
@@ -254,6 +264,10 @@ module Rubot
 
       @db.transaction do
         create_schema! if current < 1
+        # v2 moved the render-only `ui_diff` out of the payload. Old rows keep
+        # theirs in the payload and load_session still understands them, so the
+        # migration is the column and nothing else — no rewrite of 7k rows.
+        @db.execute("ALTER TABLE messages ADD COLUMN diff BLOB") if current == 1
         @db.execute("PRAGMA user_version = #{SCHEMA_VERSION}")
       end
     end
@@ -285,6 +299,7 @@ module Rubot
           text       TEXT NOT NULL DEFAULT '',
           created_at TEXT,
           payload    TEXT NOT NULL DEFAULT '',
+          diff       BLOB,
           UNIQUE(session_id, idx)
         )
       SQL
@@ -303,6 +318,33 @@ module Rubot
 
       JSON.parse(payload)
     rescue JSON::ParserError
+      nil
+    end
+
+    # `ui_diff` is what a channel draws under a tool call, never something the
+    # model is sent. It is 69% of the archive (21.7 MB over 527 messages, 42 KB
+    # each) and compresses to 24%, so it travels in its own column as zlib rather
+    # than inside the payload. Splitting it also keeps `payload` readable: what
+    # is left is the conversation.
+    def split_display_field(message)
+      diff = message["ui_diff"]
+      return [ JSON.generate(message), nil ] if diff.nil?
+
+      payload = JSON.generate(message.reject { |key, _| key == "ui_diff" })
+      [ payload, deflate(JSON.generate(diff)) ]
+    end
+
+    def deflate(text)
+      Zlib::Deflate.deflate(text, Zlib::BEST_COMPRESSION)
+    end
+
+    # nil rather than raising for an empty or unreadable blob: a diff is display
+    # furniture, it must never stop a transcript from loading.
+    def inflate(blob)
+      return nil if blob.nil? || blob.empty?
+
+      JSON.parse(Zlib::Inflate.inflate(blob.to_s))
+    rescue Zlib::Error, JSON::ParserError
       nil
     end
 
