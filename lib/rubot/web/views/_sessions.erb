@@ -1,29 +1,49 @@
-<%# One conversation per row, named by the prompt that started it. The id
-    carries "~" between persona and start time, so the row can be reopened
-    without asking the store again.
+<%# The sidebar's two lists. Pinned is what the reader chose to keep, ordered by
+    when each was pinned; Recent is everything else, newest first, twenty rows
+    to a block with a control at the end that loads the next block. Both are
+    <details open>, so they can be folded away on a phone but are both visible
+    on a first visit — a section that starts closed would hide conversations the
+    reader never asked to hide.
 
-    Re-rendered as an out-of-band swap at the end of a turn: a session opened
-    from the "+" button has no name until its first prompt is in the file.
-
-    The row is a div, not a link, because it holds two actions: opening the
-    conversation and deleting it. Deleting is a POST — it takes something away
-    — and asks first, since a conversation is a day's work and its file is the
-    only copy. -%>
+    The whole nav is swapped as one piece: after a turn names a conversation, or
+    after a pin moves one, both sections can change at once. -%>
 <nav class="sessions" id="sessions">
-  <% sessions.each do |row| %>
-    <div class="session<%= row[:active] ? " is-active" : "" %>">
-      <a class="session-link"
-         href="/s/<%= h(row[:id]) %><%= h(token_query) %>"
-         <%= row[:active] ? 'aria-current="page"' : "" %>>
-        <span class="label"><%= h(row[:label]) %></span>
-        <span class="meta"><%= h(row[:meta]) %></span>
-      </a>
-      <form class="session-delete"
-            method="post"
-            action="/s/<%= h(row[:id]) %>/delete<%= h(token_query) %>"
-            onsubmit="return confirm('Hapus sesi ini? Seluruh percakapannya ikut hilang.')">
-        <button type="submit" title="Hapus sesi" aria-label="Hapus sesi">&times;</button>
-      </form>
-    </div>
-  <% end %>
+  <details class="session-group" open>
+    <summary class="group-head" title="Maksimal 10 sesi di-pin per persona">
+      <span class="group-name">Pinned</span>
+      <span class="group-count"><%= groups[:pinned].size %>/<%= groups[:pinned_limit] %></span>
+    </summary>
+    <% if groups[:pinned].empty? %>
+      <p class="group-empty">Belum ada sesi yang di-pin.</p>
+    <% else %>
+      <% groups[:pinned].each do |row| %>
+        <%= View.render("_session_row", row: row, token_query: token_query,
+                                       page: groups[:page], current: groups[:current]) %>
+      <% end %>
+    <% end %>
+  </details>
+
+  <details class="session-group" open>
+    <summary class="group-head">
+      <span class="group-name">Recent</span>
+      <span class="group-count"><%= groups[:recent_total] %></span>
+    </summary>
+    <% if groups[:recent].empty? %>
+      <p class="group-empty">Belum ada sesi.</p>
+    <% else %>
+      <% groups[:recent].each do |row| %>
+        <%= View.render("_session_row", row: row, token_query: token_query,
+                                       page: groups[:page], current: groups[:current]) %>
+      <% end %>
+    <% end %>
+
+    <%# "Load more" continues the list instead of paging through it: the answer
+        is appended where the button was, and the button follows it. A page
+        swap would throw away the rows the reader was just looking at. -%>
+    <% if groups[:more] %>
+      <%= View.render("_recent_more", current: groups[:current],
+                                     page: groups[:next_page],
+                                     token_query: token_query) %>
+    <% end %>
+  </details>
 </nav>

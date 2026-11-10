@@ -1,0 +1,12 @@
+<%# The way further back. It is the last row of the recent section and replaces
+    itself with the next block: the rows land where the button was, and a fresh
+    button follows them until the list runs out. Without a script the same link
+    reloads the sidebar with one more block loaded, which is the same list one
+    step longer. -%>
+<div class="recent-more" id="recent-more">
+  <a class="load-more"
+     href="/s/<%= h(current) %>?page=<%= h(page) %><%= h(token_query.sub("?", "&")) %>"
+     hx-get="/s/<%= h(current) %>/recent?page=<%= h(page) %><%= h(token_query.sub("?", "&")) %>"
+     hx-target="#recent-more"
+     hx-swap="outerHTML">Muat lebih banyak</a>
+</div>

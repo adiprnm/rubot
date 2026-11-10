@@ -771,6 +771,20 @@ module Rubot
           MARKS.fetch(kind, "")
         end
 
+        # The pin on a sidebar row. Drawn rather than written: 📌 is whatever
+        # emoji font the reader has, at whatever weight, and this button has to
+        # line up with the × beside it. One stroke, currentColor, so it takes
+        # the row's colour — filled when the conversation is pinned, outlined
+        # when it is not.
+        def pin_icon(pinned: false)
+          fill = pinned ? "currentColor" : "none"
+          %(<svg class="pin-icon" viewBox="0 0 24 24" width="11" height="11" ) +
+            %(fill="#{fill}" stroke="currentColor" stroke-width="1.8" ) +
+            %(stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ) +
+            %(focusable="false"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"/>) +
+            %(<path d="M12 14v7"/></svg>)
+        end
+
         # A tool row's mark. A call that is open gets the same turning arc as the
         # rows above it instead of the half disc, which was a fallback font's
         # shape. The ring is the row's only motion: a sweep across the whole row

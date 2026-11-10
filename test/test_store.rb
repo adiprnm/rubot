@@ -79,6 +79,47 @@ class TestStore < Minitest::Test
     assert_equal 3, @store.sidebar(limit: 3).size
   end
 
+  def test_sidebar_reads_every_row_when_the_limit_is_nil
+    25.times do |i|
+      @store.append_messages("s#{i}", [build_message("user", "pesan #{i}")])
+      @store.upsert_session(id: "s#{i}", title: "s#{i}", updated_at: "2026-11-10T10:00:#{format("%02d", i)}Z")
+    end
+
+    assert_equal 25, @store.sidebar(limit: nil).size
+    assert_equal 5, @store.sidebar(limit: 5).size
+  end
+
+  # A pin is a stamp, not a flag: the pinned section is ordered by it, and the
+  # sidebar cap needs an oldest pin to drop.
+  def test_pin_and_unpin_round_trip
+    @store.append_messages("s1", [build_message("user", "halo")])
+    @store.upsert_session(id: "s1", title: "satu", updated_at: "2026-11-10T10:00:00Z")
+
+    assert @store.pin_session("s1", at: "2026-11-10T09:00:00Z")
+    assert_equal "2026-11-10T09:00:00Z", @store.sidebar.first[:pinned_at]
+
+    assert @store.unpin_session("s1")
+    assert_nil @store.sidebar.first[:pinned_at]
+  end
+
+  # The limited query is the one the sidebar uses to bound the chronological
+  # list. A pin must not fall off the end of it, however old it is.
+  def test_a_pinned_session_survives_the_sidebar_limit
+    @store.append_messages("tua", [build_message("user", "lama")])
+    @store.upsert_session(id: "tua", title: "lama", updated_at: "2020-01-01T10:00:00Z")
+    @store.pin_session("tua", at: "2026-11-10T09:00:00Z")
+
+    5.times do |i|
+      @store.append_messages("baru#{i}", [build_message("user", "baru #{i}")])
+      @store.upsert_session(id: "baru#{i}", title: "baru #{i}", updated_at: "2026-11-1#{i}T10:00:00Z")
+    end
+
+    rows = @store.sidebar(limit: 2)
+
+    assert_includes rows.map { |row| row[:id] }, "tua"
+    assert_operator rows.size, :>, 2, "the limit bounds the rest, not the pinned row"
+  end
+
   def test_upsert_session_counts_messages
     @store.append_messages("s1", [build_message("user", "a"), build_message("assistant", "b")])
     @store.upsert_session(id: "s1", title: "judul")

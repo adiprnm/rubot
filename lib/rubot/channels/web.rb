@@ -45,9 +45,15 @@ module Rubot
       # How often an idle page's event stream says something, so a connection
       # sitting in a proxy is not closed for being quiet.
       EVENT_HEARTBEAT = 20
-      # How many conversations the sidebar lists. Older ones stay on disk and
-      # are still reachable by their URL.
-      MAX_SESSION_ROWS = 40
+      # How many conversations can be pinned for one persona. A pin is a way of
+      # saying "this one again", and a list long enough to scroll is not a way
+      # of saying it: past ten the oldest pin gives way, so the cap needs no
+      # error message and no separate setting.
+      PINNED_LIMIT = 10
+      # How many unpinned conversations one page of the sidebar holds. The rest
+      # are still there, a page link away, so an archive with years in it does
+      # not turn the sidebar into an endless scroll.
+      RECENT_PAGE = 20
       # How many messages one search answers with. The sidebar is a list, not a
       # page: a query that matches hundreds of rows is answered with the best of
       # them, and a narrower query is how the reader asks for more.
@@ -88,9 +94,11 @@ module Rubot
       SLUG_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})\z}
       SESSION_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})\z}
       SESSION_HISTORY_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/history\z}
+      SESSION_RECENT_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/recent\z}
       SESSION_TURN_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/turn\z}
       SESSION_MEDIA_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/media/(#{MEDIA_NAME_SOURCE})\z}
       SESSION_DELETE_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/delete\z}
+      SESSION_PIN_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/pin\z}
       SESSION_QUOTA_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/quota\z}
       SESSION_REPIN_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/repin\z}
       PERSONA_SESSIONS_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/sessions\z}
@@ -223,9 +231,11 @@ module Rubot
         base = session_id(slug)
         prefix = "#{base}#{SESSION_SEPARATOR}"
         rows = if (store = Session.store)
-          # Straight from the archive: three columns, no file parsing. A session
-          # that was opened but never used has no row, so it does not appear.
-          store.sidebar(limit: 500).filter_map do |row|
+          # Straight from the archive: six short columns, no file parsing. A
+          # session that was opened but never used has no row, so it does not
+          # appear. Every row is read because the list is paginated and the
+          # page links have to know how many pages there are.
+          store.sidebar(limit: nil).filter_map do |row|
             id = row[:id].to_s
             next unless id == base || id.start_with?(prefix)
 
@@ -243,30 +253,116 @@ module Rubot
         rows.sort_by { |entry| entry[:timestamp] }.reverse
       end
 
-      # Rows for the sidebar: what the conversation is about and how long ago it
-      # moved. The one on screen is always present, even before it is saved.
-      def session_rows(slug, current_sid)
-        rows = sessions_for(slug).first(MAX_SESSION_ROWS).map do |entry|
-          {
-            id: entry[:id],
-            label: entry[:title].to_s.strip.empty? ? UNTITLED_SESSION : entry[:title].to_s,
-            meta: elapsed_label(entry[:timestamp]),
-            active: entry[:id] == current_sid
-          }
+      # Rows for the sidebar: what the conversation is about. The one on screen
+      # is always present, even before it is saved.
+      #
+      # The history is drawn as two sections. `pinned` is the hand-kept list,
+      # ordered by when each conversation was pinned; `recent` is everything
+      # else, newest first. A pinned conversation does not appear in `recent` at
+      # all — it is in one list or the other, never both.
+      #
+      # `page` counts the blocks of recent rows already asked for, not the one
+      # block on screen: "load more" appends, so a reader who asked for forty
+      # keeps the first twenty above them. The whole loaded run is returned, a
+      # block at a time, so a reload lands back where the reader was.
+      def session_groups(slug, current_sid, page: 1)
+        entries = sessions_for(slug)
+        pinned = entries.select { |entry| pinned_entry?(entry) }
+                        .sort_by { |entry| entry[:pinned_at].to_s }
+                        .reverse
+                        .first(PINNED_LIMIT)
+        recent = recent_entries(entries, current_sid)
+        pages = recent_pages(recent)
+        loaded = page.to_i.clamp(1, pages)
+        window = recent.first(loaded * RECENT_PAGE)
+        {
+          pinned: pinned.map { |entry| session_row(entry, current_sid) },
+          recent: window.map { |entry| session_row(entry, current_sid) },
+          page: loaded,
+          pages: pages,
+          more: loaded < pages,
+          next_page: loaded + 1,
+          recent_total: recent.size,
+          pinned_limit: PINNED_LIMIT,
+          current: current_sid
+        }
+      end
+
+      # One block of the recent list, the way the "load more" button asks for
+      # it: exactly the rows after the ones already on screen, so appending the
+      # answer cannot repeat a row. Past the last block the answer is empty —
+      # the list shrank while the button was in hand — and the control goes
+      # away with it.
+      def recent_block(slug, current_sid, page)
+        recent = recent_entries(sessions_for(slug), current_sid)
+        pages = recent_pages(recent)
+        page = page.to_i
+        page = 1 if page < 1
+        rows = recent[(page - 1) * RECENT_PAGE, RECENT_PAGE] || []
+        {
+          rows: rows.map { |entry| session_row(entry, current_sid) },
+          page: page,
+          pages: pages,
+          more: page < pages,
+          next_page: page + 1,
+          recent_total: recent.size,
+          current: current_sid
+        }
+      end
+
+      # Everything that is not pinned, newest first. A conversation that has
+      # not been written yet has no row in the index, so the page supplies one;
+      # it belongs at the top, where a reader who just pressed "+" looks.
+      def recent_entries(entries, current_sid)
+        recent = entries.reject { |entry| pinned_entry?(entry) }
+        unless recent.any? { |entry| entry[:id] == current_sid }
+          recent.unshift({ id: current_sid, title: "", timestamp: nil, pinned_at: nil })
         end
+        recent
+      end
 
-        return rows if rows.any? { |row| row[:active] }
+      def recent_pages(recent)
+        [ (recent.size + RECENT_PAGE - 1) / RECENT_PAGE, 1 ].max
+      end
 
-        [ { id: current_sid, label: UNTITLED_SESSION, meta: "", active: true }, *rows ]
+      # The flat list the older callers expect: the pinned section followed by
+      # the loaded recent ones. Tests and the header name only need to look for
+      # the active row, not at how the sidebar draws its sections.
+      def session_rows(slug, current_sid, page: 1)
+        groups = session_groups(slug, current_sid, page: page)
+        groups[:pinned] + groups[:recent]
+      end
+
+      def session_row(entry, current_sid)
+        title = entry[:title].to_s.strip
+        {
+          id: entry[:id],
+          label: title.empty? ? UNTITLED_SESSION : title,
+          pinned: pinned_entry?(entry),
+          # A conversation with no archive row yet has no stamp and nothing to
+          # pin; the row is drawn for the reader who just opened it.
+          pinnable: !entry[:timestamp].nil?,
+          active: entry[:id] == current_sid
+        }
+      end
+
+      def pinned_entry?(entry)
+        !entry[:pinned_at].to_s.strip.empty?
       end
 
       # The name of the conversation on screen: the prompt that opened it. It is
       # the one thing that tells two sessions of the same persona apart, so it
       # is used as the name everywhere — sidebar, header, tab — instead of
       # showing it in one place and an id everywhere else.
+      #
+      # Asked of the whole list rather than of one page: the page a reader is
+      # looking at depends on the sidebar's state, and the header does not.
       def session_label(slug, sid)
-        row = session_rows(slug, sid).find { |entry| entry[:active] }
-        row ? row[:label] : UNTITLED_SESSION
+        entry = sessions_for(slug).find { |candidate| candidate[:id] == sid }
+        return UNTITLED_SESSION if entry.nil?
+
+        title = entry[:title].to_s.strip
+        title.empty? ? UNTITLED_SESSION : title
       end
 
       # The name a session carries once it has one; nil while it is still
@@ -370,6 +466,8 @@ module Rubot
           render_session(res, match[1], req)
         elsif method == "GET" && (match = SESSION_HISTORY_PATH.match(path))
           render_history(res, match[1], req)
+        elsif method == "GET" && (match = SESSION_RECENT_PATH.match(path))
+          render_recent(res, match[1], req)
         elsif method == "POST" && path == "/personas"
           create_persona(req, res)
         elsif method == "POST" && (match = PERSONA_EDIT_PATH.match(path))
@@ -386,6 +484,8 @@ module Rubot
           repin_prompt(res, match[1])
         elsif method == "POST" && (match = SESSION_DELETE_PATH.match(path))
           delete_session(res, match[1], req)
+        elsif method == "POST" && (match = SESSION_PIN_PATH.match(path))
+          toggle_pin(res, match[1], req)
         elsif method == "GET" && (match = %r{\A/turns/([\w-]+)/stream\z}.match(path))
           stream_turn(res, match[1])
         elsif method == "POST" && (match = %r{\A/turns/([\w-]+)/(steer|stop|confirm)\z}.match(path))
@@ -558,6 +658,62 @@ module Rubot
         redirect(res, remaining ? "/s/#{remaining[:id]}" : "/p/#{slug}", req)
       end
 
+      # Pinning is how a conversation stops sliding down the list: it moves to
+      # the section above, ordered by when it was pinned, and only unpinning
+      # puts it back in the flow. The cap is enforced rather than refused —
+      # pinning an eleventh conversation unpins the one that has been pinned
+      # longest, which is a rule a reader can predict without an error dialog.
+      #
+      # The archive is where the pin lives, so a channel running without one
+      # (JSON files only) answers with the list it already has.
+      def toggle_pin(res, sid, req)
+        slug = owner_slug(sid)
+        return not_found(res) unless slug
+
+        if (store = Session.store)
+          if form(req, "pin") == "1"
+            drop_oldest_pin(slug, sid, store)
+            store.pin_session(sid)
+          else
+            store.unpin_session(sid)
+          end
+          broadcast_sessions(slug)
+        end
+
+        # The row that was open when the pin was pressed, which is what the
+        # refreshed list has to keep marked. Pin and conversation can differ:
+        # the pin is on whichever row was touched, the page is behind it.
+        current = form(req, "current")
+        current = sid if current.empty? || owner_slug(current) != slug
+
+        page = session_page(req)
+        if req && req["HX-Request"].to_s == "true"
+          res["Content-Type"] = "text/html; charset=utf-8"
+          res["Cache-Control"] = "no-store"
+          res.body = View.render("_sessions",
+                                 groups: session_groups(slug, current, page: page),
+                                 token_query: token_query)
+        else
+          redirect(res, "/s/#{sid}", req)
+        end
+      end
+
+      # Keep one persona's pinned list at the ceiling. The oldest stamp is the
+      # one that gives way, so the list is the most recent ten things the
+      # reader chose to keep rather than the first ten they ever chose.
+      def drop_oldest_pin(slug, sid, store)
+        others = sessions_for(slug)
+                 .select { |entry| pinned_entry?(entry) && entry[:id] != sid }
+                 .sort_by { |entry| entry[:pinned_at].to_s }
+
+        while others.size >= PINNED_LIMIT
+          stale = others.shift
+          break unless stale
+
+          store.unpin_session(stale[:id])
+        end
+      end
+
       # Where a conversation lives on disk. One directory holds every session,
       # so the id alone finds the file.
       def session_path(sid)
@@ -635,6 +791,31 @@ module Rubot
                                             older_url: older_url(sid, page[:before]))
       end
 
+      # The next block of the recent list, in place of the button that asked for
+      # it. Appending is the whole point: a page swap would drop the rows above
+      # it, and "load more" that replaces what you were reading is not load
+      # more. The control follows the block it just delivered, or disappears
+      # when the list has nothing left.
+      def render_recent(res, sid, req)
+        slug = owner_slug(sid)
+        return not_found(res) unless slug
+
+        block = recent_block(slug, sid, session_page(req))
+        body = block[:rows].map do |row|
+          View.render("_session_row", row: row, token_query: token_query,
+                                      page: block[:page], current: block[:current])
+        end.join
+        if block[:more]
+          body += View.render("_recent_more", current: block[:current],
+                                               page: block[:next_page],
+                                               token_query: token_query)
+        end
+
+        res["Content-Type"] = "text/html; charset=utf-8"
+        res["Cache-Control"] = "no-store"
+        res.body = body
+      end
+
       # The index a search result asked the page to open at, or nil for the
       # ordinary tail of the conversation. 0 is a real index — the first message
       # of a session — which is why this is not a truthiness check.
@@ -646,6 +827,15 @@ module Rubot
 
         value = Integer(raw, exception: false)
         value && value >= 0 ? value : nil
+      end
+
+      # Which page of the recent list the sidebar is showing. It travels in the
+      # URL so a reload keeps the reader where they were.
+      def session_page(req)
+        return 1 if req.nil?
+
+        value = Integer(form(req, "page"), exception: false)
+        value && value.positive? ? value : 1
       end
 
       # --- search ---------------------------------------------------------
@@ -778,7 +968,7 @@ module Rubot
         body = View.render(
           "index",
           personas: persona_rows(slug),
-          sessions: session_rows(slug, sid),
+          groups: session_groups(slug, sid, page: session_page(req)),
           slug: slug,
           session_id: sid,
           session_short: sid.delete_prefix("web_"),
@@ -1488,7 +1678,9 @@ module Rubot
         persona_label = persona ? persona.label : slug.capitalize
         label = named_session_label(slug, sid)
 
-        nav = View.render("_sessions", sessions: session_rows(slug, sid), token_query: token_query)
+        nav = View.render("_sessions",
+                          groups: session_groups(slug, sid),
+                          token_query: token_query)
                   .sub(%(<nav class="sessions" id="sessions">),
                        %(<nav class="sessions" id="sessions" hx-swap-oob="true">))
         head = View.render("_chathead",

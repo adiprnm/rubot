@@ -1,0 +1,46 @@
+<%# One conversation per row, named by the prompt that started it. The id
+    carries "~" between persona and start time, so the row can be reopened
+    without asking the store again.
+
+    Three controls sit on the row: the link that opens it, the pin that keeps it
+    at the top, and the delete that removes it. Pin and delete are forms because
+    both change something; only one of them changes something in the archive,
+    which is why the pin is the quieter mark.
+
+    A conversation that has no row in the archive yet (a brand-new "Sesi baru")
+    has nothing to pin, so it gets no pin button until its first message has
+    been saved. -%>
+<div class="session<%= row[:active] ? " is-active" : "" %><%= row[:pinned] ? " is-pinned" : "" %>">
+  <a class="session-link"
+     href="/s/<%= h(row[:id]) %><%= h(token_query) %>"
+     <%= row[:active] ? 'aria-current="page"' : "" %>>
+    <span class="label"><%= h(row[:label]) %></span>
+  </a>
+
+  <% if row[:pinnable] %>
+    <%# An in-place swap: the pin moves this row to the other section, and the
+        list it belongs to is the whole of what changes. Without a script the
+        form still posts and lands on the conversation. -%>
+    <form class="session-pin"
+          method="post"
+          action="/s/<%= h(row[:id]) %>/pin<%= h(token_query) %>"
+          hx-post="/s/<%= h(row[:id]) %>/pin<%= h(token_query) %>"
+          hx-target="#sessions"
+          hx-swap="outerHTML">
+      <input type="hidden" name="pin" value="<%= row[:pinned] ? "0" : "1" %>">
+      <input type="hidden" name="page" value="<%= h(page) %>">
+      <input type="hidden" name="current" value="<%= h(current) %>">
+      <button type="submit"
+              title="<%= row[:pinned] ? "Lepas pin" : "Pin sesi" %>"
+              aria-label="<%= row[:pinned] ? "Lepas pin" : "Pin sesi" %>"
+              aria-pressed="<%= row[:pinned] ? "true" : "false" %>"><%= pin_icon(pinned: row[:pinned]) %></button>
+    </form>
+  <% end %>
+
+  <form class="session-delete"
+        method="post"
+        action="/s/<%= h(row[:id]) %>/delete<%= h(token_query) %>"
+        onsubmit="return confirm('Hapus sesi ini? Seluruh percakapannya ikut hilang.')">
+    <button type="submit" title="Hapus sesi" aria-label="Hapus sesi">&times;</button>
+  </form>
+</div>

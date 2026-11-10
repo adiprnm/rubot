@@ -593,7 +593,7 @@ module Rubot
       # a persona, one open session, and whatever turn is still in flight.
       def render_page(live_turn: nil, persona_prompt: "")
         View.render("index",
-                    personas: [], sessions: [],
+                    personas: [], groups: { pinned: [], recent: [], page: 1, pages: 1, recent_total: 0, pinned_limit: 10, current: "web_rubot" },
                     slug: "rubot", persona_label: "Rubot", persona_emoji: "🤖",
                     persona_prompt: persona_prompt,
                     persona_model: "m", session_id: "web_rubot",
@@ -1460,7 +1460,7 @@ module Rubot
       # is still there, no bubble came out of it, and nothing explains why.
       def test_a_refused_prompt_has_a_place_to_say_why
         html = View.render("index",
-                           personas: [], sessions: [],
+                           personas: [], groups: { pinned: [], recent: [], page: 1, pages: 1, recent_total: 0, pinned_limit: 10, current: "web_rubot" },
                            slug: "rubot", persona_label: "Rubot", persona_emoji: "🤖",
                            persona_prompt: "",
                            persona_model: "m", session_id: "web_rubot",
@@ -2600,6 +2600,209 @@ module Rubot
         assert rows.first[:active]
       end
 
+      # --- pinned and paged sessions --------------------------------------
+
+      # The sidebar answers "which conversation", not "how long ago": the age
+      # was a second column competing with the one thing the row is for, so it
+      # is gone from the row and from what the row is built from.
+      def test_a_session_row_does_not_show_how_long_ago_it_moved
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: { "web_kanyaah" => "Halo" }
+        )
+        row = channel.send(:session_rows, "kanyaah", "web_kanyaah").first
+
+        refute row.key?(:meta), "there is no age to draw"
+        html = View.render("_session_row", row: row, token_query: "", page: 1,
+                                          current: "web_kanyaah")
+        refute_includes html, %(class="meta")
+      end
+
+      # Two lists in the sidebar, and both start open: a section that starts
+      # folded would hide conversations the reader never chose to hide.
+      def test_the_sidebar_has_pinned_and_recent_sections_that_start_open
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: { "web_kanyaah" => "Halo" }
+        )
+        groups = channel.send(:session_groups, "kanyaah", "web_kanyaah")
+
+        html = View.render("_sessions", groups: groups, token_query: "")
+
+        assert_equal 2, html.scan(%(<details class="session-group" open>)).size,
+                     "pinned and recent are both open"
+        assert_includes html, %(<span class="group-name">Pinned</span>)
+        assert_includes html, %(<span class="group-name">Recent</span>)
+        assert_includes html, "Belum ada sesi yang di-pin."
+      end
+
+      def test_a_pinned_conversation_sits_above_the_rest_and_only_once
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: {
+            "web_kanyaah" => [ [ "user", "paling lama" ] ],
+            "web_kanyaah~pinned" => [ [ "user", "yang di-pin" ] ],
+            "web_kanyaah~baru" => [ [ "user", "paling baru" ] ]
+          }
+        )
+        Rubot::Session.store.pin_session("web_kanyaah~pinned", at: "2026-11-10T09:00:00Z")
+
+        groups = channel.send(:session_groups, "kanyaah", "web_kanyaah~baru")
+
+        assert_equal [ "yang di-pin" ], groups[:pinned].map { |row| row[:label] }
+        assert groups[:pinned].first[:pinned]
+        refute_includes groups[:recent].map { |row| row[:id] }, "web_kanyaah~pinned",
+                        "a pinned conversation must not be listed in both sections"
+        assert_equal 2, groups[:recent_total]
+      end
+
+      # The pin is pressed beside a conversation, not on a page of its own: the
+      # answer is the sidebar, and the row the reader was on stays marked.
+      def test_pinning_in_place_answers_with_the_sidebar_and_keeps_the_open_row_marked
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: {
+            "web_kanyaah" => [ [ "user", "yang dibuka" ] ],
+            "web_kanyaah~other" => [ [ "user", "yang di-pin" ] ]
+          }
+        )
+        request = Struct.new(:query) do
+          def [](key) = key == "HX-Request" ? "true" : nil
+        end
+        req = request.new({ "pin" => "1", "page" => "1", "current" => "web_kanyaah" })
+        res = FakeResponse.new
+
+        channel.send(:toggle_pin, res, "web_kanyaah~other", req)
+
+        assert_equal 200, res.status
+        assert_includes res.body, %(<nav class="sessions" id="sessions">)
+        refute_includes res.body, "hx-swap-oob", "this is a targeted swap, not an out-of-band one"
+        assert_includes res.body, %(class="session is-active")
+        assert_includes res.body, %(aria-pressed="true")
+      end
+
+      def test_a_row_carries_a_pin_control_and_a_pinned_row_one_to_unpin_it
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: { "web_kanyaah" => [ [ "user", "Halo" ] ] }
+        )
+        Rubot::Session.store.pin_session("web_kanyaah", at: "2026-11-10T09:00:00Z")
+
+        html = View.render("_sessions",
+                           groups: channel.send(:session_groups, "kanyaah", "web_kanyaah"),
+                           token_query: "")
+
+        assert_includes html, %(class="session-pin")
+        assert_includes html, %(action="/s/web_kanyaah/pin")
+        assert_includes html, %(name="pin" value="0")
+        assert_includes html, %(aria-pressed="true")
+      end
+
+      # Pinning an eleventh conversation is not refused: the pin that has been
+      # there longest gives way, so the list is the ten most recent choices.
+      def test_pinning_past_the_cap_drops_the_oldest_pin
+        ids = (1..11).map { |i| "web_kanyaah~#{format("%02d", i)}" }
+        messages = ids.to_h { |id| [ id, [ [ "user", id ] ] ] }
+        channel = channel_with_archive(personas: { "kanyaah" => { "name" => "Kanyaah" } },
+                                       messages: messages)
+        store = Rubot::Session.store
+        ids.first(10).each_with_index do |id, i|
+          store.pin_session(id, at: format("2026-11-%02dT10:00:00Z", i + 1))
+        end
+
+        req = Struct.new(:query) { def [](_key) = nil }.new({ "pin" => "1", "page" => "1" })
+        channel.send(:toggle_pin, FakeResponse.new, ids.last, req)
+
+        pinned = channel.send(:session_groups, "kanyaah", ids.last)[:pinned].map { |row| row[:id] }
+
+        assert_equal 10, pinned.size
+        refute_includes pinned, ids.first, "the oldest pin is the one that goes"
+        assert_includes pinned, ids.last
+      end
+
+      # Twenty rows in the first block; asking for the next block appends to the
+      # ones already loaded rather than replacing them, which is what makes the
+      # button "load more" and not "page two".
+      def test_recent_sessions_load_a_block_of_twenty_at_a_time
+        ids = (1..21).map { |i| "web_kanyaah~#{format("%02d", i)}" }
+        messages = ids.to_h { |id| [ id, [ [ "user", id ] ] ] }
+        channel = channel_with_archive(personas: { "kanyaah" => { "name" => "Kanyaah" } },
+                                       messages: messages)
+
+        first = channel.send(:session_groups, "kanyaah", "web_kanyaah~01")
+        loaded = channel.send(:session_groups, "kanyaah", "web_kanyaah~01", page: 2)
+
+        assert_equal 20, first[:recent].size
+        assert_equal 21, first[:recent_total]
+        assert_equal 2, first[:pages]
+        assert first[:more]
+        assert_equal 2, first[:next_page]
+
+        assert_equal 21, loaded[:recent].size, "the first block is still there"
+        assert_equal 2, loaded[:page]
+        refute loaded[:more]
+      end
+
+      # The block the button asks for is exactly the rows not on screen yet, so
+      # appending it cannot repeat one.
+      def test_a_recent_block_holds_only_the_rows_after_the_ones_shown
+        ids = (1..25).map { |i| "web_kanyaah~#{format("%02d", i)}" }
+        messages = ids.to_h { |id| [ id, [ [ "user", id ] ] ] }
+        channel = channel_with_archive(personas: { "kanyaah" => { "name" => "Kanyaah" } },
+                                       messages: messages)
+
+        first = channel.send(:session_groups, "kanyaah", "web_kanyaah~01")
+        block = channel.send(:recent_block, "kanyaah", "web_kanyaah~01", 2)
+
+        assert_equal 5, block[:rows].size
+        assert_equal 20, first[:recent].size
+        assert_empty block[:rows].map { |row| row[:id] } & first[:recent].map { |row| row[:id] }
+      end
+
+      def test_the_load_more_control_carries_the_next_block_and_the_token
+        ids = (1..21).map { |i| "web_kanyaah~#{format("%02d", i)}" }
+        messages = ids.to_h { |id| [ id, [ [ "user", id ] ] ] }
+        channel = channel_with_archive(personas: { "kanyaah" => { "name" => "Kanyaah" } },
+                                       messages: messages)
+
+        html = View.render("_sessions",
+                           groups: channel.send(:session_groups, "kanyaah", "web_kanyaah~01"),
+                           token_query: "?token=t0k")
+
+        assert_includes html, %(class="recent-more" id="recent-more")
+        assert_includes html, %(hx-get="/s/web_kanyaah~01/recent?page=2&amp;token=t0k")
+        assert_includes html, %(hx-target="#recent-more")
+        assert_includes html, %(hx-swap="outerHTML")
+        assert_includes html, "Muat lebih banyak"
+        refute_includes html, "page-note", "there are no numbered pages any more"
+      end
+
+      # The answer to "load more" is rows plus the control that follows them,
+      # laid down where the old control was. On the last block there is no
+      # control to follow, and its absence is what ends the list.
+      def test_loading_more_answers_with_the_next_rows_and_the_control_that_follows
+        ids = (1..41).map { |i| "web_kanyaah~#{format("%02d", i)}" }
+        messages = ids.to_h { |id| [ id, [ [ "user", id ] ] ] }
+        channel = channel_with_archive(personas: { "kanyaah" => { "name" => "Kanyaah" } },
+                                       messages: messages)
+        second = Struct.new(:query).new({ "page" => "2" })
+        last = Struct.new(:query).new({ "page" => "3" })
+        res = FakeResponse.new
+
+        channel.send(:render_recent, res, "web_kanyaah~01", second)
+
+        assert_equal 200, res.status
+        assert_equal 20, res.body.scan(%(class="session-link")).size
+        assert_includes res.body, %(id="recent-more")
+        assert_includes res.body, "page=3", "the control points at the block after this one"
+
+        res = FakeResponse.new
+        channel.send(:render_recent, res, "web_kanyaah~01", last)
+
+        assert_equal 1, res.body.scan(%(class="session-link")).size
+        refute_includes res.body, %(id="recent-more"), "the list ends without a control"
+      end
+
       def test_the_session_list_refresh_is_an_out_of_band_swap
         channel = channel_with_sessions(
           personas: { "kanyaah" => { "name" => "Kanyaah" } },
@@ -2882,9 +3085,9 @@ module Rubot
           personas: { "kanyaah" => { "name" => "Kanyaah" } },
           sessions: { "web_kanyaah" => "Halo" }
         )
-        rows = channel.send(:session_rows, "kanyaah", "web_kanyaah")
+        groups = channel.send(:session_groups, "kanyaah", "web_kanyaah")
 
-        html = View.render("_sessions", sessions: rows, token_query: "?token=t0k")
+        html = View.render("_sessions", groups: groups, token_query: "?token=t0k")
 
         assert_includes html, %(action="/s/web_kanyaah/delete?token=t0k")
         assert_includes html, %(aria-label="Hapus sesi")
@@ -3541,7 +3744,7 @@ module Rubot
       # images; the lightbox is filled in when one of them is pressed.
       def test_the_page_carries_one_lightbox
         html = View.render("index",
-                           personas: [], sessions: [],
+                           personas: [], groups: { pinned: [], recent: [], page: 1, pages: 1, recent_total: 0, pinned_limit: 10, current: "web_rubot" },
                            slug: "rubot", persona_label: "Rubot", persona_emoji: "🤖",
                            persona_prompt: "",
                            persona_model: "m", session_id: "web_rubot",

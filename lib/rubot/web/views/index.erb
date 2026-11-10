@@ -107,8 +107,10 @@
               aria-label="Cari percakapan" title="Cari percakapan (⌘K)"><%= search_icon %></button>
     </div>
 
-    <p class="sidebar-label">Sesi</p>
-    <%= View.render("_sessions", sessions: sessions, token_query: token_query) %>
+    <%# Two lists, not one: what the reader chose to keep, and the rest of the
+        archive a page at a time. Each is its own folded section so a long
+        archive does not push the pinned ones out of reach. -%>
+    <%= View.render("_sessions", groups: groups, token_query: token_query) %>
 
     <%# Nothing is being asked while the page sits idle, so the news that a job
         fired and opened a conversation arrives on a stream of its own. What it

@@ -809,12 +809,87 @@ body {
   100% { box-shadow: inset 3px 0 0 transparent; }
 }
 
-.sidebar-label {
-  padding: 0 0.5rem 0.4rem;
+/* The two lists: pinned conversations, then the rest of the archive. A
+   summary is the section's only control, so it has to look pressable and has
+   to say how many rows it is holding. The marker is drawn by CSS rather than
+   the browser's default triangle, which sits on a different baseline in every
+   engine. */
+.session-group { display: block; flex: none; }
+
+.group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  padding: 0.35rem 0.5rem 0.3rem;
   font-size: 12px;
   font-style: italic;
   color: var(--fg-faint);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
 }
+
+.group-head::-webkit-details-marker { display: none; }
+
+.group-head::before {
+  content: "▸";
+  font-style: normal;
+  font-size: 9px;
+  transition: transform .12s;
+}
+
+.session-group[open] > .group-head::before { transform: rotate(90deg); }
+
+.group-head:hover { color: var(--fg-dim); }
+
+.group-name { letter-spacing: 0.01em; }
+
+/* The count is what tells a folded section apart from an empty one. */
+.group-count {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--fg-faint);
+  opacity: 0.8;
+}
+
+.group-empty {
+  margin: 0;
+  padding: 0.2rem 0.5rem 0.5rem 1.25rem;
+  font-size: 12px;
+  color: var(--fg-faint);
+  opacity: 0.75;
+}
+
+/* The way further back is a row of its own under the list, small and quiet: it
+   continues the list rather than being a destination. */
+.recent-more {
+  display: flex;
+  justify-content: center;
+  padding: 0.45rem 0.1rem 0.15rem;
+}
+
+.load-more {
+  display: block;
+  width: 100%;
+  padding: 0.32rem 0.4rem;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--fg-faint);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: -0.02em;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.load-more:hover { background: var(--bg1); color: var(--fg-dim); }
+
+/* In flight, the button says so by going quieter rather than by changing its
+   words: the block that answers it is already on its way. */
+.load-more.htmx-request { opacity: 0.5; }
 
 .sessions {
   display: flex;
@@ -833,23 +908,20 @@ body {
   border: 2px solid var(--bg-dim);
 }
 
-/* A row is a conversation plus the one action that removes it. The link keeps
-   the name and the stamp on a grid so a long name stays cut to one line and
-   the age stays flush right; the delete button is a column of its own and
-   appears on the row's edge. */
+/* A row is a conversation plus the two things that can happen to it: pinning
+   keeps it in place, deleting takes it away. The link keeps the name and the
+   stamp on a grid so a long name stays cut to one line and the age stays flush
+   right; the actions are columns of their own on the row's edge. */
 .session {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: baseline;
   border-radius: 3px;
   color: var(--fg-dim);
 }
 
 .session-link {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.5rem;
-  align-items: baseline;
+  display: block;
   padding: 0.42rem 0 0.42rem 0.5rem;
   min-width: 0;
   text-decoration: none;
@@ -873,7 +945,6 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 1.7rem;
   height: 1.7rem;
   border: 0;
   border-radius: 3px;
@@ -892,21 +963,67 @@ body {
 
 .session-delete button:hover { color: var(--red); background: var(--bg2); }
 
+/* The row aligns text by baseline so the name, the age and the controls sit on
+   one line. The controls are boxes, not text, and a box lined up by a baseline
+   it does not have hangs above the middle — two pixels is enough for a pin to
+   read as stuck to the top of the row. Centre them instead; the link keeps its
+   baseline alignment. */
+.session-pin,
+.session-delete { align-self: center; }
+
+.session-pin {
+  margin: 0;
+  display: flex;
+  align-items: center;
+}
+
+/* The two actions sit side by side, so their boxes have to be tight: a 27px
+   square around an 8px glyph leaves a gap wide enough to read as two separate
+   controls. Compact boxes keep the pair together; the touch media query gives
+   the target back to a finger, which needs width more than the eye does. */
+.session-pin button,
+.session-delete button { width: 1.15rem; }
+
+@media (pointer: coarse) {
+  .session-pin button,
+  .session-delete button { width: 1.5rem; }
+}
+
+.session-pin button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 1.7rem;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--fg-faint);
+  cursor: pointer;
+  /* Visible on a touch screen too: there is no hover there, and a control that
+     only appears on hover is a control a phone cannot find. Still quiet, so a
+     column of pins does not read as the point of the list. */
+  opacity: 0.35;
+  transition: color .12s, background .12s, opacity .12s;
+}
+
+.session:hover .session-pin button,
+.session-pin button:focus-visible { opacity: 0.75; }
+
+.session.is-pinned .session-pin button { opacity: 1; color: var(--yellow); }
+
+.session-pin button:hover { background: var(--bg2); opacity: 1; }
+
+.session .pin-icon { display: block; }
+
 /* The prompt that started the conversation, cut to one line: this is a name,
    not a preview. Hovering still gives the whole thing through the title. */
 .session .label {
+  display: block;
   font-size: 13.5px;
   line-height: 1.4;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session .meta {
-  font-family: var(--mono);
-  font-size: 9.5px;
-  letter-spacing: -0.03em;
-  color: var(--fg-faint);
   white-space: nowrap;
 }
 

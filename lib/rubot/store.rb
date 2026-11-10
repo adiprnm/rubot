@@ -188,6 +188,31 @@ module Rubot
 
     # --- reading -------------------------------------------------------
 
+    # Lift a conversation out of the chronological list, or put it back. The
+    # stamp is kept rather than a flag because the pinned section is ordered by
+    # it: a cap of ten then has a defined "oldest" to drop.
+    #
+    # Pinning is not a message write, so it does not go through the actor — the
+    # web client owns this column and no turn reads it.
+    def pin_session(session_id, at: nil)
+      id = text_id(session_id)
+      return false if id.empty?
+
+      @db.execute(
+        "UPDATE sessions SET pinned_at = ? WHERE id = ?",
+        [ (at || Time.now.utc.iso8601).to_s, id ]
+      )
+      @db.changes.positive?
+    end
+
+    def unpin_session(session_id)
+      id = text_id(session_id)
+      return false if id.empty?
+
+      @db.execute("UPDATE sessions SET pinned_at = NULL WHERE id = ?", [ id ])
+      @db.changes.positive?
+    end
+
     # Whether an id is already in use. Cheaper than loading the transcript: the
     # web client asks this before handing out a fresh id.
     def session?(session_id)
@@ -199,20 +224,34 @@ module Rubot
 
     # What the sidebar shows, newest first. Three columns and no JSON parsing:
     # this is the query that replaces Session.describe over the whole directory.
+    #
+    # A pinned row is never dropped by the limit: the sidebar has a section for
+    # it, and a conversation pinned months ago must stay there however many
+    # newer ones exist. The limit still bounds the chronological rows.
+    #
+    # `limit: nil` reads every row, which is what a paginated list needs in
+    # order to know how many pages there are.
     def sidebar(limit: 40)
-      @db.execute(<<~SQL, [limit.to_i]).map do |(id, title, updated_at, count, cwd)|
-        SELECT id, title, updated_at, msg_count, cwd
-        FROM sessions
-        ORDER BY COALESCE(updated_at, '') DESC
-        LIMIT ?
-      SQL
+      args = []
+      sql = +"SELECT id, title, updated_at, msg_count, cwd, pinned_at FROM sessions "
+      unless limit.nil?
+        sql << <<~SQL
+          WHERE pinned_at IS NOT NULL
+             OR id IN (SELECT id FROM sessions ORDER BY COALESCE(updated_at, '') DESC LIMIT ?)
+        SQL
+        args << limit.to_i
+      end
+      sql << " ORDER BY COALESCE(updated_at, '') DESC"
+
+      @db.execute(sql, args).map do |(id, title, updated_at, count, cwd, pinned_at)|
         {
           id: text_id(id),
           title: title.to_s,
           updated_at: updated_at,
           timestamp: timestamp_of(updated_at),
           messages: count.to_i,
-          cwd: cwd
+          cwd: cwd,
+          pinned_at: pinned_at
         }
       end
     end

@@ -712,6 +712,9 @@ module Rubot
         timestamp: row[:timestamp],
         messages: row[:messages].to_i,
         cwd: row[:cwd],
+        # The stamp, not a flag: the sidebar's pinned section is ordered by it,
+        # and nil is "not pinned" for every row written before pins existed.
+        pinned_at: row[:pinned_at],
         last_prompt: nil
       }
     end
@@ -761,7 +764,11 @@ module Rubot
         # prompt because it is about continuing; a sidebar lists conversations,
         # and a conversation is known by the question that started it — or by
         # the name the model gave it once the first turn finished.
-        title: title_for(messages, data["title"])
+        title: title_for(messages, data["title"]),
+        # A hand-kept pin, when the file carries one. The archive is where pins
+        # are written in practice; a JSON file only has one if something put it
+        # there, and reading it costs nothing.
+        pinned_at: data["pinned_at"]
       }
     end
 
