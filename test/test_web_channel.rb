@@ -3095,6 +3095,52 @@ module Rubot
         assert queue.empty?, "a stream that has gone away must not be written to"
       end
 
+      # The page may not be open at all — that is the whole point of a daily
+      # job firing at nine. Whoever is not looking at the app is reached by a
+      # notification instead, and it points at the conversation the job opened
+      # so the tap lands in the right place.
+      def test_a_fired_job_notifies_the_devices_that_have_no_page_open
+        channel = channel_with_sessions(personas: { "english-tutor" => { "name" => "English Tutor" } })
+        session = RecordingCronSession.new
+        pushes = []
+        channel.define_singleton_method(:prepare_delivery) { |_sid| nil }
+        channel.define_singleton_method(:session_for) { |_sid| session }
+        channel.define_singleton_method(:notify_push) do |slug, **options|
+          pushes << { slug: slug }.merge(options)
+          { "queued" => 1 }
+        end
+
+        channel.send(:deliver_cron_turn,
+                     mode: "agent_turn", slug: "english-tutor", new_session: true,
+                     description: "Practice", result: { agent_message: "Practice!" })
+
+        assert_equal 1, pushes.size, "a fired job has to reach the devices, not only the pages"
+        assert_equal "english-tutor", pushes.first[:slug]
+        assert_includes pushes.first[:body], "Practice",
+                        "the notification says what the job is, in the reader's own words"
+        assert_match(%r{\A/s/web_english-tutor}, pushes.first[:url],
+                     "tapping it opens the conversation the job just opened")
+      end
+
+      # Nothing is announced when there is nobody to write it for.
+      def test_a_job_with_no_description_still_says_something
+        channel = channel_with_sessions(personas: { "english-tutor" => { "name" => "English Tutor" } })
+        session = RecordingCronSession.new
+        pushes = []
+        channel.define_singleton_method(:prepare_delivery) { |_sid| nil }
+        channel.define_singleton_method(:session_for) { |_sid| session }
+        channel.define_singleton_method(:notify_push) do |slug, **options|
+          pushes << { slug: slug }.merge(options)
+          { "queued" => 1 }
+        end
+
+        channel.send(:deliver_cron_turn,
+                     mode: "agent_turn", slug: "english-tutor", new_session: false,
+                     result: { agent_message: "Minum air" })
+
+        refute_empty pushes.first[:body].to_s.strip, "an empty notification is a notification nobody understands"
+      end
+
       def test_each_session_row_carries_a_way_to_delete_it
         channel = channel_with_sessions(
           personas: { "kanyaah" => { "name" => "Kanyaah" } },
