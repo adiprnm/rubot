@@ -104,9 +104,15 @@ class TestActors < Minitest::Test
 
       assert_equal "Hello world", response
       assert_equal [ "Hello", " world" ], chunks
-      assert_equal "actor-test", handle.session.id
       assert_equal 2, handle.session.message_count
-      assert File.exist?(File.join(config.sessions_dir, "actor-test.json"))
+      assert_equal "actor-test", handle.session.id
+      # The turn is archived in SQLite, not in a JSON file next to config.yml.
+      store = pool.store
+      refute_nil store, "the pool opens the archive at boot"
+      assert store.session?("actor-test"), "the conversation is in the archive"
+      assert_equal 2, store.message_count("actor-test")
+      refute File.exist?(File.join(config.sessions_dir, "actor-test.json")),
+             "a store-backed session no longer writes its JSON file"
     ensure
       pool.shutdown
     end
@@ -155,8 +161,10 @@ class TestActors < Minitest::Test
 
       assert_equal 1, extraction_request_count, "the batched extraction request must be sent"
       assert_equal 1, naming_request_count, "the first flush names the conversation"
-      session = JSON.parse(File.read(File.join(config.sessions_dir, "learning-ractor.json")))
-      assert_empty Array(session["memory_backlog"]), "the batch must be consumed by extraction"
+      # The batch is consumed by the extraction; the JSON file is gone and the
+      # state lives in the archive's meta.
+      meta = pool.store.load_session("learning-ractor")[:meta]
+      assert_empty Array(meta["memory_backlog"]), "the batch must be consumed by extraction"
     ensure
       pool.shutdown
     end

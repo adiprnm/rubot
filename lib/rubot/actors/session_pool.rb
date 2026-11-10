@@ -5,6 +5,8 @@ require_relative "session_actor"
 require_relative "../config"
 require_relative "../persona_store"
 require_relative "../session_handle"
+require_relative "../store"
+require_relative "../store_service"
 
 module Rubot
   module Actors
@@ -14,6 +16,7 @@ module Rubot
     # main Ractor (where channels run). Use #for to obtain a SessionHandle.
     class SessionPool
       attr_reader :cron, :cron_events, :workspace, :models, :sessions_dir, :sessions_cwd
+      attr_reader :store, :store_service
 
       def initialize(config:, delivery: nil)
         @config_data = config.snapshot
@@ -29,6 +32,12 @@ module Rubot
         @cron_workspaces = {}
         @cron_events = delivery
         @persona_store = build_persona_store(config)
+
+        # The archive lives here because this runs in the main Ractor, where
+        # SQLite is allowed. Actors reach it through `store_port`; readers
+        # through Session.store. A failure to open it falls back to JSON.
+        @store, @store_service = open_store(@sessions_dir)
+        Session.store = @store
 
         @cron = if config.tools_enabled
           CronActor.new(
@@ -157,7 +166,8 @@ module Rubot
             config_path: @config_path,
             session_id: sid,
             cron_actor: cron,
-            persona: persona_for(sid)
+            persona: persona_for(sid),
+            store_port: @store_service&.port
           )
         end
 
@@ -202,9 +212,35 @@ module Rubot
 
         actors.each(&:shutdown)
         @cron&.shutdown
+        # After the actors: one of them may still be mid-turn and writing.
+        @store_service&.stop
+        Session.store = nil if Session.store.equal?(@store)
       end
 
       private
+
+      # The archive and its service, or [nil, nil] when it cannot be opened.
+      #
+      # Falling back to the JSON files is deliberate: a database that will not
+      # open (a read-only home, a corrupt file) is a bad day, but a bot that
+      # refuses to start over it is a worse one.
+      def open_store(sessions_dir)
+        return [ nil, nil ] if sessions_dir.to_s.empty?
+
+        path = Store.path_for(sessions_dir)
+        store = Store.new(path)
+        imported = store.import_directory(sessions_dir, skip_existing: true)
+        if imported[:sessions].positive?
+          warn "[store] imported #{imported[:sessions]} session(s) from JSON " \
+               "(#{imported[:messages]} messages) into #{path}"
+        end
+        [ store, StoreService.new(store) ]
+      rescue StandardError => e
+        warn "[store] could not open #{path || "the archive"}: #{e.class}: #{e.message}; " \
+             "sessions stay in JSON files"
+        store&.close
+        [ nil, nil ]
+      end
 
       def build_persona_store(config)
         PersonaStore.new(

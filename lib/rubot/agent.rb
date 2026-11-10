@@ -103,8 +103,13 @@ module Rubot
     # session actor swaps in the token its watcher thread listens on.
     attr_accessor :cancellation
 
-    def initialize(config:, provider: nil, session_id: "default", tools: nil, persona: nil)
+    def initialize(config:, provider: nil, session_id: "default", tools: nil, persona: nil,
+                   archive: nil)
       @config = config
+      # Handle on the SQLite archive (see StoreClient). nil means the session
+      # keeps living in its JSON file — the fallback when the archive cannot be
+      # opened.
+      @archive = archive
       @cancellation = Cancellation.new
       # Text the user typed while a turn was already running (TUI steering).
       # The turn consumes it between rounds; a mutex keeps the reader thread
@@ -118,7 +123,8 @@ module Rubot
       @session = Session.new(session_id, workspace: config.workspace,
                                          sessions_dir: session_dir_for(config),
                                          cwd: session_cwd_for(config),
-                                         max_messages: config.session_max_messages)
+                                         max_messages: config.session_max_messages,
+                                         archive: @archive)
       apply_initial_preset!
       @provider = provider || build_provider(preset: @active_preset)
 
@@ -807,7 +813,8 @@ module Rubot
       @session = Session.new(session_id, workspace: @config.workspace,
                                          sessions_dir: session_dir_for(@config),
                                          cwd: session_cwd_for(@config),
-                                         max_messages: @config.session_max_messages)
+                                         max_messages: @config.session_max_messages,
+                                         archive: @archive)
       apply_initial_preset!
       @session
     end

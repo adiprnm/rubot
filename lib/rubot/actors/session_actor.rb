@@ -30,7 +30,8 @@ module Rubot
     class SessionActor
       attr_reader :ractor, :session_id, :stop_port
 
-      def initialize(config_data:, config_path:, session_id:, cron_actor: nil, persona: nil)
+      def initialize(config_data:, config_path:, session_id:, cron_actor: nil, persona: nil,
+                     store_port: nil)
         @session_id = session_id.to_s
 
         # The stop port has to be created inside the Ractor (only the creating
@@ -45,7 +46,8 @@ module Rubot
             config_path: config_path,
             session_id: @session_id,
             cron_actor: cron_actor,
-            persona: persona
+            persona: persona,
+            store_port: store_port
           },
           bootstrap,
           name: "rubot-session-#{@session_id}"
@@ -74,7 +76,12 @@ module Rubot
           boot << stop_port
 
           config = Config.from_data(args[:config_data], config_path: args[:config_path])
-          agent = Agent.new(config: config, session_id: args[:session_id], persona: args[:persona])
+          agent = Agent.new(
+            config: config,
+            session_id: args[:session_id],
+            persona: args[:persona],
+            archive: args[:store_port] && Rubot::StoreClient.new(args[:store_port])
+          )
           agent.cancellation = cancellation
           agent.cron_ractor = args[:cron_actor] if args[:cron_actor]
           SessionActor.serve(agent, args[:session_id], stop_port: stop_port, watcher: watcher)

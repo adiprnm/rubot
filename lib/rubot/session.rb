@@ -53,10 +53,22 @@ module Rubot
     CACHE_HISTORY_LIMIT = 12
 
     def initialize(id = "default", workspace: nil, sessions_dir: nil, cwd: nil,
-                   max_messages: DEFAULT_MAX_MESSAGES)
+                   max_messages: DEFAULT_MAX_MESSAGES, archive: nil)
       @id = id
       @messages = []
       @workspace = workspace
+      # Optional handle to the SQLite archive (see StoreClient). When present it
+      # is the source of truth and the JSON file is only an export: the
+      # transcript is appended to, not rewritten. The cache does not notice —
+      # this is read once at load and written at save!, and neither touches
+      # @messages in between.
+      @archive = archive
+      # Absolute index of @messages[0] in the archive, and how many of the
+      # messages in @messages have already been written. The archive is
+      # append-only, so trimming the front of the live window moves the offset
+      # instead of renumbering anything.
+      @archive_offset = 0
+      @archived = 0
       # Where the JSON file goes. Defaults to <workspace>/sessions so callers
       # that only know a workspace keep working; the TUI passes the central
       # directory explicitly (Config#sessions_dir).
@@ -475,7 +487,10 @@ module Rubot
     end
 
     def clear!
-      @messages = []
+      # A clear opens a new window instead of emptying the archive: the next
+      # message lands after what came before it, so no index is ever reused and
+      # nothing is deleted.
+      drop_front!(@messages.size)
       @forced_skill = nil
       @summary = nil
       @task = nil
@@ -525,7 +540,7 @@ module Rubot
       # Replace the old summary: the summarizer already merged it into this
       # one. Appending here is what made the prompt grow without bound.
       @summary = clean_summary
-      @messages = @messages[cutoff..] || []
+      drop_front!(cutoff)
       # The transcript was rewritten, so the last request's usage no longer
       # describes it (Pi invalidates its context estimate the same way).
       invalidate_context_anchor!
@@ -610,8 +625,23 @@ module Rubot
     # every session without a recorded origin (Telegram chats, legacy files).
     # Sessions without messages (and unreadable files) are left out: /resume
     # only offers something that can actually be continued.
+    # The archive, when the process has one (set by SessionPool at boot).
+    #
+    # These three readers are the seam: channels ask for a list, a summary or a
+    # transcript and do not care where it comes from. With the archive set they
+    # answer from SQLite; without it (the fallback when it cannot be opened) the
+    # JSON files answer exactly as before.
+    class << self
+      attr_accessor :store
+    end
+
     def self.index(workspace = nil, cwd: :all, dir: nil)
       dir ||= sessions_dir(workspace)
+      if (archive = store) && dir
+        entries = archive.sidebar(limit: 1000).map { |row| entry_from_row(row) }
+        entries = entries.select { |entry| entry[:cwd] == cwd } unless cwd == :all
+        return entries
+      end
       return [] unless dir && Dir.exist?(dir)
 
       entries = Dir.glob(File.join(dir, "*.json")).filter_map { |path| describe(path) }
@@ -626,6 +656,10 @@ module Rubot
     # Summary of one saved session, or nil when there is nothing to resume.
     def self.find(workspace, id, dir: nil)
       dir ||= sessions_dir(workspace)
+      if (archive = store)
+        row = archive.sidebar(limit: 1000).find { |entry| entry[:id] == id.to_s }
+        return row && entry_from_row(row)
+      end
       return nil unless dir
 
       describe(File.join(dir, "#{id}.json"))&.except(:timestamp)
@@ -635,6 +669,10 @@ module Rubot
     # transcript exactly as it was.
     def self.transcript(workspace, id, dir: nil)
       dir ||= sessions_dir(workspace)
+      if (archive = store)
+        loaded = archive.load_session(id)
+        return loaded ? normalize_utf8(loaded[:messages]) : []
+      end
       return [] unless dir
 
       path = File.join(dir, "#{id}.json")
@@ -645,6 +683,17 @@ module Rubot
       messages.is_a?(Array) ? normalize_utf8(messages) : []
     rescue JSON::ParserError, SystemCallError, EncodingError
       []
+    end
+
+    # The list shape the channels already expect from #describe.
+    def self.entry_from_row(row)
+      {
+        id: row[:id],
+        title: row[:title].to_s,
+        timestamp: row[:timestamp],
+        messages: row[:messages].to_i,
+        cwd: row[:cwd]
+      }
     end
 
     # Read one session file into the summary used by #index and #find.
@@ -732,6 +781,7 @@ module Rubot
     # for it is removed. That keeps a launch that the user closes before
     # typing anything out of the sessions directory (and out of /resume).
     def save!
+      return save_to_archive! if @archive
       return unless file_path
 
       unless persistable?
@@ -777,6 +827,68 @@ module Rubot
     end
 
     private
+
+    # Write only what is new. The old file path rewrote the whole transcript on
+    # every save — up to 3.7 MB per turn on this repo's sessions — and the JSON
+    # file is now an export rather than the store.
+    #
+    # Nothing here touches @messages, so the payload the model is sent stays
+    # identical to what it was before the save: the prompt cache is not affected
+    # by a turn being persisted.
+    def save_to_archive!
+      return false unless persistable?
+
+      pending = @messages[@archived..] || []
+      if pending.any?
+        @archive.append(@id, pending, start_index: @archive_offset + @archived)
+        @archived += pending.size
+      end
+      @archive.save_meta(
+        @id,
+        meta: archive_meta,
+        messages_start: @archive_offset,
+        title: @title,
+        cwd: @cwd,
+        created_at: @messages.first&.fetch("timestamp", nil)
+      )
+      true
+    end
+
+    # The same fields the JSON file carried. Keys match, so load! restores from
+    # either source through one path; nil means "not set", not "unset it".
+    def archive_meta
+      {
+        "summary" => @summary,
+        "task" => @task,
+        "forced_skill" => @forced_skill,
+        "model_override" => @model_override,
+        "model_preset" => @model_preset,
+        "usage" => @usage.to_h,
+        "last_usage" => @last_usage.to_h,
+        "cost" => @cost,
+        "cost_partial" => @cost_partial,
+        "last_usage_watermark" => @last_usage_watermark,
+        "cache_history" => @cache_history,
+        # The pin: losing either of these rebuilds the system prompt, and a
+        # rebuilt prompt at the front of the request is a cold cache.
+        "system_prompt" => @system_prompt,
+        "system_prompt_epoch" => @system_prompt_epoch,
+        "memory_backlog" => @memory_backlog
+      }.compact
+    end
+
+    # Drop `count` messages off the front of the live window. The archive keeps
+    # them: only the window moves, so trimming never renumbers anything and a
+    # reload returns exactly what the old JSON file would have held.
+    def drop_front!(count)
+      count = count.to_i
+      return if count <= 0
+
+      count = @messages.size if count > @messages.size
+      @messages = @messages[count..] || []
+      @archive_offset += count
+      @archived = [ @archived - count, 0 ].max
+    end
 
     # A freshly created session has nothing worth a file yet. Messages are the
     # obvious content; summary, usage and the memory backlog are kept too, so
@@ -885,13 +997,13 @@ module Rubot
     end
 
     def load!
-      return unless file_path && File.exist?(file_path)
+      data = @archive ? archive_state : file_state
+      return unless data
 
-      raw = File.read(file_path)
-      return if raw.strip.empty?
-
-      data = JSON.parse(raw)
       @messages = self.class.normalize_utf8(data["messages"] || [])
+      # Everything loaded is already in the archive; only what is appended
+      # afterwards needs writing.
+      @archived = @messages.size if @archive
       @cwd = data["cwd"].to_s.strip.empty? ? nil : data["cwd"].to_s if data.key?("cwd")
       @task = data["task"] if data["task"]
       # Sessions written before the task field existed: recover the first user
@@ -913,10 +1025,30 @@ module Rubot
       @system_prompt = data["system_prompt"].to_s.empty? ? nil : data["system_prompt"].to_s
       @system_prompt_epoch = data["system_prompt_epoch"].is_a?(Hash) ? data["system_prompt_epoch"] : nil
       @memory_backlog = Array(data["memory_backlog"]).map(&:to_s)
+    end
+
+    # The session state as the archive holds it: the messages it returned (which
+    # already start at `messages_start`) plus the metadata blob under the same
+    # keys the JSON file used, so one restore path serves both.
+    def archive_state
+      loaded = @archive.load(@id)
+      return nil unless loaded
+
+      @archive_offset = loaded[:start].to_i
+      (loaded[:meta] || {}).merge("messages" => loaded[:messages] || [])
+    end
+
+    def file_state
+      return nil unless file_path && File.exist?(file_path)
+
+      raw = File.read(file_path)
+      return nil if raw.strip.empty?
+
+      JSON.parse(raw)
     rescue JSON::ParserError => e
       # A truncated/corrupt session must not take the bot down: start fresh.
       warn "[session] ignoring unreadable session #{file_path}: #{e.message}"
-      @messages = []
+      nil
     end
 
     # Share of the cap dropped in a single cut once the transcript reaches it.
@@ -960,6 +1092,8 @@ module Rubot
       end
 
       @messages = @messages[trim_index..]
+      @archive_offset += trim_index
+      @archived = [ @archived - trim_index, 0 ].max
       invalidate_context_anchor!
     end
 

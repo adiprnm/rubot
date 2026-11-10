@@ -130,13 +130,33 @@ module Rubot
       self
     end
 
+    # Remove a conversation for good — the one place rows are deleted, and only
+    # because a reader asked while looking at it (the web client's delete
+    # button). Trimming never takes this path: it moves `messages_start`.
+    def delete_session(session_id)
+      id = session_id.to_s
+      in_transaction do
+        @db.execute("DELETE FROM messages WHERE session_id = ?", [id])
+        @db.execute("DELETE FROM sessions WHERE id = ?", [id])
+      end
+      true
+    end
+
     # --- reading -------------------------------------------------------
+
+    # Whether an id is already in use. Cheaper than loading the transcript: the
+    # web client asks this before handing out a fresh id.
+    def session?(session_id)
+      return false if session_id.to_s.empty?
+
+      !@db.get_first_value("SELECT 1 FROM sessions WHERE id = ? LIMIT 1", [session_id.to_s]).nil?
+    end
 
     # What the sidebar shows, newest first. Three columns and no JSON parsing:
     # this is the query that replaces Session.describe over the whole directory.
     def sidebar(limit: 40)
-      @db.execute(<<~SQL, [limit.to_i]).map do |(id, title, updated_at, count)|
-        SELECT id, title, updated_at, msg_count
+      @db.execute(<<~SQL, [limit.to_i]).map do |(id, title, updated_at, count, cwd)|
+        SELECT id, title, updated_at, msg_count, cwd
         FROM sessions
         ORDER BY COALESCE(updated_at, '') DESC
         LIMIT ?
@@ -146,7 +166,8 @@ module Rubot
           title: title.to_s,
           updated_at: updated_at,
           timestamp: timestamp_of(updated_at),
-          messages: count.to_i
+          messages: count.to_i,
+          cwd: cwd
         }
       end
     end

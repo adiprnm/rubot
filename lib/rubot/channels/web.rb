@@ -184,6 +184,10 @@ module Rubot
       end
 
       def taken_session_id?(sid)
+        # The archive is the live store: a session it holds is in use even
+        # though no file exists for it any more.
+        return true if (store = Session.store) && store.session?(sid)
+
         dir = @app_config&.sessions_dir
         return true if dir && File.exist?(File.join(dir, "#{sid}.json"))
 
@@ -510,6 +514,9 @@ module Rubot
 
         path = session_path(sid)
         File.delete(path) if path && File.exist?(path)
+        # The archive is the live store now; a file that is not there any more
+        # is not enough to make the conversation go away.
+        Session.store&.delete_session(sid)
 
         # Land on what is left: the persona's next newest conversation, or the
         # persona itself when this was the last one. Either way the browser is

@@ -11,6 +11,7 @@ require_relative "../image_info"
 require_relative "../model_catalog"
 require_relative "../persona"
 require_relative "../persona_store"
+require_relative "../session"
 require_relative "../telegram_format"
 require_relative "../usage"
 require_relative "../opencode_usage"
@@ -1407,7 +1408,10 @@ module Rubot
       end
 
       def topic_session_exists?(chat_id, thread_id)
-        path = File.join(sessions_dir, "#{topic_session_id(chat_id, thread_id)}.json")
+        sid = topic_session_id(chat_id, thread_id)
+        return true if (store = Session.store) && store.session?(sid)
+
+        path = File.join(sessions_dir, "#{sid}.json")
         File.exist?(path)
       end
 
