@@ -557,12 +557,18 @@ body {
 
 .new-session { margin: 0 0 0.6rem; }
 
+/* The one control in the sidebar that makes something rather than going
+   somewhere, so it wears the primary colour — but its neighbour is the search
+   button, and a bare outline beside a raised one read as a link next to a
+   button. The surface is what makes the row a pair; the colour is what ranks
+   them. Filling in on hover and press still comes from .btn.primary. */
 .new-session .btn {
   display: flex;
   align-items: center;
   gap: 0.35rem;
   width: 100%;
   padding: 0.4rem 0.5rem;
+  background: var(--bg1);
   font-size: 11px;
   text-align: left;
 }
