@@ -121,10 +121,15 @@ module Rubot
         INSERT INTO sessions(id, title, created_at, updated_at, cwd, bytes, meta, messages_start)
         VALUES(?, ?, ?, ?, ?, ?, COALESCE(?, '{}'), COALESCE(?, 0))
         ON CONFLICT(id) DO UPDATE SET
-          title          = excluded.title,
-          updated_at     = excluded.updated_at,
-          cwd            = excluded.cwd,
-          bytes          = excluded.bytes,
+          -- A blank field means "I was not told", not "clear it". Every turn
+          -- saves the session, so anything overwritten unconditionally was
+          -- erased once per turn: the name the model gave it, the timestamp the
+          -- sidebar sorts on, and the byte count the import uses to decide a
+          -- file is unchanged.
+          title      = CASE WHEN excluded.title = '' THEN sessions.title ELSE excluded.title END,
+          updated_at = COALESCE(excluded.updated_at, sessions.updated_at),
+          cwd        = COALESCE(excluded.cwd, sessions.cwd),
+          bytes      = CASE WHEN excluded.bytes = 0 THEN sessions.bytes ELSE excluded.bytes END,
           meta           = COALESCE(?, sessions.meta),
           messages_start = COALESCE(?, sessions.messages_start)
       SQL

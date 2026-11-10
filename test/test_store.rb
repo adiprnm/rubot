@@ -347,6 +347,32 @@ class TestStore < Minitest::Test
     assert_equal "s1", Rubot::Session.label(title: nil, last_prompt: nil, id: "s1")
   end
 
+  def test_saving_without_a_field_does_not_clear_it
+    @store.append_messages("s1", [build_message("user", "halo")])
+    @store.upsert_session(id: "s1", title: "nama", updated_at: "2026-11-10T03:00:00Z",
+                          cwd: "/tmp/x", bytes: 1234)
+
+    # Every turn saves the session with only what it knows. A blank must mean
+    # "not told", or the name, the sort key and the byte count are erased once
+    # per turn.
+    @store.upsert_session(id: "s1", title: "", updated_at: nil, cwd: nil, bytes: 0)
+
+    row = @store.sidebar.first
+    assert_equal "nama", row[:title]
+    assert_equal "2026-11-10T03:00:00Z", row[:updated_at]
+    assert_equal "/tmp/x", row[:cwd]
+    assert_equal 1234, @store.session_sizes["s1"]
+  end
+
+  def test_a_saved_session_keeps_its_updated_at
+    @store.append_messages("s1", [build_message("user", "halo")])
+    first = @store.sidebar.first[:updated_at]
+
+    refute_nil first, "a session that was appended to must have a timestamp"
+    @store.upsert_session(id: "s1", title: "judul")
+    assert_equal first, @store.sidebar.first[:updated_at]
+  end
+
   private
 
   def write_session(id, messages, title: nil)
