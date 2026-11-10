@@ -42,6 +42,9 @@ module Rubot
       # id ("web_<slug>"); every later one appends "~<stamp>". "~" cannot occur
       # in a slug, so the id always splits back into persona + session.
       SESSION_SEPARATOR = "~"
+      # How often an idle page's event stream says something, so a connection
+      # sitting in a proxy is not closed for being quiet.
+      EVENT_HEARTBEAT = 20
       # How many conversations the sidebar lists. Older ones stay on disk and
       # are still reachable by their URL.
       MAX_SESSION_ROWS = 40
@@ -128,6 +131,11 @@ module Rubot
         @turns = {}
         @active = {}
         @turns_mutex = Mutex.new
+        # Pages that are open and idle, listening for news that arrives on its
+        # own. Each one keeps its session id, which is what decides the active
+        # row and the persona it should hear about.
+        @event_subs = []
+        @event_mutex = Mutex.new
         @personas = nil
         super
       end
@@ -370,6 +378,8 @@ module Rubot
           create_turn(req, res, match[1])
         elsif method == "GET" && (match = SESSION_MEDIA_PATH.match(path))
           serve_media(res, match[1], match[2])
+        elsif method == "GET" && path == "/events"
+          stream_events(res, req)
         elsif method == "GET" && (match = SESSION_QUOTA_PATH.match(path))
           render_quota(res, match[1])
         elsif method == "POST" && (match = SESSION_REPIN_PATH.match(path))
@@ -1563,6 +1573,71 @@ module Rubot
         end
       end
 
+      # A page that is open and idle has no turn to carry news, and news still
+      # arrives: a fired job that opens a conversation. One connection per page
+      # stays open for it, and what it carries is the sidebar itself, marked
+      # out of band, so the list redraws without a reload and the page never
+      # asks again.
+      def stream_events(res, req)
+        sid = utf8(req.query["sid"].to_s)
+        return not_found(res) unless sid.empty? || owner_slug(sid)
+
+        queue = Queue.new
+        res.status = 200
+        res["Content-Type"] = "text/event-stream"
+        res["Cache-Control"] = "no-cache, no-store"
+        res["Connection"] = "keep-alive"
+        res["X-Accel-Buffering"] = "no"
+        res.chunked = true
+
+        listen_for_events(sid, queue)
+
+        res.body = proc do |out|
+          # What the page already shows, sent first: a stream that was dropped
+          # and reopened must not sit on a list that has moved on.
+          sse(out, "sidebar", sidebar_markup(sid))
+
+          loop do
+            break unless @running
+
+            markup = queue.pop(timeout: EVENT_HEARTBEAT)
+            if markup.nil?
+              # A comment line costs nothing and keeps the connection from
+              # being closed for silence by whatever sits in between.
+              out.write(": keepalive\n\n")
+              out.flush if out.respond_to?(:flush)
+            else
+              sse(out, "sidebar", markup)
+            end
+          end
+        rescue IOError, Errno::EPIPE, Errno::ECONNRESET
+          nil
+        ensure
+          stop_listening_for_events(queue)
+        end
+      end
+
+      # Tell every open page of this persona that its sidebar has changed. Each
+      # page is answered in its own session id, because that is what decides
+      # which row is the active one.
+      def broadcast_sessions(slug)
+        subs = @event_mutex.synchronize { @event_subs.dup }
+        subs.each do |sid, queue|
+          next unless (owner_slug(sid) || default_slug) == slug
+
+          markup = sidebar_markup(sid)
+          queue << markup unless markup.to_s.empty?
+        end
+      end
+
+      def listen_for_events(sid, queue)
+        @event_mutex.synchronize { @event_subs << [ sid, queue ] }
+      end
+
+      def stop_listening_for_events(queue)
+        @event_mutex.synchronize { @event_subs.reject! { |_sid, other| other.equal?(queue) } }
+      end
+
       def write_event(out, turn, type, payload)
         case type
         when :turn
@@ -1671,6 +1746,10 @@ module Rubot
         if result[:new_session] && session.respond_to?(:set_session_title)
           session.set_session_title(cron_session_title(result))
         end
+
+        # Whoever has this persona open hears about it now, rather than on the
+        # next reload.
+        broadcast_sessions(slug)
       end
 
       def cron_session_title(result)

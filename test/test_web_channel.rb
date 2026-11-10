@@ -2832,6 +2832,51 @@ module Rubot
         assert_equal [ channel.send(:session_id) ], opened
       end
 
+      # The page sits idle while a job fires, so nothing is asking: the sidebar
+      # has to arrive on its own. It rides a stream the page opens when it
+      # loads and keeps open while it is there.
+      def test_the_page_listens_for_news_while_it_sits_idle
+        channel = channel_with_sessions(
+          personas: { "english-tutor" => { "name" => "English Tutor" } },
+          sessions: { "web_english-tutor" => "Halo" }
+        )
+        res = FakeResponse.new
+
+        channel.send(:render_session, res, "web_english-tutor")
+
+        assert_includes res.body, %(sse-connect="/events?sid=web_english-tutor"),
+                        "an idle page has no turn stream, so it needs one of its own"
+      end
+
+      # Only the persona that gained a conversation hears about it: a page of
+      # another persona has no row to redraw.
+      def test_a_new_conversation_reaches_only_its_own_personas_pages
+        channel = channel_with_sessions(personas: {
+          "english-tutor" => { "name" => "English Tutor" },
+          "kanyaah" => { "name" => "Kanyaah" }
+        })
+        listening = Queue.new
+        elsewhere = Queue.new
+        channel.send(:listen_for_events, "web_english-tutor", listening)
+        channel.send(:listen_for_events, "web_kanyaah", elsewhere)
+
+        channel.send(:broadcast_sessions, "english-tutor")
+
+        refute listening.empty?, "the persona's page has a sidebar to redraw"
+        assert elsewhere.empty?, "another persona's page has nothing new to draw"
+      end
+
+      def test_a_page_that_went_away_stops_being_written_to
+        channel = channel_with_sessions(personas: { "english-tutor" => { "name" => "English Tutor" } })
+        queue = Queue.new
+        channel.send(:listen_for_events, "web_english-tutor", queue)
+        channel.send(:stop_listening_for_events, queue)
+
+        channel.send(:broadcast_sessions, "english-tutor")
+
+        assert queue.empty?, "a stream that has gone away must not be written to"
+      end
+
       def test_each_session_row_carries_a_way_to_delete_it
         channel = channel_with_sessions(
           personas: { "kanyaah" => { "name" => "Kanyaah" } },

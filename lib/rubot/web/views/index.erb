@@ -110,6 +110,17 @@
     <p class="sidebar-label">Sesi</p>
     <%= View.render("_sessions", sessions: sessions, token_query: token_query) %>
 
+    <%# Nothing is being asked while the page sits idle, so the news that a job
+        fired and opened a conversation arrives on a stream of its own. What it
+        carries is the sidebar, marked out of band, which is how a row can
+        appear without the page being asked again. The swap sits in a child:
+        the extension only finds a source in the parentage, never on itself. -%>
+    <div class="session-events" hidden
+         hx-ext="sse"
+         sse-connect="/events?sid=<%= h(session_id) %><%= h(token_query.sub("?", "&")) %>">
+      <span sse-swap="sidebar"></span>
+    </div>
+
     <div class="sidebar-foot">
       <dl>
         <dt>persona</dt>
