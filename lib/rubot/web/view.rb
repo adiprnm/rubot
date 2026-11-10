@@ -732,17 +732,14 @@ module Rubot
           %(<circle cx="5" cy="5" r="3.5" stroke-dasharray="15 7"/></svg>)
       end
 
-      # A ring that means "still running" turns. A ring that sits still beside a
-      # live word is not read as "quiet", it is read as a spinner that stopped —
-      # so the thought's arc turns again, and the glow travels across the word
-      # without either one cancelling the other: one is a 9px rotation, the other
-      # is a wave through the text.
-      #
-      # What must not turn is a mark of something that is over. "Thought for 12s"
-      # keeps an arc, drawn dashed, so the row still has a mark without claiming
-      # the thought is still going.
+      # A drawn ring means "this is turning", so a drawn ring that is not turning
+      # reads as a spinner that stopped — which is why the thought does not get
+      # one. The half disc is a *state*, not a rotation: the mark the working row
+      # wore before the spinner, and the one piece of the row that can sit still
+      # beside a label that is already moving. "Thought for 12s" keeps its dashed
+      # arc, and a live row that is working spins.
       MARKS = {
-        think: spinner_mark("mark-svg spin").freeze,
+        think: "◐",
         working: spinner_mark("mark-svg spin").freeze,
         running: spinner_mark("mark-svg spin").freeze,
         thought: %(<svg class="mark-svg" viewBox="0 0 10 10" fill="none" stroke="currentColor" ) +

@@ -3509,12 +3509,13 @@ module Rubot
 
       # A ring typed as a glyph sits on the baseline, and its size comes from
       # whichever font on the reader's machine happens to carry U+25CC — so
-      # beside "Thinking…" it was never the same twice, and on the machine
-      # that reported it, never centred. The two round marks are drawn now, and
-      # so is the one on an open tool call: the half disc was a borrowed glyph
-      # for the same reason. The finished states keep ✓ and ✗, which sit on the
+      # beside "Thinking…" it was never the same twice, and on the machine that
+      # reported it, never centred. The rows that turn are drawn for that reason,
+      # and so is the mark on an open call. The thought keeps the half disc: it
+      # is a state rather than a rotation, and a rotation that does not rotate is
+      # the worse of the two. The finished states keep ✓ and ✗, which sit on the
       # baseline in every mono face.
-      def test_the_round_marks_are_drawn_not_typed
+      def test_the_marks_that_turn_are_drawn
         thinking = View.render("_timeline",
                                items: [ { kind: :thinking, epoch: 1.0, started_at: 0.0,
                                           closed_at: nil, elapsed: nil } ])
@@ -3526,12 +3527,10 @@ module Rubot
                            items: [ { kind: :tool, name: "shell", detail: "ls",
                                       state: :ok, elapsed: 0.4 } ])
 
-        assert_includes thinking, "mark-svg"
         assert_includes working, "mark-svg"
         assert_includes running, "mark-svg"
         refute_includes thinking, "◌", "the ring is no longer a borrowed glyph"
-        refute_includes working, "◐", "nor is the half disc"
-        refute_includes running, "◐", "and the open call no longer wears it either"
+        assert_includes thinking, "◐", "the half disc is a state, and keeps its shape"
         assert_includes done, "✓", "a finished state keeps its glyph"
       end
 
@@ -3572,11 +3571,12 @@ module Rubot
         refute_match(/\.tool-row::after/, css, "a row that is not running must not keep sweeping")
       end
 
-      # A ring that means "still running" turns. A still ring beside a live word
-      # does not read as a quiet mark — it reads as a spinner that stopped, which
-      # is the one thing a live row must never look like. What must not turn is
-      # the mark of something that is over.
-      def test_every_live_ring_turns_and_a_finished_thought_does_not
+      # The thought wears the half disc and keeps it still: a shape that means
+      # "this is happening" does not have to turn, and a drawn ring that is not
+      # turning reads as a spinner that stopped. The glow is the thing that
+      # moves on this row. The marks that do turn are the ones being turned —
+      # the turn that is running, and a call that is open.
+      def test_the_thought_keeps_a_still_mark_while_the_word_glows
         thinking = View.render("_timeline",
                                items: [ { kind: :thinking, epoch: 1.0, started_at: 0.0,
                                           closed_at: nil, elapsed: nil } ])
@@ -3588,23 +3588,24 @@ module Rubot
                               items: [ { kind: :thinking, epoch: 1.0, started_at: 0.0,
                                          closed_at: 4.0, elapsed: 12.0 } ])
 
-        assert_includes thinking, "mark-svg spin", "the thought's arc turns"
-        assert_includes thinking, "label glow", "and the word still glows"
+        assert_includes thinking, "◐"
+        refute_includes thinking, "spin", "the mark is a state, not a rotation"
+        assert_includes thinking, "label glow", "the word is what moves here"
         assert_includes working, "mark-svg spin"
-        assert_includes running, "mark-svg spin", "an open call does not wear a stopped ring"
+        assert_includes running, "mark-svg spin", "a call that is open is turning"
         assert_includes thought, "Thought for 12s"
         refute_includes thought, "spin", "a finished thought must not keep turning"
       end
 
-      # Spinning a full ring would look exactly like a still ring, so the mark
-      # is an arc: the gap is what the eye reads as motion.
-      def test_the_spinning_mark_is_an_arc_and_it_turns
-        thinking = View.render("_timeline",
-                               items: [ { kind: :thinking, epoch: 1.0, started_at: 0.0,
-                                          closed_at: nil, elapsed: nil } ])
+      # Spinning a full ring would look exactly like a still ring, so a mark that
+      # turns is an arc: the gap is what the eye reads as motion. The thought no
+      # longer has one — it wears the half disc and keeps still — so the arc is
+      # checked where it is still used: the turn that is running.
+      def test_a_mark_that_turns_is_an_arc
+        working = View.render("_working", since: 1.0)
         css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
 
-        assert_includes thinking, "stroke-dasharray", "a full ring cannot show that it turns"
+        assert_includes working, "stroke-dasharray", "a full ring cannot show that it turns"
         assert_match(/@keyframes mark-spin/, css, "the spin keyframes are missing")
         assert_match(/\.mark \.mark-svg\.spin \{[^}]*animation: mark-spin/,
                      css, "the live marks have to be the ones that turn")
