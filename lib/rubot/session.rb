@@ -610,7 +610,8 @@ module Rubot
 
       candidate = base
       counter = 1
-      while File.exist?(File.join(dir, "#{candidate}.json"))
+      archive = store
+      while File.exist?(File.join(dir, "#{candidate}.json")) || archive&.session?(candidate)
         counter += 1
         candidate = "#{base}-#{counter}"
       end

@@ -239,12 +239,15 @@ module Rubot
     # changes nothing.
     def import_directory(dir, skip_existing: false)
       stats = { files: 0, sessions: 0, messages: 0, skipped: 0 }
-      # A session already in the archive is skipped without parsing its file:
-      # after the first import the JSON is frozen, so it holds nothing new.
-      known = skip_existing ? session_ids.each_with_object({}) { |id, h| h[id] = true } : nil
+      # A file is skipped without parsing only when it has not grown since it
+      # was imported. Size is the honest test for an append-only JSON file: the
+      # old writer kept appending, so a session imported from a still-running
+      # process is topped up instead of silently left behind.
+      known = skip_existing ? session_sizes : nil
       Dir.glob(File.join(dir, "*.json")).sort.each do |path|
         stats[:files] += 1
-        if known && known[File.basename(path, ".json")]
+        id = File.basename(path, ".json")
+        if known && known.key?(id) && known[id] == File.size(path)
           stats[:skipped] += 1
           next
         end
@@ -258,6 +261,13 @@ module Rubot
         end
       end
       stats
+    end
+
+    # id => the file size the archive was imported from.
+    def session_sizes
+      @db.execute("SELECT id, bytes FROM sessions").each_with_object({}) do |(id, bytes), hash|
+        hash[id] = bytes.to_i
+      end
     end
 
     # One file. Returns the number of messages it holds, or nil when the file has

@@ -256,13 +256,23 @@ class TestStore < Minitest::Test
     write_session("s1", [build_message("user", "lama")])
     @store.import_directory(@sessions)
 
-    # A file that changed after the import must not be read again: once the
-    # archive is the store, the JSON is frozen.
-    write_session("s1", [ build_message("user", "berubah"), build_message("user", "tambahan") ])
+    # Unchanged file: skipped without parsing.
     stats = @store.import_directory(@sessions, skip_existing: true)
 
     assert_equal 1, stats[:skipped]
     assert_equal 1, @store.message_count("s1")
+  end
+
+  def test_import_tops_up_a_session_whose_file_grew
+    write_session("s1", [build_message("user", "lama")])
+    @store.import_directory(@sessions)
+
+    # What a still-running old process does: the file keeps growing after the
+    # import. The extra messages must land, not be skipped forever.
+    write_session("s1", [ build_message("user", "lama"), build_message("assistant", "baru") ])
+    @store.import_directory(@sessions, skip_existing: true)
+
+    assert_equal 2, @store.message_count("s1")
   end
 
   private

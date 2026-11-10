@@ -229,10 +229,17 @@ module Rubot
 
         path = Store.path_for(sessions_dir)
         store = Store.new(path)
-        imported = store.import_directory(sessions_dir, skip_existing: true)
-        if imported[:sessions].positive?
-          warn "[store] imported #{imported[:sessions]} session(s) from JSON " \
-               "(#{imported[:messages]} messages) into #{path}"
+        # Importing is separate from opening on purpose: three channels boot
+        # against the same file, and a busy database during the import must not
+        # throw away a store that opened perfectly well.
+        begin
+          imported = store.import_directory(sessions_dir, skip_existing: true)
+          if imported[:sessions].positive?
+            warn "[store] imported #{imported[:sessions]} session(s) from JSON " \
+                 "(#{imported[:messages]} messages) into #{path}"
+          end
+        rescue StandardError => e
+          warn "[store] import from #{sessions_dir} failed: #{e.class}: #{e.message}"
         end
         [ store, StoreService.new(store) ]
       rescue StandardError => e
