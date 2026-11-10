@@ -57,6 +57,9 @@ module Rubot
       # A notification body is read on a lock screen: two or three lines, one
       # glance. The whole answer is one tap away, so what travels is the gist.
       TURN_NOTIFY_CHARS = 140
+      # The bold line of a notification is the shortest thing on the screen, so
+      # it gets the least room: a hook that does not fit is not a hook.
+      NOTIFY_HOOK_CHARS = 60
       # How many conversations can be pinned for one persona. A pin is a way of
       # saying "this one again", and a list long enough to scroll is not a way
       # of saying it: past ten the oldest pin gives way, so the cap needs no
@@ -2291,7 +2294,7 @@ module Rubot
             slug,
             title: persona_title(slug),
             body: result[:result][:deliver_message].to_s.strip.then { |text| text.empty? ? cron_note(result) : text },
-            url: "/s/#{session_id(slug)}"
+            url: session_url(session_id(slug))
           )
         else
           warn "[web] cron fired (#{result[:mode]}) with nowhere to put it in the browser"
@@ -2312,7 +2315,7 @@ module Rubot
 
         prepare_delivery(sid)
         session = session_for(sid)
-        session.process_cron(
+        reply = session.process_cron(
           result[:result][:agent_message],
           fresh: result[:new_session] ? true : false
         )
@@ -2330,21 +2333,73 @@ module Rubot
         # And whoever does not: a reminder is the whole point of firing while
         # the app is closed. Pages that are open are skipped by the worker
         # itself, so this cannot ring twice for the same news.
-        notify_push(
-          slug,
-          title: persona_title(slug),
-          body: cron_note(result),
-          url: "/s/#{sid}"
-        )
+        #
+        # A conversation the job just opened has already been given its first
+        # line by the persona, and that line is the better invitation: the
+        # job's description says what the job is ("Daily English speaking
+        # practice"), while the opening says why to unlock the phone ("What's
+        # one small win you had this week?"). So a new conversation announces
+        # itself in its own words, and a reminder — which has no opening worth
+        # quoting — keeps saying what it is.
+        title, note = if result[:new_session]
+          hook = cron_hook(slug, reply)
+          [ hook, cron_note(result, reply: reply, spoken: hook) ]
+        else
+          [ persona_title(slug), cron_note(result) ]
+        end
+
+        notify_push(slug, title: title, body: note, url: session_url(sid))
       end
 
-      # What a notification says about a fired job. The description is the
-      # reader's own words for it ("minum air", "cek inbox"), which is more
-      # useful than a timestamp — and it is sealed to the device, so a push
-      # service never reads it.
-      def cron_note(result)
+      # What a notification says about a fired job.
+      #
+      # With a reply to quote, it says whatever the persona asked — a question
+      # is the one thing a reader can answer straight from the lock screen. A
+      # reply with no question is quoted by its first line. Nothing to quote
+      # leaves the description, which is the reader's own words for the job
+      # ("minum air", "cek inbox") and more useful than a timestamp — and it is
+      # sealed to the device, so a push service never reads it.
+      def cron_note(result, reply: nil, spoken: nil)
+        lines = cron_lines(reply).reject { |candidate| candidate == spoken }
+        # A question is what a reader can answer straight from the lock screen,
+        # so it is preferred over a line that only sets the scene.
+        line = lines.find { |candidate| candidate.include?("?") } || lines.first
+        return shorten(line, TURN_NOTIFY_CHARS) if line
+
         label = result[:description].to_s.gsub(/\s+/, " ").strip
-        label.empty? ? "Sesi terjadwal sudah siap." : label
+        label.empty? ? "Sesi terjadwal sudah siap." : shorten(label, TURN_NOTIFY_CHARS)
+      end
+
+      # The bold line on the lock screen for a conversation that just began: the
+      # first thing the persona said, which is the invitation itself.
+      def cron_hook(slug, reply)
+        line = cron_lines(reply).first
+        line ? shorten(line, NOTIFY_HOOK_CHARS) : persona_title(slug)
+      end
+
+      # A reply is markdown written for a page — headings, bold, code spans and
+      # blank lines between paragraphs. A notification is one glance at one
+      # line, so the punctuation that only means something next to a stylesheet
+      # is dropped and the lines are handed back in the order they were spoken.
+      def cron_lines(reply)
+        reply.to_s.split("\n").map do |line|
+          line.strip
+              .sub(/\A[#>*\-]+\s*/, "")
+              .gsub(/\*\*|__|`/, "")
+              .gsub(/\s+/, " ")
+              .strip
+        end.reject(&:empty?)
+      end
+
+      # Cut a line to what a notification can show without swallowing a word in
+      # the middle of it.
+      def shorten(text, limit)
+        line = text.to_s.strip
+        return line if line.length <= limit
+
+        cut = line[0, limit - 1]
+        cut = cut.sub(/\s+\S*\z/, "") if cut.include?(" ")
+        "#{cut.rstrip}…"
       end
 
       def cron_session_title(result)

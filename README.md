@@ -1070,6 +1070,13 @@ default): a reply that runs longer than that announces itself even when no one
 asked. The notification carries the gist of the answer and opens the
 conversation it belongs to.
 
+A job that opens a conversation of its own (`new_session`) has already been
+spoken into by the time it announces itself, so it quotes what the persona
+said: the opening line is the bold line, the question under it is the body. The
+job's description says what the job is ("Daily English speaking practice"),
+the opening says why to pick up the phone ("What's one small win you had this
+week?"). A reminder has no opening worth quoting and keeps its description.
+
 The tap goes to that conversation even on a phone that has nobody signed in: the
 push payload's URL carries the token, exactly as the links the pages write do.
 The payload is sealed to the device's own key, so the push service relaying it

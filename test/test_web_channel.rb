@@ -653,14 +653,15 @@ module Rubot
       class RecordingCronSession
         attr_reader :calls, :titles
 
-        def initialize
+        def initialize(reply: "done")
+          @reply = reply
           @calls = []
           @titles = []
         end
 
         def process_cron(text, fresh: false)
           @calls << { text: text, fresh: fresh }
-          "done"
+          @reply
         end
 
         def set_session_title(title)
@@ -3346,6 +3347,84 @@ module Rubot
                         "the notification says what the job is, in the reader's own words"
         assert_match(%r{\A/s/web_english-tutor}, pushes.first[:url],
                      "tapping it opens the conversation the job just opened")
+      end
+
+      # A conversation the job opened already holds the first thing the persona
+      # said. That line is the invitation; the job's description is a label. A
+      # lock screen is a place to be invited, so the opening wins — the bold
+      # line is the greeting and the body is the question worth answering.
+      def test_a_new_conversation_announces_itself_in_its_own_words
+        channel = channel_with_sessions(personas: { "english-tutor" => { "name" => "English Tutor" } })
+        session = RecordingCronSession.new(
+          reply: "Hey Met! Today we are talking about **small wins**.\n\nWhat's one small win you had this week?\n\n"
+        )
+        pushes = []
+        channel.define_singleton_method(:prepare_delivery) { |_sid| nil }
+        channel.define_singleton_method(:session_for) { |_sid| session }
+        channel.define_singleton_method(:notify_push) do |slug, **options|
+          pushes << { slug: slug }.merge(options)
+          { "queued" => 1 }
+        end
+
+        channel.send(:deliver_cron_turn,
+                     mode: "agent_turn", slug: "english-tutor", new_session: true,
+                     description: "Daily English speaking practice — 21.00 WIB",
+                     result: { agent_message: "Practice!" })
+
+        assert_equal "Hey Met! Today we are talking about small wins.", pushes.first[:title],
+                     "the bold line is the opening, with the markdown a page needs taken out"
+        assert_equal "What's one small win you had this week?", pushes.first[:body],
+                     "the body asks the one question the reader can answer from the lock screen"
+        refute_includes pushes.first[:body], "21.00 WIB",
+                        "a static description is the fallback, not the invitation"
+      end
+
+      # A reminder has no opening worth quoting: it is one sentence the reader
+      # wrote for themselves, and that sentence is the whole notification.
+      def test_a_reminder_still_says_what_it_is
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        session = RecordingCronSession.new(reply: "Sudah diminum?")
+        pushes = []
+        channel.define_singleton_method(:prepare_delivery) { |_sid| nil }
+        channel.define_singleton_method(:session_for) { |_sid| session }
+        channel.define_singleton_method(:notify_push) do |slug, **options|
+          pushes << { slug: slug }.merge(options)
+          { "queued" => 1 }
+        end
+
+        channel.send(:deliver_cron_turn,
+                     mode: "agent_turn", slug: "kanyaah", new_session: false,
+                     description: "Minum air", result: { agent_message: "Minum air" })
+
+        assert_equal "rubot · Kanyaah", pushes.first[:title],
+                     "a reminder is signed by the persona so a busy phone knows who is talking"
+        assert_equal "Minum air", pushes.first[:body]
+      end
+
+      # One glance, one line: a long opening is cut where a word ends, and a
+      # bold line that cannot fit stops being a hook.
+      def test_a_long_opening_is_cut_to_what_a_lock_screen_shows
+        channel = channel_with_sessions(personas: { "english-tutor" => { "name" => "English Tutor" } })
+        session = RecordingCronSession.new(
+          reply: "Hello and welcome back to your daily English practice, where today we are going to talk about the small things.\n\n" \
+                 "Tell me about a small win you had this week, something that made you feel like the day was worth it?"
+        )
+        pushes = []
+        channel.define_singleton_method(:prepare_delivery) { |_sid| nil }
+        channel.define_singleton_method(:session_for) { |_sid| session }
+        channel.define_singleton_method(:notify_push) do |slug, **options|
+          pushes << { slug: slug }.merge(options)
+          { "queued" => 1 }
+        end
+
+        channel.send(:deliver_cron_turn,
+                     mode: "agent_turn", slug: "english-tutor", new_session: true,
+                     description: "Practice", result: { agent_message: "Practice!" })
+
+        assert_operator pushes.first[:title].length, :<=, Rubot::Channels::Web::NOTIFY_HOOK_CHARS
+        assert_operator pushes.first[:body].length, :<=, Rubot::Channels::Web::TURN_NOTIFY_CHARS
+        assert pushes.first[:title].end_with?("…"), "a cut line says so"
+        refute_match(/\s\z/, pushes.first[:body].sub(/…\z/, ""), "a cut never leaves a space before it")
       end
 
       # Nothing is announced when there is nobody to write it for.
