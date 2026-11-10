@@ -220,6 +220,15 @@ module Rubot
         Session.store = nil if Session.store.equal?(@store)
       end
 
+      # Where an existing session id is rooted, or nil when it owns no
+      # workspace of its own. Public on purpose: a channel asks this before it
+      # binds the cron tool to a conversation, so a reminder written in a
+      # persona's chat is filed with that persona. It reads like a query, and
+      # it is — nothing is spawned and nothing is saved.
+      def workspace_for_session(session_id)
+        persona_workspace_for(session_id.to_s)
+      end
+
       private
 
       # The archive and its service, or [nil, nil] when it cannot be opened.
@@ -289,10 +298,6 @@ module Rubot
       end
 
       # Where an existing session id would be rooted, without spawning it.
-      def workspace_for_session(session_id)
-        persona_workspace_for(session_id.to_s)
-      end
-
       def persona_workspace_for(session_id)
         key = PersonaStore.key_for_session(session_id)
         return nil unless key

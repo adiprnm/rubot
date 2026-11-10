@@ -901,6 +901,18 @@ class TestActorModelPresets < Minitest::Test
   end
 end
 
+# The web channel asks the pool where a conversation is rooted before it binds
+# the cron tool, so a reminder written in a persona's chat is filed with that
+# persona. The method went private once: respond_to? answered false, the
+# channel quietly fell back to the install's workspace, and every persona's
+# reminders were filed with the install instead.
+class TestPoolQueries < Minitest::Test
+  def test_the_pool_answers_where_a_session_is_rooted
+    assert Rubot::Actors::SessionPool.public_method_defined?(:workspace_for_session),
+           "the channel cannot ask a private method, and a silent fallback hides it"
+  end
+end
+
 # Constants the tools read while running inside a session Ractor have to be
 # shareable. A constant that is only frozen at the top level (an Array of
 # Arrays, a Hash of Hashes) is not: reading it from a non-main Ractor raises
