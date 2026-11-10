@@ -98,6 +98,7 @@ module Rubot
         end
         statement.close
       end
+      touch_session(session_id, messages)
       refresh_count(session_id)
       inserted
     end
@@ -312,6 +313,22 @@ module Rubot
         UPDATE sessions
         SET msg_count = (SELECT COUNT(*) FROM messages WHERE session_id = ?)
         WHERE id = ?
+      SQL
+    end
+
+    # A message written must not leave the conversation missing from the sidebar,
+    # and a conversation that just got a turn must move to the top of it. Both
+    # are this one row: created empty on the first append, then moved forward —
+    # never backwards, so an append carrying an old timestamp cannot reorder the
+    # list.
+    def touch_session(session_id, messages)
+      id = session_id.to_s
+      newest = messages.filter_map { |m| m.is_a?(Hash) ? m["timestamp"] : nil }.max
+      newest = newest.to_s.empty? ? Time.now.iso8601 : newest.to_s
+
+      @db.execute("INSERT OR IGNORE INTO sessions(id, updated_at) VALUES(?, ?)", [id, newest])
+      @db.execute(<<~SQL, [newest, id, newest])
+        UPDATE sessions SET updated_at = ? WHERE id = ? AND (updated_at IS NULL OR updated_at < ?)
       SQL
     end
 

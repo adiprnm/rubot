@@ -132,6 +132,30 @@ class TestStore < Minitest::Test
     assert_equal 1, @store.message_count("s1")
   end
 
+  def test_append_creates_the_sidebar_row
+    # A conversation with messages but no row would be invisible in the sidebar.
+    @store.append_messages("s1", [build_message("user", "halo")])
+
+    rows = @store.sidebar
+
+    assert_equal 1, rows.size
+    assert_equal "s1", rows[0][:id]
+    assert_equal 1, rows[0][:messages]
+  end
+
+  def test_append_moves_the_session_forward_and_never_back
+    @store.append_messages("s1", [build_message("user", "satu", "timestamp" => "2026-11-10T03:00:00Z")])
+    @store.append_messages("s1", [build_message("assistant", "dua", "timestamp" => "2026-11-10T05:00:00Z")], start_index: 1)
+
+    assert_equal "2026-11-10T05:00:00Z", @store.sidebar.first[:updated_at]
+
+    # An append carrying an older timestamp (a replayed turn) must not drag the
+    # conversation down the list.
+    @store.append_messages("s1", [build_message("user", "tiga", "timestamp" => "2026-11-10T01:00:00Z")], start_index: 2)
+
+    assert_equal "2026-11-10T05:00:00Z", @store.sidebar.first[:updated_at]
+  end
+
   def test_ui_diff_round_trips_through_its_own_column
     diff = { "path" => "lib/rubot/store.rb", "before" => "a\nb\n", "after" => "a\nc\n" }
     tool_message = build_message("tool", "[ok] edit", "ui_diff" => diff)
