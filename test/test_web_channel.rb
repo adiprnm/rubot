@@ -3510,24 +3510,73 @@ module Rubot
       # A ring typed as a glyph sits on the baseline, and its size comes from
       # whichever font on the reader's machine happens to carry U+25CC — so
       # beside "Thinking…" it was never the same twice, and on the machine
-      # that reported it, never centred. The two round marks are drawn now.
+      # that reported it, never centred. The two round marks are drawn now, and
+      # so is the one on an open tool call: the half disc was a borrowed glyph
+      # for the same reason. The finished states keep ✓ and ✗, which sit on the
+      # baseline in every mono face.
       def test_the_round_marks_are_drawn_not_typed
         thinking = View.render("_timeline",
                                items: [ { kind: :thinking, epoch: 1.0, started_at: 0.0,
                                           closed_at: nil, elapsed: nil } ])
         working = View.render("_working", since: 1.0)
+        running = View.render("_timeline",
+                              items: [ { kind: :tool, name: "shell", detail: "ls",
+                                         state: :running, epoch: 2.0, elapsed: 1.0 } ])
+        done = View.render("_timeline",
+                           items: [ { kind: :tool, name: "shell", detail: "ls",
+                                      state: :ok, elapsed: 0.4 } ])
 
         assert_includes thinking, "mark-svg"
         assert_includes working, "mark-svg"
+        assert_includes running, "mark-svg"
         refute_includes thinking, "◌", "the ring is no longer a borrowed glyph"
         refute_includes working, "◐", "nor is the half disc"
+        refute_includes running, "◐", "and the open call no longer wears it either"
+        assert_includes done, "✓", "a finished state keeps its glyph"
       end
 
-      # A ring sitting still says nothing about time, and "still running" is a
-      # statement about time: the two live marks spin. The finished thought
-      # does not — "Thought for 12s" is something that already happened, so a
-      # spinner beside it would claim the opposite.
-      def test_the_live_marks_spin_and_the_finished_thought_does_not
+      # The live thought glows one letter at a time, so the word is drawn as one
+      # span per letter carrying its own index. "Thought for 12s" is a fact
+      # about the past, not a wait, and keeps a plain label.
+      def test_the_live_thought_glows_one_letter_at_a_time
+        thinking = View.render("_timeline",
+                               items: [ { kind: :thinking, epoch: 1.0, started_at: 0.0,
+                                          closed_at: nil, elapsed: nil } ])
+        thought = View.render("_timeline",
+                              items: [ { kind: :thinking, epoch: 1.0, started_at: 0.0,
+                                         closed_at: 4.0, elapsed: 12.0 } ])
+
+        assert_includes thinking, %(class="label glow")
+        assert_equal 9, thinking.scan(/<span style="--i:\d+">/).size,
+                     "one span per letter of \"Thinking…\""
+        assert_includes thinking, %(<span style="--i:8">…</span>)
+        assert_includes thinking, %(aria-label="Thinking…"),
+                        "a screen reader should read the word, not the letters"
+
+        refute_includes thought, "label glow"
+      end
+
+      # Motion belongs only where a redraw cannot restart it: the thought while
+      # nothing else is being drawn, and a tool row while its call is open. The
+      # timeline is rewritten on every chunk of an answer, and a redraw begins
+      # every animation in it again — so a finished row that kept sweeping would
+      # sit frozen at the start of the sweep.
+      def test_the_glow_travels_and_only_a_running_call_sweeps
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+
+        assert_match(/@keyframes label-glow/, css, "the glow keyframes are missing")
+        assert_match(/\.row \.label\.glow span \{[^}]*animation: label-glow/, css)
+        assert_match(/animation-delay: calc\(var\(--i/, css, "each letter needs its own phase")
+        assert_match(/\.tool-row\.running::after \{[^}]*tool-sweep/, css)
+        assert_match(/@keyframes tool-sweep/, css)
+        refute_match(/\.tool-row::after/, css, "a row that is not running must not keep sweeping")
+      end
+
+      # One row moves once. The glow already says the thought is still running,
+      # so the arc beside it sits still; "Working…" has nothing else to move, so
+      # its arc turns. Two motions in one row would be the same sentence twice,
+      # fifty pixels apart, and the eye has to pick one anyway.
+      def test_each_row_moves_once
         thinking = View.render("_timeline",
                                items: [ { kind: :thinking, epoch: 1.0, started_at: 0.0,
                                           closed_at: nil, elapsed: nil } ])
@@ -3536,8 +3585,10 @@ module Rubot
                               items: [ { kind: :thinking, epoch: 1.0, started_at: 0.0,
                                          closed_at: 4.0, elapsed: 12.0 } ])
 
-        assert_includes thinking, %(class="mark-svg spin")
-        assert_includes working, %(class="mark-svg spin")
+        assert_includes thinking, "label glow", "the thought glows"
+        refute_includes thinking, "spin", "and does not also turn, or the row moves twice"
+        assert_includes working, "mark-svg spin", "the working row has nothing else to move"
+        refute_includes working, "glow"
         assert_includes thought, "Thought for 12s"
         refute_includes thought, "spin", "a finished thought must not keep turning"
       end
@@ -3552,7 +3603,7 @@ module Rubot
 
         assert_includes thinking, "stroke-dasharray", "a full ring cannot show that it turns"
         assert_match(/@keyframes mark-spin/, css, "the spin keyframes are missing")
-        assert_match(/\.row \.mark \.mark-svg\.spin \{[^}]*animation: mark-spin/,
+        assert_match(/\.mark \.mark-svg\.spin \{[^}]*animation: mark-spin/,
                      css, "the live marks have to be the ones that turn")
       end
 

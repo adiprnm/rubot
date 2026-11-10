@@ -1367,7 +1367,7 @@ body {
   line-height: 1;
 }
 
-.row .mark .mark-svg {
+.mark .mark-svg {
   display: block;
   width: 100%;
   height: 100%;
@@ -1378,7 +1378,7 @@ body {
    enough to read as "still going", slow enough not to pull the eye off the
    answer. Under `prefers-reduced-motion` the global rule stops it, and the
    frozen arc still reads as a mark rather than a gap. */
-.row .mark .mark-svg.spin { animation: mark-spin 1s linear infinite; }
+.mark .mark-svg.spin { animation: mark-spin 1s linear infinite; }
 
 @keyframes mark-spin {
   to { transform: rotate(1turn); }
@@ -1404,6 +1404,25 @@ body {
    "Thought for 12s" need room on both sides, or they read as a label glued to
    whatever happens to sit above and below them. */
 .row.thinking { margin: 0.5rem 0 0.7rem; }
+
+/* The live thought glows one letter at a time, from the first to the last.
+   Each letter carries its own index (`--i`, written by the template) and the
+   same animation; the delay moves the brightness along the word, and the long
+   tail of the cycle is the pause before it travels again — so the whole thing
+   repeats without the word ever sitting still as a block.
+
+   This is safe to animate where the rest of the timeline is not: a thought is
+   drawn when the wait starts and nothing redraws it until tokens arrive, which
+   is exactly when it is replaced. */
+.row .label.glow span {
+  animation: label-glow 2s ease-in-out infinite;
+  animation-delay: calc(var(--i, 0) * 0.1s);
+}
+
+@keyframes label-glow {
+  0% { color: var(--fg); text-shadow: 0 0 6px currentColor, 0 0 12px currentColor; }
+  22%, 100% { color: var(--fg-dim); text-shadow: none; }
+}
 
 /* The row that says the turn is not over. It is not part of the timeline any
    more: it sits in its own band above the field, and the stream's close empties
@@ -1446,11 +1465,50 @@ body {
   overflow: hidden;
 }
 
-.tool-row .mark { flex: 0 0 auto; }
+.tool-row .mark {
+  flex: 0 0 auto;
+  /* A drawn mark needs a box to fill, and a box has no baseline of its own: on
+     a row whose text is baseline-aligned, an empty box would hang from the
+     baseline and ride high. It centres in the row instead, which is where the
+     marks above it sit too. */
+  display: inline-flex;
+  align-self: center;
+  width: 0.9em;
+  height: 0.9em;
+}
 .tool-row.running .mark { color: var(--yellow); }
 .tool-row.ok .mark { color: var(--green); }
 .tool-row.failed .mark { color: var(--red); }
 .tool-row.unknown .mark { color: var(--fg-faint); }
+
+/* A call is the one part of a turn that takes time without saying anything, so
+   the row says it: a light sweeps across it while the call is open.
+
+   This is the only place in the timeline where a moving thing belongs. The
+   timeline is redrawn on every chunk of an answer — twenty times a second — and
+   a redraw restarts every animation in it, so a row drawn again and again can
+   carry the state a call is in but not the motion of it. A running call is the
+   exception: while it runs the row is a stable node, redrawn only when it
+   finishes, which is when the sweep should stop anyway. */
+.tool-row.running {
+  position: relative;
+  overflow: hidden;
+}
+
+.tool-row.running::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--yellow), transparent);
+  opacity: 0.16;
+  transform: translateX(-100%);
+  animation: tool-sweep 1.6s linear infinite;
+}
+
+@keyframes tool-sweep {
+  to { transform: translateX(100%); }
+}
 
 .tool-name {
   flex: 0 0 auto;
