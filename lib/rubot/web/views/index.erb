@@ -3,7 +3,8 @@
     together as a single drawer behind the button in the chat header. -%>
 <div class="app" x-data="{ nav: false }" :class="{ 'nav-open': nav }"
      @keydown.escape.window="nav = false"
-     @rubot:search.window="nav = false">
+     @rubot:search.window="nav = false"
+     @rubot:nav.window="nav = $event.detail.open">
 <div class="side-dock">
   <%# The leftmost column is a roster, not a menu: one round avatar per
       persona, named on hover, the way a chat app lists the places you can be.
