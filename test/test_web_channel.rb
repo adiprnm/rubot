@@ -3572,23 +3572,26 @@ module Rubot
         refute_match(/\.tool-row::after/, css, "a row that is not running must not keep sweeping")
       end
 
-      # One row moves once. The glow already says the thought is still running,
-      # so the arc beside it sits still; "Working…" has nothing else to move, so
-      # its arc turns. Two motions in one row would be the same sentence twice,
-      # fifty pixels apart, and the eye has to pick one anyway.
-      def test_each_row_moves_once
+      # A ring that means "still running" turns. A still ring beside a live word
+      # does not read as a quiet mark — it reads as a spinner that stopped, which
+      # is the one thing a live row must never look like. What must not turn is
+      # the mark of something that is over.
+      def test_every_live_ring_turns_and_a_finished_thought_does_not
         thinking = View.render("_timeline",
                                items: [ { kind: :thinking, epoch: 1.0, started_at: 0.0,
                                           closed_at: nil, elapsed: nil } ])
         working = View.render("_working", since: 1.0)
+        running = View.render("_timeline",
+                              items: [ { kind: :tool, name: "shell", detail: "ls",
+                                         state: :running, epoch: 2.0, elapsed: 1.0 } ])
         thought = View.render("_timeline",
                               items: [ { kind: :thinking, epoch: 1.0, started_at: 0.0,
                                          closed_at: 4.0, elapsed: 12.0 } ])
 
-        assert_includes thinking, "label glow", "the thought glows"
-        refute_includes thinking, "spin", "and does not also turn, or the row moves twice"
-        assert_includes working, "mark-svg spin", "the working row has nothing else to move"
-        refute_includes working, "glow"
+        assert_includes thinking, "mark-svg spin", "the thought's arc turns"
+        assert_includes thinking, "label glow", "and the word still glows"
+        assert_includes working, "mark-svg spin"
+        assert_includes running, "mark-svg spin", "an open call does not wear a stopped ring"
         assert_includes thought, "Thought for 12s"
         refute_includes thought, "spin", "a finished thought must not keep turning"
       end

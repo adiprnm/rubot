@@ -732,17 +732,19 @@ module Rubot
           %(<circle cx="5" cy="5" r="3.5" stroke-dasharray="15 7"/></svg>)
       end
 
-      # One row moves once. A mark that turns and a label that glows are two
-      # ways of saying "still working" fifty pixels apart, and the eye has to
-      # pick one; so the motion is given to whichever part carries the row's
-      # meaning and the mark is left still beside it. "Thinking…" glows, so its
-      # arc does not turn. "Working…" has nothing else to move, so its arc does.
-      # A running tool call sweeps, so its arc does not turn either.
+      # A ring that means "still running" turns. A ring that sits still beside a
+      # live word is not read as "quiet", it is read as a spinner that stopped —
+      # so the thought's arc turns again, and the glow travels across the word
+      # without either one cancelling the other: one is a 9px rotation, the other
+      # is a wave through the text.
+      #
+      # What must not turn is a mark of something that is over. "Thought for 12s"
+      # keeps an arc, drawn dashed, so the row still has a mark without claiming
+      # the thought is still going.
       MARKS = {
+        think: spinner_mark("mark-svg spin").freeze,
         working: spinner_mark("mark-svg spin").freeze,
-        still: spinner_mark("mark-svg").freeze,
-        # The finished thought: the same arc, drawn dashed, so "Thought for 12s"
-        # keeps a mark of its own without claiming the thought is still going.
+        running: spinner_mark("mark-svg spin").freeze,
         thought: %(<svg class="mark-svg" viewBox="0 0 10 10" fill="none" stroke="currentColor" ) +
                  %(stroke-width="1.2" stroke-linecap="round" aria-hidden="true" focusable="false">) +
                  %(<circle cx="5" cy="5" r="3.5" stroke-dasharray="1.7 1.5"/></svg>).freeze
@@ -772,12 +774,13 @@ module Rubot
           MARKS.fetch(kind, "")
         end
 
-        # A tool row's mark. A call that is open gets the same drawn arc as the
+        # A tool row's mark. A call that is open gets the same turning arc as the
         # rows above it instead of the half disc, which was a fallback font's
-        # shape and the last live mark on the page that sat still. It stays still
-        # here too: the row is already sweeping, and one row moves once.
+        # shape — a live row's ring turns, and the sweep is a second thing
+        # happening to the row, not a replacement for the mark's meaning. A
+        # finished call keeps ✓ or ✗.
         def state_mark(state)
-          state == :running ? MARKS[:still] : icon(state)
+          state == :running ? MARKS[:running] : icon(state)
         end
 
         # A 10px stroked mark. Decorative: the row's title carries the meaning,

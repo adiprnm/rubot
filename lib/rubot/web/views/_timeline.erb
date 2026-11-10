@@ -7,7 +7,7 @@
 <% if item[:closed_at] -%>
 <p class="row thinking done"><span class="mark think" aria-hidden="true"><%= mark(:thought) %></span><span class="label">Thought for <%= dur(item[:elapsed]) %></span></p>
 <% else -%>
-<p class="row thinking" data-since="<%= item[:epoch] %>" data-threshold="<%= Turn::THINKING_SECONDS %>"><span class="mark think" aria-hidden="true"><%= mark(:still) %></span><span class="label glow" aria-label="Thinking…"><%= glow("Thinking…") %></span><span class="live-clock"></span></p>
+<p class="row thinking" data-since="<%= item[:epoch] %>" data-threshold="<%= Turn::THINKING_SECONDS %>"><span class="mark think" aria-hidden="true"><%= mark(:think) %></span><span class="label glow" aria-label="Thinking…"><%= glow("Thinking…") %></span><span class="live-clock"></span></p>
 <% end -%>
 <% when :tool -%>
 <% slow = item[:elapsed] && item[:elapsed] >= Turn::SLOW_TOOL_SECONDS -%>

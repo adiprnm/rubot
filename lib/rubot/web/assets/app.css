@@ -1470,11 +1470,15 @@ body {
   /* A drawn mark needs a box to fill, and a box has no baseline of its own: on
      a row whose text is baseline-aligned, an empty box would hang from the
      baseline and ride high. It centres in the row instead, which is where the
-     marks above it sit too. */
+     marks above it sit too — and it centres what is *inside* it, or the ✓ sits
+     at the top of its own box and reads as a mark that missed the line. */
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
   align-self: center;
   width: 0.9em;
   height: 0.9em;
+  line-height: 1;
 }
 .tool-row.running .mark { color: var(--yellow); }
 .tool-row.ok .mark { color: var(--green); }
