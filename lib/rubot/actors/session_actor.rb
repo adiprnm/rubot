@@ -226,7 +226,8 @@ module Rubot
         when :skills_reload        then reload_skills(agent)
         when :set_forced_skill     then set_forced_skill(agent, msg[:name])
         when :clear_forced_skill   then clear_forced_skill(agent)
-        when :process_cron         then agent.process_cron(msg[:text])
+        when :process_cron         then agent.process_cron(msg[:text], fresh: msg[:fresh] ? true : false)
+        when :set_session_title    then agent.set_session_title(msg[:title])
         when :flush_learning       then agent.flush_learning
         else
           raise ArgumentError, "Unknown session request: #{msg[:op].inspect}"

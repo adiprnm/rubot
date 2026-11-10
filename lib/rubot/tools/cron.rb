@@ -12,8 +12,12 @@ module Rubot
       # FIX (VULN-1): Safety guard for cron command validation
       attr_accessor :safety_guard
 
-      def initialize(workspace: nil)
+      def initialize(workspace: nil, store_root: nil)
         @workspace = workspace
+        # Where the default workspace keeps its jobs.json (the install root,
+        # next to config.yml). Falls back to the workspace itself when nobody
+        # says otherwise, which is what the tests and the standalone REPL use.
+        @store_root = store_root
         @scheduler = nil
         @on_fire = nil
       end
@@ -30,7 +34,7 @@ module Rubot
           Schedule, one per job:
           - at_seconds: one-time, seconds from now (600 = 10 minutes)
           - every_seconds: recurring interval (1800 = every 30 minutes)
-          - cron_expr: standard 5-field cron ("0 9 * * *" = daily 09:00)
+          - cron_expr: standard 5-field cron, read in UTC ("0 9 * * *" = 09:00 UTC daily)
         DESC
       end
 
@@ -53,7 +57,7 @@ module Rubot
             },
             "cron_expr" => {
               "type" => "string",
-              "description" => "5-field cron expression, e.g. '0 9 * * *'"
+              "description" => "5-field cron expression, read in UTC, e.g. '0 9 * * *'"
             },
             "every_seconds" => {
               "type" => "integer",
@@ -78,6 +82,15 @@ module Rubot
             "target_thread_id" => {
               "type" => "integer",
               "description" => "Telegram topic id (set by the channel)"
+            },
+            "new_session" => {
+              "type" => "boolean",
+              "description" => "Start a fresh conversation for every run instead of " \
+                               "adding a turn to the one that created the job (default: false)"
+            },
+            "slug" => {
+              "type" => "string",
+              "description" => "Persona the job belongs to (set by the channel)"
             }
           },
           "required" => [ "operation" ]
@@ -108,6 +121,9 @@ module Rubot
 
       attr_writer :workspace
 
+      # The install root that holds the default jobs.json.
+      attr_writer :store_root
+
       # Delivery context set by the channel (e.g. Telegram chat/thread IDs).
       # Used as defaults for target_chat_id/target_thread_id when creating jobs.
       attr_accessor :delivery_context
@@ -130,6 +146,7 @@ module Rubot
         # is set. The proc always reads the current value of @safety_guard.
         @scheduler = CronScheduler.new(
           workspace: @workspace,
+          store_root: @store_root,
           safety_guard_source: -> { @safety_guard },
           &@on_fire
         )

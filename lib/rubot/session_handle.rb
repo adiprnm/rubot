@@ -143,8 +143,14 @@ module Rubot
         ActorError.new(text)
       end
 
-      def process_cron(text)
-        call(:process_cron, text: text)
+      def process_cron(text, fresh: false)
+        call(:process_cron, text: text, fresh: fresh)
+      end
+
+      # Name a conversation opened by a job, which has no user message of its
+      # own to take a name from.
+      def set_session_title(title)
+        call(:set_session_title, title: title)
       end
 
       # Run post-answer learning (memory extraction, feedback) in the actor

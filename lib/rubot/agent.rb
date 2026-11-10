@@ -1471,6 +1471,9 @@ module Rubot
       cron_tool = @tools.get("cron")
       return unless cron_tool && cron_tool.respond_to?(:workspace=)
       cron_tool.workspace = @config.workspace
+      # The install's own jobs live next to config.yml (~/.rubot/cron), not
+      # inside the workspace the agent works in.
+      cron_tool.store_root = @config.catalog_dir if cron_tool.respond_to?(:store_root=)
     end
 
     # Inject the safety guard into all tools that support it.
@@ -1853,11 +1856,16 @@ module Rubot
 
     # Process a cron message through the LLM. Called by the cron scheduler's
     # background thread.
-    def process_cron(message)
+    #
+    # `fresh` starts a transcript from nothing but the system prompt, for jobs
+    # that want a conversation of their own: a daily practice session should
+    # not inherit yesterday's subject, and a long-running reminder should not
+    # drag the history it was created in behind it.
+    def process_cron(message, fresh: false)
       # Build local messages from session history ONLY (up to the last assistant response)
       # Do NOT include the current user message — this is a separate conversation turn
       @turn_start_index = @session.messages.size
-      local_messages = build_cron_messages
+      local_messages = build_cron_messages(fresh: fresh)
       local_messages << { "role" => "user", "content" => "⏰ Scheduled task fired:\n#{message}" }
 
       response = ""
@@ -1923,11 +1931,29 @@ module Rubot
       response
     end
 
+    # Name a conversation that was opened without one. A cron job that starts
+    # its own session has no user message for the name to come from, so without
+    # this every run would sit in the sidebar as "Untitled session" and the days
+    # would be impossible to tell apart.
+    def set_session_title(title)
+      text = title.to_s.strip
+      return nil if text.empty?
+
+      @session.title = text
+      @session.save!
+      @session.title
+    end
+
     # Build messages for cron processing — uses conversation history
     # but excludes the current user message being processed.
-    def build_cron_messages
+    #
+    # With `fresh: true` the history is left out entirely: the system prompt is
+    # the whole context, which is what a job that opens its own conversation
+    # needs.
+    def build_cron_messages(fresh: false)
       messages = []
       messages << { "role" => "system", "content" => build_system_prompt }
+      return messages if fresh
 
       history_limit = @config.history_limit
       all_history = @session.safe_history(

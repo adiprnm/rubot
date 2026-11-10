@@ -16,10 +16,11 @@ module Rubot
 
       # @param workspace [String, nil]
       # @param delivery [Ractor::Port, nil] receives [:cron_fire, payload]
-      def initialize(workspace:, restrict_to_workspace: true, allow_read_outside: false, delivery: nil)
+      def initialize(workspace:, store_root: nil, restrict_to_workspace: true, allow_read_outside: false, delivery: nil)
         @ractor = Ractor.new(
           {
             workspace: workspace,
+            store_root: store_root,
             restrict_to_workspace: restrict_to_workspace,
             allow_read_outside: allow_read_outside,
             delivery: delivery
@@ -27,6 +28,7 @@ module Rubot
           name: "rubot-cron"
         ) do |args|
           ws = args[:workspace]
+          root = args[:store_root]
           port = args[:delivery]
 
           guard = SafetyGuard.new(
@@ -35,7 +37,7 @@ module Rubot
             allow_read_outside: args[:allow_read_outside]
           )
 
-          scheduler = CronScheduler.new(workspace: ws, safety_guard: guard) do |fire|
+          scheduler = CronScheduler.new(workspace: ws, store_root: root, safety_guard: guard) do |fire|
             port&.send([ :cron_fire, fire ])
           end
           scheduler.start

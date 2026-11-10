@@ -108,6 +108,14 @@ class TestPersonaStore < Minitest::Test
     assert_nil Rubot::PersonaStore.key_for_session("web_")
   end
 
+  # The terminal has no topics and no pages, so a fired job that names a
+  # persona gets a conversation of its own there.
+  def test_key_for_session_parses_terminal_session_ids
+    assert_equal "english-tutor", Rubot::PersonaStore.key_for_session("tui_english-tutor")
+    assert_equal "english-tutor", Rubot::PersonaStore.key_for_session("tui_english-tutor~20261110-210000")
+    assert_nil Rubot::PersonaStore.key_for_session("tui_")
+  end
+
   def test_get_by_session
     @store.set("123:7", persona)
 

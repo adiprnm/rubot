@@ -134,7 +134,7 @@ module Rubot
 
       def start
         @running = true
-        start_cron_listener { |result| log_cron(result) } if actor_mode?
+        start_cron_listener { |result| handle_cron_fire(result) } if actor_mode?
         ensure_default_persona
 
         @server = WEBrick::HTTPServer.new(
@@ -1278,7 +1278,10 @@ module Rubot
 
         cron.delivery_context = {
           channel: "web",
-          workspace: workspace_for_session(sid)
+          workspace: workspace_for_session(sid),
+          # Which persona the reminder belongs to, so a fired job can open a
+          # conversation there instead of falling back to the default one.
+          slug: owner_slug(sid)
         }
       end
 
@@ -1630,8 +1633,50 @@ module Rubot
         res.body = ""
       end
 
-      def log_cron(result)
-        warn "[web] cron fired (#{result[:mode]}) but the browser channel has no target yet"
+      # A fired job has no browser waiting on it, so it is delivered by
+      # writing to a conversation: the page shows it the next time it asks for
+      # the persona's sessions. A job that asked for its own conversation gets
+      # a new session each run, which is how a daily practice prompt arrives as
+      # a fresh chat instead of piling up in one.
+      def handle_cron_fire(result)
+        case result[:mode]
+        when "agent_turn"
+          deliver_cron_turn(result)
+        else
+          warn "[web] cron fired (#{result[:mode]}) with nowhere to put it in the browser"
+        end
+      rescue StandardError => e
+        warn "[web] cron delivery failed: #{e.class}: #{e.message}"
+      end
+
+      def deliver_cron_turn(result)
+        slug = result[:slug].to_s
+        slug = default_slug unless known_slug?(slug)
+
+        sid = if result[:new_session]
+          new_session_id(slug)
+        else
+          session_id(slug)
+        end
+
+        prepare_delivery(sid)
+        session = session_for(sid)
+        session.process_cron(
+          result[:result][:agent_message],
+          fresh: result[:new_session] ? true : false
+        )
+
+        # A conversation the job opened has no user message to be named after,
+        # so it takes the job's own description and the day it ran.
+        if result[:new_session] && session.respond_to?(:set_session_title)
+          session.set_session_title(cron_session_title(result))
+        end
+      end
+
+      def cron_session_title(result)
+        label = result[:description].to_s.strip
+        label = "Scheduled session" if label.empty?
+        "#{label} — #{Time.now.strftime('%Y-%m-%d')}"
       end
     end
   end

@@ -89,16 +89,26 @@ class TestCronExpression < Minitest::Test
 
   def test_next_after
     expr = Rubot::CronExpression.new("30 9 * * *")
-    now = Time.new(2025, 5, 4, 8, 0, 0)
+    now = Time.utc(2025, 5, 4, 8, 0, 0)
     next_time = expr.next_after(now)
-    assert_equal Time.new(2025, 5, 4, 9, 30, 0), next_time
+    assert_equal Time.utc(2025, 5, 4, 9, 30, 0), next_time
+    assert next_time.utc?, "a schedule is computed on the UTC clock"
   end
 
   def test_next_after_past_time
     expr = Rubot::CronExpression.new("0 9 * * *")
-    now = Time.new(2025, 5, 4, 10, 0, 0)
+    now = Time.utc(2025, 5, 4, 10, 0, 0)
     next_time = expr.next_after(now)
-    assert_equal Time.new(2025, 5, 5, 9, 0, 0), next_time
+    assert_equal Time.utc(2025, 5, 5, 9, 0, 0), next_time
+  end
+
+  # The hour in the expression is the hour in UTC, whatever zone the caller
+  # happens to be in: the same expression must not move when the process does.
+  def test_next_after_reads_the_expression_in_utc
+    expr = Rubot::CronExpression.new("0 9 * * *")
+    local = Time.at(Time.utc(2025, 5, 4, 8, 0, 0).to_i).getlocal("+07:00")
+
+    assert_equal Time.utc(2025, 5, 4, 9, 0, 0), expr.next_after(local)
   end
 end
 
@@ -639,5 +649,85 @@ class TestCronTool < Minitest::Test
     })
     assert_includes result, "✅"
     assert_includes result, "0 9 * * *"
+  end
+end
+
+# Jobs are filed by the install, and a job can say who should run it and
+# whether it wants a conversation of its own — the two things a daily practice
+# session needs and a plain reminder does not.
+class TestCronStoreAndDelivery < Minitest::Test
+  def setup
+    @root = Dir.mktmpdir
+    @workspace = File.join(@root, "workspace")
+    FileUtils.mkdir_p(@workspace)
+    @scheduler = Rubot::CronScheduler.new(workspace: @workspace, store_root: @root)
+  end
+
+  def teardown
+    FileUtils.remove_entry(@root) if File.directory?(@root)
+  end
+
+  # The install's own jobs live next to config.yml, not inside the folder the
+  # agent works in.
+  def test_the_default_store_sits_at_the_store_root
+    @scheduler.add(message: "Pagi", cron_expr: "0 9 * * *")
+
+    assert File.exist?(File.join(@root, "cron", "jobs.json"))
+    refute File.exist?(File.join(@workspace, "cron", "jobs.json")), "the workspace should not hold the install's jobs"
+  end
+
+  # A persona's reminders still belong to the persona, so deleting it can take
+  # them with it.
+  def test_a_persona_store_still_lives_in_the_persona_directory
+    persona = File.join(@root, "personas", "english-tutor")
+    @scheduler.add(message: "Latihan", cron_expr: "0 21 * * *", workspace: persona)
+
+    assert File.exist?(File.join(persona, "cron", "jobs.json"))
+  end
+
+  # A scheduler that names no store root keeps its jobs in the workspace, which
+  # is what the standalone tests and the REPL rely on.
+  def test_without_a_store_root_the_workspace_keeps_the_jobs
+    scheduler = Rubot::CronScheduler.new(workspace: @workspace)
+    scheduler.add(message: "Ping", every_seconds: 60)
+
+    assert File.exist?(File.join(@workspace, "cron", "jobs.json"))
+  end
+
+  def test_a_job_remembers_its_channel_and_persona
+    id = @scheduler.add(
+      message: "Practice", cron_expr: "0 21 * * *",
+      channel: "web", slug: "english-tutor", new_session: true
+    )
+    job = @scheduler.get(id)
+
+    assert_equal "web", job["channel"]
+    assert_equal "english-tutor", job["slug"]
+    assert job["new_session"]
+  end
+
+  def test_a_job_wants_one_conversation_by_default
+    id = @scheduler.add(message: "Minum air", every_seconds: 3600)
+
+    refute @scheduler.get(id)["new_session"]
+  end
+
+  # The firing callback is the only thing a channel sees, so everything it
+  # needs to deliver the result has to be in it.
+  def test_firing_carries_the_channel_persona_and_fresh_session
+    fired = nil
+    scheduler = Rubot::CronScheduler.new(workspace: @workspace, store_root: @root) { |result| fired = result }
+    scheduler.add(
+      message: "Practice", at_seconds: 1,
+      channel: "web", slug: "english-tutor", new_session: true
+    )
+    sleep 2
+
+    scheduler.fire_due_jobs
+
+    assert_equal "agent_turn", fired[:mode]
+    assert_equal "web", fired[:channel]
+    assert_equal "english-tutor", fired[:slug]
+    assert fired[:new_session]
   end
 end

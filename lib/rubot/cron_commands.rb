@@ -59,7 +59,10 @@ module Rubot
         description: arguments["description"] || "",
         target_chat_id: arguments["target_chat_id"] || context_value(delivery_context, :chat_id),
         target_thread_id: arguments["target_thread_id"] || context_value(delivery_context, :thread_id),
-        workspace: arguments["workspace"] || context_value(delivery_context, :workspace)
+        workspace: arguments["workspace"] || context_value(delivery_context, :workspace),
+        channel: context_value(delivery_context, :channel),
+        slug: arguments["slug"] || context_value(delivery_context, :slug),
+        new_session: truthy(arguments["new_session"])
       )
 
       job = scheduler.get(id)
@@ -155,18 +158,29 @@ module Rubot
     def delivery_desc(job)
       chat_id = job["target_chat_id"]
       thread_id = job["target_thread_id"]
-      if chat_id && thread_id
-        "chat #{chat_id}, topic #{thread_id}"
+      parts = if chat_id && thread_id
+        [ "chat #{chat_id}, topic #{thread_id}" ]
       elsif chat_id
-        "chat #{chat_id}"
+        [ "chat #{chat_id}" ]
       else
-        "channel default"
+        [ job["channel"] ? "#{job['channel']} (default)" : "channel default" ]
       end
+      parts << "persona #{job['slug']}" if job["slug"]
+      parts << "new session each run" if job["new_session"]
+      parts.join(", ")
     end
 
     def context_value(context, key)
       return nil unless context
       context[key] || context[key.to_s]
+    end
+
+    # Tool arguments arrive from a model, which may say "true", 1 or true.
+    def truthy(value)
+      return false if value.nil? || value == false
+      return true if value == true
+
+      !%w[false 0 no off].include?(value.to_s.strip.downcase)
     end
   end
 end

@@ -195,6 +195,11 @@ module Rubot
       if (match = /\Aweb_([a-z0-9][a-z0-9_-]{0,31})(?:~[a-z0-9-]+)?\z/.match(id))
         return match[1]
       end
+      # A terminal has no topics and no pages, so a fired persona job gets a
+      # conversation of its own rather than reusing the browser's.
+      if (match = /\Atui_([a-z0-9][a-z0-9_-]{0,31})(?:~[a-z0-9-]+)?\z/.match(id))
+        return match[1]
+      end
 
       nil
     end

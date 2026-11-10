@@ -42,6 +42,9 @@ module Rubot
         @cron = if config.tools_enabled
           CronActor.new(
             workspace: config.workspace,
+            # The install's own jobs.json sits beside config.yml (~/.rubot),
+            # not inside the workspace the agent works in.
+            store_root: config.catalog_dir,
             restrict_to_workspace: config.restrict_to_workspace,
             allow_read_outside: config.allow_read_outside_workspace,
             delivery: delivery

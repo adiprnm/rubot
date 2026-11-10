@@ -21,10 +21,17 @@ module Rubot
         match_field(@fields[4], time.wday, 0, 6)
     end
 
-    # Compute the next matching time after the given time
+    # Compute the next matching time after the given time.
+    #
+    # Schedules are read in UTC: "0 9 * * *" means 09:00 UTC every day, not
+    # 09:00 wherever the process happens to run. Otherwise the same install
+    # fires at different hours depending on the machine it lands in, and a
+    # container reporting UTC beside a host reporting WIB drifts an hour for
+    # every change of the clock.
     def next_after(time, max_iterations: 525_600) # 1 year of minutes
+      base = time.getutc
       # Start at the beginning of the next minute (handles overflow correctly)
-      t = Time.new(time.year, time.month, time.day, time.hour, time.min, 0) + 60
+      t = Time.utc(base.year, base.month, base.day, base.hour, base.min, 0) + 60
       max_iterations.times do
         return t if match?(t)
         t += 60
@@ -72,8 +79,14 @@ module Rubot
     # safety_guard_source can be passed as a proc/lambda that returns
     # the current guard value — this prevents TOCTOU where the guard
     # is set after the scheduler is created.
-    def initialize(workspace:, safety_guard: nil, safety_guard_source: nil, &on_fire)
+    def initialize(workspace:, store_root: nil, safety_guard: nil, safety_guard_source: nil, &on_fire)
       @workspace = workspace
+      # Where the default workspace's jobs.json lives. The install keeps it at
+      # the root next to config.yml (~/.rubot/cron) instead of inside the
+      # workspace, so a workspace stays a place the agent works in and the
+      # install's own state stays where the rest of it is kept. A persona is
+      # still filed inside its own directory.
+      @store_root = normalize_workspace(store_root) || @workspace
       @safety_guard = safety_guard
       @safety_guard_source = safety_guard_source
       @jobs = {}
@@ -87,7 +100,7 @@ module Rubot
 
     # Add a new scheduled job. Returns job ID.
     # FIX (VULN-13): Validates command through safety guard before storing.
-    def add(message:, cron_expr: nil, every_seconds: nil, at_seconds: nil, command: nil, mode: nil, description: "", target_chat_id: nil, target_thread_id: nil, workspace: nil)
+    def add(message:, cron_expr: nil, every_seconds: nil, at_seconds: nil, command: nil, mode: nil, description: "", target_chat_id: nil, target_thread_id: nil, workspace: nil, channel: nil, slug: nil, new_session: false)
       if at_seconds
         schedule_type = "at"
         at_seconds = at_seconds.to_i
@@ -112,7 +125,7 @@ module Rubot
 
       @mutex.synchronize do
         id = generate_id
-        now = Time.now
+        now = Time.now.utc
 
         next_run = if schedule_type == "at"
           now + at_seconds
@@ -145,7 +158,19 @@ module Rubot
           # The directory whose agent should run an `agent_turn` job. A job
           # added from a persona's topic names that persona's directory, so
           # the reminder answers in the same voice it was written in.
-          "workspace" => workspace || @workspace
+          "workspace" => workspace || @workspace,
+          # Which channel wrote the job, so its result is delivered back the
+          # way it was asked for rather than to whichever channel happens to
+          # be running.
+          "channel" => channel,
+          # The persona the job belongs to, when the conversation had one. It
+          # is what lets a fired job open a conversation in that persona
+          # instead of guessing from a directory path.
+          "slug" => slug,
+          # A conversation of its own for every run, instead of one more turn
+          # in the conversation that created the job. A daily practice session
+          # wants a fresh transcript; a reminder does not.
+          "new_session" => new_session ? true : false
         }
 
         # File it where it was written: a persona's reminder belongs to the
@@ -322,7 +347,7 @@ module Rubot
         enabled_jobs.select do |job|
           next_run = job["next_run"]
           next false unless next_run
-          Time.parse(next_run) <= Time.now
+          Time.parse(next_run) <= Time.now.utc
         end.map(&:dup)
       end
 
@@ -338,7 +363,15 @@ module Rubot
           target_thread_id: job["target_thread_id"],
           # Which agent should run an agent_turn job: the directory the job was
           # written in, so a persona's reminder answers with that persona.
-          workspace: job["workspace"]
+          workspace: job["workspace"],
+          # How to hand the result back: the channel that wrote the job, and
+          # the persona it belongs to, so a fired job can open a conversation
+          # there instead of landing in whichever channel is running.
+          channel: job["channel"],
+          slug: job["slug"],
+          # Ask for a conversation of its own rather than another turn in the
+          # one that created the job.
+          new_session: job["new_session"] ? true : false
         }
         @on_fire.call(fire_result)
         fire_result
@@ -462,7 +495,7 @@ module Rubot
         store_path, job = location
         store = store_path == @workspace ? @jobs : (@extra_workspaces[store_path] ||= load_store(store_path))
 
-        job["last_run"] = Time.now.iso8601
+        job["last_run"] = Time.now.utc.iso8601
         job["run_count"] += 1
 
         if result[:success]
@@ -476,7 +509,7 @@ module Rubot
         if job["one_time"]
           store.delete(job_id)
         else
-          now = Time.now
+          now = Time.now.utc
           job["next_run"] = if job["schedule_type"] == "every"
             (now + job["every_seconds"]).iso8601
           else
@@ -495,9 +528,11 @@ module Rubot
       end
     end
 
+    # The default workspace's store lives at the install root (~/.rubot/cron),
+    # not inside the workspace itself; see #initialize.
     def data_file
-      return nil unless @workspace
-      File.join(@workspace, "cron", "jobs.json")
+      return nil unless @store_root
+      File.join(@store_root, "cron", "jobs.json")
     end
 
     # A workspace path as an absolute string, or nil for "nowhere".
@@ -520,8 +555,16 @@ module Rubot
       File.join(path, "cron", "jobs.json")
     end
 
+    # Where a workspace's own store sits. The default workspace is the special
+    # case: its jobs belong to the install, not to the directory the agent
+    # happens to work in.
+    def store_file_for(path)
+      return nil if path.nil?
+      path == @workspace ? data_file : store_file(path)
+    end
+
     def load_store(path)
-      file = store_file(path)
+      file = store_file_for(path)
       return {} unless file && File.exist?(file)
 
       data = JSON.parse(File.read(file))
@@ -534,7 +577,7 @@ module Rubot
     end
 
     def save_store(path, jobs)
-      file = store_file(path)
+      file = store_file_for(path)
       return unless file
 
       FileUtils.mkdir_p(File.dirname(file))

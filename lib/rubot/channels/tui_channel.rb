@@ -58,7 +58,15 @@ module Rubot
         when "deliver"
           @tui_instance&.deliver_cron(result[:result][:deliver_message].to_s)
         when "agent_turn"
-          response = @pool.for("default").process_cron(result[:result][:agent_message])
+          # The job names the persona it was written in; running it in that
+          # persona's conversation keeps the answer in the same voice. Without
+          # one, the terminal's own agent is the right one.
+          sid = result[:slug].to_s.strip
+          session_id = sid.empty? ? "default" : "tui_#{sid}"
+          response = @pool.for(session_id).process_cron(
+            result[:result][:agent_message],
+            fresh: result[:new_session] ? true : false
+          )
           @tui_instance&.deliver_cron(response) if response && !response.empty?
         end
       rescue StandardError => e
