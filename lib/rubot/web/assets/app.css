@@ -2142,8 +2142,9 @@ body.lightbox-open { overflow: hidden; }
 .usage-facts .value { color: var(--fg); }
 .usage-facts .usage-breakdown { display: block; color: var(--fg-faint); font-size: 11.5px; }
 
-/* The allowance: a name, a bar, and what is left. The bar is the used share,
-   so a limit three quarters spent reads as three quarters full. */
+/* The allowance: a name, a bar, and how much is spent. The bar and the figure
+   are the same reading, so a limit three quarters spent says so twice — the
+   bar fills towards the limit, and the number counts towards it too. */
 .usage-meters {
   display: grid;
   gap: 0.5rem;
@@ -2156,7 +2157,7 @@ body.lightbox-open { overflow: hidden; }
   display: grid;
   grid-template-columns: 4.2rem minmax(0, 1fr) auto;
   grid-template-areas:
-    "name bar left"
+    "name bar used"
     ".    reset reset";
   gap: 0.15rem 0.5rem;
   align-items: center;
@@ -2190,10 +2191,10 @@ body.lightbox-open { overflow: hidden; }
 /* An allowance the provider already cut off says so in the colour that means
    stop, not in the one that means plenty. */
 .usage-meter.is-limited .meter-fill { background: var(--red); }
-.usage-meter.is-limited .meter-left { color: var(--red); }
+.usage-meter.is-limited .meter-used { color: var(--red); }
 
-.usage-meter .meter-left {
-  grid-area: left;
+.usage-meter .meter-used {
+  grid-area: used;
   color: var(--fg-dim);
   font-family: var(--mono);
   font-size: 10px;
@@ -2347,7 +2348,7 @@ body.lightbox-open { overflow: hidden; }
   }
 
   .usage-meter .meter-name,
-  .usage-meter .meter-left { font-size: 9.5px; }
+  .usage-meter .meter-used { font-size: 9.5px; }
   .usage-meter .meter-reset { font-size: 10px; }
 
   .usage-note { font-size: 11px; }

@@ -2071,8 +2071,8 @@ module Rubot
                "the button sits at the end of the row it expands"
       end
 
-      # A meter says three things: what is spent, what is left, when it comes
-      # back. A provider that already cut the account off says that too.
+      # A meter says two things: what is spent, and when the window comes back.
+      # A provider that already cut the account off says that too.
       def test_the_quota_draws_one_meter_per_allowance
         channel = Rubot::Channels::Web.new(channel_config: {})
         meters = channel.send(:quota_meters,
@@ -2084,10 +2084,24 @@ module Rubot
         assert_equal 2, meters.size, "only the windows the provider reported"
         assert_includes html, "Rolling"
         assert_includes html, "12.5% terpakai"
-        assert_includes html, "87.5% sisa"
         assert_includes html, %(style="width: 12.5%")
         assert_includes html, "is-limited", "an allowance that is gone is not green"
         assert_includes html, "reset dalam"
+      end
+
+      # The provider reports the share that is spent, and the bar has always
+      # been drawn as that share. The figure beside it counted down instead —
+      # so a quarter gone read "75% sisa" next to a bar a quarter full. Both
+      # now say the same thing.
+      def test_the_quota_counts_what_is_spent_not_what_is_left
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        html = View.render("_quota",
+                           meters: channel.send(:quota_meters,
+                                                { "rolling" => { "percent" => 25.0 } }),
+                           note: "")
+
+        assert_includes html, "25.0% terpakai"
+        refute_includes html, "sisa", "the panel counts towards the limit, not away from it"
       end
 
       # A provider that sells tokens by the drink has no allowance at all. That

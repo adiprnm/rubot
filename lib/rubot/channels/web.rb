@@ -930,8 +930,10 @@ module Rubot
         View.render("_quota", meters: [], note: "Kuota tidak bisa diperiksa sekarang.")
       end
 
-      # One row per meter the provider reports: how much is spent, how much is
-      # left, and when it comes back.
+      # One row per meter the provider reports: how much is spent, and when it
+      # comes back. The provider's `percent` is already the spent share, so the
+      # panel states it as it is — an allowance reads in the direction of the
+      # thing a reader is asking about, which is how much of it is gone.
       def quota_meters(report)
         return [] unless report.is_a?(Hash)
 
@@ -939,11 +941,11 @@ module Rubot
           meter = report[name]
           next unless meter.is_a?(Hash)
 
-          used = meter["percent"].to_f
+          used = meter["percent"].to_f.clamp(0.0, 100.0)
           {
             name: name.capitalize,
-            used: format("%.1f", used.clamp(0.0, 100.0)),
-            left: "#{format('%.1f', (100.0 - used).clamp(0.0, 100.0))}% sisa",
+            used: format("%.1f", used),
+            used_label: "#{format('%.1f', used)}% terpakai",
             reset: quota_reset(meter),
             limited: meter["limited"] ? true : false
           }
