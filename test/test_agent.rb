@@ -360,6 +360,37 @@ class TestAgentProgressNarration < Minitest::Test
     assert_includes @agent.build_system_prompt, "Progress Narration"
   end
 
+  # The rule is the request, not the clock: an unprompted announcement repeats
+  # what the reader already sees. The one exception is a standing request for a
+  # notification at the end of every turn — and nothing smaller counts as it.
+  def test_system_prompt_never_announces_a_turn_on_its_own_initiative
+    prompt = @agent.build_system_prompt
+    assert_includes prompt, "Announcing the End of a Turn"
+    assert_includes prompt, "on your own initiative"
+  end
+
+  def test_system_prompt_allows_per_turn_notifications_only_when_asked
+    prompt = @agent.build_system_prompt
+    assert_includes prompt, "notified at the end of every turn"
+    assert_includes prompt, "counts as that request"
+  end
+
+  # The rule names a tool, so it must travel only when that tool can be called:
+  # a prompt sentence the model has no way to obey is worse than none.
+  def test_notify_rule_is_left_out_when_the_tool_is_not_available
+    bare = Rubot::Tools::Registry.new
+    bare.clear
+
+    agent = Rubot::Agent.new(
+      config: @config,
+      provider: NarratingProvider.new,
+      session_id: "no-notify",
+      tools: bare
+    )
+
+    refute_includes agent.build_system_prompt, "Announcing the End of a Turn"
+  end
+
   def test_system_prompt_asks_for_ruby_scripts_instead_of_python
     prompt = @agent.build_system_prompt
     assert_includes prompt, "Scripting Language"

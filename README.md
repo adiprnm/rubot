@@ -1064,7 +1064,10 @@ Two things arrive this way: a **scheduled job** firing, and a **turn the agent
 was asked to announce** — the user said "kabari kalau sudah kelar", the agent
 called `notify`, and the push says what it was told to say. A turn nobody asked
 about stays quiet: finishing work is not news on its own, and the reply is
-already on the screen it was typed into. An install that wants the old
+already on the screen it was typed into. The single override is a standing
+request: a user who asks to be notified at the end of *every* turn gets one at
+the end of every turn, because that is a preference about their devices rather
+than something one turn can decide. An install that wants the old
 time-based rule back can set `turn_notify_after` (seconds, `0` = off, the
 default): a reply that runs longer than that announces itself even when no one
 asked. The notification carries the gist of the answer and opens the

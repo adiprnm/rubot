@@ -24,9 +24,14 @@ module Rubot
           Ask for the end of this turn to be announced on the user's devices.
 
           Use it when the user says "tell me when you are done", "kabari kalau
-          sudah kelar", or asks to be notified about long work. The
-          notification arrives when the turn finishes and opens this
-          conversation; it never interrupts the turn or stops the work.
+          sudah kelar", or otherwise asks to be told that this work is
+          finished. The notification arrives when the turn finishes and opens
+          this conversation; it never interrupts the turn or stops the work.
+
+          Never call it on your own initiative — not for work that merely takes
+          a while. The one exception is a standing request: when the user asked
+          to be notified at the end of every turn, call it at the end of every
+          turn from then on.
 
           Pass `message` to choose what the notification says — the result in
           one line. Without it, the opening of your answer travels instead.

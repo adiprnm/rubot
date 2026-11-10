@@ -1085,12 +1085,39 @@ module Rubot
       discussing.
     PROMPT
 
+    # When a finished turn may ring the user's phone.
+    #
+    # The rule is the request, not the clock and not the agent's own judgement:
+    # a turn ends on the screen where it was typed, so announcing one unprompted
+    # only repeats what the reader already sees. The single exception is a
+    # standing request — the user asking, in their own words, to be told at the
+    # end of every turn — because that is a preference about their devices and
+    # nothing about this particular turn can stand in for it.
+    NOTIFY_RULE = <<~PROMPT.strip.freeze
+      # Announcing the End of a Turn
+
+      A turn ends where the user is already looking, so a notification nobody
+      asked for tells them what is on their screen. Never call the `notify`
+      tool on your own initiative — not for long work, not for work they are
+      waiting on, not because a notification would be nice.
+
+      Call it when the user asked to be told that this work is finished
+      ("kabari kalau sudah kelar", "tell me when you are done"). The
+      announcement carries `message` if you pass one, otherwise the opening of
+      your answer, and it arrives when the turn ends.
+
+      One request overrides this: when the user themselves asked to be
+      notified at the end of every turn, call `notify` at the end of every
+      turn from then on, without waiting to be asked again. Nothing else
+      counts as that request.
+    PROMPT
+
     # Build the full system prompt from all sources
     # Which delivery rule to send: the batch version only when `send_files` is
     # actually available, the single-file version when it is not, and nothing
     # at all when neither tool is enabled.
     def file_delivery_rule
-      names = (tool_definitions || []).map(&:name)
+      names = tool_names
       return FILE_DELIVERY_RULE if names.include?("send_files")
       return FILE_DELIVERY_SINGLE_RULE if names.include?("send_file")
 
@@ -1199,6 +1226,11 @@ module Rubot
 
       # 1d. File edits go through the file tool (diff view + confirmation)
       parts << FILE_EDIT_RULE
+
+      # 1e. When a finished turn may announce itself. Only when the tool is
+      # there to be called: a prompt that names a tool this agent does not
+      # have is an instruction it cannot follow.
+      parts << NOTIFY_RULE if tool_names.include?("notify")
 
       # 1e. A batch of files is one call, not one call per file. Only the
       # delivery tools this agent can actually call are named here.
@@ -1626,6 +1658,13 @@ module Rubot
       end
 
       name
+    end
+
+    # The names a request may call, which is what a prompt sentence can safely
+    # name: `tools_enabled` can switch the whole set off, and a config can trim
+    # it further.
+    def tool_names
+      (tool_definitions || []).map(&:name)
     end
 
     def tool_definitions
