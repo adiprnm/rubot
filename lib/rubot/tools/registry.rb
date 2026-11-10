@@ -60,6 +60,7 @@ module Rubot
         register Cron.new
         register SendFile.new(safety_guard: @safety_guard)
         register SendFiles.new(safety_guard: @safety_guard)
+        register Notify.new
       end
     end
   end

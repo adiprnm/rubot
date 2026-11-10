@@ -1289,6 +1289,46 @@ module Rubot
                                           .instance_variable_get(:@turn_notify_after)
       end
 
+      # "Kabari kalau sudah kelar" is the one case where the clock does not
+      # decide: the reader asked, so the announcement happens even for a turn
+      # that took a second, says what the agent was told to say, and is forced
+      # past the "the page is already showing this" rule.
+      def test_a_turn_that_was_asked_to_report_back_announces_itself
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        calls = []
+        channel.define_singleton_method(:notify_push) do |slug, **options|
+          calls << [ slug, options ]
+          nil
+        end
+        channel.define_singleton_method(:prepare_delivery) { |_sid| nil }
+        channel.define_singleton_method(:usage_markup) { |_sid| nil }
+        channel.define_singleton_method(:sidebar_markup) { |_sid| "" }
+        channel.define_singleton_method(:process_message) do |_text, **options|
+          options[:on_tool_call].call("notify", { "message" => "Migrasi selesai, 5 test lulus" }, nil)
+          "Ringkasan pekerjaan."
+        end
+        channel.instance_variable_set(:@turn_notify_after, 3600)
+
+        channel.send(:run_turn, Turn.new(id: "t1", session_id: "web_kanyaah", prompt: "kerjain ya"), "kerjain ya")
+
+        assert_equal 1, calls.length, "the request outranks the threshold"
+        slug, options = calls[0]
+        assert_equal "kanyaah", slug
+        assert_equal "Migrasi selesai, 5 test lulus", options[:body],
+                     "the notification says what the agent chose to say"
+        assert_equal true, options[:force],
+                     "the reader asked to be told, so a visible page does not silence it"
+        assert_equal "/s/web_kanyaah", options[:url]
+      end
+
+      def test_the_notify_tool_is_registered_and_only_carries_the_request
+        tool = Rubot::Tools::Registry.new.get("notify")
+
+        refute_nil tool, "the agent needs a way to ask"
+        assert_includes tool.execute({}), "announced"
+        assert_includes tool.execute({ "message" => "Selesai" }), "Selesai"
+      end
+
       # A finished turn announces itself only when it ran long enough that the
       # reader plausibly walked away. The wiring is what this checks: the clock
       # starts when the prompt is accepted and stops when the answer is whole,

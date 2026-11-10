@@ -13,6 +13,7 @@ require_relative "../session"
 require_relative "../tools/send_file"
 require_relative "../web/diff"
 require_relative "../web/highlight"
+require_relative "../web/notifier"
 require_relative "../web/push"
 require_relative "../web/turn"
 require_relative "../web/view"
@@ -141,6 +142,8 @@ module Rubot
       # signs, kept in one file for this install.
       PushTransport = Rubot::Web::Push
       VapidKey = Rubot::Web::Vapid
+      # The part that decides who gets told and what it costs in round trips.
+      PushNotifier = Rubot::Web::Notifier
 
       # What a newly created persona starts with when the form leaves a field
       # blank.
@@ -716,47 +719,26 @@ module Rubot
       # Delivering means one HTTPS round trip per device to a push service, so
       # it never happens on the caller's thread: a turn or a cron fire must not
       # wait on Apple's or Google's edge. The exception is the test button,
-      # which exists precisely to report the result.
-      #
-      # A `:gone` answer is the browser saying it will never accept this
-      # endpoint again (app uninstalled, permission revoked). The row is
-      # dropped here rather than retried forever.
+      # which exists precisely to report the result. The sending itself lives in
+      # `Notifier`, because the same job has to be possible from the command
+      # line — this method is the channel's doorway to it.
       def notify_push(slug, title:, body:, url:, sync: false, force: false)
+        notifier = push_notifier
+        return { "sent" => 0, "reason" => "no archive" } unless notifier
+
+        if sync
+          notifier.deliver(slug, title: title, body: body, url: url, force: force)
+        else
+          notifier.notify(slug, title: title, body: body, url: url, force: force)
+        end
+      end
+
+      # Built per call rather than memoised: the archive behind `Session.store`
+      # is a setting tests swap between one call and the next, and a notifier
+      # holding the old one would answer from a stale list of devices.
+      def push_notifier
         store = Session.store
-        return { "sent" => 0, "reason" => "no archive" } unless store
-
-        subscriptions = store.push_subscriptions(slug)
-        return { "sent" => 0, "reason" => "no subscriptions" } if subscriptions.empty?
-
-        message = { "title" => title, "body" => body, "url" => url, "tag" => "rubot-#{slug}" }
-        message["force"] = true if force
-        payload = JSON.generate(message)
-
-        job = lambda do
-          counts = { "sent" => 0, "gone" => 0, "failed" => 0, "status" => [] }
-          subscriptions.each do |subscription|
-            status, code = PushTransport.deliver_with_status(subscription: subscription, payload: payload,
-                                                             key: vapid.key, subject: @vapid_subject)
-            counts["status"] << code
-            case status
-            when :ok then counts["sent"] += 1
-            when :gone
-              store.drop_push_subscription(subscription["endpoint"])
-              counts["gone"] += 1
-            else counts["failed"] += 1
-            end
-          end
-          counts
-        end
-
-        return job.call if sync
-
-        Thread.new do
-          job.call
-        rescue StandardError => e
-          warn "[web] push delivery: #{e.class}: #{e.message}"
-        end
-        { "queued" => subscriptions.length }
+        store && PushNotifier.new(store: store, vapid: vapid, subject: @vapid_subject)
       end
 
       # The end of a turn nobody was waiting on.
@@ -768,11 +750,25 @@ module Rubot
       # threshold is the whole rule. Which devices actually ring is their own
       # decision — a page that is in front skips the notification in its worker,
       # so a desk with the app open does not announce itself.
-      def notify_turn_end(turn, elapsed)
+      def notify_turn_end(turn, elapsed, requested: nil)
+        slug = owner_slug(turn.session_id) || default_slug
+        # The agent was asked to report back, so the announcement happens even
+        # for a turn that took a second — and it says what it was told to say.
+        # `force` follows from the same thing: this news is for the person at
+        # the screen, not a report they might already be reading.
+        if requested
+          note = requested.to_s.strip
+          notify_push(slug,
+                      title: persona_title(slug),
+                      body: note.empty? ? turn_note(turn) : note,
+                      url: "/s/#{turn.session_id}",
+                      force: true)
+          return
+        end
+
         return if @turn_notify_after <= 0
         return if elapsed < @turn_notify_after
 
-        slug = owner_slug(turn.session_id) || default_slug
         notify_push(slug,
                     title: persona_title(slug),
                     body: turn_note(turn),
@@ -1926,13 +1922,21 @@ module Rubot
       # whole point of this channel's attachment folder.
       def run_turn(turn, text)
         started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        # The agent asking to be announced at the end: nil until it does, then
+        # the line it wants said. A request outranks the clock below — the
+        # reader asked, so the wait is not what decides.
+        announcement = nil
         Thread.current[:rubot_web_turn] = turn
         prepare_delivery(turn.session_id)
 
         response = process_message(
           text,
           session_id: turn.session_id,
-          on_tool_call: ->(name, args, _snapshot) { turn.tool_started(name, summarize_arguments(args)) },
+          on_tool_call: lambda do |name, args, _snapshot|
+            announcement = args.to_h["message"].to_s.strip if name.to_s == "notify"
+            announcement ||= ""
+            turn.tool_started(name, summarize_arguments(args))
+          end,
           on_tool_result: ->(name, result, diff) { tool_finished(turn, name, result, diff) },
           on_reasoning: ->(delta) { turn.thinking(delta) },
           on_usage: ->(report) {
@@ -1953,7 +1957,8 @@ module Rubot
         # Measured to the moment the answer was complete, not to the moment the
         # page finished drawing it — the reader waited for the first, and a slow
         # network is not a slow turn.
-        notify_turn_end(turn, Process.clock_gettime(Process::CLOCK_MONOTONIC) - started)
+        notify_turn_end(turn, Process.clock_gettime(Process::CLOCK_MONOTONIC) - started,
+                        requested: announcement)
       rescue StandardError => e
         turn.fail_with(handle_error(e, text))
       ensure
