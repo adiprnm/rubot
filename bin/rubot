@@ -167,6 +167,41 @@ if ARGV.first == "init"
   exit
 end
 
+# The archive's own maintenance: a backup, the JSON export, the housekeeping
+# SQLite would otherwise only do when someone remembers.
+if ARGV.first == "store"
+  ARGV.shift
+  operation = ARGV.shift
+  config = Rubot::Config.new
+  store = Rubot::Store.new(Rubot::Store.path_for(config.sessions_dir))
+  backups = File.join(File.dirname(config.config_path), "backups")
+  stamp = Time.now.strftime("%Y%m%d-%H%M%S")
+
+  begin
+    case operation
+    when "backup"
+      destination = ARGV.shift || File.join(backups, "sessions-#{stamp}.db")
+      store.backup(destination)
+      puts "Backup: #{destination} (#{File.size(destination)} bytes)"
+    when "export"
+      dir = ARGV.shift || File.join(backups, "sessions-#{stamp}")
+      count = store.export_json(dir)
+      puts "Exported #{count} sessions to #{dir}"
+    when "optimize"
+      ran = store.optimize!
+      puts "Optimized: #{ran.empty? ? 'nothing to do' : ran.join(', ')}"
+    when "counts"
+      store.counts.each { |key, value| puts format("%-10s %d", key, value) }
+    else
+      warn "Usage: rubot store [backup [path] | export [dir] | optimize | counts]"
+      exit 1
+    end
+  ensure
+    store.close
+  end
+  exit
+end
+
 if ARGV.first == "check"
   ARGV.shift
   puts "╔══════════════════════════════════════════════╗"

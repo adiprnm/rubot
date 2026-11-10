@@ -42,6 +42,11 @@ module Rubot
     # (it is per connection, and connections cannot be shared across Ractors).
     DEFAULT_CACHE_KB = 512
     BUSY_TIMEOUT_MS = 5_000
+    # The full-text index is merged back into shape every so many appended
+    # messages, not on a timer: a timer needs an owner and a lifetime, and the
+    # store is already the thing that knows a message was written. 500 is about a
+    # week of ordinary use.
+    FTS_OPTIMIZE_EVERY = 500
 
     attr_reader :path, :migrations_dir
 
@@ -101,6 +106,7 @@ module Rubot
       end
       touch_session(session_id, messages)
       refresh_count(session_id)
+      optimize_fts_when_due(inserted)
       inserted
     end
 
@@ -237,8 +243,112 @@ module Rubot
     end
 
     def close
-      @db.close if @db && !@db.closed?
+      return if @db.nil? || @db.closed?
+
+      # The last thing a process does with the archive is tidy it: the planner
+      # statistics and the full-text index cost nothing on a connection that is
+      # about to disappear, and are the two things that make every later query
+      # cheaper. A failure here must never stop the close.
+      begin
+        optimize!
+      rescue StandardError => e
+        warn "[store] optimize before close: #{e.class}: #{e.message}"
+      end
+      @db.close
+    ensure
       @db = nil
+    end
+
+    # --- maintenance ---------------------------------------------------
+
+    # SQLite's own housekeeping, in the two places it pays off.
+    #
+    # `PRAGMA optimize` gathers the statistics the query planner uses; without
+    # it the planner guesses at how many rows a session has, and the sidebar's
+    # "newest 40" is planned as a scan. The full-text index is append-only like
+    # the messages it mirrors, so it accumulates the segments of deleted text the
+    # same way, and merging them back is what keeps a search from reading the
+    # history of every edit ever made.
+    #
+    # Returns the steps that ran, so a caller can report what it did.
+    def optimize!
+      ran = []
+      @db.execute("PRAGMA optimize")
+      ran << :planner
+      if fts_table
+        @db.execute(%(INSERT INTO #{fts_table}(#{fts_table}) VALUES('optimize')))
+        ran << :fts
+      end
+      ran
+    end
+
+    # The name of the full-text table if the schema has one. Asked once rather
+    # than assumed: the archive works without search, and the index arrived in a
+    # later migration. `migrate!` has already run by the time anyone asks, so the
+    # answer cannot go stale inside one process.
+    def fts_table
+      return @fts_table if @fts_checked
+
+      @fts_checked = true
+      @fts_table = if @db.nil? || @db.closed?
+        nil
+      else
+        @db.get_first_value(<<~SQL)
+          SELECT name FROM sqlite_master
+          WHERE type = 'table' AND name IN ('fts', 'messages_fts')
+          LIMIT 1
+        SQL
+      end
+    end
+
+    # A copy that is consistent while the archive is open.
+    #
+    # `cp` is not: under WAL the newest turns live in `sessions.db-wal`, so the
+    # file a copy picks up is the archive as of the last checkpoint — and a
+    # checkpoint may not have happened for hours. VACUUM INTO asks SQLite to
+    # write the whole logical database into a new file, which is what a query
+    # would see, WAL included.
+    #
+    # The copy is written beside the destination and renamed, because VACUUM INTO
+    # refuses a target that already exists and because a half-written file must
+    # never wear the name a restore script looks for.
+    def backup(destination)
+      FileUtils.mkdir_p(File.dirname(destination))
+      temporary = "#{destination}.tmp-#{Process.pid}"
+      FileUtils.rm_f(temporary)
+      @db.execute("VACUUM INTO ?", [ temporary ])
+      File.rename(temporary, destination)
+      destination
+    ensure
+      FileUtils.rm_f(temporary) if temporary && File.exist?(temporary)
+    end
+
+    # The JSON files the archive replaced, written back out one per session.
+    #
+    # This is the second backup format on purpose: a .db file is only readable
+    # by SQLite and only while the schema and this class agree, and a backup you
+    # cannot read is not a backup. What is written here is the same shape
+    # `import_directory` reads, so restoring is the importer and nothing else has
+    # to be written for the day the archive is lost.
+    def export_json(dir)
+      FileUtils.mkdir_p(dir)
+      written = 0
+      sessions_with_dates.each do |row|
+        loaded = load_session(row[:id])
+        next if loaded.nil?
+
+        data = {}
+        loaded[:meta].each { |key, value| data[key.to_s] = value }
+        data["id"] = row[:id]
+        data["title"] = row[:title]
+        data["created_at"] = row[:created_at]
+        data["updated_at"] = row[:updated_at]
+        data["cwd"] = row[:cwd]
+        data["messages"] = loaded[:messages]
+        File.write(File.join(dir, "#{row[:id]}.json"), JSON.pretty_generate(data))
+        written += 1
+      end
+      written
     end
 
     # --- import --------------------------------------------------------
@@ -276,6 +386,20 @@ module Rubot
     def session_sizes
       @db.execute("SELECT id, bytes FROM sessions").each_with_object({}) do |(id, bytes), hash|
         hash[id] = bytes.to_i
+      end
+    end
+
+    # Every conversation with the dates a JSON file carries. `sidebar` answers
+    # the same question for the page, but it drops what a file needs to be
+    # rebuilt.
+    def sessions_with_dates
+      @db.execute(<<~SQL).map do |(id, title, created_at, updated_at, cwd)|
+        SELECT id, title, created_at, updated_at, cwd
+        FROM sessions
+        ORDER BY COALESCE(updated_at, '') DESC
+      SQL
+        { id: text_id(id), title: title.to_s, created_at: created_at,
+          updated_at: updated_at, cwd: cwd }
       end
     end
 
@@ -344,6 +468,23 @@ module Rubot
 
     def migrate!
       Migrator.new(@db, dir: @migrations_dir).run!
+    end
+
+    # Merging the index costs a write of its own, so it waits for a batch of
+    # appends instead of running inside every turn. A schema without the index
+    # has nothing to merge, and a merge that fails must not fail the append that
+    # triggered it: the messages are already stored.
+    def optimize_fts_when_due(inserted)
+      @appended_since_optimize = (@appended_since_optimize || 0) + inserted.to_i
+      return if @appended_since_optimize < FTS_OPTIMIZE_EVERY
+
+      @appended_since_optimize = 0
+      table = fts_table
+      return unless table
+
+      @db.execute(%(INSERT INTO #{table}(#{table}) VALUES('optimize')))
+    rescue StandardError => e
+      warn "[store] fts optimize: #{e.class}: #{e.message}"
     end
 
 

@@ -373,6 +373,96 @@ class TestStore < Minitest::Test
     assert_equal first, @store.sidebar.first[:updated_at]
   end
 
+  # A copy taken with `cp` misses everything still in the WAL, and under this
+  # archive's write pattern that can be hours of turns. VACUUM INTO writes what a
+  # query would see, so the copy opens as the same archive.
+  def test_a_backup_is_a_copy_the_archive_can_be_opened_from
+    @store.append_messages("s1", [build_message("user", "halo"), build_message("assistant", "hai")])
+    destination = File.join(@dir, "backups", "sessions.db")
+
+    @store.backup(destination)
+
+    assert File.file?(destination), "the backup has to exist where it was asked for"
+    copy = Rubot::Store.new(destination)
+    begin
+      assert_equal 2, copy.message_count("s1")
+      assert_equal "halo", copy.load_session("s1")[:messages].first["content"]
+    ensure
+      copy.close
+    end
+  end
+
+  # VACUUM INTO refuses a target that exists, so an ordinary "back up over the
+  # last backup" would fail on the second run.
+  def test_a_backup_replaces_an_existing_file
+    destination = File.join(@dir, "sessions.db")
+    File.write(destination, "not a database")
+    @store.append_messages("s1", [build_message("user", "halo")])
+
+    @store.backup(destination)
+
+    assert_operator File.size(destination), :>, 100
+  end
+
+  # The planner stats are always worth refreshing. The full-text index only
+  # exists once the schema has one, and the answer to "is it there" is asked
+  # rather than assumed — the archive works without search.
+  def test_optimize_runs_the_planner_and_whatever_index_exists
+    assert_equal [ :planner ], @store.optimize!
+
+    indexed_path = File.join(@dir, "indexed.db")
+    indexed = Rubot::Store.new(indexed_path)
+    indexed.close
+    db = SQLite3::Database.new(indexed_path)
+    db.execute("CREATE VIRTUAL TABLE fts USING fts5(body)")
+    db.close
+
+    indexed = Rubot::Store.new(indexed_path)
+    begin
+      assert_includes indexed.optimize!, :fts
+    ensure
+      indexed.close
+    end
+  end
+
+  # Closing is the one moment the housekeeping is free: the connection is about
+  # to go, so the statistics are gathered on the way out.
+  def test_a_close_optimizes_before_it_lets_go
+    store = Rubot::Store.new(@db_path)
+    ran = []
+    store.define_singleton_method(:optimize!) { ran << :optimized; [] }
+
+    store.close
+    store.close # and a second close is not an error
+
+    assert_equal [ :optimized ], ran
+  end
+
+  # The JSON files are the backup that outlives the schema: a .db file is only
+  # readable by SQLite, and a backup you cannot read is not a backup. What is
+  # written has to be what the importer already reads.
+  def test_the_json_export_imports_back_into_an_empty_archive
+    @store.append_messages("s1", [build_message("user", "halo"), build_message("assistant", "hai")])
+    @store.upsert_session(id: "s1", title: "judul", updated_at: "2026-11-10T03:05:00Z",
+                          cwd: "/tmp/x", meta: { "summary" => "ringkas" })
+    exported = File.join(@dir, "export")
+
+    written = @store.export_json(exported)
+
+    assert_equal 1, written
+    restored_path = File.join(@dir, "restored", "sessions.db")
+    restored = Rubot::Store.new(restored_path)
+    begin
+      stats = restored.import_directory(exported)
+      assert_equal 1, stats[:sessions]
+      assert_equal 2, restored.message_count("s1")
+      assert_equal "judul", restored.sidebar.first[:title]
+      assert_equal "ringkas", restored.load_session("s1")[:meta]["summary"]
+    ensure
+      restored.close
+    end
+  end
+
   private
 
   def write_session(id, messages, title: nil)
