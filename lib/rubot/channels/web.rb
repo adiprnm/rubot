@@ -13,6 +13,7 @@ require_relative "../session"
 require_relative "../tools/send_file"
 require_relative "../web/diff"
 require_relative "../web/highlight"
+require_relative "../web/push"
 require_relative "../web/turn"
 require_relative "../web/view"
 
@@ -45,6 +46,15 @@ module Rubot
       # How often an idle page's event stream says something, so a connection
       # sitting in a proxy is not closed for being quiet.
       EVENT_HEARTBEAT = 20
+      # How long a turn has to run before finishing it is worth a notification.
+      # A reply that takes a second is answered while the reader is still
+      # looking at the box they typed into; one that takes a minute is the kind
+      # of thing people walk away from. Devices with the app in front skip the
+      # buzz themselves, so this number only decides what counts as "a wait".
+      TURN_NOTIFY_AFTER = 20
+      # A notification body is read on a lock screen: two or three lines, one
+      # glance. The whole answer is one tap away, so what travels is the gist.
+      TURN_NOTIFY_CHARS = 140
       # How many conversations can be pinned for one persona. A pin is a way of
       # saying "this one again", and a list long enough to scroll is not a way
       # of saying it: past ten the oldest pin gives way, so the cap needs no
@@ -123,6 +133,11 @@ module Rubot
       Turn = Rubot::Web::Turn
       View = Rubot::Web::View
       Format = Rubot::Web::Format
+      # Web Push, named apart from `Web` for the same reason. `Push` is the
+      # protocol (seal a payload, sign a request); `Vapid` is the key that
+      # signs, kept in one file for this install.
+      PushTransport = Rubot::Web::Push
+      VapidKey = Rubot::Web::Vapid
 
       # What a newly created persona starts with when the form leaves a field
       # blank.
@@ -145,6 +160,19 @@ module Rubot
         @event_subs = []
         @event_mutex = Mutex.new
         @personas = nil
+        # Built on first use: reading (or generating) the key is a file that
+        # most boots never need, and a channel with push unused should not have
+        # written one. The mutex matters on that first use: two threads racing
+        # to build it could each generate a key, and the one that lost the file
+        # would sign with a key the browsers never subscribed to.
+        @vapid = nil
+        @vapid_mutex = Mutex.new
+        @vapid_subject = (channel_config["vapid_subject"] || VapidKey::SUBJECT).to_s
+
+        # How long a turn has to run before its ending is worth a knock on the
+        # door. Zero turns the notifications off; a reader who finds the buzz
+        # too eager raises the number rather than hunting for a switch.
+        @turn_notify_after = (channel_config["turn_notify_after"] || TURN_NOTIFY_AFTER).to_i
         super
       end
 
@@ -486,6 +514,14 @@ module Rubot
           delete_session(res, match[1], req)
         elsif method == "POST" && (match = SESSION_PIN_PATH.match(path))
           toggle_pin(res, match[1], req)
+        elsif method == "GET" && path == "/push/key"
+          push_public_key(res)
+        elsif method == "POST" && path == "/push/subscribe"
+          push_subscribe(req, res)
+        elsif method == "POST" && path == "/push/unsubscribe"
+          push_unsubscribe(req, res)
+        elsif method == "POST" && path == "/push/test"
+          push_test(req, res)
         elsif method == "GET" && (match = %r{\A/turns/([\w-]+)/stream\z}.match(path))
           stream_turn(res, match[1])
         elsif method == "POST" && (match = %r{\A/turns/([\w-]+)/(steer|stop|confirm)\z}.match(path))
@@ -584,6 +620,208 @@ module Rubot
         res["Cache-Control"] = "no-cache"
         res["Service-Worker-Allowed"] = "/"
         res.body = File.binread(file).sub("__VERSION__", asset_version.to_s)
+      end
+
+      # --- web push ------------------------------------------------------
+
+      # The key pair that signs a notification request. Beside config.yml,
+      # because it is this install's identity to the push services and outlives
+      # every conversation; never in the repository, because anyone holding it
+      # could notify the devices that subscribed here.
+      def vapid
+        @vapid_mutex.synchronize { @vapid ||= VapidKey.new(vapid_path, subject: @vapid_subject) }
+      end
+
+      def vapid_path
+        dir = @app_config ? @app_config.catalog_dir : File.expand_path("~/.rubot")
+        File.join(dir, "vapid.json")
+      end
+
+      # What the page needs before it may subscribe: the public half only.
+      def push_public_key(res)
+        json(res, 200, { "key" => vapid.public_key, "subject" => @vapid_subject })
+      rescue StandardError => e
+        warn "[web] push key: #{e.class}: #{e.message}"
+        json(res, 500, { "error" => "key unavailable" })
+      end
+
+      # `pushManager.subscribe` hands over three strings and no identity: the
+      # endpoint is what identifies the device, so subscribing again is an
+      # update of the keys, not a second device.
+      #
+      # The subscription belongs to the device, not to the conversation it was
+      # made in — the browser keeps exactly one per registration, so a row
+      # tagged with a persona would make the drawer say "aktif" in every other
+      # persona while their notifications silently went nowhere. Hence a null
+      # persona, which means "all of them".
+      def push_subscribe(req, res)
+        return cross_site(res) unless same_origin?(req)
+
+        endpoint = form(req, "endpoint")
+        p256dh = form(req, "p256dh")
+        auth = form(req, "auth")
+        return bad_request(res) if endpoint.empty? || p256dh.empty? || auth.empty?
+
+        unless store = Session.store
+          json(res, 503, { "error" => "archive unavailable" })
+          return
+        end
+
+        store.add_push_subscription(endpoint: endpoint, p256dh: p256dh, auth: auth, persona: nil)
+        json(res, 200, { "ok" => true })
+      end
+
+      def push_unsubscribe(req, res)
+        return cross_site(res) unless same_origin?(req)
+
+        endpoint = form(req, "endpoint")
+        return bad_request(res) if endpoint.empty?
+
+        Session.store&.drop_push_subscription(endpoint)
+        json(res, 200, { "ok" => true })
+      end
+
+      # A notification now, to the device that asked. The drawer's button is
+      # how a reader finds out whether the permission, the keys and the push
+      # service all work — better than waiting for a reminder hours later.
+      def push_test(req, res)
+        return cross_site(res) unless same_origin?(req)
+
+        slug = form(req, "persona")
+        slug = default_slug unless !slug.empty? && known_slug?(slug)
+
+        result = notify_push(slug,
+                             title: persona_title(slug),
+                             body: "Notifikasi percobaan. Kalau ini muncul, semuanya sudah tersambung.",
+                             url: "/s/#{session_id(slug)}",
+                             sync: true,
+                             # The page that presses this button is on screen,
+                             # and the worker's "the reader is already looking"
+                             # rule would swallow the very notification that is
+                             # meant to prove the path works.
+                             force: true)
+        json(res, 200, result)
+      end
+
+      # Tell a persona's devices that something arrived.
+      #
+      # Delivering means one HTTPS round trip per device to a push service, so
+      # it never happens on the caller's thread: a turn or a cron fire must not
+      # wait on Apple's or Google's edge. The exception is the test button,
+      # which exists precisely to report the result.
+      #
+      # A `:gone` answer is the browser saying it will never accept this
+      # endpoint again (app uninstalled, permission revoked). The row is
+      # dropped here rather than retried forever.
+      def notify_push(slug, title:, body:, url:, sync: false, force: false)
+        store = Session.store
+        return { "sent" => 0, "reason" => "no archive" } unless store
+
+        subscriptions = store.push_subscriptions(slug)
+        return { "sent" => 0, "reason" => "no subscriptions" } if subscriptions.empty?
+
+        message = { "title" => title, "body" => body, "url" => url, "tag" => "rubot-#{slug}" }
+        message["force"] = true if force
+        payload = JSON.generate(message)
+
+        job = lambda do
+          counts = { "sent" => 0, "gone" => 0, "failed" => 0, "status" => [] }
+          subscriptions.each do |subscription|
+            status, code = PushTransport.deliver_with_status(subscription: subscription, payload: payload,
+                                                             key: vapid.key, subject: @vapid_subject)
+            counts["status"] << code
+            case status
+            when :ok then counts["sent"] += 1
+            when :gone
+              store.drop_push_subscription(subscription["endpoint"])
+              counts["gone"] += 1
+            else counts["failed"] += 1
+            end
+          end
+          counts
+        end
+
+        return job.call if sync
+
+        Thread.new do
+          job.call
+        rescue StandardError => e
+          warn "[web] push delivery: #{e.class}: #{e.message}"
+        end
+        { "queued" => subscriptions.length }
+      end
+
+      # The end of a turn nobody was waiting on.
+      #
+      # A prompt typed into a page is answered in that page; a prompt that left
+      # the reader to do something else is answered into a conversation they
+      # have to be told about. The only honest signal available is time: a turn
+      # that took a while is a turn somebody probably walked away from, so the
+      # threshold is the whole rule. Which devices actually ring is their own
+      # decision — a page that is in front skips the notification in its worker,
+      # so a desk with the app open does not announce itself.
+      def notify_turn_end(turn, elapsed)
+        return if @turn_notify_after <= 0
+        return if elapsed < @turn_notify_after
+
+        slug = owner_slug(turn.session_id) || default_slug
+        notify_push(slug,
+                    title: persona_title(slug),
+                    body: turn_note(turn),
+                    url: "/s/#{turn.session_id}")
+      rescue StandardError => e
+        # A turn that finished is a turn that succeeded; a push service having a
+        # bad day must not turn that into an error the reader sees.
+        warn "[web] turn notification: #{e.class}: #{e.message}"
+      end
+
+      # What the lock screen says about a finished turn: the first line or so of
+      # the answer, folded flat. The answer itself is a tap away.
+      def turn_note(turn)
+        text = turn.response.to_s.gsub(/\s+/, " ").strip
+        return "Balasan sudah siap." if text.empty?
+
+        text.length > TURN_NOTIFY_CHARS ? "#{text[0, TURN_NOTIFY_CHARS - 1].rstrip}…" : text
+      end
+
+      # What a notification is signed as: the persona's own name, so a phone
+      # with three of them knows which one is talking before it is unlocked.
+      def persona_title(slug)
+        _key, persona = personas.find { |key, _persona| key == slug }
+        label = persona&.label.to_s.strip
+        label.empty? ? "rubot · #{slug}" : "rubot · #{label}"
+      end
+
+      def json(res, status, body)
+        res.status = status
+        res["Content-Type"] = "application/json; charset=utf-8"
+        res["Cache-Control"] = "no-store"
+        res.body = JSON.generate(body)
+      end
+
+      # A subscription is an endpoint someone else chose, and every later
+      # notification is delivered to it — sealed to that stranger's key, so they
+      # can read it. A page on another origin can POST one here without ever
+      # being able to read the answer, and with no token on a loopback install
+      # nothing else would stop it. So the push writes ask where the request
+      # came from. `Sec-Fetch-Site` is what current browsers send; `Origin` is
+      # the older proof; a client sending neither (curl, a test) is not a
+      # browser that could be tricked into this.
+      def same_origin?(req)
+        site = req["Sec-Fetch-Site"].to_s
+        return %w[same-origin none].include?(site) unless site.empty?
+
+        origin = req["Origin"].to_s
+        return true if origin.empty?
+
+        host = req["Host"].to_s.sub(/:\d+\z/, "")
+        URI.parse(origin).host.to_s == host
+      rescue URI::InvalidURIError
+        false
+      end
+
+      def cross_site(res)
+        json(res, 403, { "error" => "cross-origin request refused" })
       end
 
       def deny(res)
@@ -1587,6 +1825,7 @@ module Rubot
       # is aimed at this conversation first — a picture the agent sends is the
       # whole point of this channel's attachment folder.
       def run_turn(turn, text)
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         Thread.current[:rubot_web_turn] = turn
         prepare_delivery(turn.session_id)
 
@@ -1611,6 +1850,10 @@ module Rubot
         # once the turn has been written to the session file.
         turn.emit(:sidebar, sidebar_markup(turn.session_id))
         turn.finish(response)
+        # Measured to the moment the answer was complete, not to the moment the
+        # page finished drawing it — the reader waited for the first, and a slow
+        # network is not a slow turn.
+        notify_turn_end(turn, Process.clock_gettime(Process::CLOCK_MONOTONIC) - started)
       rescue StandardError => e
         turn.fail_with(handle_error(e, text))
       ensure
@@ -1918,6 +2161,18 @@ module Rubot
         case result[:mode]
         when "agent_turn"
           deliver_cron_turn(result)
+        when "deliver"
+          # A "deliver" job has no turn to run: it is a message written for the
+          # moment it fires. There is no session to open, so the notification
+          # points at the persona's own conversation instead.
+          slug = result[:slug].to_s
+          slug = default_slug unless known_slug?(slug)
+          notify_push(
+            slug,
+            title: persona_title(slug),
+            body: result[:result][:deliver_message].to_s.strip.then { |text| text.empty? ? cron_note(result) : text },
+            url: "/s/#{session_id(slug)}"
+          )
         else
           warn "[web] cron fired (#{result[:mode]}) with nowhere to put it in the browser"
         end
@@ -1951,6 +2206,25 @@ module Rubot
         # Whoever has this persona open hears about it now, rather than on the
         # next reload.
         broadcast_sessions(slug)
+
+        # And whoever does not: a reminder is the whole point of firing while
+        # the app is closed. Pages that are open are skipped by the worker
+        # itself, so this cannot ring twice for the same news.
+        notify_push(
+          slug,
+          title: persona_title(slug),
+          body: cron_note(result),
+          url: "/s/#{sid}"
+        )
+      end
+
+      # What a notification says about a fired job. The description is the
+      # reader's own words for it ("minum air", "cek inbox"), which is more
+      # useful than a timestamp — and it is sealed to the device, so a push
+      # service never reads it.
+      def cron_note(result)
+        label = result[:description].to_s.gsub(/\s+/, " ").strip
+        label.empty? ? "Sesi terjadwal sudah siap." : label
       end
 
       def cron_session_title(result)

@@ -1209,6 +1209,38 @@ module Rubot
         assert_equal 1000.0, turn.epoch, "a tool call does not restart it"
       end
 
+      # A phone that puts the app down freezes its sockets, and coming back
+      # reopens them: htmx reports the gap as `htmx:sseError` a moment before it
+      # reconnects. Retiring the turn on that signal emptied the band and marked
+      # the turn done, so after the app came back "Working…" and the call's own
+      # clock never appeared again — the row is drawn only when the turn starts,
+      # and the live clock only counts inside a turn that is not done. An error
+      # is a reconnect, not an ending; the stream that returns is the one that
+      # knows how the work ended.
+      def test_a_dropped_stream_does_not_end_the_turn
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+
+        refute_includes js, '["htmx:sseClose", "htmx:sseError"]',
+                        "a drop and an ending are not the same news"
+        assert_includes js, '"htmx:sseClose"'
+        assert_includes js, "function retireTurn"
+        refute_includes js, 'addEventListener("htmx:sseError"',
+                        "the connection coming back must not retire the turn"
+      end
+
+      # The page also keeps an idle stream open for news about other
+      # conversations, and it lives as long as the page does. Its closing says
+      # nothing about a turn, so the element the stream hangs off decides what
+      # is being ended.
+      def test_only_a_turn_stream_ends_a_turn
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+
+        assert_includes js, %(elt.closest(".turn")),
+                        "the stream's own element says what it belongs to"
+        assert_includes js, "if (!turn) return;",
+                        "the page's own news feed is not a turn"
+      end
+
       # The row is drawn once, at first paint. Re-sending it on every tool call
       # put a fresh node in the band, and the fresh node restarted its own
       # animation: the text the reader was looking at strobed on every call
@@ -1245,6 +1277,51 @@ module Rubot
                         "the row belongs to the band above the field, not to the thread"
         assert_equal 1, res.body.scan('id="working"').size,
                      "a second band in the response would be a second copy on the page"
+      end
+
+      def test_the_turn_notification_threshold_comes_from_the_config
+        assert_equal 0,
+                     Rubot::Channels::Web.new(channel_config: { "turn_notify_after" => 0 })
+                                          .instance_variable_get(:@turn_notify_after),
+                     "zero is how a reader turns the buzz off"
+        assert_equal Rubot::Channels::Web::TURN_NOTIFY_AFTER,
+                     Rubot::Channels::Web.new(channel_config: {})
+                                          .instance_variable_get(:@turn_notify_after)
+      end
+
+      # A finished turn announces itself only when it ran long enough that the
+      # reader plausibly walked away. The wiring is what this checks: the clock
+      # starts when the prompt is accepted and stops when the answer is whole,
+      # and the notification carries the conversation it belongs to.
+      def test_a_slow_turn_notifies_when_it_ends_and_a_quick_one_does_not
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        calls = []
+        channel.define_singleton_method(:notify_push) do |slug, title:, body:, url:, **|
+          calls << { slug: slug, title: title, body: body, url: url }
+          { "sent" => 1 }
+        end
+        channel.define_singleton_method(:prepare_delivery) { |_sid| nil }
+        channel.define_singleton_method(:usage_markup) { |_sid| nil }
+        channel.define_singleton_method(:sidebar_markup) { |_sid| "" }
+        channel.define_singleton_method(:process_message) { |_text, **| sleep 1.05 and "jawaban siap" }
+
+        channel.instance_variable_set(:@turn_notify_after, 1)
+        slow = Turn.new(id: "t1", session_id: "web_kanyaah", prompt: "halo")
+        channel.send(:run_turn, slow, "halo")
+
+        assert_equal 1, calls.length, "a turn past the threshold announces itself"
+        assert_equal "kanyaah", calls[0][:slug]
+        assert_equal "jawaban siap", calls[0][:body]
+        assert_equal "/s/web_kanyaah", calls[0][:url],
+                     "the notification has to open the conversation that finished"
+
+        # Same work, a threshold it never crossed.
+        calls.clear
+        channel.define_singleton_method(:process_message) { |_text, **| "cepat" }
+        channel.instance_variable_set(:@turn_notify_after, 60)
+        channel.send(:run_turn, Turn.new(id: "t2", session_id: "web_kanyaah", prompt: "halo"), "halo")
+
+        assert_empty calls, "a quick reply belongs to the page that asked for it"
       end
 
       # A refresh during an answer must not look like a conversation whose last
@@ -2032,7 +2109,10 @@ module Rubot
                           "#{name} needs a button of its own"
         end
         assert_equal 3, html.scan("data-theme-choice=").size
-        assert_equal 3, html.scan("aria-pressed=").size,
+        # The picker only: the drawer's notification toggle is also a pressed
+        # button, and it is not part of this choice.
+        picker = html[/<div class="theme-picker".*?<\/div>/m].to_s
+        assert_equal 3, picker.scan("aria-pressed=").size,
                      "the state has to be announceable, not just painted"
         assert_includes html, %(role="group")
       end

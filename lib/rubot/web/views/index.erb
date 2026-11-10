@@ -139,6 +139,23 @@
           nowhere near the session: two people reading the same conversation
           should each get their own colours. -%>
       <%= View.render("_theme_picker") %>
+
+      <%# Notifications sit beside the palettes because they are the same kind
+          of setting: this device's, not this conversation's. The button says
+          its own state rather than being an unlabelled switch — "aktifkan",
+          "aktif", "diblokir" — and the permission may only be asked for on a
+          press, which is also the only way iOS will answer it. -%>
+      <div class="push-picker" data-push-slug="<%= h(slug) %>">
+        <span class="theme-label">notifikasi</span>
+        <button type="button" class="theme-swatch push-toggle" data-push-toggle
+                aria-pressed="false" title="Notifikasi saat app sedang ditutup">
+          <span class="swatch-dot push-dot" aria-hidden="true"></span><span data-push-label>memuat…</span>
+        </button>
+        <button type="button" class="theme-swatch push-test" data-push-test hidden
+                title="Kirim satu notifikasi percobaan ke perangkat ini">
+          kirim tes
+        </button>
+      </div>
     </div>
   </aside>
 </div>

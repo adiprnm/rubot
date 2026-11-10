@@ -145,6 +145,16 @@ channels:
   #   persona: rubot         # session id becomes web_<persona>
   #   token: ""              # shared secret, checked on every request
   #   access_log: false      # true prints one line per request
+  #   # Web Push. The key pair is generated on first use in vapid.json beside
+  #   # this file (mode 0600) and never leaves the machine; deleting it silently
+  #   # invalidates every subscription, so the device has to be re-subscribed.
+  #   # `sub` is the contact the push service may complain to; any mailto works.
+  #   vapid_subject: mailto:rubot@localhost
+  #   # Seconds a turn must run before its ending is worth a notification.
+  #   # A reply that takes a moment is answered while the reader is still
+  #   # looking; one that takes a minute is the kind of thing people walk away
+  #   # from. 0 turns the notifications off.
+  #   turn_notify_after: 20
 
   telegram:
     enabled: true

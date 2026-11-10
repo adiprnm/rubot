@@ -1133,6 +1133,68 @@ body {
   background: linear-gradient(135deg, #f3efda 50%, #556b00 50%);
 }
 
+/* The notification toggle borrows the palette row's shape: a caption line, then
+   controls on the next. Its dot is the state — hollow when off, green when this
+   device will be woken, red when the browser has refused, and faded when the
+   platform cannot do it at all. The label carries the same answer in words, so
+   the colour is never the only signal. */
+.push-picker {
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  align-items: center;
+  justify-content: start;
+  gap: 0.2rem 0.25rem;
+  margin-top: 0.55rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--line-soft);
+}
+
+.push-picker .theme-label {
+  grid-column: 1 / -1;
+}
+
+.push-dot {
+  background: none;
+  border-color: var(--fg-faint);
+}
+
+.push-toggle[aria-pressed="true"] .push-dot {
+  background: var(--green);
+  border-color: var(--green);
+}
+
+.push-picker[data-push-state="denied"] .push-dot {
+  background: var(--red);
+  border-color: var(--red);
+}
+
+.push-picker[data-push-state="unsupported"] {
+  opacity: 0.55;
+}
+
+.push-picker[data-push-state="unsupported"] .push-dot {
+  border-style: dashed;
+}
+
+.push-toggle[disabled] {
+  cursor: default;
+}
+
+/* The test button is text, not an icon: what it does needs saying, and it only
+   exists once there is something to test.
+
+   `[hidden]` has to be spelled out because the swatch rule above sets
+   `display: inline-flex`, and an author rule of equal specificity beats the
+   browser's own `[hidden] { display: none }` — without this line the button
+   would sit there looking pressable while doing nothing. */
+.push-test {
+  color: var(--fg-faint);
+}
+
+.push-test[hidden] {
+  display: none;
+}
+
 /* ---------- chat column ------------------------------------------ */
 
 .chat {

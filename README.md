@@ -1026,10 +1026,56 @@ with.
 | `persona` | `rubot` | Prefix for the session id (`web_<persona>`) |
 | `token` | unset | Shared secret, checked on every request |
 | `access_log` | `false` | Print one line per request |
+| `vapid_subject` | `mailto:rubot@localhost` | Contact the push service may complain to |
+| `turn_notify_after` | `20` | Seconds a turn must run before its ending is worth a notification (`0` = off) |
 
 This channel runs shell commands through the same agent as every other channel,
 so it binds to loopback by default. Reaching it from another device is better
 done over a private network (Tailscale, an SSH tunnel) than by exposing the port.
+
+#### Notifications (Web Push)
+
+A scheduled job fires whether or not a page is open. The drawer's **notifikasi**
+button asks this device to be woken for it: press it once, allow the prompt, and
+a reminder that runs while the app is closed arrives on the lock screen. The
+button reports its own state — `aktif`, `diblokir`, `butuh https`, `tidak
+didukung` — and `kirim tes` sends one notification immediately, which is the
+quickest way to find out whether the permission, the keys and the push service
+all agree.
+
+There is no account, SDK or third-party dashboard involved. The server signs its
+request with a VAPID key pair it generates itself, and seals the payload with
+`aes128gcm` to a key only the browser holds, so the browser vendor's push
+service carries a message it cannot read. Both halves are implemented in
+`lib/rubot/web/push.rb` on top of OpenSSL — no gem.
+
+Three things are worth knowing before relying on it:
+
+- **It needs HTTPS.** Push is refused on a plain-HTTP origin, and the button says
+  `butuh https` rather than failing silently. A Tailscale certificate or a local
+  CA both satisfy it.
+- **iOS needs the app installed.** Safari offers Web Push only to a PWA added to
+  the home screen (16.4+), and only when the permission is asked for from a tap.
+- **`vapid.json` is the identity.** It is generated on first use beside
+  `config.yml` with mode `0600`. Replacing or deleting it invalidates every
+  subscription — the device has to be subscribed again.
+
+Two things arrive this way: a **scheduled job** firing, and a **turn that ran
+long enough** that the reader plausibly walked away from it. The second is
+governed by `turn_notify_after` (seconds, default 20, `0` = off): a reply that
+takes a moment is answered while the reader is still looking at the box they
+typed into, and announcing it would be noise about something already on screen.
+The notification carries the gist of the answer and opens the conversation it
+belongs to.
+
+A subscription the browser has dropped answers `410 Gone`; that row is deleted
+on the next send rather than retried forever. A page that is already visible is
+skipped by the service worker, so a notification never announces something the
+reader is looking at — except the test button, whose whole job is to be seen
+while the app is open. The test answers with the push service's status code
+(`kirim tes` → `terkirim 201`), and turns into `ditampilkan` once the worker
+confirms it actually reached the screen: "accepted by Google" and "shown on the
+phone" are different events, and only the second one is the proof.
 
 ### Running Multiple Channels
 
