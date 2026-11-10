@@ -207,16 +207,27 @@ module Rubot
       # session that was opened but never used does not appear; the caller adds
       # the one on screen itself when it is missing.
       def sessions_for(slug)
-        dir = @app_config&.sessions_dir
-        return [] unless dir && Dir.exist?(dir)
-
         base = session_id(slug)
         prefix = "#{base}#{SESSION_SEPARATOR}"
-        Dir.glob(File.join(dir, "#{base}*.json"))
-          .filter_map { |path| Session.describe(path) }
-          .select { |entry| entry[:id] == base || entry[:id].to_s.start_with?(prefix) }
-          .sort_by { |entry| entry[:timestamp] }
-          .reverse
+        rows = if (store = Session.store)
+          # Straight from the archive: three columns, no file parsing. A session
+          # that was opened but never used has no row, so it does not appear.
+          store.sidebar(limit: 500).filter_map do |row|
+            id = row[:id].to_s
+            next unless id == base || id.start_with?(prefix)
+
+            Session.entry_from_row(row)
+          end
+        else
+          dir = @app_config&.sessions_dir
+          return [] unless dir && Dir.exist?(dir)
+
+          Dir.glob(File.join(dir, "#{base}*.json"))
+            .filter_map { |path| Session.describe(path) }
+            .select { |entry| entry[:id] == base || entry[:id].to_s.start_with?(prefix) }
+        end
+
+        rows.sort_by { |entry| entry[:timestamp] }.reverse
       end
 
       # Rows for the sidebar: what the conversation is about and how long ago it
