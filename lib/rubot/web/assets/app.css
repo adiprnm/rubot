@@ -1645,11 +1645,18 @@ body {
    whatever happens to sit above and below them. */
 .row.thinking { margin: 0.5rem 0 0.7rem; }
 
-/* The live thought glows one letter at a time, from the first to the last.
+/* The live thought lights one letter at a time, from the first to the last.
    Each letter carries its own index (`--i`, written by the template) and the
    same animation; the delay moves the brightness along the word, and the long
    tail of the cycle is the pause before it travels again — so the whole thing
    repeats without the word ever sitting still as a block.
+
+   The light is the letter's own colour, not a halo around it. A text-shadow of
+   the same colour as the glyph, on 10.5px mono, blurs into the strokes and
+   reads as a glowing patch behind the word rather than a letter that is lit;
+   so the lit letter simply takes the brightest text colour and the rest fall
+   back to the faint one, which is what makes the sweep visible in the first
+   place.
 
    This is safe to animate where the rest of the timeline is not: a thought is
    drawn when the wait starts and nothing redraws it until tokens arrive, which
@@ -1660,8 +1667,8 @@ body {
 }
 
 @keyframes label-glow {
-  0% { color: var(--fg); text-shadow: 0 0 6px currentColor, 0 0 12px currentColor; }
-  22%, 100% { color: var(--fg-dim); text-shadow: none; }
+  0% { color: var(--fg); }
+  22%, 100% { color: var(--fg-faint); }
 }
 
 /* The row that says the turn is not over. It is not part of the timeline any
