@@ -1,0 +1,50 @@
+<%# The way in, when the address has no token.
+
+    A whole document rather than a fragment through layout: the shell expects a
+    conversation behind it (a thread, a composer, an SSE stream), and none of
+    that exists yet. The token is asked for once, written to the same cookie
+    every page render sets, and the reader goes on to the page they asked for —
+    so the URL they keep (a bookmark, the app's start url) never carries it.
+
+    The theme is chosen before the first paint, exactly as layout does it, or a
+    light-theme reader gets a flash of dark on the one screen that has no
+    conversation to look at. -%>
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <script>
+    (function () {
+      var saved = null;
+      try { saved = localStorage.getItem("rubot-theme"); } catch (_e) { /* private mode */ }
+      var theme = saved === "light" || saved === "dark" || saved === "everforest"
+        ? saved
+        : (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
+            ? "light" : "everforest");
+      document.documentElement.setAttribute("data-theme", theme);
+      document.documentElement.style.colorScheme = theme === "light" ? "light" : "dark";
+    })();
+  </script>
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#2b332f">
+  <title>rubot · masuk</title>
+  <link rel="stylesheet" href="/assets/app.css?v=<%= h(asset_version) %>">
+</head>
+<body>
+<form class="gate-card" method="post" action="/unlock">
+  <h1>rubot</h1>
+  <p>Alamat ini tidak membawa token. Masukkan token akses untuk melanjutkan.</p>
+  <label>Token
+    <input type="password" name="token" autocomplete="current-password"
+           autocapitalize="off" autocorrect="off" spellcheck="false"
+           required autofocus>
+  </label>
+  <input type="hidden" name="next" value="<%= h(next_path) %>">
+  <div class="gate-row">
+    <% if error %><p class="gate-error"><%= h(error) %></p><% else %><span></span><% end %>
+    <button class="btn primary" type="submit">Masuk</button>
+  </div>
+</form>
+</body>
+</html>

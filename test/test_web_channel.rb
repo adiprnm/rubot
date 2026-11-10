@@ -2462,6 +2462,112 @@ module Rubot
         refute channel.send(:authorized?, request.new("", {}, []))
       end
 
+      # --- the way in ------------------------------------------------------
+
+      # A request from a browser asking for a page: what the gate answers.
+      def gate_request(path, query_string: "", accept: "text/html", htmx: false, method: "GET")
+        query = URI.decode_www_form(query_string).to_h
+        request = Object.new
+        request.define_singleton_method(:path) { path }
+        request.define_singleton_method(:request_method) { method }
+        request.define_singleton_method(:query) { query }
+        request.define_singleton_method(:query_string) { query_string }
+        request.define_singleton_method(:cookies) { [] }
+        request.define_singleton_method(:[]) do |key|
+          case key.to_s
+          when "Accept" then accept
+          when "HX-Request" then htmx ? "true" : nil
+          end
+        end
+        request
+      end
+
+      # Arriving without a token used to answer "token required" as plain text,
+      # which left the reader nothing to act on: the token lived in the URL, so
+      # a bookmark or a typed address was a dead end. The field is the way in.
+      def test_a_page_without_a_token_asks_for_one_in_a_field
+        channel = Rubot::Channels::Web.new(channel_config: { "token" => "t0k" })
+        res = FakeResponse.new
+
+        channel.send(:dispatch, gate_request("/s/web_kanyaah"), res)
+
+        assert_equal 403, res.status
+        assert_includes res.body, %(action="/unlock")
+        assert_includes res.body, %(name="token")
+        assert_includes res.body, %(type="password")
+        refute_includes res.body, "token required"
+      end
+
+      # The token is not carried into the next URL: asking for it here is what
+      # lets the address bar stop holding it, so where the reader was going is
+      # kept without the one parameter the form is about.
+      def test_the_form_carries_where_the_reader_was_going_without_the_token
+        channel = Rubot::Channels::Web.new(channel_config: { "token" => "t0k" })
+        res = FakeResponse.new
+
+        channel.send(:dispatch, gate_request("/s/web_kanyaah", query_string: "token=nope&at=41"), res)
+
+        assert_includes res.body, %(name="next" value="/s/web_kanyaah?at=41")
+      end
+
+      # htmx swaps a fragment into a page that is already open, and an SSE
+      # client has nowhere to show a card: those keep the plain refusal rather
+      # than being handed a document to paste somewhere.
+      def test_a_fragment_or_a_stream_is_still_refused_plainly
+        channel = Rubot::Channels::Web.new(channel_config: { "token" => "t0k" })
+
+        htmx = FakeResponse.new
+        channel.send(:dispatch, gate_request("/s/web_kanyaah/recent", htmx: true), htmx)
+        assert_equal 403, htmx.status
+        assert_equal "token required", htmx.body
+
+        stream = FakeResponse.new
+        channel.send(:dispatch, gate_request("/events", accept: "text/event-stream"), stream)
+        assert_equal "token required", stream.body
+      end
+
+      def test_the_right_token_writes_the_cookie_and_opens_the_page_that_was_asked_for
+        channel = Rubot::Channels::Web.new(channel_config: { "token" => "t0k" })
+        res = FakeResponse.new
+
+        channel.send(:dispatch,
+                     gate_request("/unlock", method: "POST", query_string: "token=t0k&next=%2Fs%2Fweb_kanyaah"),
+                     res)
+
+        assert_equal 303, res.status
+        assert_equal "/s/web_kanyaah", res.headers["Location"]
+        assert_equal "rubot_token=t0k; Path=/; HttpOnly; SameSite=Lax", res.headers["Set-Cookie"]
+        refute_includes res.headers["Location"].to_s, "token",
+                        "the cookie is set: the URL no longer has to carry it"
+      end
+
+      def test_a_wrong_token_leaves_the_reader_at_the_field
+        channel = Rubot::Channels::Web.new(channel_config: { "token" => "t0k" })
+        res = FakeResponse.new
+
+        channel.send(:dispatch, gate_request("/unlock", method: "POST", query_string: "token=nope"), res)
+
+        assert_equal 403, res.status
+        assert_includes res.body, "Token tidak cocok."
+        assert_nil res.headers["Set-Cookie"], "a wrong token writes no cookie"
+      end
+
+      # `next` is a path this app wrote into the form. An absolute URL typed in
+      # by hand would otherwise make the gate an open redirect.
+      def test_the_next_page_must_be_a_path_this_app_chose
+        channel = Rubot::Channels::Web.new(channel_config: { "token" => "t0k" })
+
+        [ "https://evil.example/x", "//evil.example/x" ].each do |bad|
+          res = FakeResponse.new
+          channel.send(:dispatch,
+                       gate_request("/unlock", method: "POST",
+                                               query_string: URI.encode_www_form("token" => "t0k", "next" => bad)),
+                       res)
+
+          assert_equal "/", res.headers["Location"], "#{bad.inspect} is not a path this app wrote"
+        end
+      end
+
       # --- assets ---------------------------------------------------------
 
       # --- installed app --------------------------------------------------

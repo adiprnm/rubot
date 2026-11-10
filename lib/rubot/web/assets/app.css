@@ -2934,6 +2934,93 @@ body.lightbox-open { overflow: hidden; }
   .side-edit[open] summary { z-index: 81; }
 }
 
+/* ---------- gate -------------------------------------------------- */
+
+/* The way in, on an address that carries no token. A card rather than a page:
+   it asks one thing, and nothing behind it is loaded yet — no shell, no thread,
+   no stream. It is fixed with `inset: 0` and an auto margin because the
+   document's body is already `height: 100%; overflow: hidden`, so a card that
+   centred itself by flow would sit at the top on a short screen and drift on a
+   phone with the keyboard up. */
+.gate-card {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(calc(100% - 2.4rem), 22rem);
+  height: fit-content;
+  max-height: calc(100% - 2.4rem);
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 1.4rem 1.3rem 1.2rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg1);
+  box-shadow: 0 18px 60px var(--shadow-deep);
+}
+
+.gate-card h1 {
+  margin: 0 0 0.2rem;
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  color: var(--fg);
+}
+
+.gate-card > p {
+  margin: 0 0 0.95rem;
+  font-size: 13.5px;
+  font-style: italic;
+  line-height: 1.45;
+  color: var(--fg-faint);
+}
+
+.gate-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-style: italic;
+  color: var(--fg-faint);
+}
+
+/* The token is a machine string, so the field is set in the mono face and the
+   phone's capitalisation and autocorrect are turned off in the markup: a token
+   that arrives with a capital letter first is simply the wrong token. */
+.gate-card input {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: -0.03em;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg0);
+  color: var(--fg);
+  outline: none;
+}
+
+.gate-card input:focus { border-color: var(--green); }
+
+/* The error and the button share a row: a wrong token should not move the
+   button under the hand that is about to press it again. */
+.gate-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-top: 0.8rem;
+}
+
+.gate-card .gate-error {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-style: normal;
+  letter-spacing: -0.03em;
+  color: var(--red);
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
