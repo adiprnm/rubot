@@ -47,12 +47,13 @@ module Rubot
       # How often an idle page's event stream says something, so a connection
       # sitting in a proxy is not closed for being quiet.
       EVENT_HEARTBEAT = 20
-      # How long a turn has to run before finishing it is worth a notification.
-      # A reply that takes a second is answered while the reader is still
-      # looking at the box they typed into; one that takes a minute is the kind
-      # of thing people walk away from. Devices with the app in front skip the
-      # buzz themselves, so this number only decides what counts as "a wait".
-      TURN_NOTIFY_AFTER = 20
+      # How long a turn has to run before finishing it is worth a notification,
+      # measured in seconds. Off by default: a turn ending is not news unless
+      # the reader asked to be told (`notify`), and a timer made every long
+      # reply announce itself whether or not anyone wanted that. Set
+      # `turn_notify_after` to a positive number to bring the clock back; a
+      # device with the app in front skips the buzz on its own either way.
+      TURN_NOTIFY_AFTER = 0
       # A notification body is read on a lock screen: two or three lines, one
       # glance. The whole answer is one tap away, so what travels is the gist.
       TURN_NOTIFY_CHARS = 140
@@ -704,7 +705,7 @@ module Rubot
         result = notify_push(slug,
                              title: persona_title(slug),
                              body: "Notifikasi percobaan. Kalau ini muncul, semuanya sudah tersambung.",
-                             url: "/s/#{session_id(slug)}",
+                             url: session_url(session_id(slug)),
                              sync: true,
                              # The page that presses this button is on screen,
                              # and the worker's "the reader is already looking"
@@ -741,15 +742,16 @@ module Rubot
         store && PushNotifier.new(store: store, vapid: vapid, subject: @vapid_subject)
       end
 
-      # The end of a turn nobody was waiting on.
+      # The end of a turn somebody asked to hear about.
       #
-      # A prompt typed into a page is answered in that page; a prompt that left
-      # the reader to do something else is answered into a conversation they
-      # have to be told about. The only honest signal available is time: a turn
-      # that took a while is a turn somebody probably walked away from, so the
-      # threshold is the whole rule. Which devices actually ring is their own
-      # decision — a page that is in front skips the notification in its worker,
-      # so a desk with the app open does not announce itself.
+      # The rule is the request, not the clock: a turn ends where it was typed,
+      # so announcing it unprompted says nothing the reader does not already
+      # see. Two things can still ring — the agent was told "kabari kalau sudah
+      # kelar" and called `notify`, or the install opted back into the old
+      # time-based rule with a positive `turn_notify_after`, where a turn that
+      # ran a long time is a turn the reader plausibly walked away from. Which
+      # devices actually ring is their own decision: a page that is in front
+      # skips the notification in its worker.
       def notify_turn_end(turn, elapsed, requested: nil)
         slug = owner_slug(turn.session_id) || default_slug
         # The agent was asked to report back, so the announcement happens even
@@ -761,7 +763,7 @@ module Rubot
           notify_push(slug,
                       title: persona_title(slug),
                       body: note.empty? ? turn_note(turn) : note,
-                      url: "/s/#{turn.session_id}",
+                      url: session_url(turn.session_id),
                       force: true)
           return
         end
@@ -772,7 +774,7 @@ module Rubot
         notify_push(slug,
                     title: persona_title(slug),
                     body: turn_note(turn),
-                    url: "/s/#{turn.session_id}")
+                    url: session_url(turn.session_id))
       rescue StandardError => e
         # A turn that finished is a turn that succeeded; a push service having a
         # bad day must not turn that into an error the reader sees.
@@ -953,6 +955,19 @@ module Rubot
 
       def token_query
         @token ? "?token=#{CGI.escape(@token)}" : ""
+      end
+
+      # Where a notification lands: the conversation it is about, carrying the
+      # token the way every link the pages write does.
+      #
+      # A tap is not a request the app made. It may open a window that never
+      # saw the gate, or a phone that dropped the session cookie when the app
+      # was closed — and then the URL without the token earns a token prompt
+      # instead of the answer the notification just promised. So the token
+      # travels in the push payload, which is sealed to the device's own key:
+      # the push service carrying it cannot read it.
+      def session_url(sid)
+        "/s/#{sid}#{token_query}"
       end
 
       # --- page ----------------------------------------------------------

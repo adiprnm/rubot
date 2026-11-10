@@ -293,6 +293,33 @@ class TestWebPush < Minitest::Test
     thread&.join(2)
   end
 
+  # A tap is not a request the app made. It can open a window that never saw
+  # the gate, or a phone that dropped the session cookie when the app closed —
+  # and a bare URL then earns a token prompt instead of the answer the
+  # notification just promised. So the conversation URL carries the token.
+  def test_a_notification_opens_the_conversation_that_earned_it
+    turn = Struct.new(:session_id, :response).new("web_rubot~20261111-011100", "Migrasi selesai, 5 test lulus.")
+    channel = Rubot::Channels::Web.new(channel_config: { "token" => "s3cret" })
+    sent = []
+    channel.define_singleton_method(:notify_push) { |slug, **opts| sent << [slug, opts]; nil }
+    channel.define_singleton_method(:persona_title) { |_slug| "rubot · Rubot" }
+    channel.define_singleton_method(:owner_slug) { |_sid| "rubot" }
+
+    channel.send(:notify_turn_end, turn, 0.2, requested: "Migrasi selesai")
+
+    slug, push = sent.first
+    assert_equal "rubot", slug
+    assert_equal "Migrasi selesai", push[:body]
+    assert_equal "/s/web_rubot~20261111-011100?token=s3cret", push[:url],
+                 "the tap has to land on the conversation, not on the gate"
+    assert_equal true, push[:force]
+
+    # The same URL rule for the tick-box that says "there is news": an install
+    # without a token gets a plain path, and nothing is appended for it.
+    open_channel = Rubot::Channels::Web.new(channel_config: {})
+    assert_equal "/s/web_rubot", open_channel.send(:session_url, "web_rubot")
+  end
+
   def test_turn_notifications_can_be_switched_off_and_the_body_is_folded
     turn = Struct.new(:session_id, :response).new("web_rubot", "halo")
 

@@ -1027,7 +1027,7 @@ with.
 | `token` | unset | Shared secret, checked on every request |
 | `access_log` | `false` | Print one line per request |
 | `vapid_subject` | `mailto:rubot@localhost` | Contact the push service may complain to |
-| `turn_notify_after` | `20` | Seconds a turn must run before its ending is worth a notification (`0` = off) |
+| `turn_notify_after` | `0` | Seconds a turn must run before its ending is worth a notification (`0` = off, the default) |
 
 This channel runs shell commands through the same agent as every other channel,
 so it binds to loopback by default. Reaching it from another device is better
@@ -1060,13 +1060,21 @@ Three things are worth knowing before relying on it:
   `config.yml` with mode `0600`. Replacing or deleting it invalidates every
   subscription — the device has to be subscribed again.
 
-Two things arrive this way: a **scheduled job** firing, and a **turn that ran
-long enough** that the reader plausibly walked away from it. The second is
-governed by `turn_notify_after` (seconds, default 20, `0` = off): a reply that
-takes a moment is answered while the reader is still looking at the box they
-typed into, and announcing it would be noise about something already on screen.
-The notification carries the gist of the answer and opens the conversation it
-belongs to.
+Two things arrive this way: a **scheduled job** firing, and a **turn the agent
+was asked to announce** — the user said "kabari kalau sudah kelar", the agent
+called `notify`, and the push says what it was told to say. A turn nobody asked
+about stays quiet: finishing work is not news on its own, and the reply is
+already on the screen it was typed into. An install that wants the old
+time-based rule back can set `turn_notify_after` (seconds, `0` = off, the
+default): a reply that runs longer than that announces itself even when no one
+asked. The notification carries the gist of the answer and opens the
+conversation it belongs to.
+
+The tap goes to that conversation even on a phone that has nobody signed in: the
+push payload's URL carries the token, exactly as the links the pages write do.
+The payload is sealed to the device's own key, so the push service relaying it
+cannot read the token, and the reader is not asked to type it after tapping a
+notification about work that is already finished.
 
 A subscription the browser has dropped answers `410 Gone`; that row is deleted
 on the next send rather than retried forever. A page that is already visible is
