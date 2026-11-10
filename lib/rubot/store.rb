@@ -105,15 +105,26 @@ module Rubot
 
     # Metadata row for the sidebar. Kept separate from the messages so renaming a
     # conversation does not touch the transcript.
-    def upsert_session(id:, title: "", created_at: nil, updated_at: nil, cwd: nil, bytes: 0)
-      @db.execute(<<~SQL, [id.to_s, title.to_s, created_at, updated_at, cwd, bytes])
-        INSERT INTO sessions(id, title, created_at, updated_at, cwd, bytes)
-        VALUES(?, ?, ?, ?, ?, ?)
+    #
+    # `meta` and `messages_start` are nil-unless-set: a caller that only knows the
+    # title must not wipe the summary or move the window.
+    def upsert_session(id:, title: "", created_at: nil, updated_at: nil, cwd: nil, bytes: 0,
+                       meta: nil, messages_start: nil)
+      meta_json = meta.nil? ? nil : JSON.generate(meta)
+      # meta and messages_start appear twice: once for the insert, once for the
+      # conflict update, where a nil must keep what is already stored.
+      args = [id.to_s, title.to_s, created_at, updated_at, cwd, bytes,
+              meta_json, messages_start, meta_json, messages_start]
+      @db.execute(<<~SQL, args)
+        INSERT INTO sessions(id, title, created_at, updated_at, cwd, bytes, meta, messages_start)
+        VALUES(?, ?, ?, ?, ?, ?, COALESCE(?, '{}'), COALESCE(?, 0))
         ON CONFLICT(id) DO UPDATE SET
-          title      = excluded.title,
-          updated_at = excluded.updated_at,
-          cwd        = excluded.cwd,
-          bytes      = excluded.bytes
+          title          = excluded.title,
+          updated_at     = excluded.updated_at,
+          cwd            = excluded.cwd,
+          bytes          = excluded.bytes,
+          meta           = COALESCE(?, sessions.meta),
+          messages_start = COALESCE(?, sessions.messages_start)
       SQL
       refresh_count(id)
       self
@@ -148,11 +159,17 @@ module Rubot
     # projection and content is read back out of the payload rather than kept as
     # a third copy (which cost 4 MB on 7k messages).
     def load_session(session_id)
-      rows = @db.execute(<<~SQL, [session_id.to_s])
+      row = @db.execute(
+        "SELECT meta, messages_start FROM sessions WHERE id = ?", [session_id.to_s]
+      ).first
+      start = row ? row[1].to_i : 0
+
+      rows = @db.execute(<<~SQL, [session_id.to_s, start])
         SELECT payload, diff, text, role, created_at FROM messages
-        WHERE session_id = ? ORDER BY idx
+        WHERE session_id = ? AND idx >= ? ORDER BY idx
       SQL
-      return nil if rows.empty?
+      # No session row and no messages: nothing is known about this id.
+      return nil if rows.empty? && row.nil?
 
       messages = rows.map do |(payload, diff, text, role, created_at)|
         message = decode_payload(payload) || { "role" => role.to_s, "content" => text.to_s }
@@ -163,7 +180,7 @@ module Rubot
         message["timestamp"] ||= created_at if created_at
         message
       end
-      { id: session_id.to_s, messages: messages }
+      { id: session_id.to_s, messages: messages, meta: decode_meta(row && row[0]), start: start }
     end
 
     def session_ids
@@ -199,10 +216,18 @@ module Rubot
     # Load every session file in `dir` into the archive. Idempotent: a file that
     # was already imported only fills in what is missing, so running it twice
     # changes nothing.
-    def import_directory(dir)
+    def import_directory(dir, skip_existing: false)
       stats = { files: 0, sessions: 0, messages: 0, skipped: 0 }
+      # A session already in the archive is skipped without parsing its file:
+      # after the first import the JSON is frozen, so it holds nothing new.
+      known = skip_existing ? session_ids.each_with_object({}) { |id, h| h[id] = true } : nil
       Dir.glob(File.join(dir, "*.json")).sort.each do |path|
         stats[:files] += 1
+        if known && known[File.basename(path, ".json")]
+          stats[:skipped] += 1
+          next
+        end
+
         result = import_file(path)
         if result
           stats[:sessions] += 1
@@ -279,6 +304,15 @@ module Rubot
       JSON.parse(payload)
     rescue JSON::ParserError
       nil
+    end
+
+    def decode_meta(raw)
+      return {} if raw.nil? || raw.to_s.empty?
+
+      parsed = JSON.parse(raw.to_s)
+      parsed.is_a?(Hash) ? parsed : {}
+    rescue JSON::ParserError
+      {}
     end
 
     # `ui_diff` is what a channel draws under a tool call, never something the

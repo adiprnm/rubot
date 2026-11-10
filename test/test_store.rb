@@ -213,6 +213,58 @@ class TestStore < Minitest::Test
     refute loaded.key?("ui_diff")
   end
 
+  def test_session_meta_round_trips
+    @store.append_messages("s1", [build_message("user", "halo")])
+    meta = {
+      "summary" => "ringkasan",
+      "system_prompt" => "PROMPT",
+      "system_prompt_epoch" => { "model" => "m" },
+      "task" => "tugas"
+    }
+
+    @store.upsert_session(id: "s1", title: "judul", meta: meta)
+
+    assert_equal meta, @store.load_session("s1")[:meta]
+  end
+
+  def test_messages_start_moves_the_window
+    @store.append_messages("s1", [
+      build_message("user", "lama"),
+      build_message("assistant", "juga lama"),
+      build_message("user", "baru")
+    ])
+    @store.upsert_session(id: "s1", messages_start: 2)
+
+    loaded = @store.load_session("s1")
+
+    assert_equal [ "baru" ], loaded[:messages].map { |m| m["content"] }
+    assert_equal 2, loaded[:start]
+    assert_equal 3, @store.message_count("s1"), "the archive keeps what the window dropped"
+  end
+
+  def test_upsert_without_meta_does_not_clear_it
+    @store.upsert_session(id: "s1", meta: { "summary" => "penting" }, messages_start: 5)
+    @store.upsert_session(id: "s1", title: "judul baru")
+
+    loaded = @store.load_session("s1")
+
+    assert_equal "penting", loaded[:meta]["summary"]
+    assert_equal 5, loaded[:start]
+  end
+
+  def test_import_can_skip_sessions_already_archived
+    write_session("s1", [build_message("user", "lama")])
+    @store.import_directory(@sessions)
+
+    # A file that changed after the import must not be read again: once the
+    # archive is the store, the JSON is frozen.
+    write_session("s1", [ build_message("user", "berubah"), build_message("user", "tambahan") ])
+    stats = @store.import_directory(@sessions, skip_existing: true)
+
+    assert_equal 1, stats[:skipped]
+    assert_equal 1, @store.message_count("s1")
+  end
+
   private
 
   def write_session(id, messages, title: nil)

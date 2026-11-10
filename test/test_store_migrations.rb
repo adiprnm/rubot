@@ -132,9 +132,10 @@ class TestStoreMigrations < Minitest::Test
     db = SQLite3::Database.new(File.join(@dir, "sessions.db"))
     versions = db.execute("SELECT version FROM schema_migrations ORDER BY version").flatten
 
-    assert_equal [ 1, 2 ], versions
+    assert_equal [ 1, 2, 3 ], versions
     assert_equal %w[id session_id idx role text created_at payload diff], db.execute("PRAGMA table_info(messages)").map { |r| r[1] }
-    assert_equal %w[id title created_at updated_at cwd msg_count bytes], db.execute("PRAGMA table_info(sessions)").map { |r| r[1] }
+    assert_equal %w[id title created_at updated_at cwd msg_count bytes meta messages_start],
+                 db.execute("PRAGMA table_info(sessions)").map { |r| r[1] }
   ensure
     store&.close
     db&.close unless db&.closed?

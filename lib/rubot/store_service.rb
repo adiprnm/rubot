@@ -134,7 +134,7 @@ module Rubot
 
     # Only the four fields upsert_session knows about, so a caller may pass the
     # hash it already has without tripping over an unknown key.
-    SESSION_FIELDS = %i[id title created_at updated_at cwd bytes].freeze
+    SESSION_FIELDS = %i[id title created_at updated_at cwd bytes meta messages_start].freeze
 
     def session_attributes(arguments)
       arguments.select { |key, _| SESSION_FIELDS.include?(key.to_sym) }
