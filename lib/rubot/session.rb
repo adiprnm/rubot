@@ -652,17 +652,25 @@ module Rubot
       return nil unless File.file?(path)
 
       data = JSON.parse(File.read(path))
+      describe_data(data, id: File.basename(path, ".json"), mtime: File.mtime(path))
+    rescue JSON::ParserError, SystemCallError, EncodingError
+      nil
+    end
+
+    # The same summary from already-parsed data, so a caller that also needs the
+    # messages (the SQLite importer) does not parse the file twice.
+    def self.describe_data(data, id:, mtime: nil)
       messages = data["messages"]
       return nil unless messages.is_a?(Array) && !messages.empty?
 
       updated = begin
         Time.iso8601(data["updated_at"].to_s)
       rescue ArgumentError, TypeError
-        File.mtime(path)
+        mtime || Time.now
       end
 
       {
-        id: File.basename(path, ".json"),
+        id: id,
         messages: messages.size,
         updated_at: updated.iso8601,
         timestamp: updated.to_f,
@@ -674,8 +682,6 @@ module Rubot
         # the name the model gave it once the first turn finished.
         title: title_for(messages, data["title"])
       }
-    rescue JSON::ParserError, SystemCallError, EncodingError
-      nil
     end
 
     # The newest thing the user asked, which is what /resume shows for each

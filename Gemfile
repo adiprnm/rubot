@@ -16,6 +16,12 @@ gem "ruby-tui", path: "vendor/ruby-tui"
 # since Ruby 3.4, so it has to be required (and declared) explicitly.
 gem "base64", "~> 0.3"
 
+# The session store (SQLite) and its full-text search. The connection is not
+# Ractor-safe: SQLite3::Database must live in the main Ractor (see
+# Rubot::Store), which is why the store is reached through a port rather than
+# opened inside a SessionActor.
+gem "sqlite3", "~> 2.10"
+
 group :development, :test do
   gem "minitest", "~> 5.0"
   gem "rake"
