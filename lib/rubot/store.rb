@@ -5,6 +5,7 @@ require "time"
 require "zlib"
 require "sqlite3"
 require_relative "session"
+require_relative "store/migrator"
 
 module Rubot
   # SQLite archive of every conversation.
@@ -32,15 +33,17 @@ module Rubot
   # assumed). A Store is therefore opened in the main Ractor and reached from a
   # SessionActor through a port, never instantiated inside one.
   class Store
-    SCHEMA_VERSION = 2
     DB_FILENAME = "sessions.db"
+    # The schema is the numbered .sql files in store/migrations/, applied by
+    # Migrator. Nothing here knows what version 3 will add.
+    MIGRATIONS_DIR = File.join(__dir__, "store", "migrations")
     # Small on purpose: the sidebar reads three short columns and the archive is
     # read once per turn, so a large page cache would only cost resident memory
     # (it is per connection, and connections cannot be shared across Ractors).
     DEFAULT_CACHE_KB = 512
     BUSY_TIMEOUT_MS = 5_000
 
-    attr_reader :path
+    attr_reader :path, :migrations_dir
 
     # Where the archive lives for a given sessions directory: next to the JSON
     # files it replaces, so config.yml's own directory stays the single place
@@ -49,8 +52,9 @@ module Rubot
       File.join(File.dirname(sessions_dir), DB_FILENAME)
     end
 
-    def initialize(path, cache_kb: DEFAULT_CACHE_KB)
+    def initialize(path, cache_kb: DEFAULT_CACHE_KB, migrations_dir: MIGRATIONS_DIR)
       @path = path
+      @migrations_dir = migrations_dir
       FileUtils.mkdir_p(File.dirname(path))
       @db = SQLite3::Database.new(path)
       @db.busy_timeout = BUSY_TIMEOUT_MS
@@ -259,54 +263,9 @@ module Rubot
     end
 
     def migrate!
-      current = @db.get_first_value("PRAGMA user_version").to_i
-      return if current >= SCHEMA_VERSION
-
-      @db.transaction do
-        create_schema! if current < 1
-        # v2 moved the render-only `ui_diff` out of the payload. Old rows keep
-        # theirs in the payload and load_session still understands them, so the
-        # migration is the column and nothing else — no rewrite of 7k rows.
-        @db.execute("ALTER TABLE messages ADD COLUMN diff BLOB") if current == 1
-        @db.execute("PRAGMA user_version = #{SCHEMA_VERSION}")
-      end
+      Migrator.new(@db, dir: @migrations_dir).run!
     end
 
-    def create_schema!
-      @db.execute(<<~SQL)
-        CREATE TABLE IF NOT EXISTS sessions(
-          id         TEXT PRIMARY KEY,
-          title      TEXT NOT NULL DEFAULT '',
-          created_at TEXT,
-          updated_at TEXT,
-          cwd        TEXT,
-          msg_count  INTEGER NOT NULL DEFAULT 0,
-          bytes      INTEGER NOT NULL DEFAULT 0
-        )
-      SQL
-      # No DELETE, ever: see the class comment. idx is the position in the
-      # transcript and (session_id, idx) is what makes a re-save a no-op.
-      #
-      # `content` is not a column: it is recoverable from `payload`, and keeping
-      # both cost 4 MB on 7k messages. `text` is the one derived copy worth
-      # paying for — search and snippets read it without touching JSON.
-      @db.execute(<<~SQL)
-        CREATE TABLE IF NOT EXISTS messages(
-          id         INTEGER PRIMARY KEY,
-          session_id TEXT NOT NULL,
-          idx        INTEGER NOT NULL,
-          role       TEXT NOT NULL,
-          text       TEXT NOT NULL DEFAULT '',
-          created_at TEXT,
-          payload    TEXT NOT NULL DEFAULT '',
-          diff       BLOB,
-          UNIQUE(session_id, idx)
-        )
-      SQL
-      # The UNIQUE constraint already indexes (session_id, idx); a second index
-      # on the same columns would only cost disk and write time.
-      @db.execute("CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at)")
-    end
 
 
 
