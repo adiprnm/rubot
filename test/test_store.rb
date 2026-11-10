@@ -275,6 +275,28 @@ class TestStore < Minitest::Test
     assert_equal 2, @store.message_count("s1")
   end
 
+  def test_import_carries_the_session_summary
+    data = {
+      "id" => "s1",
+      "created_at" => "2026-11-10T03:00:00Z",
+      "updated_at" => "2026-11-10T03:05:00Z",
+      "summary" => "ringkasan yang sudah memadatkan 300 pesan",
+      "system_prompt" => "PROMPT TERPIN",
+      "system_prompt_epoch" => { "model" => "m" },
+      "forced_skill" => "todotxt",
+      "messages" => [ build_message("user", "halo") ]
+    }
+    File.write(File.join(@sessions, "s1.json"), JSON.generate(data))
+
+    @store.import_directory(@sessions)
+
+    meta = @store.load_session("s1")[:meta]
+    assert_equal "ringkasan yang sudah memadatkan 300 pesan", meta["summary"],
+                 "a compacted session must keep the summary it was compressed into"
+    assert_equal "PROMPT TERPIN", meta["system_prompt"]
+    assert_equal "todotxt", meta["forced_skill"]
+  end
+
   private
 
   def write_session(id, messages, title: nil)

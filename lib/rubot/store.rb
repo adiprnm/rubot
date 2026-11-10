@@ -273,6 +273,16 @@ module Rubot
     # One file. Returns the number of messages it holds, or nil when the file has
     # nothing to resume (Session.describe_data decides that, the same rule the
     # sidebar uses, so the list looks the same after the migration).
+    # The session fields the JSON file carried beyond the messages. Imported so
+    # a compacted session keeps the summary its transcript was compressed into —
+    # without it, resuming that session after the migration would show the model
+    # the tail of a conversation whose beginning it no longer has.
+    META_KEYS = %w[
+      summary task forced_skill model_override model_preset usage last_usage cost
+      cost_partial last_usage_watermark cache_history system_prompt system_prompt_epoch
+      memory_backlog
+    ].freeze
+
     def import_file(path)
       return nil unless File.file?(path)
 
@@ -281,6 +291,9 @@ module Rubot
       return nil unless summary
 
       messages = Session.normalize_utf8(data["messages"])
+      meta = META_KEYS.each_with_object({}) do |key, hash|
+        hash[key] = data[key] if data.key?(key) && !data[key].nil?
+      end
       in_transaction do
         append_messages(summary[:id], messages)
         upsert_session(
@@ -289,7 +302,8 @@ module Rubot
           created_at: data["created_at"],
           updated_at: summary[:updated_at],
           cwd: summary[:cwd],
-          bytes: File.size(path)
+          bytes: File.size(path),
+          meta: meta
         )
       end
       summary[:messages]
