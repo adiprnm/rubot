@@ -1,0 +1,40 @@
+<%# What the search box in the sidebar answers with.
+
+    One block per conversation, best hit first. The ranking is the store's —
+    bm25 over three weighted columns — so the conversation where the phrase was
+    actually discussed arrives before the twenty where it appeared inside a tool
+    result, and grouping keeps that order instead of imposing another.
+
+    A hit is a link to the message itself, not to the conversation: the reader
+    typed a phrase to find the place it was said, and handing them the tail of a
+    long session would leave them scrolling for it. The snippet is the store's
+    own, already escaped and already marked — see Store#snippet_html. -%>
+<% if query.empty? -%>
+<p class="search-hint">Cari di seluruh percakapan, termasuk yang sudah tidak ada di sidebar.</p>
+<% elsif groups.empty? -%>
+<p class="search-hint">Tidak ada yang cocok dengan “<%= h(query) %>”.</p>
+<% else -%>
+<nav class="search-results" aria-label="Hasil pencarian">
+  <% groups.each do |session_id, hits| -%>
+  <% first = hits.first -%>
+  <div class="search-group">
+    <a class="search-head" href="/s/<%= h(session_id) %><%= h(token_query) %>"
+       title="<%= h(first[:persona_label]) %> · <%= h(first[:title]) %>">
+      <span class="emoji" aria-hidden="true"><%= h(first[:emoji]) %></span>
+      <span class="label"><%= h(first[:title]) %></span>
+      <span class="meta"><%= h(first[:age]) %></span>
+    </a>
+    <ul class="search-hits">
+      <% hits.each do |hit| -%>
+      <li>
+        <a class="search-hit" href="<%= h(hit[:href]) %>">
+          <span class="who"><%= h(hit[:who]) %></span>
+          <span class="snippet"><%= hit[:html] %></span>
+        </a>
+      </li>
+      <% end -%>
+    </ul>
+  </div>
+  <% end -%>
+</nav>
+<% end -%>

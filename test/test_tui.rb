@@ -1088,7 +1088,7 @@ end
       submits = []
       input.on(:submit) { |v| submits << v }
       "/se".each_char { |c| input.handle_key(::TUI::Key.printable(c)) }
-      assert_equal %w[/session], input.menu_items
+      assert_equal %w[/session /search], input.menu_items
 
       input.handle_key(::TUI::Key.new(:enter))
       assert_equal [ "/session" ], submits, "enter executes the highlighted command"

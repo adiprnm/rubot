@@ -84,6 +84,7 @@ module Rubot
       "/session NAME" => "Switch to a new session",
       "/resume"   => "Pick a saved session to resume",
       "/resume N|NAME" => "Resume a saved session",
+      "/search KATA" => "Search every stored message, including compacted turns",
       "/info"     => "Show agent info (provider, model, tools)",
       "/context"  => "Show context usage, cache hit rate, and estimated cost",
       "/usage"    => "Show OpenCode Go subscription usage",
@@ -156,6 +157,11 @@ module Rubot
     SKILL_PATH = %r{/skills/([^/\s]+)/SKILL\.md}
 
     # Shell commands that only dump a file's contents count as reading.
+    # How many archive hits /search prints. A terminal is a scrollback, not a
+    # page: the best of a query is worth reading and the rest is a narrower
+    # query away.
+    SEARCH_RESULTS = 15
+
     READ_COMMANDS = /\b(cat|bat|less|more|head|tail)\b/
 
     def initialize(agent = nil, stream: true, pool: nil, on_cron: nil)
@@ -1394,6 +1400,8 @@ module Rubot
         end
       when "/resume"
         handle_resume(parts[1])
+      when "/search"
+        handle_search(parts[1..].join(" "))
       when "/info"
         say("Agent info:", :info)
         agent.startup_info.each { |k, v| say_text("#{k}: #{v}") }
@@ -1627,6 +1635,52 @@ module Rubot
       say_text("Resume one with /resume <number> or /resume <id>.")
       others = other_dir_sessions
       say_text("#{others} more from other directories · /resume all") if others.positive?
+    end
+
+    # /search asks the archive, not the session on screen: every message ever
+    # stored, including the turns a compacted conversation no longer shows the
+    # model — which is the reason the archive is kept. The store answers
+    # best-first (bm25 over three weighted columns, see Store#search), and each
+    # hit names the session it came from because that is what /resume takes.
+    def handle_search(query)
+      text = query.to_s.strip
+      if text.empty?
+        say("Search the archive:", :info)
+        say_text("/search <kata> — every stored message, including compacted turns")
+        return
+      end
+
+      store = Rubot::Session.store
+      if store.nil?
+        say("The archive is not open, so there is nothing to search.", :warn)
+        say_text("Search reads the SQLite archive; without it, conversations are files and /resume lists them.")
+        return
+      end
+
+      hits = store.search(text, limit: SEARCH_RESULTS)
+      if hits.empty?
+        say("Nothing matches #{text.inspect}.", :info)
+        return
+      end
+
+      blank
+      say("#{hits.size} hit(s) for #{text.inspect}:", :info)
+      hits.each_with_index do |hit, index|
+        say_text(format("  %-2d %-26s %-9s %s", index + 1, hit[:session_id], hit[:role],
+                        relative_time(hit[:created_at])))
+        # One line per hit: a terminal wraps, and a wrapped snippet would push
+        # the next hit away from its own id.
+        say_text("     #{snippet_line(hit[:snippet])}")
+      end
+      blank
+      say_text("Resume one with /resume <id>.")
+    end
+
+    # A snippet arrives with the archive's own newlines and runs of spaces
+    # intact, since it is cut from the message as it was written.
+    def snippet_line(text)
+      collapsed = text.to_s.gsub(/\s+/, " ").strip
+      collapsed.length > 120 ? "#{collapsed[0, 119]}…" : collapsed
     end
 
     # Only ids that are actually on disk resolve, which also keeps a crafted

@@ -45,6 +45,10 @@ module Rubot
       # How many conversations the sidebar lists. Older ones stay on disk and
       # are still reachable by their URL.
       MAX_SESSION_ROWS = 40
+      # How many messages one search answers with. The sidebar is a list, not a
+      # page: a query that matches hundreds of rows is answered with the best of
+      # them, and a narrower query is how the reader asks for more.
+      SEARCH_LIMIT = 20
       # How much of a conversation the page draws at once. A long session is a
       # lot of DOM to build for a reader who only ever looks at the end of it,
       # so the page starts at the tail and earlier turns arrive as the reader
@@ -352,8 +356,10 @@ module Rubot
           open_persona(res, match[1], req)
         elsif method == "POST" && (match = PERSONA_SESSIONS_PATH.match(path))
           create_session(res, match[1], req)
+        elsif method == "GET" && path == "/search"
+          render_search(res, req)
         elsif method == "GET" && (match = SESSION_PATH.match(path))
-          render_session(res, match[1])
+          render_session(res, match[1], req)
         elsif method == "GET" && (match = SESSION_HISTORY_PATH.match(path))
           render_history(res, match[1], req)
         elsif method == "POST" && path == "/personas"
@@ -559,12 +565,40 @@ module Rubot
       # index into the full history) and start HISTORY_PAGE entries earlier.
       # `more` says whether anything older is left, so the page can draw the
       # marker that asks for it.
-      def history_page(sid, before: nil)
+      #
+      # `at` is the other way in, and the one a search result uses: the page
+      # ends at the entry holding that message, so the hit is the last thing
+      # drawn and the turns that led to it are the page above. With both, `at`
+      # wins — a hit is where the reader asked to go.
+      #
+      # `landed` comes back with it because a hit is not always an entry: one
+      # turn wraps many messages, so the message the reader clicked has an index
+      # of its own and the entry that holds it has an earlier one. The page marks
+      # the entry; the anchor can only name the message.
+      def history_page(sid, before: nil, at: nil)
         entries = history(sid)
-        stop = before ? before.clamp(0, entries.size) : entries.size
+        focus = at.nil? ? nil : focus_index(entries, at)
+        stop = if at.nil?
+          before ? before.clamp(0, entries.size) : entries.size
+        elsif focus
+          focus + 1
+        else
+          entries.size
+        end
         start = [ stop - HISTORY_PAGE, 0 ].max
 
-        { entries: entries[start...stop], more: start.positive?, before: start }
+        { entries: entries[start...stop], more: start.positive?, before: start,
+          landed: focus ? entries[focus] : nil }
+      end
+
+      # The entry a search hit lands on: the prompt that quoted it, or the turn
+      # that answered it. A session trimmed since it was indexed has messages
+      # the page no longer holds, so the nearest entry above the index is the
+      # fallback rather than the tail of the conversation, which would be a
+      # page away from what was asked for.
+      def focus_index(entries, at)
+        entries.index { |entry| entry[:idx].to_i <= at && entry[:last].to_i >= at } ||
+          entries.rindex { |entry| entry[:idx].to_i <= at }
       end
 
       # Where the page older than this one lives. The token rides in the query
@@ -589,6 +623,98 @@ module Rubot
         res["Cache-Control"] = "no-store"
         res.body = View.render("_history", **page,
                                             older_url: older_url(sid, page[:before]))
+      end
+
+      # The index a search result asked the page to open at, or nil for the
+      # ordinary tail of the conversation. 0 is a real index — the first message
+      # of a session — which is why this is not a truthiness check.
+      def at_index(req)
+        return nil if req.nil?
+
+        raw = form(req, "at")
+        return nil if raw.empty?
+
+        value = Integer(raw, exception: false)
+        value && value >= 0 ? value : nil
+      end
+
+      # --- search ---------------------------------------------------------
+
+      # Search results, drawn the way the sidebar lists conversations: one
+      # block per conversation with its hits underneath. The ranking already
+      # orders hits best first (bm25 over three weighted columns, see
+      # Store#search), and grouping keeps that order — a conversation appears
+      # where its best hit does, so a flat list of twenty rows from one session
+      # does not read as twenty conversations that all share a title.
+      def render_search(res, req)
+        query = form(req, "q").strip
+
+        res["Content-Type"] = "text/html; charset=utf-8"
+        res["Cache-Control"] = "no-store"
+        res.body = View.render("_search", query: query, groups: search_groups(query),
+                                          token_query: token_query)
+      end
+
+      def search_groups(query)
+        return {} if query.empty?
+
+        store = Session.store
+        return {} unless store
+
+        # The archive is shared by every channel, so the prefix keeps the answer
+        # to conversations this channel can open: a hit in a Telegram chat has
+        # no page here. Asking for more than a page of results and then cutting
+        # is not the same as asking for a page — the SQL keeps the limit honest.
+        hits = store.search(query, limit: SEARCH_LIMIT * 2, prefix: "web_")
+        rows = hits.filter_map do |hit|
+          sid = hit[:session_id]
+          slug = owner_slug(sid)
+          next unless slug
+
+          persona = persona_store&.[](slug)
+          {
+            href: hit_url(sid, hit[:idx]),
+            who: role_label(hit[:role]),
+            html: hit[:html],
+            idx: hit[:idx],
+            session_id: sid,
+            title: hit[:title].to_s.strip.empty? ? UNTITLED_SESSION : hit[:title].to_s.strip,
+            emoji: persona ? persona.emoji_or : "🤖",
+            persona_label: persona ? persona.label : slug.capitalize,
+            age: iso_age(hit[:created_at])
+          }
+        end
+
+        rows.first(SEARCH_LIMIT).group_by { |row| row[:session_id] }
+      end
+
+      # The URL a hit opens: the conversation, asked to land on that message.
+      # No fragment — a turn wraps several messages, so `at` is the only thing
+      # that names the place, and the page marks the entry that holds it.
+      def hit_url(sid, idx)
+        params = [ token_query.delete_prefix("?"), "at=#{idx}" ].reject(&:empty?)
+        "/s/#{sid}?#{params.join("&")}"
+      end
+
+      # Who said it, in the words the thread uses: the person is "kamu", the
+      # assistant is the product's own name, and a tool row is a tool.
+      def role_label(role)
+        case role.to_s
+        when "user" then "kamu"
+        when "tool" then "tool"
+        else "rubot"
+        end
+      end
+
+      # A stored timestamp is ISO-8601 text, and the sidebar speaks in ages: a
+      # difference between two instants needs no timezone, an absolute time
+      # would have to assume one.
+      def iso_age(value)
+        return "" if value.to_s.empty?
+
+        elapsed_label(Time.iso8601(value.to_s).to_f)
+      rescue ArgumentError
+        ""
       end
 
       # The allowance, fetched when the panel behind the status row is opened.
@@ -630,7 +756,7 @@ module Rubot
         :unpinned
       end
 
-      def render_session(res, sid)
+      def render_session(res, sid, req = nil)
         slug = owner_slug(sid)
         return not_found(res) unless slug
 
@@ -638,7 +764,7 @@ module Rubot
         persona = persona_store&.[](slug)
         persona_label = persona ? persona.label : slug.capitalize
         session_label = named_session_label(slug, sid)
-        page = history_page(sid)
+        page = history_page(sid, at: at_index(req))
         body = View.render(
           "index",
           personas: persona_rows(slug),
@@ -707,7 +833,13 @@ module Rubot
       def history(sid)
         return [] unless @app_config
 
-        messages = Session.transcript(
+        # The transcript's position in the file is not the same number as its
+        # position in the archive: a trimmed session starts at `start`, so the
+        # absolute index of a message is `start + position`. Search hits are
+        # addressed by that index, and it is attached here — on the entry that
+        # will be drawn — because it is the only thing that can send a reader
+        # back to the message a hit came from.
+        messages, start = Session.transcript_with_start(
           @app_config.workspace,
           sid,
           dir: @app_config.sessions_dir
@@ -718,13 +850,15 @@ module Rubot
         turns = []
         current = nil
 
-        messages.each do |msg|
+        messages.each_with_index do |msg, position|
+          idx = start + position
+
           case msg["role"]
           when "user"
             text = Session.text_content(msg["content"]).to_s.strip
             next if text.empty?
 
-            turns << { kind: :prompt, text: text }
+            turns << { kind: :prompt, text: text, idx: idx, last: idx }
             current = nil
           when "assistant"
             items = []
@@ -737,10 +871,15 @@ module Rubot
             # calling out, and answering again is a single exchange.
             if current
               current[:items].concat(items)
+              current[:last] = idx
             else
-              current = { kind: :turn, items: items }
+              current = { kind: :turn, items: items, idx: idx, last: idx }
               turns << current
             end
+          when "tool"
+            # A hit inside a tool result lands on the turn that called it, so
+            # the entry's own range has to reach past its last assistant round.
+            current[:last] = idx if current
           end
         end
 

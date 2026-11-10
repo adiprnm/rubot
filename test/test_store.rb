@@ -542,6 +542,32 @@ class TestStore < Minitest::Test
     assert_equal 1, @store.search("wanderer").size
   end
 
+  # One archive serves every channel, and each one can only open its own
+  # conversations. The scope has to be part of the query rather than a filter on
+  # the answer: twenty rows cut down to two would answer with two.
+  def test_search_can_be_scoped_to_a_prefix
+    @store.append_messages("web_kanyaah", [build_message("user", "cache hit anjlok")])
+    @store.append_messages("tg_12345", [build_message("user", "cache hit juga")])
+    @store.append_messages("web_other", [build_message("user", "cache hit ketiga")])
+
+    assert_equal 3, @store.search("cache").size
+    assert_equal %w[web_kanyaah web_other],
+                 @store.search("cache", prefix: "web_").map { |hit| hit[:session_id] }.sort
+    assert_equal [ "tg_12345" ], @store.search("cache", prefix: "tg_").map { |hit| hit[:session_id] }
+  end
+
+  # A limit is a limit of the scoped answer, not of the unscoped one.
+  def test_a_scoped_search_spends_its_limit_inside_the_scope
+    @store.append_messages("tg_1", [ build_message("user", "wanderer satu"),
+                                     build_message("user", "wanderer dua") ])
+    @store.append_messages("web_1", [build_message("user", "wanderer tiga")])
+
+    hits = @store.search("wanderer", limit: 1, prefix: "web_")
+
+    assert_equal 1, hits.size
+    assert_equal "web_1", hits.first[:session_id]
+  end
+
   # The migration projects the rows that were already stored; the dedupe and the
   # 8 KB bound are Ruby's rules, so a rebuild applies them to the whole archive.
   def test_a_rebuild_reindexes_the_whole_archive

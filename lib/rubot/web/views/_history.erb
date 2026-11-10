@@ -12,10 +12,15 @@
 </div>
 <% end -%>
 <% entries.each do |msg| -%>
+<%# The entry a search result landed on. The hit names a message; a turn wraps
+    several of them, so the entry is what gets marked — and the mark is what
+    the browser scrolls to, since an id can only name a message. -%>
+<% landed_here = !landed.nil? && msg.equal?(landed) -%>
 <% if msg[:kind] == :prompt -%>
-<%= View.render("_message", role: "user", text: msg[:text]) %>
+<%= View.render("_message", role: "user", text: msg[:text], anchor: "m-#{msg[:idx]}",
+                            landed: landed_here) %>
 <% else -%>
-<div class="turn is-done">
+<div class="turn is-done<%= " is-landed" if landed_here %>"<% if msg[:idx] %> id="m-<%= msg[:idx] %>"<% end %>>
   <div class="turn-body"><%= View.render("_timeline", items: msg[:items]) %></div>
 </div>
 <% end -%>

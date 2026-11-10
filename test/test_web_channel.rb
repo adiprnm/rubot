@@ -624,6 +624,20 @@ module Rubot
         end
       end
 
+      # The other half of a request: a path, a method and a query string. The
+      # routing table is the one thing a view test cannot reach, so a route that
+      # is wired to nothing still has to fail here rather than in a browser.
+      class FakeRequest
+        attr_reader :path, :request_method, :query, :header
+
+        def initialize(path, method: "GET", query: {})
+          @path = path
+          @request_method = method
+          @query = query
+          @header = {}
+        end
+      end
+
       # A session stand-in that only has to hand out tools: the delivery bind
       # reads nothing else.
       class FakeToolAgent
@@ -652,6 +666,8 @@ module Rubot
       end
 
       def teardown
+        Rubot::Session.store&.close
+        Rubot::Session.store = nil
         Array(@fixtures).each { |dir| FileUtils.remove_entry(dir) if File.directory?(dir) }
       end
 
@@ -679,6 +695,40 @@ module Rubot
           data["title"] = titles[id] if titles[id]
           File.write(File.join(dir, "sessions", "#{id}.json"), JSON.generate(data))
         end
+
+        config = Rubot::Config.from_data(
+          { "agents" => { "defaults" => { "workspace" => workspace } } },
+          config_path: File.join(dir, "config.yml")
+        )
+
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        channel.instance_variable_set(:@app_config, config)
+        channel
+      end
+
+      # The same channel, but with the archive open — which is the only thing
+      # that can answer a search. Messages go through the store rather than into
+      # a JSON file, so history, ranking and the message index all come from the
+      # place the page reads them in production.
+      def channel_with_archive(personas:, messages:, titles: {})
+        dir = Dir.mktmpdir("rubot-web-archive")
+        @fixtures << dir
+        workspace = File.join(dir, "workspace")
+        FileUtils.mkdir_p(File.join(dir, "sessions"))
+        FileUtils.mkdir_p(workspace)
+
+        File.write(File.join(dir, "personas.json"), JSON.generate(personas))
+
+        store = Rubot::Store.new(Rubot::Store.path_for(File.join(dir, "sessions")))
+        messages.each do |sid, rows|
+          store.append_messages(sid, rows.map.with_index do |(role, text), offset|
+            { "role" => role, "content" => text,
+              "timestamp" => (Time.utc(2026, 11, 10, 8, 0) + offset).iso8601 }
+          end)
+          store.upsert_session(id: sid, title: titles.fetch(sid, rows.first.last),
+                               updated_at: "2026-11-10T08:00:00Z")
+        end
+        Rubot::Session.store = store
 
         config = Rubot::Config.from_data(
           { "agents" => { "defaults" => { "workspace" => workspace } } },
@@ -3650,6 +3700,264 @@ module Rubot
       # channel names what it serves.
       # A file in a conversation's folder, named the way the channel writes
       # names: an id in front, the reader's own name behind it.
+      # --- search ---------------------------------------------------------
+
+      # Search is a dialog in the middle of the screen, not a field in the
+      # sidebar: a hit is a place in another conversation, and its sentence
+      # needs the width of the page to be worth reading. The dialog is drawn
+      # once per page and opened from the button beside "+ Sesi baru".
+      def test_the_page_carries_the_search_dialog_and_its_way_in
+        html = render_page
+
+        assert_includes html, %(<dialog id="search-dialog")
+        assert_includes html, %(hx-get="/search")
+        assert_includes html, %(data-search-open)
+        assert_includes html, %(data-search-close)
+        refute_includes html, "side-search", "no field left in the sidebar"
+      end
+
+      # On a phone the button that opens the dialog is inside the drawer, and a
+      # panel left open behind a modal reappears the moment the dialog closes —
+      # looking like the dialog had not been dismissed. The page closes it when
+      # search opens, whichever way it was opened.
+      def test_opening_search_shuts_the_mobile_drawer
+        html = render_page
+
+        assert_includes html, %(@rubot:search.window="nav = false")
+      end
+
+      # The button draws its own magnifier. An emoji is whatever picture the
+      # system font carries, so it would change shape and weight per machine
+      # beside a row that is otherwise identical everywhere.
+      def test_the_search_button_wears_a_drawn_magnifier
+        html = render_page
+        button = html[/<button class="search-open".*?<\/button>/m]
+
+        refute_nil button
+        assert_includes button, %(<svg class="search-icon")
+        assert_includes button, %(aria-hidden="true"), "a drawing must not be read out"
+        refute_includes button, "🔍"
+      end
+
+      # The dialog opens empty. An answer to a query nobody can see any more is
+      # a list of strangers, so the pane starts as the hint and app.js puts it
+      # back on close.
+      def test_the_search_dialog_opens_with_the_hint
+        html = render_page
+
+        assert_includes html, %(<p class="search-hint">Cari di seluruh percakapan)
+      end
+
+      # The sidebar lists forty conversations and the page draws twenty entries
+      # of one of them. The archive is the only place that can answer "where did
+      # we talk about this", so the answer names the conversation and the
+      # message inside it.
+      def test_search_answers_with_the_conversation_and_the_message
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah", "emoji" => "🧭" } },
+          messages: { "web_kanyaah" => [ [ "user", "kenapa cache hit anjlok?" ],
+                                         [ "assistant", "Karena prefix-nya bergeser." ] ] }
+        )
+
+        groups = channel.send(:search_groups, "cache")
+        hit = groups.values.flatten.first
+
+        assert_equal [ "web_kanyaah" ], groups.keys
+        assert_equal "🧭", hit[:emoji]
+        assert_equal "kamu", hit[:who]
+        assert_includes hit[:html], "<mark>cache</mark>"
+        # The link asks the page to land on that message. No fragment: a turn
+        # wraps several messages, so the index names the place and the page
+        # marks the entry that holds it (see #history_page).
+        assert_equal "/s/web_kanyaah?at=0", hit[:href]
+      end
+
+      # The archive is shared by every channel, and a Telegram chat has no page
+      # in this one. A hit the reader cannot open is a dead link, not a result.
+      def test_search_leaves_out_a_conversation_this_channel_cannot_open
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: { "web_kanyaah" => [ [ "user", "cache hit turun" ] ],
+                      "tg_12345" => [ [ "user", "cache hit juga di sini" ] ] }
+        )
+
+        assert_equal [ "web_kanyaah" ], channel.send(:search_groups, "cache").keys
+      end
+
+      def test_an_empty_query_asks_nothing_of_the_archive
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: { "web_kanyaah" => [ [ "user", "halo" ] ] }
+        )
+
+        assert_empty channel.send(:search_groups, "   ")
+      end
+
+      # Opening a hit is a page that ends at the message, not the tail of the
+      # conversation: the reader asked for a place, and the turns that led to it
+      # are the page above.
+      def test_a_hit_opens_the_page_that_ends_at_its_message
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: { "web_kanyaah" => (1..30).flat_map do |i|
+            [ [ "user", "pesan #{i}" ], [ "assistant", "balasan #{i}" ] ]
+          end }
+        )
+
+        page = channel.send(:history_page, "web_kanyaah", at: 41)
+
+        # Message 41 is the answer to "pesan 21", so the turn drawn last is the
+        # one the hit belongs to.
+        assert_equal 41, page[:entries].last[:idx]
+        assert_equal :turn, page[:entries].last[:kind]
+        assert_same page[:entries].last, page[:landed]
+        assert page[:more], "everything older is still a page away"
+        assert_operator page[:entries].size, :<=, Rubot::Channels::Web::HISTORY_PAGE
+
+        html = View.render("_history", entries: page[:entries], more: false, older_url: "",
+                                      landed: page[:landed])
+        assert_includes html, %(class="turn is-done is-landed" id="m-41")
+      end
+
+      # A turn wraps the whole round — the call, its result and the answer — so a
+      # hit in the middle of one lands on the turn, not on the message that
+      # happened to open it.
+      def test_a_hit_inside_a_turn_lands_on_the_turn_that_holds_it
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        write_messages(channel, "web_kanyaah", [
+          { "role" => "user", "content" => "cek file" },
+          { "role" => "assistant", "content" => "", "tool_calls" => [
+            { "id" => "c1", "type" => "function",
+              "function" => { "name" => "grep", "arguments" => %({"pattern":"wanderer"}) } }
+          ] },
+          { "role" => "tool", "tool_call_id" => "c1", "content" => "wanderer ada di 12 tempat" },
+          { "role" => "assistant", "content" => "Ketemu." }
+        ])
+
+        page = channel.send(:history_page, "web_kanyaah", at: 2)
+
+        assert_equal 1, page[:landed][:idx], "the turn opens at the call"
+        assert_equal 3, page[:landed][:last], "and reaches the answer"
+
+        html = View.render("_history", entries: page[:entries], more: false, older_url: "",
+                                      landed: page[:landed])
+        assert_includes html, %(class="turn is-done is-landed" id="m-1")
+      end
+
+      # A prompt is an entry of its own, so a hit in the person's own words
+      # lands on the bubble rather than on the answer below it.
+      def test_a_prompt_hit_lands_on_the_bubble_it_quoted
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: { "web_kanyaah" => (1..30).flat_map do |i|
+            [ [ "user", "pesan #{i}" ], [ "assistant", "balasan #{i}" ] ]
+          end }
+        )
+
+        page = channel.send(:history_page, "web_kanyaah", at: 40)
+
+        assert_equal 40, page[:entries].last[:idx]
+        assert_equal :prompt, page[:entries].last[:kind]
+
+        html = View.render("_history", entries: page[:entries], more: false, older_url: "",
+                                      landed: page[:landed])
+        assert_includes html, %(class="msg user is-landed" id="m-40")
+      end
+
+      # A session trimmed since it was indexed no longer holds the message the
+      # hit came from. Landing on the tail would be a page away from what was
+      # asked for, so the nearest entry above the index is the place.
+      def test_a_hit_whose_message_is_gone_lands_on_the_nearest_entry
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: { "web_kanyaah" => [ [ "user", "satu" ], [ "assistant", "dua" ] ] }
+        )
+
+        page = channel.send(:history_page, "web_kanyaah", at: 500)
+
+        assert_equal 1, page[:entries].last[:idx], "the last entry, not nothing"
+        assert_same page[:entries].last, page[:landed]
+        refute page[:more]
+      end
+
+      # Without `at` the page is still the tail: the landing parameter must not
+      # change what opening a conversation normally does.
+      def test_a_page_without_a_hit_is_still_the_tail
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: { "web_kanyaah" => (1..30).flat_map do |i|
+            [ [ "user", "pesan #{i}" ], [ "assistant", "balasan #{i}" ] ]
+          end }
+        )
+
+        page = channel.send(:history_page, "web_kanyaah")
+
+        assert_equal 59, page[:entries].last[:idx]
+        assert_nil page[:landed]
+        assert page[:more]
+      end
+
+      # The dialog asks this route on every pause in typing, and the answer is a
+      # fragment swapped into the pane — never a page.
+      def test_the_search_route_answers_a_fragment
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah", "emoji" => "🧭" } },
+          messages: { "web_kanyaah" => [ [ "user", "kenapa cache hit anjlok?" ] ] }
+        )
+        res = FakeResponse.new
+
+        channel.send(:dispatch, FakeRequest.new("/search", query: { "q" => "cache" }), res)
+
+        assert_equal 200, res.status
+        assert_includes res.body, %(class="search-group")
+        assert_includes res.body, "Kanyaah · kenapa cache hit anjlok?"
+        assert_includes res.body, %(href="/s/web_kanyaah?at=0")
+      end
+
+      def test_the_search_route_says_so_when_nothing_matches
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: { "web_kanyaah" => [ [ "user", "halo" ] ] }
+        )
+        res = FakeResponse.new
+
+        channel.send(:dispatch, FakeRequest.new("/search", query: { "q" => "zebra" }), res)
+
+        assert_equal 200, res.status
+        assert_includes res.body, "Tidak ada yang cocok"
+      end
+
+      # The link a hit writes is a page that already lands there: the entry is
+      # marked by the server, so no script has to find the message afterwards.
+      def test_a_session_opens_at_the_entry_a_hit_named
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: { "web_kanyaah" => (1..30).flat_map do |i|
+            [ [ "user", "pesan #{i}" ], [ "assistant", "balasan #{i}" ] ]
+          end }
+        )
+        res = FakeResponse.new
+
+        channel.send(:dispatch, FakeRequest.new("/s/web_kanyaah", query: { "at" => "41" }), res)
+
+        assert_equal 200, res.status
+        assert_includes res.body, %(class="turn is-done is-landed" id="m-41")
+      end
+
+      def test_an_index_that_is_not_a_number_is_ignored
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: { "web_kanyaah" => [ [ "user", "satu" ], [ "assistant", "dua" ] ] }
+        )
+        res = FakeResponse.new
+
+        channel.send(:dispatch, FakeRequest.new("/s/web_kanyaah", query: { "at" => "hapus" }), res)
+
+        assert_equal 200, res.status
+        assert_includes res.body, %(id="m-1"), "the tail, as if nothing was asked for"
+        refute_includes res.body, "is-landed", "an unreadable index marks nothing"
+      end
+
       def write_attachment(channel, sid, basename, body)
         name = "a" * 32 + "-#{File.basename(basename, File.extname(basename))}#{File.extname(basename)}"
         dir = channel.send(:attachments_dir, sid)

@@ -1,9 +1,15 @@
 <%# Only the prompt is quoted in a bubble. The answer is the page speaking, so
-    it takes the full column with nothing around it. -%>
+    it takes the full column with nothing around it.
+
+    `anchor` is optional: the thread stamps a message index on an entry so the
+    entry can be linked to. `landed` is the other direction — this entry is the
+    one a search result asked for, and the page scrolls here and rings it once.
+    An entry with neither — the live turn, which has no stored index yet —
+    simply carries no id and no mark. -%>
 <% if role == "user" -%>
-<div class="msg user">
+<div class="msg user<%= " is-landed" unless defined?(landed).nil? || !landed %>"<% if defined?(anchor) && anchor %> id="<%= h(anchor) %>"<% end %>>
   <div class="bubble"><span class="sr-only">Kamu: </span><%= h(text) %></div>
 </div>
 <% else -%>
-<div class="text"><span class="sr-only">Rubot: </span><%= fmt(text) %></div>
+<div class="text"<% if defined?(anchor) && anchor %> id="<%= h(anchor) %>"<% end %>><span class="sr-only">Rubot: </span><%= fmt(text) %></div>
 <% end -%>

@@ -569,6 +569,240 @@ body {
 
 .new-session .btn span { font-size: 13px; line-height: 1; }
 
+/* ---------- search ------------------------------------------------- */
+
+/* Search is a dialog, not a column: a result is a place in another
+   conversation, and the title, the speaker and the sentence need the width of
+   the page to be readable. Opening it also leaves the sidebar doing its own
+   job, which is a list of this persona's conversations.
+
+   It is a real <dialog>, so the browser gives it the top layer, a focus trap,
+   escape to close and an inert page behind it — none of which a positioned div
+   would, and all of which a search overlay needs. */
+.search-dialog {
+  width: min(92vw, 40rem);
+  max-height: min(80vh, 34rem);
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg0);
+  color: var(--fg);
+  box-shadow: 0 18px 60px var(--shadow-deep);
+  overflow: hidden;
+}
+
+.search-dialog::backdrop {
+  background: var(--scrim);
+  /* The page behind is inert while the dialog is open; this just says so. */
+  backdrop-filter: blur(1.5px);
+}
+
+/* The field is the top of the dialog and stays put while the list scrolls
+   under it: the query is the thing being edited, so it cannot scroll away. */
+.search-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.55rem 0.6rem 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.search-input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.25rem 0;
+  font-family: var(--serif);
+  font-size: 15px;
+  color: var(--fg);
+  background: none;
+  border: 0;
+}
+
+.search-input::placeholder { color: var(--fg-faint); }
+.search-input:focus { outline: none; }
+
+.search-input::-webkit-search-cancel-button {
+  filter: grayscale(1) opacity(0.55);
+  cursor: pointer;
+}
+
+/* A key, drawn as one: the dialog closes with escape and this is what says so.
+   It is also a button, because a phone has no escape key. */
+.search-close {
+  padding: 0.22rem 0.45rem;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+  color: var(--fg-faint);
+  background: var(--bg-dim);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.search-close:hover { color: var(--fg); background: var(--bg1); }
+
+/* The answers. Their own scroller, so a hundred hits do not push the field out
+   of the dialog — the field is fixed, the list is what moves. */
+.search-results-pane {
+  max-height: calc(min(80vh, 34rem) - 3.1rem);
+  overflow-y: auto;
+  padding: 0.6rem 0.55rem 0.7rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg2) transparent;
+}
+
+.search-results-pane::-webkit-scrollbar { width: 8px; }
+.search-results-pane::-webkit-scrollbar-thumb {
+  background: var(--bg2);
+  border-radius: 8px;
+  border: 2px solid var(--bg0);
+}
+
+/* What the dialog says before it has anything to show, and when nothing
+   matches. Quiet enough that it reads as the field's own placeholder. */
+.search-hint {
+  margin: 0;
+  padding: 0.35rem 0.35rem 0.8rem;
+  font-size: 13px;
+  font-style: italic;
+  line-height: 1.45;
+  color: var(--fg-faint);
+}
+
+.search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+/* The conversation a group of hits belongs to: face, name, age. It links to
+   the conversation itself, for the reader who wants the whole of it rather
+   than the sentence they searched for. */
+.search-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.45rem;
+  align-items: baseline;
+  padding: 0 0.35rem 0.25rem;
+  color: var(--fg-dim);
+  text-decoration: none;
+}
+
+.search-head:hover,
+.search-head:focus-visible { color: var(--fg); }
+
+.search-head .emoji { font-size: 13px; }
+
+.search-head .label {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-head .meta {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: -0.03em;
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+
+.search-hits {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* One hit: who said it, then the phrase in its sentence. Two lines of snippet —
+   this is an index of places, and the whole message is one click away. */
+.search-hit {
+  display: block;
+  padding: 0.4rem 0.5rem 0.45rem;
+  border-radius: 4px;
+  color: var(--fg-dim);
+  text-decoration: none;
+}
+
+.search-hit:hover,
+.search-hit:focus-visible { background: var(--bg1); color: var(--fg); }
+
+.search-hit .who {
+  display: block;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+
+.search-hit .snippet {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  overflow: hidden;
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+
+/* The phrase that was asked for. The selection pair rather than an accent: a
+   mark is a highlight on text, and every theme already names the ground and the
+   ink for exactly that. */
+.search-hit mark {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+  border-radius: 2px;
+  padding: 0 0.08em;
+}
+
+/* The way in, beside "+ Sesi baru": two actions about this persona's
+   conversations, so they share a row instead of stacking into a column of
+   equal-looking buttons. */
+.side-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.35rem;
+  margin: 0 0 0.6rem;
+}
+
+.side-actions .new-session { margin: 0; }
+
+.search-open {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem 0.55rem;
+  color: var(--fg-dim);
+  background: var(--bg1);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.search-open:hover { color: var(--fg); background: var(--bg2); }
+
+/* The glyph is a drawing, not a character: it inherits the button's colour and
+   sits on the optical centre of the row without the line-height of a font. */
+.search-open .search-icon { display: block; }
+
+/* Where a search result landed. Drawn once and faded out: it answers "which
+   message did I click" and then gets out of the conversation's way. An inset
+   bar rather than a background, so the entry does not change height or colour
+   under the reader's eye. */
+.thread .is-landed { animation: landed 2.4s ease-out 1; border-radius: 4px; }
+
+@keyframes landed {
+  0%, 55% { box-shadow: inset 3px 0 0 var(--green); }
+  100% { box-shadow: inset 3px 0 0 transparent; }
+}
+
 .sidebar-label {
   padding: 0 0.5rem 0.4rem;
   font-size: 12px;

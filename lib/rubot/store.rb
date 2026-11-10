@@ -284,19 +284,28 @@ module Rubot
     #
     # Returns [{ session_id:, idx:, role:, created_at:, title:, snippet:, html:,
     # score: }, ...], best first.
-    def search(text, limit: 20)
+    #
+    # `prefix` narrows the search to sessions whose id starts with it, so a
+    # channel can ask for the conversations it can actually open. The archive is
+    # shared by every channel — a Telegram chat is in here too — and a hit in a
+    # conversation the asker has no page for is a dead link, not a result. It is
+    # an SQL filter rather than a slice in Ruby so the limit stays a limit:
+    # filtering twenty rows down to two would answer with two.
+    def search(text, limit: 20, prefix: nil)
       expression = search_expression(text)
       return [] if expression.nil? || fts_table.nil?
 
       weights = SEARCH_WEIGHTS.join(", ")
-      @db.execute(<<~SQL, [ expression, limit.to_i ]).map do |row|
+      scope = prefix.to_s.empty? ? [ "", [] ] : [ " AND substr(m.session_id, 1, ?) = ?",
+                                                  [ prefix.to_s.length, prefix.to_s ] ]
+      @db.execute(<<~SQL, [ expression, *scope[1], limit.to_i ]).map do |row|
         SELECT m.session_id, m.idx, m.role, m.created_at, s.title,
                snippet(fts, -1, '#{SNIPPET_OPEN}', '#{SNIPPET_CLOSE}', '…', 24),
                bm25(fts, #{weights})
         FROM fts
         JOIN messages m ON m.id = fts.rowid
         LEFT JOIN sessions s ON s.id = m.session_id
-        WHERE fts MATCH ?
+        WHERE fts MATCH ?#{scope[0]}
         ORDER BY bm25(fts, #{weights})
         LIMIT ?
       SQL

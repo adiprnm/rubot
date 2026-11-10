@@ -669,21 +669,34 @@ module Rubot
     # Full message list of a saved session, used by /resume to restore the
     # transcript exactly as it was.
     def self.transcript(workspace, id, dir: nil)
+      transcript_with_start(workspace, id, dir: dir).first
+    end
+
+    # The transcript plus the index its first message carries in the archive.
+    #
+    # A trimmed session starts partway through: `messages_start` is the index
+    # the stored transcript begins at, so position `n` in the returned array is
+    # message `start + n`. Search hits are addressed by that absolute index, and
+    # this is what turns one into a place in the list a page can draw. The file
+    # fallback starts at zero, which is what a file always was.
+    def self.transcript_with_start(workspace, id, dir: nil)
       dir ||= sessions_dir(workspace)
       if (archive = store)
         loaded = archive.load_session(id)
-        return loaded ? normalize_utf8(loaded[:messages]) : []
+        return [ [], 0 ] if loaded.nil?
+
+        return [ normalize_utf8(loaded[:messages]), loaded[:start].to_i ]
       end
-      return [] unless dir
+      return [ [], 0 ] unless dir
 
       path = File.join(dir, "#{id}.json")
-      return [] unless File.file?(path)
+      return [ [], 0 ] unless File.file?(path)
 
       data = JSON.parse(File.read(path))
       messages = data["messages"]
-      messages.is_a?(Array) ? normalize_utf8(messages) : []
+      [ messages.is_a?(Array) ? normalize_utf8(messages) : [], 0 ]
     rescue JSON::ParserError, SystemCallError, EncodingError
-      []
+      [ [], 0 ]
     end
 
     # The list shape the channels already expect from #describe. `updated_at` is

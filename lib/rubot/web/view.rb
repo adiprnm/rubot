@@ -780,6 +780,17 @@ module Rubot
           state == :running ? MARKS[:running] : icon(state)
         end
 
+        # The way into the archive. A drawn magnifier rather than an emoji: an
+        # emoji is whatever picture the system font happens to carry, so it
+        # changes shape and weight per machine next to a button that is otherwise
+        # the same everywhere. 12×12, stroke only, currentColor, so it takes the
+        # button's colour the way the status row's marks do.
+        def search_icon
+          %(<svg class="search-icon" viewBox="0 0 12 12" width="12" height="12" fill="none" ) +
+            %(stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true" ) +
+            %(focusable="false"><circle cx="5.2" cy="5.2" r="3.3"/><path d="M7.7 7.7 10.5 10.5"/></svg>)
+        end
+
         # A 10px stroked mark. Decorative: the row's title carries the meaning,
         # so the drawing is hidden from a screen reader.
         def usage_icon(name)

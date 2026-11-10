@@ -2,7 +2,8 @@
     room for either of them, so both slide away together and come back
     together as a single drawer behind the button in the chat header. -%>
 <div class="app" x-data="{ nav: false }" :class="{ 'nav-open': nav }"
-     @keydown.escape.window="nav = false">
+     @keydown.escape.window="nav = false"
+     @rubot:search.window="nav = false">
 <div class="side-dock">
   <%# The leftmost column is a roster, not a menu: one round avatar per
       persona, named on hover, the way a chat app lists the places you can be.
@@ -91,11 +92,20 @@
       </details>
     </header>
 
-    <%# A plain form, not an htmx request: a new session is a new URL, so the
-        browser is asked to navigate to it. -%>
-    <form class="new-session" method="post" action="/p/<%= h(slug) %>/sessions<%= h(token_query) %>">
-      <button class="btn" type="submit"><span aria-hidden="true">+</span> Sesi baru</button>
-    </form>
+        <%# The way into the archive: every message ever stored, including the turns
+        a compacted session no longer shows the model — which is the reason the
+        archive exists at all. It sits beside "+ Sesi baru" because both are
+        about this persona's conversations, and one of them makes a new one.
+
+        The dialog itself is at the end of the page: it is not part of the
+        sidebar's flow, and the top layer it opens into is not either. -%>
+    <div class="side-actions">
+      <form class="new-session" method="post" action="/p/<%= h(slug) %>/sessions<%= h(token_query) %>">
+        <button class="btn" type="submit"><span aria-hidden="true">+</span> Sesi baru</button>
+      </form>
+      <button class="search-open" type="button" data-search-open
+              aria-label="Cari percakapan" title="Cari percakapan (⌘K)"><%= search_icon %></button>
+    </div>
 
     <p class="sidebar-label">Sesi</p>
     <%= View.render("_sessions", sessions: sessions, token_query: token_query) %>
@@ -136,7 +146,7 @@
           session with hundreds of turns should not cost a full render, and the
           bottom of it is all anyone opens it for. -%>
       <%= View.render("_history", entries: page[:entries], more: page[:more],
-                                  older_url: older_url) %>
+                                  older_url: older_url, landed: page[:landed]) %>
       <% if page[:entries].empty? && live_turn.nil? %>
         <p class="empty">
           <%= h(persona_label) %> punya SOUL, skills, dan memory sendiri.
@@ -188,6 +198,11 @@
     </div>
   </main>
 </div>
+
+<%# The archive, in a dialog of its own. It lives outside the app grid because a
+    modal is hoisted to the top layer anyway, and escaping the grid keeps the
+    two from ever arguing about width. -%>
+<%= View.render("_search_dialog", token_query: token_query) %>
 
 <%# The sheet a picture opens into. One of them serves every image on the page:
     the click handler fills in its src from the picture that was pressed, so a
