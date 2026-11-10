@@ -1814,17 +1814,27 @@ body {
 .diff-line { color: var(--fg-faint); }
 
 /* The path is what the diff is about; it gets the row's own colour and the
-   space between it and the counts. */
+   space between it and the counts. The padding is symmetrical so the name sits
+   on the middle line of its band instead of hanging off the border above it. */
 .diff-path {
-  padding: 0 0.55rem 0.28rem;
+  padding: 0.28rem 0.55rem;
   border-bottom: 1px solid var(--line-soft);
   color: var(--fg-dim);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 1.6;
 }
 
+/* The bands are laid out in a grid of one column, and the column is as wide as
+   the longest row — never narrower than the block. In ordinary block flow every
+   row would be exactly the visible width and the green and red would stop at
+   the right edge of the screen, leaving a bare strip wherever the reader
+   scrolled; a cell stretches to its column, so one row's width is every row's
+   width and the tint runs the whole way. */
 .diff-body {
+  display: grid;
+  grid-auto-columns: minmax(max-content, 100%);
   overflow-x: auto;
   padding: 0.22rem 0;
 }
