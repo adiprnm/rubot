@@ -84,6 +84,20 @@ module Rubot
 
       private
 
+      # Rough size of what the provider was asked to read. Characters rather
+      # than tokens: enough to watch a prompt grow, and free to compute.
+      def prompt_bytes(payload)
+        messages = payload["messages"]
+        return 0 unless messages.is_a?(Array)
+
+        # Messages reach here with string keys from the agent and symbol keys
+        # from callers that build them by hand; both count.
+        messages.sum do |message|
+          content = message.is_a?(Hash) ? (message["content"] || message[:content]) : nil
+          content.to_s.bytesize
+        end
+      end
+
       def build_payload(messages, tools, stream: false)
         payload = {
           "model" => @config.model,
@@ -115,6 +129,9 @@ module Rubot
         uri = URI("#{api_base}/chat/completions")
 
         log_debug("Request: #{JSON.generate(payload)}")
+        # Nothing streams here, so the whole wait is one number: there is no
+        # first byte to separate it from.
+        started = Rubot::Timing.clock
         response = with_retry do
           http = Net::HTTP.new(uri.host, uri.port)
           http.use_ssl = uri.scheme == "https"
@@ -139,7 +156,15 @@ module Rubot
           raise "API error #{response.code}: #{response.body}"
         end
 
-        JSON.parse(response.body)
+        body = JSON.parse(response.body)
+        Rubot::Timing.record(
+          model: @config.model,
+          prompt_bytes: prompt_bytes(payload),
+          total: Rubot::Timing.clock - started,
+          kind: "request",
+          usage: body["usage"]
+        )
+        body
       end
 
       def make_stream_request(payload, &on_chunk)
@@ -154,6 +179,10 @@ module Rubot
         usage = nil
         finish_reason = nil
         saw_done = false
+        # Two halves of the wait, kept apart: how long the provider took to say
+        # anything at all, and how long the answer then took to finish.
+        started = Rubot::Timing.clock
+        first_byte = nil
 
         with_retry(retryable: -> { accumulated.empty? }) do
           http = Net::HTTP.new(uri.host, uri.port)
@@ -203,11 +232,13 @@ module Rubot
                     next unless delta
 
                     if delta["content"]
+                      first_byte ||= Rubot::Timing.clock - started if Rubot::Timing.enabled?
                       accumulated += delta["content"]
                       yield delta["content"], nil if on_chunk
                     end
 
                     if delta["reasoning_content"]
+                      first_byte ||= Rubot::Timing.clock - started if Rubot::Timing.enabled?
                       reasoning_content += delta["reasoning_content"]
                       # The caller renders the model's thinking as it arrives,
                       # so it is handed out on its own channel instead of
@@ -263,6 +294,15 @@ module Rubot
 
           tool_calls = tool_calls_accum.empty? ? nil : tool_calls_accum.values
           track_usage(usage)
+
+          Rubot::Timing.record(
+            model: @config.model,
+            prompt_bytes: prompt_bytes(payload),
+            first_byte: first_byte,
+            total: Rubot::Timing.clock - started,
+            tool_calls: tool_calls&.size,
+            usage: usage
+          )
 
           extra = { "usage" => usage }.compact
           # A stream that never sent `data: [DONE]` was cut, not finished: the

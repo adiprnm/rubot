@@ -88,6 +88,7 @@ module Rubot
       "/info"     => "Show agent info (provider, model, tools)",
       "/context"  => "Show context usage, cache hit rate, and estimated cost",
       "/usage"    => "Show OpenCode Go subscription usage",
+      "/timing"   => "Where provider requests spend their time (needs RUBOT_TIMING=1 on launch)",
       "/models"   => "List the models the provider supports",
       "/model"    => "Show current active model",
       "/use-model NAME" => "Switch to a model for this session",
@@ -1438,6 +1439,10 @@ module Rubot
       when "/usage"
         blank
         say_text(Rubot::OpencodeUsageReport.render(agent.opencode_usage))
+        blank
+      when "/timing"
+        blank
+        say_text(Rubot::Timing.report)
         blank
       when "/models"
         handle_models_command(parts[1])

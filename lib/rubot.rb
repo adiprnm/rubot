@@ -3,6 +3,7 @@
 require_relative "rubot/env_loader"
 require_relative "rubot/cancellation"
 require_relative "rubot/learning"
+require_relative "rubot/timing"
 require_relative "rubot/config"
 require_relative "rubot/model_info"
 require_relative "rubot/pricing_catalog"
