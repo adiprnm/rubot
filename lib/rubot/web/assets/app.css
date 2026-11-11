@@ -3435,3 +3435,47 @@ a:active,
   .btn:active,
   .theme-swatch:active { transform: none; }
 }
+
+/* ---------- unread marks ------------------------------------------ */
+
+/* A conversation that finished something while its page was not open. The dot
+   sits in the padding the row already had, so a marked row does not reflow the
+   list and the labels of the rows below stay where they were. Yellow because
+   that is what this theme uses for "look here", not red, which means failure. */
+.session-link { position: relative; }
+
+.session.is-unread .session-link { padding-left: 1.05rem; }
+
+.unread-dot {
+  position: absolute;
+  left: 0.32rem;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  margin-top: -2px;
+  border-radius: 50%;
+  background: var(--yellow);
+}
+
+/* The roster's version of the same fact, as a number: the rail is asking
+   "which persona has something new", and two personas with news need to be
+   told apart by more than a dot. Drawn over the avatar's top-right corner,
+   which is where a phone puts this on every icon it owns. */
+.rail-badge {
+  position: absolute;
+  top: -0.1rem;
+  right: -0.15rem;
+  min-width: 1.05rem;
+  height: 1.05rem;
+  padding: 0 0.2rem;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--bg-dim);
+  background: var(--yellow);
+  color: var(--on-accent);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}

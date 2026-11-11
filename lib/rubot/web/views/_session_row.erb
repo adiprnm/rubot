@@ -10,10 +10,18 @@
     A conversation that has no row in the archive yet (a brand-new "Sesi baru")
     has nothing to pin, so it gets no pin button until its first message has
     been saved. -%>
-<div class="session<%= row[:active] ? " is-active" : "" %><%= row[:pinned] ? " is-pinned" : "" %>">
+<div class="session<%= row[:active] ? " is-active" : "" %><%= row[:pinned] ? " is-pinned" : "" %><%= row[:unread] ? " is-unread" : "" %>">
   <a class="session-link"
      href="/s/<%= h(row[:id]) %><%= h(token_query) %>"
      <%= row[:active] ? 'aria-current="page"' : "" %>>
+    <%# A dot, not a count: the row is one conversation, and "3" would be three
+        of what? The count belongs to the persona, where it is a number of
+        conversations. The label carries the same fact for a reader who cannot
+        see the dot. -%>
+    <% if row[:unread] %>
+      <span class="unread-dot" aria-hidden="true"></span>
+      <span class="sr-only">belum dibaca</span>
+    <% end %>
     <span class="label"><%= h(row[:label]) %></span>
   </a>
 

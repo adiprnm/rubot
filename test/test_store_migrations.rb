@@ -132,10 +132,10 @@ class TestStoreMigrations < Minitest::Test
     db = SQLite3::Database.new(File.join(@dir, "sessions.db"))
     versions = db.execute("SELECT version FROM schema_migrations ORDER BY version").flatten
 
-    assert_equal [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 ], versions
+    assert_equal [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 ], versions
     assert_equal %w[id session_id idx role text created_at payload diff user_text assistant_text tool_text],
                  db.execute("PRAGMA table_info(messages)").map { |r| r[1] }
-    assert_equal %w[id title created_at updated_at cwd msg_count bytes meta messages_start pinned_at],
+    assert_equal %w[id title created_at updated_at cwd msg_count bytes meta messages_start pinned_at unread_at],
                  db.execute("PRAGMA table_info(sessions)").map { |r| r[1] }
     assert_equal %w[endpoint p256dh auth persona created_at last_seen_at],
                  db.execute("PRAGMA table_info(push_subscriptions)").map { |r| r[1] },

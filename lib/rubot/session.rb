@@ -810,6 +810,9 @@ module Rubot
         # The stamp, not a flag: the sidebar's pinned section is ordered by it,
         # and nil is "not pinned" for every row written before pins existed.
         pinned_at: row[:pinned_at],
+        # Nil for a row from a database older than schema 11 and for the
+        # file-backed list, which has nothing to read the mark from.
+        unread_at: row[:unread_at],
         last_prompt: nil
       }
     end

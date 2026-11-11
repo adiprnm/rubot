@@ -400,7 +400,10 @@ module Rubot
           # A conversation with no archive row yet has no stamp and nothing to
           # pin; the row is drawn for the reader who just opened it.
           pinnable: !entry[:timestamp].nil?,
-          active: entry[:id] == current_sid
+          active: entry[:id] == current_sid,
+          # The row that is open is, by definition, seen: a mark on it would sit
+          # there until the next reload and say nothing.
+          unread: !entry[:unread_at].to_s.strip.empty? && entry[:id] != current_sid
         }
       end
 
@@ -1424,6 +1427,10 @@ module Rubot
         slug = owner_slug(sid)
         return not_found(res) unless slug
 
+        # Opening the conversation is what the mark was waiting for. Cleared
+        # before the page is drawn so the row it renders is already plain.
+        Session.store&.clear_unread(sid)
+
         live = live_turn(sid)
         persona = persona_store&.[](slug)
         persona_label = persona ? persona.label : slug.capitalize
@@ -1631,14 +1638,32 @@ module Rubot
       end
 
       def persona_rows(current_slug)
+        counts = unread_counts
         personas.map do |key, persona|
           {
             slug: key,
             label: persona.label,
             emoji: persona.emoji_or,
             active: key == current_slug,
+            # How many conversations of this persona finished something unseen.
+            # Zero for a roster read before the first turn, which is why the
+            # badge only draws when it is positive.
+            unread: counts[key].to_i,
             model: persona.model || persona.preset || "default"
           }
+        end
+      end
+
+      # Sessions with something new, counted per persona. The persona of an id is
+      # `PersonaStore.key_for_session`'s answer — the same rule every other
+      # screen uses — so a Telegram topic's id is not silently counted twice.
+      def unread_counts
+        store = Session.store
+        return {} unless store
+
+        store.unread_sessions.each_with_object(Hash.new(0)) do |row, counts|
+          slug = PersonaStore.key_for_session(row[:id])
+          counts[slug] += 1 if slug
         end
       end
 
@@ -2280,6 +2305,13 @@ module Rubot
         # once the turn has been written to the session file.
         turn.emit(:sidebar, sidebar_markup(turn.session_id))
         turn.finish(response)
+        # A turn that finished while the conversation was not on screen gets a
+        # mark in the list; the pages of the same persona are told so the row
+        # appears without a reload.
+        if mark_unread_unless_watched(turn.session_id)
+          slug = owner_slug(turn.session_id)
+          broadcast_sessions(slug) if slug
+        end
         # Measured to the moment the answer was complete, not to the moment the
         # page finished drawing it — the reader waited for the first, and a slow
         # network is not a slow turn.
@@ -2513,8 +2545,27 @@ module Rubot
       # Tell every open page of this persona that its sidebar has changed. Each
       # page is answered in its own session id, because that is what decides
       # which row is the active one.
-      def broadcast_sessions(slug)
-        subs = @event_mutex.synchronize { @event_subs.dup }
+      # A finished turn that nobody had on screen gets a mark in the list.
+      #
+      # The open pages are the signal: each page holds one event stream,
+      # subscribed with the session id it is showing, so a stream with that id
+      # means the conversation is being watched and the mark would be about
+      # something the reader already saw. Returns whether it marked anything,
+      # which is what decides the broadcast.
+      def mark_unread_unless_watched(sid)
+        store = Session.store
+        return false unless store
+        return false if watched?(sid)
+
+        store.mark_unread(sid)
+        true
+      end
+
+      def watched?(sid)
+        @event_mutex.synchronize { @event_subs.any? { |sub, _queue| sub == sid } }
+      end
+
+      def broadcast_sessions(slug)        subs = @event_mutex.synchronize { @event_subs.dup }
         subs.each do |sid, queue|
           next unless (owner_slug(sid) || default_slug) == slug
 

@@ -70,6 +70,39 @@ class TestStore < Minitest::Test
     assert_equal "Percakapan baru", rows[0][:title]
   end
 
+  def test_unread_mark_lives_on_the_row_until_it_is_opened
+    @store.append_messages("s1", [build_message("user", "halo")])
+    @store.upsert_session(id: "s1", title: "Satu", updated_at: "2026-11-10T10:00:00Z")
+
+    @store.mark_unread("s1")
+
+    row = @store.sidebar(limit: 10).first
+    refute_nil row[:unread_at], "the sidebar must be able to draw the mark"
+    assert_equal ["s1"], @store.unread_sessions.map { |entry| entry[:id] }
+
+    @store.clear_unread("s1")
+
+    assert_nil @store.sidebar(limit: 10).first[:unread_at]
+    assert_empty @store.unread_sessions
+  end
+
+  def test_unread_mark_is_kept_apart_per_session
+    %w[a b].each do |id|
+      @store.append_messages(id, [build_message("user", "pesan")])
+      @store.upsert_session(id: id, title: id, updated_at: "2026-11-10T10:00:00Z")
+    end
+
+    @store.mark_unread("a")
+
+    assert_equal ["a"], @store.unread_sessions.map { |entry| entry[:id] }
+    assert_nil @store.sidebar(limit: 10).find { |row| row[:id] == "b" }[:unread_at]
+  end
+
+  def test_unread_mark_on_a_session_without_a_row_is_a_no_op
+    refute @store.mark_unread("tidak-ada"), "nothing was written, so there is nothing to mark"
+    assert_empty @store.unread_sessions
+  end
+
   def test_sidebar_limit
     5.times do |i|
       @store.append_messages("s#{i}", [build_message("user", "pesan #{i}")])

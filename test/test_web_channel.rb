@@ -5240,6 +5240,52 @@ module Rubot
         assert_empty res.body
       end
 
+      # A conversation that finished while its page was closed is marked in the
+      # list; the mark must be visible without a reload, so it is drawn from the
+      # row itself rather than added by a script afterwards.
+      def test_a_session_row_carries_the_unread_dot
+        html = View.render("_session_row",
+                           row: { id: "web_rubot~x", label: "Sesi", pinned: false, pinnable: true,
+                                  active: false, unread: true },
+                           page: 1, current: "web_rubot~x", token_query: "")
+
+        assert_includes html, "unread-dot"
+        assert_includes html, "belum dibaca"
+        assert_includes html, "is-unread"
+      end
+
+      def test_a_read_session_row_has_no_mark
+        html = View.render("_session_row",
+                           row: { id: "web_rubot~x", label: "Sesi", pinned: false, pinnable: true,
+                                  active: false, unread: false },
+                           page: 1, current: "web_rubot~x", token_query: "")
+
+        refute_includes html, "unread-dot"
+      end
+
+      # The roster answers "which persona has something new"; nine and above are
+      # drawn as "9+" so a two-digit count cannot spill out of the badge.
+      def test_the_persona_rail_shows_a_count_and_caps_it
+        html = View.render("index",
+                           personas: [ { slug: "a", label: "A", emoji: "🤖", active: false, unread: 3, model: "m" },
+                                       { slug: "b", label: "B", emoji: "🧭", active: false, unread: 12, model: "m" } ],
+                           groups: { pinned: [], recent: [], page: 1, pages: 1, recent_total: 0, pinned_limit: 10, current: "web_a" },
+                           slug: "a", persona_label: "A", persona_emoji: "🤖", persona_prompt: "",
+                           persona_model: "m", session_id: "web_a", persona_model_value: "", model_choices: [],
+                           session_model: "", session_thinking: "medium", session_requests: 0, persona_thinking: "medium",
+                           session_short: "web_a", session_label: "Sesi baru",
+                           document_title: "rubot · A", live_turn: nil, live_prompt_shown: false, token_query: "",
+                           page: { entries: [], more: false, before: 0 }, older_url: "",
+                           usage: { cost: "—", cache: "—", ctx: "—", cause: "" },
+                           usage_facts: { model: "m · openai", cost: "—", breakdown: "", requests: "0",
+                                          messages: "0", tokens_in: "0", tokens_out: "0", reasoning: "",
+                                          cache: "—", cache_history: "", cache_cause: "", re_read: "0",
+                                          saved: "", ctx: "—" })
+
+        assert_includes html, ">3</span>"
+        assert_includes html, "9+"
+        assert_includes html, "3 percakapan belum dibaca"
+      end
 
     end
   end

@@ -361,7 +361,7 @@ module Rubot
     # order to know how many pages there are.
     def sidebar(limit: 40)
       args = []
-      sql = +"SELECT id, title, updated_at, msg_count, cwd, pinned_at FROM sessions "
+      sql = +"SELECT id, title, updated_at, msg_count, cwd, pinned_at, unread_at FROM sessions "
       unless limit.nil?
         sql << <<~SQL
           WHERE pinned_at IS NOT NULL
@@ -371,7 +371,7 @@ module Rubot
       end
       sql << " ORDER BY COALESCE(updated_at, '') DESC"
 
-      @db.execute(sql, args).map do |(id, title, updated_at, count, cwd, pinned_at)|
+      @db.execute(sql, args).map do |(id, title, updated_at, count, cwd, pinned_at, unread_at)|
         {
           id: text_id(id),
           title: title.to_s,
@@ -379,9 +379,37 @@ module Rubot
           timestamp: timestamp_of(updated_at),
           messages: count.to_i,
           cwd: cwd,
-          pinned_at: pinned_at
+          pinned_at: pinned_at,
+          unread_at: unread_at
         }
       end
+    end
+
+    # A turn finished while the conversation was not on screen. The timestamp is
+    # what the row carries until it is opened; `clear_unread` is the opening.
+    # Kept on the row rather than in the browser so a phone and a laptop agree
+    # about what has been seen.
+    #
+    # A no-op for a session with no row: nothing has been written yet, so there
+    # is nothing for the sidebar to mark.
+    def mark_unread(session_id, at: Time.now.utc.iso8601)
+      id = text_id(session_id)
+      @db.execute("UPDATE sessions SET unread_at = ? WHERE id = ?", [at, id])
+      # Whether there was a row to mark, so a caller can tell "new mark" from
+      # "nothing was written yet" without asking again.
+      @db.changes.positive?
+    end
+
+    def clear_unread(session_id)
+      id = text_id(session_id)
+      @db.execute("UPDATE sessions SET unread_at = NULL WHERE id = ? AND unread_at IS NOT NULL", [id])
+    end
+
+    # One entry per session with something new, drawn for the persona roster: a
+    # count per persona without asking the archive once per persona.
+    def unread_sessions
+      @db.execute("SELECT id, unread_at FROM sessions WHERE unread_at IS NOT NULL")
+         .map { |(id, at)| { id: text_id(id), unread_at: at } }
     end
 
     # The transcript, in order, with every message reconstructed as it was.
