@@ -1,6 +1,12 @@
+<%# The prompt is the reader's own words, so it is drawn as a bubble of its own.
+    `text` is nil when the history already holds this prompt — a page opened
+    while the turn runs draws it from the transcript instead, and two bubbles
+    for one prompt is exactly the double render this avoids. -%>
+<% if text -%>
 <div class="msg user">
-  <div class="bubble"><span class="sr-only">Kamu: </span><%= h(text) %></div>
+  <div class="bubble text"><span class="sr-only">Kamu: </span><%= fmt_prompt(text) %></div>
 </div>
+<% end -%>
 
 <div class="turn"
      hx-ext="sse"

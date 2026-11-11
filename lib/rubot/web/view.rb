@@ -848,6 +848,15 @@ module Rubot
           Format.markdown(text, quotable: true)
         end
 
+        # A prompt is rendered as markdown too — the same parser, so a list in a
+        # message reads as a list instead of as a run of asterisks — but without
+        # the quote mark: that control hands a paragraph back to the composer,
+        # and a prompt is already the composer's own words. The paragraph rules
+        # are shared; only the mark is left out.
+        def fmt_prompt(text)
+          Format.markdown(text, quotable: false)
+        end
+
         def icon(state)
           ICONS.fetch(state, "·")
         end

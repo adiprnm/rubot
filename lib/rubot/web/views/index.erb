@@ -206,10 +206,13 @@
         </p>
       <% end %>
       <%# A turn still in flight is drawn after the history and opens its own
-          stream again: the prompt it is answering is not in the session file
-          yet, so this fragment is the only record of it on a refreshed page. -%>
+          stream again: the prompt it is answering may not be in the session file
+          yet, so this fragment is the only record of it on a refreshed page.
+          When the file has caught up, `live_prompt_shown` says so and the bubble
+          is left to the history — one prompt, one bubble. -%>
       <% if live_turn %>
-        <%= View.render("_turn", turn: live_turn, text: live_turn.prompt,
+        <%= View.render("_turn", turn: live_turn,
+                        text: live_prompt_shown ? nil : live_turn.prompt,
                         token_query: token_query) %>
       <% end %>
     </div>

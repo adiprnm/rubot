@@ -1376,6 +1376,7 @@ module Rubot
         persona_label = persona ? persona.label : slug.capitalize
         session_label = named_session_label(slug, sid)
         page = history_page(sid, at: at_index(req))
+        live_prompt_shown = live ? prompt_in_tail?(page[:entries], live) : false
         body = View.render(
           "index",
           personas: persona_rows(slug),
@@ -1394,6 +1395,7 @@ module Rubot
           page: page,
           older_url: older_url(sid, page[:before]),
           live_turn: live,
+          live_prompt_shown: live_prompt_shown,
           usage: usage_locals(sid),
           usage_facts: index_usage_facts(sid),
           token_query: token_query
@@ -2026,6 +2028,26 @@ module Rubot
           turn = @turns[@active[sid]]
           turn && !turn.closed? ? turn : nil
         end
+      end
+
+      # A turn in flight is drawn from the turn itself, because the session file
+      # may not hold that prompt yet. It usually does: the user message is
+      # written when the turn starts, so a page opened a second later holds the
+      # prompt *and* the live turn, and drew it twice — the "sometimes double
+      # prompt" seen after switching persona mid-turn and coming back. Whichever
+      # of the two arrived first, only one bubble is drawn: the transcript keeps
+      # it when it is there, and the turn supplies it otherwise.
+      #
+      # The last prompt in the file is the one this turn is answering, not the
+      # last entry: by the time the reader comes back the file usually holds the
+      # answer's opening rounds too. A second prompt cannot be sent while a turn
+      # runs (the server answers 409), so a repeated text cannot be mistaken for
+      # an older turn.
+      def prompt_in_tail?(entries, live)
+        last_prompt = entries.reverse.find { |entry| entry[:kind] == :prompt }
+        return false unless last_prompt
+
+        last_prompt[:text].to_s.strip == live.prompt.to_s.strip
       end
 
       def create_turn(req, res, sid)

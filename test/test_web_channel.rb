@@ -1128,24 +1128,53 @@ module Rubot
         refute_includes answer, "avatar"
         assert_includes answer, %(class="text")
 
-        assert_includes prompt, %(class="bubble")
+        assert_includes prompt, %(class="bubble text"),
+                        "the bubble borrows the prose rules, markdown included"
         assert_includes prompt, "pertanyaan"
 
         refute_includes history, "bubble"
         assert_includes history, %(class="text")
       end
 
-      # A prompt is a quotation, and the line breaks in it are part of what was
-      # said. With the default whitespace they collapsed: the field showed two
-      # paragraphs, the bubble showed one run, and a reader had no way to tell
-      # whether the newline had survived the send.
-      def test_the_prompt_keeps_the_line_breaks_that_were_typed
-        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
-        rule = css[/^\.msg\.user \.bubble \{[^}]*\}/]
+      # A prompt is markdown too. It used to be escaped text, so a list typed
+      # into the field came back as asterisks and a code fence as backticks —
+      # the answer was rendered and the question was not.
+      def test_a_prompt_is_rendered_as_markdown
+        html = View.render("_message", role: "user",
+                           text: "**tebal** dan `kode`\n\n- satu\n- dua")
 
-        refute_nil rule, "the prompt bubble needs its own rule to carry this"
-        assert_includes rule, "white-space: pre-wrap",
-                        "pre-wrap keeps every newline; `pre` would not wrap a long one"
+        assert_includes html, "<strong>tebal</strong>"
+        assert_includes html, "<code>kode</code>"
+        assert_includes html, "<li>satu</li>"
+        refute_includes html, "**tebal**"
+      end
+
+      # The renderer is the only thing allowed to write tags: what the person
+      # typed is escaped before anything else, so a prompt cannot inject markup.
+      def test_a_prompt_cannot_inject_html
+        html = View.render("_message", role: "user",
+                           text: "halo <script>alert(1)</script>")
+
+        refute_includes html, "<script>"
+        assert_includes html, "&lt;script&gt;"
+      end
+
+      # The quote mark hands a paragraph back to the composer. A prompt is the
+      # composer's own words already, so its bubble carries none of them.
+      def test_a_prompt_carries_no_quote_marks
+        html = View.render("_message", role: "user", text: "satu paragraf saja")
+
+        refute_includes html, "para-quote"
+      end
+
+      # A prompt is a quotation, and the line breaks in it are part of what was
+      # said: the field showed two lines, so the bubble has to. The renderer
+      # writes a single newline as <br>, which is what makes that true now that
+      # the bubble is a prose block rather than pre-wrapped text.
+      def test_the_prompt_keeps_the_line_breaks_that_were_typed
+        html = View.render("_message", role: "user", text: "baris satu\nbaris dua")
+
+        assert_includes html, "baris satu<br>baris dua"
       end
 
       def test_timeline_shows_a_duration_only_past_the_threshold
@@ -1461,6 +1490,32 @@ module Rubot
                         "and so is the text it has written so far"
         assert_includes html, %(sse-connect="/turns/tabc/stream"),
                         "the page has to join the stream again, not sit on a frozen copy"
+      end
+
+      # The prompt is written to the session file when the turn starts, so a
+      # page opened a moment later holds it in the transcript *and* finds the
+      # turn in memory. Drawing both showed the same prompt twice — the double
+      # render that appeared after switching persona mid-turn and coming back.
+      def test_a_refreshed_page_draws_an_already_written_prompt_once
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: { "web_kanyaah" => "Berapa harga template?" }
+        )
+        turn = Turn.new(id: "tabc", session_id: "web_kanyaah", prompt: "Berapa harga template?")
+        turn.append_chunk("Aku cek katalog dulu.")
+        channel.instance_variable_get(:@turns)["tabc"] = turn
+        channel.instance_variable_get(:@active)["web_kanyaah"] = "tabc"
+
+        res = FakeResponse.new
+        channel.send(:render_session, res, "web_kanyaah")
+        html = res.body
+
+        assert_equal 1, html.scan(%(class="msg user")).size,
+                     "one prompt, one bubble — the transcript keeps it"
+        assert_includes html, "Aku cek katalog dulu.",
+                        "the answer in flight is still drawn"
+        assert_includes html, %(sse-connect="/turns/tabc/stream"),
+                        "the page still joins the stream"
       end
 
       # Steering used to reach the model but not the page: the bubble only
@@ -3539,6 +3594,24 @@ module Rubot
         channel.send(:broadcast_sessions, "english-tutor")
 
         assert queue.empty?, "a stream that has gone away must not be written to"
+      end
+
+      # The naming request is what a turn used to wait for, and it now runs
+      # after the turn has ended. The page therefore has to be told when it is
+      # done: that push is the only moment the new name can appear without a
+      # reload.
+      def test_the_name_learned_after_the_turn_is_pushed_to_the_page
+        channel = channel_with_sessions(
+          personas: { "english-tutor" => { "name" => "English Tutor" } },
+          sessions: { "web_english-tutor" => "Halo" }
+        )
+        queue = Queue.new
+        channel.send(:listen_for_events, "web_english-tutor", queue)
+
+        assert channel.send(:defer_learning?), "the turn must not wait for naming"
+        channel.send(:after_learning, "web_english-tutor")
+
+        refute queue.empty?, "the page has a new name to show"
       end
 
       # The page may not be open at all — that is the whole point of a daily
