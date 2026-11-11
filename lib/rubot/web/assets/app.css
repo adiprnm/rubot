@@ -3332,8 +3332,15 @@ body.lightbox-open { overflow: hidden; }
 .session-select:hover { color: var(--fg); }
 .session-select:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
 /* An option list is drawn by the platform, so it keeps the page's own colours
-   where the browser lets them through. */
-.session-select option { background: var(--bg0); color: var(--fg); }
+   where the browser lets them through. The list itself is read at arm's
+   length — a menu of 11px mono is a menu you have to lean into — so the
+   options carry their own size, a step above the closed control. */
+.session-select option {
+  background: var(--bg0);
+  color: var(--fg);
+  font-size: 13.5px;
+  line-height: 1.7;
+}
 
 /* A phone has no hover and no room for a caption the reader has to squint at:
    the row grows to a thumb-sized control and its letters grow with it, with
