@@ -1258,6 +1258,65 @@ body {
   color: var(--fg-dim);
 }
 
+/* The name is editable, so it is a button — but it has to go on looking like a
+   label: the header of the conversation being read is not a toolbar. No border,
+   no background, no padding; the pointer and the hover colour are the whole of
+   the hint, and the tooltip says the rest. */
+.chat-head .session-rename {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+
+.chat-head button.session-name {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--fg-dim);
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-head button.session-name:hover,
+.chat-head button.session-name:focus-visible { color: var(--fg); }
+
+/* The field takes the row the name was using, so nothing else in the header
+   moves when it opens. Enter saves, Escape backs out (see _chathead.erb). */
+.chat-head .session-rename-form {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+
+.chat-head .session-rename-field {
+  flex: 1;
+  min-width: 0;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg0);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13.5px;
+}
+
+.chat-head .session-rename-form button {
+  padding: 0 0.25rem;
+  border: 0;
+  background: none;
+  color: var(--fg-dim);
+  font: inherit;
+  cursor: pointer;
+}
+
+.chat-head .session-rename-form button:hover { color: var(--fg); }
+
 /* ---------- thread ----------------------------------------------- */
 
 .thread {

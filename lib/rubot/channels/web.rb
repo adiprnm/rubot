@@ -114,6 +114,7 @@ module Rubot
       SESSION_MEDIA_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/media/(#{MEDIA_NAME_SOURCE})\z}
       SESSION_DELETE_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/delete\z}
       SESSION_PIN_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/pin\z}
+      SESSION_RENAME_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/rename\z}
       SESSION_QUOTA_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/quota\z}
       SESSION_REPIN_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/repin\z}
       PERSONA_SESSIONS_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/sessions\z}
@@ -529,6 +530,8 @@ module Rubot
           delete_session(res, match[1], req)
         elsif method == "POST" && (match = SESSION_PIN_PATH.match(path))
           toggle_pin(res, match[1], req)
+        elsif method == "POST" && (match = SESSION_RENAME_PATH.match(path))
+          rename_session(res, match[1], req)
         elsif method == "GET" && path == "/push/key"
           push_public_key(res)
         elsif method == "POST" && path == "/push/subscribe"
@@ -1025,6 +1028,42 @@ module Rubot
       #
       # The archive is where the pin lives, so a channel running without one
       # (JSON files only) answers with the list it already has.
+      # The reader naming a conversation by hand. A session's name is not the
+      # model's property: the automatic namer only ever fills an empty title, so
+      # a name written here is not replaced afterwards (see
+      # Agent#run_session_naming). The name is trimmed and flattened — a title is
+      # one line in a list, and a newline in it would be drawn as two rows.
+      #
+      # Refused while a turn runs. The session actor answers requests only
+      # between turns, so a rename made now would queue behind the answer and
+      # look like a hang; the name is unchanged and can be set once it is done.
+      def rename_session(res, sid, req)
+        slug = owner_slug(sid)
+        return not_found(res) unless slug
+
+        if session_running?(sid)
+          # 409 with an empty body: htmx leaves the header alone, so the reader
+          # keeps the old name instead of a half-applied one.
+          res.status = 409
+          res.body = ""
+          return
+        end
+
+        name = form(req, "name").to_s.gsub(/\s+/, " ").strip
+        name = name[0, SessionNamer::MAX_TITLE_CHARS].strip if name.length > SessionNamer::MAX_TITLE_CHARS
+        session_for(sid).set_session_title(name) unless name.empty?
+
+        if req && req["HX-Request"].to_s == "true"
+          res["Content-Type"] = "text/html; charset=utf-8"
+          res["Cache-Control"] = "no-store"
+          # The header and the sidebar both carry the name, and the tab reads it
+          # from the header: one answer updates all three in place.
+          res.body = sidebar_markup(sid)
+        else
+          redirect(res, "/s/#{sid}", req)
+        end
+      end
+
       def toggle_pin(res, sid, req)
         slug = owner_slug(sid)
         return not_found(res) unless slug
@@ -2142,6 +2181,8 @@ module Rubot
                            persona_emoji: persona ? persona.emoji_or : "🤖",
                            persona_label: persona_label,
                            session_label: label,
+                           session_id: sid,
+                           token_query: token_query,
                            document_title: document_title(persona_label, label))
                    .sub(%(<header class="chat-head" id="chat-head"),
                         %(<header class="chat-head" id="chat-head" hx-swap-oob="true"))

@@ -2915,7 +2915,9 @@ module Rubot
         markup = channel.send(:sidebar_markup, "web_kanyaah")
 
         assert_includes markup, %(data-title="Kanyaah · Build gagal di CI")
-        assert_includes markup, %(<span class="session-name">Build gagal di CI</span>)
+        assert_includes markup, ">Build gagal di CI</button>"
+        assert_includes markup, %(/s/web_kanyaah/rename),
+                        "the name is editable from the header it is drawn in"
       end
 
       # A session that has not been written yet has no file, so the row for the

@@ -19,6 +19,30 @@
   <b><%= h(persona_label) %></b>
   <% if session_label -%>
     <span class="sep" aria-hidden="true">·</span>
-    <span class="session-name"><%= h(session_label) %></span>
+    <%# The name is the reader's to change: the automatic one is a guess from the
+        first prompt, and a conversation someone returns to deserves the name
+        they remember it by. Tapping the name turns it into a field; Enter saves,
+        Escape leaves it as it was. The answer swaps the header and the sidebar
+        in place, so the tab and the list follow without a reload. -%>
+    <span class="session-rename" x-data="{ editing: false }" @keydown.escape="editing = false">
+      <button class="session-name" type="button" title="Ubah nama sesi"
+              aria-label="Ubah nama sesi: <%= h(session_label) %>"
+              x-show="!editing"
+              @click="editing = true; $nextTick(() => $refs.field.select())"><%= h(session_label) %></button>
+      <form class="session-rename-form" x-show="editing" x-cloak
+            method="post"
+            action="/s/<%= h(session_id) %>/rename<%= h(token_query) %>"
+            hx-post="/s/<%= h(session_id) %>/rename<%= h(token_query) %>"
+            hx-target="#chat-head"
+            hx-swap="outerHTML">
+        <input class="session-rename-field" name="name" x-ref="field" required
+               value="<%= h(session_label) %>"
+               maxlength="<%= Rubot::SessionNamer::MAX_TITLE_CHARS %>"
+               autocomplete="off" aria-label="Nama sesi" enterkeyhint="done">
+        <button type="submit" title="Simpan nama" aria-label="Simpan nama">✓</button>
+        <button type="button" title="Batal" aria-label="Batal"
+                @click="editing = false">×</button>
+      </form>
+    </span>
   <% end -%>
 </header>

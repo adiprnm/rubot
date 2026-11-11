@@ -1322,6 +1322,18 @@ class TestAgentAdaptiveLearning < Minitest::Test
     assert_equal "Local app tweaks", @agent.session.title
   end
 
+  # A name written by hand is not a placeholder for one the model picks later:
+  # the namer only ever fills an empty title, so a conversation renamed before
+  # its first turn answers keeps the name it was given.
+  def test_a_hand_written_title_is_not_replaced_by_the_namer
+    @agent.set_session_title("Proyek Templete")
+    @agent.process("first message here", stream: false)
+    @agent.flush_learning
+
+    assert_equal 0, @provider.naming_calls, "a title already set is not a question to answer"
+    assert_equal "Proyek Templete", @agent.session.title
+  end
+
   def test_naming_replaces_the_first_prompt_in_the_session_list
     @agent.process("first message here", stream: false)
     @agent.flush_learning
