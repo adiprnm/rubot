@@ -222,6 +222,36 @@ module Rubot
         end
         expanded
       end
+      # Confirm the bytes are on disk before reporting success.
+      #
+      # A write that reports "Edited" while the file is unchanged is the one
+      # failure a caller cannot see and cannot recover from — it goes on to build
+      # on a change that is not there. It has been observed (2026-11-11): every
+      # edit in a session reported OK, while reading the same paths found nothing.
+      # The cause was never reproduced, so this does not pretend to fix it: it
+      # refuses to lie about it, and names the path, the sizes and the mtime so
+      # the next report can be acted on instead of guessed at.
+      def verify_written!(p, content)
+        on_disk = File.read(p, encoding: "UTF-8")
+        return true if on_disk == content
+
+        raise "Write verification failed for #{p}: wrote #{content.bytesize} bytes, " \
+              "read back #{on_disk.bytesize} bytes (mtime #{File.mtime(p).utc.iso8601}). " \
+              "Another process may be rewriting this file; the edit is not in effect."
+      end
+
+      # The append case only needs the tail to be there; reading a whole large
+      # file back to prove a 200-byte append would cost more than it buys.
+      def verify_appended!(p, content)
+        expected = content.bytesize
+        actual = File.size(p)
+        return true if actual >= expected && File.binread(p, expected, actual - expected) == content.b
+
+        raise "Append verification failed for #{p}: the file does not end with the " \
+              "#{expected} bytes that were appended (size #{actual}). " \
+              "Another process may be rewriting this file; the append is not in effect."
+      end
+
       def check_path(path, operation:)
         guard = @safety_guard
         if guard.nil?
@@ -330,6 +360,7 @@ module Rubot
         end
 
         File.write(p, updated, encoding: "UTF-8")
+        verify_written!(p, updated)
         "Edited #{p}: replaced #{occurrences} occurrence(s), " \
           "#{old_text.length} -> #{new_string.to_s.length} chars"
       end
@@ -341,6 +372,7 @@ module Rubot
         p = safe_path(path)
         FileUtils.mkdir_p(File.dirname(p))
         File.write(p, content, encoding: "UTF-8")
+        verify_written!(p, content)
         "Written #{content.length} characters to #{p}"
       end
 
@@ -352,6 +384,7 @@ module Rubot
         p = safe_path(path)
         FileUtils.mkdir_p(File.dirname(p))
         File.open(p, "a", encoding: "UTF-8") { |f| f.write(content) }
+        verify_appended!(p, content)
         "Appended #{content.length} characters to #{p}"
       end
 

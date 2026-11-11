@@ -614,6 +614,48 @@ class TestTools < Minitest::Test
 
   # --- File tool ---
 
+  # A write that says "Edited" while the file on disk is unchanged is the one
+  # failure a caller cannot see: it builds the next step on a change that is not
+  # there. Observed on 2026-11-11 across a whole session, never reproduced, so
+  # the tool now verifies instead of trusting File.write.
+  def test_a_write_that_does_not_land_is_reported_as_a_failure
+    filepath = File.join(@tmpdir, "unwritten.txt")
+    File.write(filepath, "the old content\n")
+
+    error = assert_raises(RuntimeError) do
+      Rubot::Tools::FileTool.new.send(:verify_written!, filepath, "the new content\n")
+    end
+
+    assert_includes error.message, "Write verification failed"
+    assert_includes error.message, "the edit is not in effect"
+  end
+
+  def test_a_verified_write_is_accepted
+    filepath = File.join(@tmpdir, "written.txt")
+    File.write(filepath, "the new content\n")
+
+    assert Rubot::Tools::FileTool.new.send(:verify_written!, filepath, "the new content\n")
+  end
+
+  def test_an_append_that_does_not_land_is_reported_as_a_failure
+    filepath = File.join(@tmpdir, "appended.txt")
+    File.write(filepath, "first line\n")
+
+    error = assert_raises(RuntimeError) do
+      Rubot::Tools::FileTool.new.send(:verify_appended!, filepath, "second line\n")
+    end
+
+    assert_includes error.message, "Append verification failed"
+    assert_includes error.message, "the append is not in effect"
+  end
+
+  def test_a_verified_append_is_accepted
+    filepath = File.join(@tmpdir, "appended-ok.txt")
+    File.write(filepath, "first line\nsecond line\n")
+
+    assert Rubot::Tools::FileTool.new.send(:verify_appended!, filepath, "second line\n")
+  end
+
   def test_file_write_and_read
     filepath = File.join(@tmpdir, "test.txt")
     write_result = @registry.execute("file_ops", {
