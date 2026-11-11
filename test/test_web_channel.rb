@@ -2939,6 +2939,20 @@ module Rubot
         assert_equal "rubot", JSON.parse(response.body)["name"]
       end
 
+      # Suppressing a notification because "the app is visible" silenced exactly
+      # the ones that matter: an installed app that is backgrounded still
+      # reports `visibilityState: "visible"` on iOS, so a locked phone looked
+      # like a reader staring at the screen. Focus is the other half — a window
+      # somebody is actually in has both.
+      def test_the_worker_only_suppresses_a_notification_for_a_window_in_front
+        worker = File.read(File.expand_path("../lib/rubot/web/assets/sw.js", __dir__))
+
+        assert_includes worker, 'client.visibilityState === "visible"'
+        assert_includes worker, "client.focused",
+                        "a backgrounded app still reports visible; focus is what tells them apart"
+        assert_includes worker, "payload.force", "the test button must be able to ring anyway"
+      end
+
       # The shell is kept, the conversation is not: a cached answer would be
       # handed to whoever opens the app next, and it would be a lie the moment
       # the turn moved on.

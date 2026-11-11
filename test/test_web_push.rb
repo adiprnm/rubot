@@ -442,4 +442,43 @@ class TestWebPush < Minitest::Test
     server&.shutdown
     thread&.join(2)
   end
+
+  # "Nothing arrived" is the hardest report to act on, because the sender cannot
+  # see the device. What it can see is the push service's answer, so a refusal
+  # is written down with its code — and the endpoint itself is not, since it is
+  # the capability that lets any caller wake that device.
+  def test_a_refused_delivery_is_logged_without_leaking_the_endpoint
+    ua_key = OpenSSL::PKey::EC.generate(Push::CURVE)
+    auth = SecureRandom.random_bytes(16)
+    requests = Queue.new
+    server, port, thread = start_push_service(requests, status: 500)
+
+    store = Rubot::Store.new(File.join(@dir, "sessions.db"))
+    endpoint = "http://127.0.0.1:#{port}/push?cap=secret-capability"
+    store.add_push_subscription(endpoint: endpoint, p256dh: Push.base64url(Push.point_bytes(ua_key)),
+                                auth: Push.base64url(auth))
+    Rubot::Session.store = store
+
+    config = Rubot::Config.from_data(
+      { "agents" => { "defaults" => { "workspace" => @dir } } },
+      config_path: File.join(@dir, "config.yml")
+    )
+    channel = Rubot::Channels::Web.new(channel_config: {})
+    channel.instance_variable_set(:@app_config, config)
+
+    _out, err = capture_io do
+      counts = channel.send(:notify_push, "rubot", title: "rubot", body: "halo",
+                            url: "/s/web_rubot", sync: true)
+      assert_equal 1, counts["failed"]
+    end
+
+    assert_includes err, "500", "the push service's own code is the evidence"
+    assert_includes err, "127.0.0.1", "the host says which service answered"
+    refute_includes err, "secret-capability", "the endpoint is a capability, not a log field"
+  ensure
+    Rubot::Session.store = nil
+    store&.close
+    server&.shutdown
+    thread&.join(2)
+  end
 end

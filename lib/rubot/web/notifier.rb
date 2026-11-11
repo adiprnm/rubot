@@ -43,7 +43,13 @@ module Rubot
             # message into a void.
             @store.drop_push_subscription(subscription["endpoint"])
             counts["gone"] += 1
-          else counts["failed"] += 1
+          else
+            counts["failed"] += 1
+            # A device that says nothing is indistinguishable from a delivery
+            # that never happened, so the reason is written down: the push
+            # service's own code is the only evidence there is when "no
+            # notification arrived" is the complaint.
+            warn "[push] #{slug}: #{status} (#{code.inspect}) for #{endpoint_host(subscription)}"
           end
         end
         counts
@@ -71,6 +77,15 @@ module Rubot
       end
 
       private
+
+      # The push service, not the endpoint: the endpoint is a capability — it
+      # is what lets anyone send to this device — and a log line is not the
+      # place to keep one.
+      def endpoint_host(subscription)
+        URI.parse(subscription["endpoint"].to_s).host.to_s
+      rescue URI::InvalidURIError
+        "?"
+      end
 
       def empty_counts
         { "sent" => 0, "gone" => 0, "failed" => 0, "status" => [] }
