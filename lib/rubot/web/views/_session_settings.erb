@@ -1,0 +1,29 @@
+<%# The model and the thinking level this session runs on, under the field
+    the reader types in. A change posts at once — there is no save button to
+    forget — and the answer is this same row again, with the new choice
+    marked, so a stale page cannot drift from what the session really runs
+    on. An empty model means "follow the persona/config default"; an empty
+    thinking level means "follow the config's effort". -%>
+<form id="session-settings" class="session-settings"
+      hx-post="/s/<%= h(session_id) %>/settings<%= h(token_query) %>"
+      hx-trigger="change from:select"
+      hx-target="this"
+      hx-swap="outerHTML">
+  <label class="session-setting">
+    <span>Model</span>
+    <select name="model" autocomplete="off">
+      <option value=""<%= " selected" if session_model.empty? %>>Ikut default</option>
+      <% model_choices.each do |choice| %>
+        <option value="<%= h(choice[:value]) %>"<%= " selected" if choice[:value] == session_model %>><%= h(choice[:label]) %></option>
+      <% end %>
+    </select>
+  </label>
+  <label class="session-setting">
+    <span>Thinking</span>
+    <select name="thinking" autocomplete="off">
+      <% [["", "Default"], %w[minimal Minimal], %w[low Low], %w[medium Medium], %w[high High]].each do |value, label| %>
+        <option value="<%= h(value) %>"<%= " selected" if value == session_thinking %>><%= label %></option>
+      <% end %>
+    </select>
+  </label>
+</form>

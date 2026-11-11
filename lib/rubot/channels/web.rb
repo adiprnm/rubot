@@ -117,6 +117,7 @@ module Rubot
       SESSION_RENAME_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/rename\z}
       SESSION_QUOTA_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/quota\z}
       SESSION_REPIN_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/repin\z}
+      SESSION_SETTINGS_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/settings\z}
       PERSONA_SESSIONS_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/sessions\z}
       PERSONA_EDIT_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/edit\z}
       # Where the token form posts. Not under /s/ or /p/ because it belongs to
@@ -545,6 +546,8 @@ module Rubot
           toggle_pin(res, match[1], req)
         elsif method == "POST" && (match = SESSION_RENAME_PATH.match(path))
           rename_session(res, match[1], req)
+        elsif method == "POST" && (match = SESSION_SETTINGS_PATH.match(path))
+          update_session_settings(res, match[1], req)
         elsif method == "GET" && path == "/push/key"
           push_public_key(res)
         elsif method == "POST" && path == "/push/subscribe"
@@ -1086,6 +1089,41 @@ module Rubot
         end
       end
 
+      # Model and thinking level for this session, chosen under the
+      # composer. Applied to the live actor so the next turn picks them up,
+      # and persisted by the session itself. Refused while a turn is running
+      # for the same reason rename is: the actor answers requests only
+      # between turns.
+      def update_session_settings(res, sid, req)
+        slug = owner_slug(sid)
+        return not_found(res) unless slug
+
+        if session_running?(sid)
+          res.status = 409
+          res.body = ""
+          return
+        end
+
+        model = form(req, "model").to_s.strip
+        thinking = form(req, "thinking").to_s.strip
+
+        handle = session_for(sid)
+        handle.use_model(model) if !model.empty? && model != session_model(sid) && known_model?(model)
+        handle.use_thinking(thinking)
+
+        if req && req["HX-Request"].to_s == "true"
+          res["Content-Type"] = "text/html; charset=utf-8"
+          res["Cache-Control"] = "no-store"
+          res.body = View.render("_session_settings",
+                                  session_id: sid, token_query: token_query,
+                                  model_choices: model_choices,
+                                  session_model: session_model(sid),
+                                  session_thinking: session_thinking(sid))
+        else
+          redirect(res, "/s/#{sid}", req)
+        end
+      end
+
       def toggle_pin(res, sid, req)
         slug = owner_slug(sid)
         return not_found(res) unless slug
@@ -1399,6 +1437,8 @@ module Rubot
           persona_model: persona_model(persona),
           persona_model_value: persona_model_value(persona),
           model_choices: model_choices,
+          session_model: session_model(sid),
+          session_thinking: session_thinking(sid),
           session_label: session_label,
           document_title: document_title(persona_label, session_label),
           page: page,
@@ -1511,6 +1551,24 @@ module Rubot
         return true if config.model_entry_by_name(name)
 
         ModelCatalog.cached_model_ids(config.catalog_dir).include?(name)
+      end
+
+      # The model and thinking level this session runs on, read from the
+      # store's meta block rather than from the actor: a turn may be running
+      # in it, and the page has to render without waiting for that turn.
+      def session_model(sid)
+        session_meta(sid)["model_override"].to_s
+      end
+
+      def session_thinking(sid)
+        session_meta(sid)["thinking_level"].to_s
+      end
+
+      def session_meta(sid)
+        store = Session.store
+        return {} unless store
+
+        store.session_meta(sid)
       end
 
       def persona_rows(current_slug)

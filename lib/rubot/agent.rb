@@ -139,7 +139,7 @@ module Rubot
                                          max_messages: config.session_max_messages,
                                          archive: @archive)
       apply_initial_preset!
-      @provider = provider || build_provider(preset: @active_preset)
+      @provider = provider || build_provider(preset: @active_preset, effort: @session.thinking_level)
 
       # Build safety guard from config
       @safety_guard = SafetyGuard.new(
@@ -735,8 +735,24 @@ module Rubot
       @session.model_preset = nil
       @active_preset_name = "default"
       @session.save!
-      @provider = Provider.build(settings)
+      @provider = Provider.build(settings.with_effort(@session.thinking_level))
       @session_model
+    end
+
+    # Switch the reasoning effort ("thinking level") for this session. nil or
+    # "" returns to whatever the config or preset says. The provider is
+    # rebuilt so the very next request carries the new effort.
+    def use_thinking(level)
+      text = level.to_s.strip.downcase
+      text = nil if text.empty?
+      return nil if text && !%w[minimal low medium high].include?(text)
+
+      @session.thinking_level = text
+      @session.save!
+      @provider = Provider.build(
+        @config.provider_settings(@session_model || @config.name).with_effort(text)
+      )
+      text
     end
 
     # The models the provider supports, from its /models catalog. The list is
@@ -1493,7 +1509,7 @@ module Rubot
       @active_preset = resolve_initial_preset || @config.default_model_preset
       @active_preset_name = @active_preset["name"]
       @session_model = @active_preset["model"]
-      @provider = build_provider(preset: @active_preset)
+      @provider = build_provider(preset: @active_preset, effort: @session.thinking_level)
     end
 
     def apply_preset_source(source, name: nil, session_name: nil)
@@ -1519,7 +1535,7 @@ module Rubot
       @session.model_preset = session_name || preset_name
       @session.model_override = nil
       @session.save!
-      @provider = Provider.build(settings)
+      @provider = Provider.build(settings.with_effort(@session.thinking_level))
       active_model_preset
     end
 
@@ -1738,12 +1754,13 @@ end
 
     # Build a provider from an immutable settings snapshot. No config
     # mutation is performed, so this is safe to call from any Ractor.
-    def build_provider(model_name = nil, preset: nil)
+    def build_provider(model_name = nil, preset: nil, effort: nil)
       settings = if preset
         @config.provider_settings_for_preset(preset)
       else
         @config.provider_settings(model_name)
       end
+      settings = settings.with_effort(effort) unless effort.nil?
       Provider.build(settings)
     end
 

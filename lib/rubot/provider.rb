@@ -27,6 +27,21 @@ module Rubot
       freeze
     end
 
+    # The same settings with a different reasoning effort. A session-level
+    # thinking level rides on top of whatever the config or preset says: nil
+    # (or an unknown word) means "no session preference", and the settings
+    # come back unchanged.
+    def with_effort(effort)
+      normalized = normalize_effort(effort)
+      return self if @reasoning_effort == normalized
+
+      ProviderSettings.new(
+        provider: @provider, model: @model, api_key: @api_key, api_base: @api_base,
+        max_tokens: @max_tokens, temperature: @temperature, debug: @debug,
+        extra_headers: @extra_headers, reasoning_effort: normalized
+      )
+    end
+
     def debug?
       @debug
     end

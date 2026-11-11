@@ -196,6 +196,12 @@ module Rubot
         call(:use_model_preset, name: name, preset: preset)
       end
 
+      # Switch the session's reasoning effort ("thinking level"). nil or ""
+      # means "follow the config default" again.
+      def use_thinking(level)
+        call(:use_thinking, level: level)
+      end
+
       def persona
         call(:persona)
       end

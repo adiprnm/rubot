@@ -2624,3 +2624,83 @@ class TestAgentReasoning < Minitest::Test
     assert_empty thoughts
   end
 end
+
+class TestAgentThinkingLevel < Minitest::Test
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @config_path = File.join(@tmpdir, "config.yml")
+    @workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(@workspace)
+
+    config_data = {
+      "agents" => { "defaults" => { "workspace" => @workspace } },
+      "models" => [
+        { "name" => "model-a", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" },
+        { "name" => "model-b", "model" => "openai/gpt-4", "api_key" => "sk-test" }
+      ]
+    }
+    File.write(@config_path, config_data.to_yaml)
+    @config = Rubot::Config.new(@config_path)
+    @tools = Rubot::Tools::Registry.new
+    @agent = Rubot::Agent.new(config: @config, session_id: "default", tools: @tools)
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+  end
+
+  def test_use_thinking_sets_the_provider_effort_and_persists_it
+    @agent.use_thinking("low")
+
+    assert_equal "low", @agent.provider.config.reasoning_effort
+
+    fresh = Rubot::Agent.new(config: @config, session_id: "default", tools: @tools)
+    assert_equal "low", fresh.provider.config.reasoning_effort,
+                 "a session keeps its thinking level across restarts"
+  end
+
+  def test_use_thinking_rejects_an_unknown_level
+    assert_nil @agent.use_thinking("turbo")
+    assert_nil @agent.session.thinking_level
+  end
+
+  def test_use_thinking_empty_returns_to_the_config_default
+    @agent.use_thinking("high")
+    @agent.use_thinking("")
+
+    assert_nil @agent.session.thinking_level
+    assert_nil @agent.provider.config.reasoning_effort
+  end
+
+  def test_switching_models_keeps_the_thinking_level
+    @agent.use_thinking("medium")
+
+    @agent.use_model("model-b")
+
+    assert_equal "medium", @agent.provider.config.reasoning_effort
+    assert_equal "gpt-4", @agent.active_model_name
+  end
+
+  def test_a_session_level_thinking_clears_a_preset_effort
+    config_data = {
+      "agents" => { "defaults" => { "workspace" => @workspace, "model_preset" => "primary" } },
+      "models" => [
+        { "name" => "model-a", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" }
+      ],
+      "model_presets" => {
+        "primary" => { "model" => "model-a", "reasoning_effort" => "high" }
+      }
+    }
+    File.write(@config_path, config_data.to_yaml)
+    config = Rubot::Config.new(@config_path)
+    agent = Rubot::Agent.new(config: config, session_id: "default", tools: @tools)
+
+    assert_equal "high", agent.provider.config.reasoning_effort,
+                 "the preset's effort is what the session starts on"
+
+    agent.use_thinking("")
+
+    assert_nil agent.provider.config.reasoning_effort,
+               "the session's own choice wins over the preset"
+  end
+end

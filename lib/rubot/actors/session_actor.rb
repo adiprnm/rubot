@@ -204,6 +204,8 @@ module Rubot
         when :set_auto_approve    then agent.auto_approve = msg[:value]
         when :forced_skill         then agent.session.forced_skill
         when :use_model            then agent.use_model(msg[:name])
+        when :use_thinking         then agent.use_thinking(msg[:level])
+        when :session_thinking     then agent.session.thinking_level
         when :persona              then agent.persona_info
         when :set_persona          then agent.set_persona(msg[:persona])
         when :clear_session        then agent.clear_session

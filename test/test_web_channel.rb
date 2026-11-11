@@ -670,6 +670,7 @@ module Rubot
                     persona_prompt: persona_prompt,
                     persona_model: "m", session_id: "web_rubot",
                     persona_model_value: "", model_choices: [],
+                    session_model: "", session_thinking: "",
                     session_short: "web_rubot", session_label: "Sesi baru",
                     document_title: "rubot · Rubot", live_turn: live_turn,
                     live_prompt_shown: false, token_query: "",
@@ -1728,6 +1729,7 @@ module Rubot
                            persona_prompt: "",
                            persona_model: "m", session_id: "web_rubot",
                     persona_model_value: "", model_choices: [],
+                    session_model: "", session_thinking: "",
                            session_short: "web_rubot", session_label: "Sesi baru",
                            document_title: "rubot · Rubot", live_turn: nil, token_query: "",
                            page: { entries: [], more: false, before: 0 }, older_url: "",
@@ -4410,6 +4412,7 @@ module Rubot
                            persona_prompt: "",
                            persona_model: "m", session_id: "web_rubot",
                     persona_model_value: "", model_choices: [],
+                    session_model: "", session_thinking: "",
                            session_short: "web_rubot", session_label: "Sesi baru",
                            document_title: "rubot · Rubot", live_turn: nil, token_query: "",
                            page: { entries: [], more: false, before: 0 }, older_url: "",
@@ -5009,6 +5012,91 @@ module Rubot
       def png_bytes
         "\x89PNG\r\n\x1A\n".b + ("\x00".b * 64)
       end
+
+      # The model and the thinking level are per-session choices under the
+      # composer. A change is applied to the session's actor, and the answer
+      # is the row again with the new choice already marked — a stale page
+      # cannot drift from what the session really runs on.
+      def test_session_settings_applies_the_choice_and_rerenders_the_row
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        channel.instance_variable_get(:@app_config).data["models"] =
+          [{ "name" => "model-a", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" }]
+
+        handle = Class.new do
+          attr_reader :model, :thinking
+
+          def use_model(name)
+            @model = name
+          end
+
+          def use_thinking(level)
+            @thinking = level
+          end
+        end.new
+        channel.define_singleton_method(:session_for) { |_sid| handle }
+        # No archive in this fixture, so the meta the row reads from is the
+        # handle itself: what the actor applied is what the page shows.
+        channel.define_singleton_method(:session_meta) do |_sid|
+          { "model_override" => handle.model.to_s, "thinking_level" => handle.thinking.to_s }
+        end
+
+        res = FakeResponse.new
+        channel.send(:update_session_settings, res, "web_kanyaah",
+                     form_post({ "model" => "model-a", "thinking" => "low" }))
+
+        assert_equal 200, res.status
+        assert_equal "model-a", handle.model
+        assert_equal "low", handle.thinking
+        assert_includes res.body, 'value="model-a" selected'
+        assert_includes res.body, 'value="low" selected'
+      end
+
+      # An empty model means "follow the default" again, and an unknown name
+      # is dropped rather than pinned: the picker only offers what the
+      # provider and config know, so a hand-crafted post must not get past it.
+      def test_session_settings_ignores_an_unknown_model_and_clears_thinking
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+
+        handle = Class.new do
+          attr_reader :model, :thinking
+
+          def use_model(name)
+            @model = name
+          end
+
+          def use_thinking(level)
+            @thinking = level
+          end
+        end.new
+        channel.define_singleton_method(:session_for) { |_sid| handle }
+
+        res = FakeResponse.new
+        channel.send(:update_session_settings, res, "web_kanyaah",
+                     form_post({ "model" => "made-up-model", "thinking" => "" }))
+
+        assert_equal 200, res.status
+        assert_nil handle.model, "an unknown model is never applied"
+        assert_equal "", handle.thinking, "empty means back to the default"
+        assert_includes res.body, "<option value=\"\" selected>", "the row shows the default marked"
+      end
+
+      # A turn owns the actor between rounds, so a settings change is refused
+      # the same way a rename is: with a bare 409, not a half-applied row.
+      def test_session_settings_is_refused_while_a_turn_is_running
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        turn = Turn.new(id: "tabc", session_id: "web_kanyaah", prompt: "Halo")
+        channel.instance_variable_get(:@turns)["tabc"] = turn
+        channel.define_singleton_method(:session_running?) { |_sid| true }
+
+        res = FakeResponse.new
+        channel.send(:update_session_settings, res, "web_kanyaah",
+                     form_post({ "model" => "model-a", "thinking" => "low" }))
+
+        assert_equal 409, res.status
+        assert_empty res.body
+      end
+
+
     end
   end
 end

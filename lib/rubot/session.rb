@@ -45,7 +45,7 @@ module Rubot
 
     attr_reader :id, :messages, :workspace, :usage, :last_usage, :cost
     attr_reader :task, :cwd, :cache_history
-    attr_accessor :summary, :forced_skill, :model_override, :model_preset, :title
+    attr_accessor :summary, :forced_skill, :model_override, :model_preset, :thinking_level, :title
 
     # How many recent requests keep their cache share. Enough to see a pattern
     # (a run of zeros is a busted cache, a stray zero is a compaction), short
@@ -101,6 +101,9 @@ module Rubot
       @forced_skill = nil
       @model_override = nil
       @model_preset = nil
+      # Reasoning effort this session asks for ("minimal"/"low"/"medium"/"high").
+      # nil means "whatever the config or preset says".
+      @thinking_level = nil
       # A name for the conversation, chosen by the model from the first prompt
       # (see SessionNamer). nil means "not named yet"; readers fall back to the
       # opening prompt.
@@ -514,6 +517,7 @@ module Rubot
       @title = nil
       @model_override = nil
       @model_preset = nil
+      @thinking_level = nil
       @usage = Usage.zero
       @last_usage = Usage.zero
       @cost = nil
@@ -859,6 +863,7 @@ module Rubot
       data["forced_skill"] = @forced_skill if @forced_skill
       data["model_override"] = @model_override if @model_override
       data["model_preset"] = @model_preset if @model_preset
+      data["thinking_level"] = @thinking_level if @thinking_level
       data["usage"] = @usage.to_h
       data["last_usage"] = @last_usage.to_h
       data["cost"] = @cost if @cost
@@ -919,6 +924,7 @@ module Rubot
         "forced_skill" => @forced_skill,
         "model_override" => @model_override,
         "model_preset" => @model_preset,
+        "thinking_level" => @thinking_level,
         "usage" => @usage.to_h,
         "last_usage" => @last_usage.to_h,
         "cost" => @cost,
@@ -952,7 +958,7 @@ module Rubot
     def persistable?
       return true unless @messages.empty?
       return true if @summary && !@summary.strip.empty?
-      return true if @forced_skill || @model_override || @model_preset
+      return true if @forced_skill || @model_override || @model_preset || @thinking_level
       return true if @usage.requests.positive?
       return true if @last_usage.requests.positive?
       return true if @memory_backlog && !@memory_backlog.empty?
@@ -1072,6 +1078,7 @@ module Rubot
       @forced_skill = data["forced_skill"] if data["forced_skill"]
       @model_override = data["model_override"] if data["model_override"]
       @model_preset = data["model_preset"] if data["model_preset"]
+      @thinking_level = data["thinking_level"] if data["thinking_level"]
       @usage = Usage.from_h(data["usage"])
       @last_usage = Usage.from_h(data["last_usage"])
       @cost = load_cost(data["cost"])

@@ -343,6 +343,15 @@ module Rubot
       { id: id, messages: messages, meta: decode_meta(row && row[0]), start: start }
     end
 
+    # The meta block of one session without loading its transcript. The page
+    # reads the model override and thinking level for the controls under the
+    # composer from here, because a turn may be running in the actor that owns
+    # the session and the page must render without waiting for it.
+    def session_meta(session_id)
+      row = @db.get_first_row("SELECT meta FROM sessions WHERE id = ?", [text_id(session_id)])
+      decode_meta(row && row[0])
+    end
+
     def session_ids
       @db.execute("SELECT id FROM sessions ORDER BY COALESCE(updated_at, '') DESC").map { |row| text_id(row.first) }
     end
@@ -616,7 +625,8 @@ module Rubot
     # without it, resuming that session after the migration would show the model
     # the tail of a conversation whose beginning it no longer has.
     META_KEYS = %w[
-      summary task forced_skill model_override model_preset usage last_usage cost
+      summary task forced_skill model_override model_preset thinking_level
+      usage last_usage cost
       cost_partial last_usage_watermark cache_history system_prompt system_prompt_epoch
       memory_backlog
     ].freeze
