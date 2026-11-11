@@ -2681,8 +2681,7 @@ class TestAgentThinkingLevel < Minitest::Test
     assert_equal "gpt-4", @agent.active_model_name
   end
 
-  def test_a_session_level_thinking_clears_a_preset_effort
-    config_data = {
+  def test_clearing_the_session_level_falls_back_to_the_preset    config_data = {
       "agents" => { "defaults" => { "workspace" => @workspace, "model_preset" => "primary" } },
       "models" => [
         { "name" => "model-a", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" }
@@ -2700,7 +2699,35 @@ class TestAgentThinkingLevel < Minitest::Test
 
     agent.use_thinking("")
 
-    assert_nil agent.provider.config.reasoning_effort,
-               "the session's own choice wins over the preset"
+    assert_equal "high", agent.provider.config.reasoning_effort,
+                 "clearing the session's own choice goes back to the preset's effort"
+  end
+
+  # A persona carries the default a new conversation starts from, so a
+  # session that has chosen nothing runs on the persona's level.
+  def test_the_persona_default_is_what_an_unchosen_session_runs_on
+    config_data = {
+      "agents" => { "defaults" => { "workspace" => @workspace } },
+      "models" => [
+        { "name" => "model-a", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" }
+      ]
+    }
+    File.write(@config_path, config_data.to_yaml)
+    config = Rubot::Config.new(@config_path)
+    persona = Rubot::Persona.new(slug: "trading", name: "Trading", thinking: "high")
+
+    agent = Rubot::Agent.new(config: config, session_id: "default", tools: @tools,
+                             persona: persona)
+    assert_equal "high", agent.thinking_level
+    assert_equal "high", agent.provider.config.reasoning_effort
+
+    agent.use_thinking("low")
+    assert_equal "low", agent.provider.config.reasoning_effort,
+                 "the session's own choice comes first"
+
+    fresh = Rubot::Agent.new(config: config, session_id: "default", tools: @tools,
+                             persona: persona)
+    assert_equal "low", fresh.provider.config.reasoning_effort,
+                 "and it survives a restart"
   end
 end

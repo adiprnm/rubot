@@ -56,6 +56,13 @@
             <% end %>
           </select>
         </label>
+        <label>Thinking default
+          <select name="thinking">
+            <% Persona::THINKING_LEVELS.each do |level| %>
+              <option value="<%= h(level) %>"<%= " selected" if level == Rubot::Channels::Web::DEFAULT_THINKING %>><%= h(level) %></option>
+            <% end %>
+          </select>
+        </label>
         <label>System prompt
           <textarea name="system_prompt" rows="3" placeholder="Kamu spesialis …"></textarea>
         </label>
@@ -95,6 +102,14 @@
               <option value=""<%= " selected" if persona_model_value.empty? %>>Ikut default</option>
               <% model_choices.each do |choice| %>
                 <option value="<%= h(choice[:value]) %>"<%= " selected" if choice[:value] == persona_model_value %>><%= h(choice[:label]) %></option>
+              <% end %>
+            </select>
+          </label>
+
+          <label>Thinking default
+            <select name="thinking">
+              <% Persona::THINKING_LEVELS.each do |level| %>
+                <option value="<%= h(level) %>"<%= " selected" if level == persona_thinking %>><%= h(level) %></option>
               <% end %>
             </select>
           </label>

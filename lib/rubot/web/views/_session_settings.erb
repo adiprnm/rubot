@@ -4,10 +4,14 @@
     the composer rather than in a settings page, the same width and centring
     as the box above them.
 
+    Both lists hold real choices only. There is no "follow the default" entry:
+    the default belongs to the persona, chosen where the persona is edited,
+    and a picker that can say "default" hides the very thing the reader wants
+    to know — which model, which effort.
+
     A change posts at once (there is no save button to forget), and the answer
     is this same row again with the new choice marked: a page cannot drift
-    from what the session really runs on. An empty model means "follow the
-    persona/config default"; an empty level means "follow the config". -%>
+    from what the session really runs on. -%>
 <form id="session-settings" class="session-settings"
       data-model="<%= h(session_model) %>"
       data-thinking="<%= h(session_thinking) %>"
@@ -19,9 +23,15 @@
     <span class="session-setting-label">model</span>
     <select class="session-select" name="model" autocomplete="off"
             aria-label="Model sesi ini">
-      <option value=""<%= " selected" if session_model.empty? %>>ikut default</option>
       <% model_choices.each do |choice| %>
         <option value="<%= h(choice[:value]) %>"<%= " selected" if choice[:value] == session_model %>><%= h(choice[:label]) %></option>
+      <% end %>
+      <%# The list is built from config and the provider catalog, and the model
+          the session runs on can be a third thing (a hand-edited config, a
+          catalog that failed to load). Showing the real one beats showing an
+          empty box that misrepresents it. -%>
+      <% unless session_model.empty? || model_choices.any? { |choice| choice[:value] == session_model } %>
+        <option value="<%= h(session_model) %>" selected><%= h(session_model) %></option>
       <% end %>
     </select>
   </label>
@@ -29,8 +39,8 @@
     <span class="session-setting-label">thinking</span>
     <select class="session-select" name="thinking" autocomplete="off"
             aria-label="Level thinking sesi ini">
-      <% [["", "default"], %w[minimal minimal], %w[low low], %w[medium medium], %w[high high]].each do |value, label| %>
-        <option value="<%= h(value) %>"<%= " selected" if value == session_thinking %>><%= label %></option>
+      <% Persona::THINKING_LEVELS.each do |level| %>
+        <option value="<%= h(level) %>"<%= " selected" if level == session_thinking %>><%= h(level) %></option>
       <% end %>
     </select>
   </label>

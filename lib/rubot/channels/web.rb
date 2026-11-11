@@ -118,6 +118,11 @@ module Rubot
       SESSION_QUOTA_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/quota\z}
       SESSION_REPIN_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/repin\z}
       SESSION_SETTINGS_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/settings\z}
+
+      # The level a persona starts from, and the one a session falls back to
+      # when neither it nor its persona has chosen: the middle of what the
+      # models understand, and the one effort a reasoning model accepts.
+      DEFAULT_THINKING = "medium"
       PERSONA_SESSIONS_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/sessions\z}
       PERSONA_EDIT_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/edit\z}
       # Where the token form posts. Not under /s/ or /p/ because it belongs to
@@ -1109,7 +1114,7 @@ module Rubot
 
         handle = session_for(sid)
         handle.use_model(model) if !model.empty? && model != session_model(sid) && known_model?(model)
-        handle.use_thinking(thinking)
+        handle.use_thinking(thinking) unless thinking.empty?
 
         if req && req["HX-Request"].to_s == "true"
           res["Content-Type"] = "text/html; charset=utf-8"
@@ -1436,6 +1441,7 @@ module Rubot
           persona_prompt: persona ? persona.system_prompt.to_s : "",
           persona_model: persona_model(persona),
           persona_model_value: persona_model_value(persona),
+          persona_thinking: persona_thinking(persona),
           model_choices: model_choices,
           session_model: session_model(sid),
           session_thinking: session_thinking(sid),
@@ -1556,12 +1562,56 @@ module Rubot
       # The model and thinking level this session runs on, read from the
       # store's meta block rather than from the actor: a turn may be running
       # in it, and the page has to render without waiting for that turn.
-      def session_model(sid)
-        session_meta(sid)["model_override"].to_s
+      # A persona's default effort, as its edit form shows it: what it stores,
+      # or the floor every persona starts from.
+      def persona_thinking(persona)
+        persona&.thinking || DEFAULT_THINKING
       end
 
+      # A level from the persona form, checked against the ones a model
+      # understands. An unknown word falls back to what the persona already
+      # had, so a stale form cannot erase the default.
+      def persona_thinking_from(req, fallback: nil)
+        level = form(req, "thinking").to_s.strip.downcase
+        return fallback if level.empty?
+        return level if Persona::THINKING_LEVELS.include?(level)
+
+        fallback
+      end
+
+      # The model this session runs on. The picker lists real models only, so
+      # it has to start on the one the session would actually use: its own
+      # override, the persona's, or the config's default.
+      def session_model(sid)
+        meta = session_meta(sid)
+        return meta["model_override"].to_s unless meta["model_override"].to_s.empty?
+
+        persona = persona_store&.[](owner_slug(sid))
+        return persona.model if persona && persona.model
+
+        config = @app_config
+        return "" unless config
+
+        entry = config.active_model_entry
+        name = entry["name"].to_s
+        name.empty? ? config.name : name
+      end
+
+      # Its own choice, then the persona's default, then the effort the
+      # persona's preset carries. There is no "default" entry in the picker, so
+      # this always answers a concrete level.
       def session_thinking(sid)
-        session_meta(sid)["thinking_level"].to_s
+        meta = session_meta(sid)
+        return meta["thinking_level"].to_s unless meta["thinking_level"].to_s.empty?
+
+        persona = persona_store&.[](owner_slug(sid))
+        return persona.thinking if persona && persona.thinking
+
+        preset = @app_config&.model_preset(persona&.preset)
+        level = preset.is_a?(Hash) ? preset["reasoning_effort"].to_s : ""
+        return level unless level.empty?
+
+        DEFAULT_THINKING
       end
 
       def session_meta(sid)
@@ -1886,6 +1936,7 @@ module Rubot
           name: form(req, "name").strip.empty? ? nil : form(req, "name").strip,
           emoji: form(req, "emoji").strip.empty? ? EMOJI_CHOICES.first : form(req, "emoji").strip,
           model: persona_model_from(req),
+          thinking: persona_thinking_from(req, fallback: DEFAULT_THINKING),
           system_prompt: prompt.empty? ? nil : prompt
         ))
         store.prepare_workspace(slug, seed_from: @app_config&.workspace)
@@ -1918,6 +1969,8 @@ module Rubot
         # pinning the persona to the global default.
         keeps_model = !form_field?(req, "model")
         model = keeps_model ? current.model : persona_model_from(req, fallback: current.model)
+        keeps_thinking = !form_field?(req, "thinking")
+        thinking = keeps_thinking ? current.thinking : persona_thinking_from(req, fallback: current.thinking)
 
         store.set(slug, Persona.new(
           slug: slug,
@@ -1929,6 +1982,7 @@ module Rubot
           # only by a form that actually carries the picker.
           preset: keeps_model ? current.preset : nil,
           model: model,
+          thinking: thinking,
           system_prompt: prompt.empty? ? nil : prompt,
           skills: current.skills,
           ref: current.ref,

@@ -206,6 +206,7 @@ module Rubot
         when :use_model            then agent.use_model(msg[:name])
         when :use_thinking         then agent.use_thinking(msg[:level])
         when :session_thinking     then agent.session.thinking_level
+        when :thinking_level       then agent.thinking_level
         when :persona              then agent.persona_info
         when :set_persona          then agent.set_persona(msg[:persona])
         when :clear_session        then agent.clear_session

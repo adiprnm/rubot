@@ -139,7 +139,7 @@ module Rubot
                                          max_messages: config.session_max_messages,
                                          archive: @archive)
       apply_initial_preset!
-      @provider = provider || build_provider(preset: @active_preset, effort: @session.thinking_level)
+      @provider = provider || build_provider(preset: @active_preset, effort: thinking_level)
 
       # Build safety guard from config
       @safety_guard = SafetyGuard.new(
@@ -735,24 +735,32 @@ module Rubot
       @session.model_preset = nil
       @active_preset_name = "default"
       @session.save!
-      @provider = Provider.build(settings.with_effort(@session.thinking_level))
+      @provider = Provider.build(settings.with_effort(thinking_level))
       @session_model
     end
 
     # Switch the reasoning effort ("thinking level") for this session. nil or
-    # "" returns to whatever the config or preset says. The provider is
-    # rebuilt so the very next request carries the new effort.
+    # "" drops the session's own choice, so the persona's default — or the
+    # effort its preset carries — takes over again. The provider is rebuilt so
+    # the very next request carries the new effort.
     def use_thinking(level)
       text = level.to_s.strip.downcase
       text = nil if text.empty?
-      return nil if text && !%w[minimal low medium high].include?(text)
+      return nil if text && !Persona::THINKING_LEVELS.include?(text)
 
       @session.thinking_level = text
       @session.save!
-      @provider = Provider.build(
-        @config.provider_settings(@session_model || @config.name).with_effort(text)
-      )
+      @provider = build_provider(preset: @active_preset, effort: thinking_level)
       text
+    end
+
+    # The reasoning effort this session runs on: its own choice first, then the
+    # persona's default, then the effort its preset or the config carries.
+    # nil means "send no effort at all", which is what the providers did before
+    # the choice existed.
+    def thinking_level
+      @session.thinking_level || @persona&.thinking ||
+        @active_preset&.dig("reasoning_effort") || @config.reasoning_effort
     end
 
     # The models the provider supports, from its /models catalog. The list is
@@ -1509,7 +1517,7 @@ module Rubot
       @active_preset = resolve_initial_preset || @config.default_model_preset
       @active_preset_name = @active_preset["name"]
       @session_model = @active_preset["model"]
-      @provider = build_provider(preset: @active_preset, effort: @session.thinking_level)
+      @provider = build_provider(preset: @active_preset, effort: thinking_level)
     end
 
     def apply_preset_source(source, name: nil, session_name: nil)
@@ -1535,7 +1543,7 @@ module Rubot
       @session.model_preset = session_name || preset_name
       @session.model_override = nil
       @session.save!
-      @provider = Provider.build(settings.with_effort(@session.thinking_level))
+      @provider = Provider.build(settings.with_effort(thinking_level))
       active_model_preset
     end
 
@@ -1769,7 +1777,7 @@ end
       return if @session_model.nil?
       return if @config.model_entry_by_name(@session_model).nil? && !provider_model_id?(@session_model)
 
-      @provider = build_provider(@session_model)
+      @provider = build_provider(@session_model, effort: thinking_level)
     end
 
     # A model from the provider's /models catalog rather than config.yml.

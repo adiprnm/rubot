@@ -670,7 +670,7 @@ module Rubot
                     persona_prompt: persona_prompt,
                     persona_model: "m", session_id: "web_rubot",
                     persona_model_value: "", model_choices: [],
-                    session_model: "", session_thinking: "",
+                    session_model: "", session_thinking: "medium", persona_thinking: "medium",
                     session_short: "web_rubot", session_label: "Sesi baru",
                     document_title: "rubot · Rubot", live_turn: live_turn,
                     live_prompt_shown: false, token_query: "",
@@ -1729,7 +1729,7 @@ module Rubot
                            persona_prompt: "",
                            persona_model: "m", session_id: "web_rubot",
                     persona_model_value: "", model_choices: [],
-                    session_model: "", session_thinking: "",
+                    session_model: "", session_thinking: "medium", persona_thinking: "medium",
                            session_short: "web_rubot", session_label: "Sesi baru",
                            document_title: "rubot · Rubot", live_turn: nil, token_query: "",
                            page: { entries: [], more: false, before: 0 }, older_url: "",
@@ -4412,7 +4412,7 @@ module Rubot
                            persona_prompt: "",
                            persona_model: "m", session_id: "web_rubot",
                     persona_model_value: "", model_choices: [],
-                    session_model: "", session_thinking: "",
+                    session_model: "", session_thinking: "medium", persona_thinking: "medium",
                            session_short: "web_rubot", session_label: "Sesi baru",
                            document_title: "rubot · Rubot", live_turn: nil, token_query: "",
                            page: { entries: [], more: false, before: 0 }, older_url: "",
@@ -5019,8 +5019,11 @@ module Rubot
       # cannot drift from what the session really runs on.
       def test_session_settings_applies_the_choice_and_rerenders_the_row
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        # model-b is what the config runs on by default; model-a is the
+        # change this test makes.
         channel.instance_variable_get(:@app_config).data["models"] =
-          [{ "name" => "model-a", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" }]
+          [{ "name" => "model-b", "model" => "openai/gpt-4o", "api_key" => "sk-test" },
+           { "name" => "model-a", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" }]
 
         handle = Class.new do
           attr_reader :model, :thinking
@@ -5051,10 +5054,11 @@ module Rubot
         assert_includes res.body, 'value="low" selected'
       end
 
-      # An empty model means "follow the default" again, and an unknown name
-      # is dropped rather than pinned: the picker only offers what the
-      # provider and config know, so a hand-crafted post must not get past it.
-      def test_session_settings_ignores_an_unknown_model_and_clears_thinking
+      # The pickers offer real choices only, so a hand-crafted post carrying
+      # something else must not get past them: an unknown model is dropped
+      # rather than pinned, and an empty level leaves the persona's default
+      # alone instead of inventing one.
+      def test_session_settings_ignores_an_unknown_model_and_an_empty_level
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
 
         handle = Class.new do
@@ -5069,6 +5073,7 @@ module Rubot
           end
         end.new
         channel.define_singleton_method(:session_for) { |_sid| handle }
+        channel.define_singleton_method(:session_meta) { |_sid| {} }
 
         res = FakeResponse.new
         channel.send(:update_session_settings, res, "web_kanyaah",
@@ -5076,8 +5081,30 @@ module Rubot
 
         assert_equal 200, res.status
         assert_nil handle.model, "an unknown model is never applied"
-        assert_equal "", handle.thinking, "empty means back to the default"
-        assert_includes res.body, "<option value=\"\" selected>", "the row shows the default marked"
+        assert_nil handle.thinking, "an empty level leaves the persona's default alone"
+        assert_includes res.body, 'value="medium" selected', "the row marks the level it runs on"
+        refute_includes res.body, "ikut default"
+        refute_includes res.body, 'value="" selected'
+      end
+
+      # The persona owns the defaults, so a session that has chosen nothing
+      # shows the persona's own choices rather than a "default" entry.
+      def test_the_session_row_starts_on_the_persona_defaults
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah", "model" => "model-a",
+                                     "thinking" => "high" } }
+        )
+        channel.instance_variable_get(:@app_config).data["models"] =
+          [{ "name" => "model-a", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" },
+           { "name" => "model-b", "model" => "openai/gpt-4o", "api_key" => "sk-test" }]
+
+        res = FakeResponse.new
+        channel.send(:render_session, res, "web_kanyaah", FakeRequest.new("/s/web_kanyaah"))
+
+        assert_equal 200, res.status
+        assert_includes res.body, 'value="model-a" selected'
+        assert_includes res.body, 'value="high" selected'
+        refute_includes res.body, "ikut default"
       end
 
       # A turn owns the actor between rounds, so a settings change is refused

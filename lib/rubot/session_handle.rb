@@ -202,6 +202,12 @@ module Rubot
         call(:use_thinking, level: level)
       end
 
+      # The effort this session actually runs on: its own choice, the persona
+      # default, or the effort its preset carries.
+      def thinking_level
+        call(:thinking_level)
+      end
+
       def persona
         call(:persona)
       end
@@ -343,6 +349,10 @@ module Rubot
 
         def model_preset
           @handle.call(:model_preset)
+        end
+
+        def thinking_level
+          @handle.call(:thinking_level)
         end
 
         def forced_skill=(name)

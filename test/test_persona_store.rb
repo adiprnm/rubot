@@ -29,6 +29,18 @@ class TestPersona < Minitest::Test
     assert_nil Rubot::Persona.from("name" => "  ", "system_prompt" => "")
   end
 
+  def test_thinking_round_trips_and_rejects_a_typo
+    persona = Rubot::Persona.new(name: "trading", thinking: "HIGH")
+    assert_equal "high", persona.thinking, "a level is stored lowercase"
+
+    restored = Rubot::Persona.from(persona.to_h)
+    assert_equal "high", restored.thinking
+
+    assert_nil Rubot::Persona.new(name: "x", thinking: "turbo").thinking,
+               "a word the models do not understand is not a preference"
+    assert_nil Rubot::Persona.new(name: "x", thinking: "").thinking
+  end
+
   def test_to_h_round_trips
     persona = Rubot::Persona.new(name: "trading", model: "llama3", system_prompt: "Halo")
     restored = Rubot::Persona.from(persona.to_h)

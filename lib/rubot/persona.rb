@@ -17,17 +17,22 @@ module Rubot
   # it is derived from the store's directory and the slug, so the file stays
   # portable and cannot point an agent at an arbitrary path.
   class Persona
-    attr_reader :slug, :name, :emoji, :accent, :preset, :model, :system_prompt, :skills, :ref,
-                :created_at
+    attr_reader :slug, :name, :emoji, :accent, :preset, :model, :thinking, :system_prompt,
+                :skills, :ref, :created_at
+
+    # The reasoning efforts a model understands, in the order the pickers show
+    # them. A level outside this list is not a preference, it is a typo.
+    THINKING_LEVELS = %w[minimal low medium high].freeze
 
     def initialize(slug: nil, name: nil, emoji: nil, accent: nil, preset: nil, model: nil,
-                   system_prompt: nil, skills: nil, ref: nil, created_at: nil)
+                   thinking: nil, system_prompt: nil, skills: nil, ref: nil, created_at: nil)
       @slug = normalize_string(slug)
       @name = normalize_string(name)
       @emoji = normalize_string(emoji)
       @accent = normalize_string(accent)
       @preset = normalize_string(preset)
       @model = normalize_string(model)
+      @thinking = normalize_thinking(thinking)
       @system_prompt = normalize_string(system_prompt)
       @skills = normalize_list(skills)
       @ref = normalize_string(ref)
@@ -51,6 +56,7 @@ module Rubot
         accent: fetch.call("accent"),
         preset: fetch.call("preset"),
         model: fetch.call("model"),
+        thinking: fetch.call("thinking"),
         system_prompt: fetch.call("system_prompt"),
         skills: fetch.call("skills"),
         ref: fetch.call("ref"),
@@ -67,6 +73,7 @@ module Rubot
         "accent" => @accent,
         "preset" => @preset,
         "model" => @model,
+        "thinking" => @thinking,
         "system_prompt" => @system_prompt,
         "skills" => @skills,
         "ref" => @ref,
@@ -75,7 +82,7 @@ module Rubot
     end
 
     def empty?
-      [ @slug, @name, @emoji, @accent, @preset, @model, @system_prompt, @ref ]
+      [ @slug, @name, @emoji, @accent, @preset, @model, @thinking, @system_prompt, @ref ]
         .all? { |value| value.nil? || value.empty? }
     end
 
@@ -101,6 +108,15 @@ module Rubot
 
       text = value.to_s.strip
       text.empty? ? nil : text
+    end
+
+    # Only a level the model understands is a default; anything else is
+    # dropped rather than sent as a request argument the provider rejects.
+    def normalize_thinking(value)
+      text = normalize_string(value)&.downcase
+      return nil if text.nil?
+
+      THINKING_LEVELS.include?(text) ? text : nil
     end
 
     # Skill names the persona always works with. A plain string is accepted so
