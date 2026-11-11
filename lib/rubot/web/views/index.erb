@@ -275,8 +275,7 @@
         reader types in rather than in a settings page. -%>
     <%= View.render("_session_settings", session_id: session_id, token_query: token_query,
                     model_choices: model_choices,
-                    session_model: session_model, session_thinking: session_thinking,
-                    session_requests: session_requests) %>
+                    session_model: session_model, session_thinking: session_thinking) %>
 
     <%# The footer is facts about the conversation, not about the moment: that
         a turn is running is said in the band above the field, where the work

@@ -734,7 +734,7 @@ module Rubot
                     persona_prompt: persona_prompt,
                     persona_model: "m", session_id: "web_rubot",
                     persona_model_value: "", model_choices: [],
-                    session_model: "", session_thinking: "medium", session_requests: 3, persona_thinking: "medium",
+                    session_model: "", session_thinking: "medium", persona_thinking: "medium",
                     session_short: "web_rubot", session_label: "Sesi baru",
                     document_title: "rubot · Rubot", live_turn: live_turn,
                     live_prompt_shown: false, token_query: "",
@@ -1793,7 +1793,7 @@ module Rubot
                            persona_prompt: "",
                            persona_model: "m", session_id: "web_rubot",
                     persona_model_value: "", model_choices: [],
-                    session_model: "", session_thinking: "medium", session_requests: 3, persona_thinking: "medium",
+                    session_model: "", session_thinking: "medium", persona_thinking: "medium",
                            session_short: "web_rubot", session_label: "Sesi baru",
                            document_title: "rubot · Rubot", live_turn: nil, token_query: "",
                            page: { entries: [], more: false, before: 0 }, older_url: "",
@@ -4599,7 +4599,7 @@ module Rubot
                            persona_prompt: "",
                            persona_model: "m", session_id: "web_rubot",
                     persona_model_value: "", model_choices: [],
-                    session_model: "", session_thinking: "medium", session_requests: 3, persona_thinking: "medium",
+                    session_model: "", session_thinking: "medium", persona_thinking: "medium",
                            session_short: "web_rubot", session_label: "Sesi baru",
                            document_title: "rubot · Rubot", live_turn: nil, token_query: "",
                            page: { entries: [], more: false, before: 0 }, older_url: "",
@@ -5241,34 +5241,6 @@ module Rubot
         assert_includes res.body, 'value="low" selected'
       end
 
-      # A picker change rewrites the prompt, so it costs a re-read of the whole
-      # prefix. Saying so before the change turns a surprising number in the
-      # usage panel into an expected one.
-      def test_the_picker_warns_that_a_change_costs_a_re_read
-        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
-        channel.define_singleton_method(:session_meta) { |_sid| { "usage" => { "requests" => 12 } } }
-
-        html = Rubot::Web::View.render("_session_settings",
-                                       session_id: "web_kanyaah", token_query: "",
-                                       model_choices: [ { value: "m", label: "m" } ],
-                                       session_model: "m", session_thinking: "medium",
-                                       session_requests: channel.send(:session_requests, "web_kanyaah"))
-
-        assert_includes html, "session-setting-hint"
-        assert_includes html, "prefix dibaca ulang"
-      end
-
-      # A session that has not sent a request has no prefix to lose.
-      def test_the_picker_says_nothing_on_a_session_without_requests
-        html = Rubot::Web::View.render("_session_settings",
-                                       session_id: "web_kanyaah", token_query: "",
-                                       model_choices: [ { value: "m", label: "m" } ],
-                                       session_model: "m", session_thinking: "medium",
-                                       session_requests: 0)
-
-        refute_includes html, "session-setting-hint"
-      end
-
       # The pickers offer real choices only, so a hand-crafted post carrying
       # something else must not get past them: an unknown model is dropped
       # rather than pinned, and an empty level leaves the persona's default
@@ -5370,7 +5342,7 @@ module Rubot
                            groups: { pinned: [], recent: [], page: 1, pages: 1, recent_total: 0, pinned_limit: 10, current: "web_a" },
                            slug: "a", persona_label: "A", persona_emoji: "🤖", persona_prompt: "",
                            persona_model: "m", session_id: "web_a", persona_model_value: "", model_choices: [],
-                           session_model: "", session_thinking: "medium", session_requests: 0, persona_thinking: "medium",
+                           session_model: "", session_thinking: "medium", persona_thinking: "medium",
                            session_short: "web_a", session_label: "Sesi baru",
                            document_title: "rubot · A", live_turn: nil, live_prompt_shown: false, token_query: "",
                            page: { entries: [], more: false, before: 0 }, older_url: "",
