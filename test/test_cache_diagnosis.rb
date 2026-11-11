@@ -152,12 +152,16 @@ class TestCacheDiagnosis < Minitest::Test
     assert_equal 1_024, Rubot::CacheDiagnosis.min_prompt_tokens(nil)
   end
 
-  def test_every_cause_has_a_label_a_reader_can_read
+  # The cause is only ever read in the log now (a reader looking at a
+  # conversation does not need "cache kedaluwarsa (>5 menit)" in the status
+  # row), but the wording still has to name the cause instead of printing the
+  # symbol.
+  def test_every_cause_has_a_label_a_log_reader_can_read
     causes = %i[cold model_switch prompt_epoch tools_change trim_boundary tool_result_shrink
                 reasoning_tail history_rewrite below_min_length ttl_expiry uncached unknown]
 
     causes.each do |label|
-      rendered = Rubot::UsageReport.cause_label(cache_cause: label)
+      rendered = Rubot::CacheDiagnosis.describe(label)
 
       refute_nil rendered, "#{label} would print nothing"
       refute_includes rendered, label.to_s, "#{label} would print its own symbol"

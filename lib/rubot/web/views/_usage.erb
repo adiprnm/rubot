@@ -13,11 +13,6 @@
   <span class="metric" title="Porsi prompt yang diambil dari cache pada permintaan terakhir — bukan rata-rata sesi">
     <%= usage_icon(:cache) %><span class="value"><%= h(cache) %></span>
   </span>
-  <% unless cause.to_s.empty? -%>
-    <span class="metric metric-cause" title="Sebab permintaan terakhir tidak memakai cache: <%= h(cause) %>">
-      <span class="value"><%= h(cause) %></span>
-    </span>
-  <% end -%>
   <span class="metric" title="Porsi context window model yang terpakai permintaan berikutnya">
     <%= usage_icon(:context) %><span class="value"><%= h(ctx) %></span>
   </span>

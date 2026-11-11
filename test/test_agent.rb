@@ -3014,14 +3014,16 @@ class TestAgentCacheDivergence < Minitest::Test
     assert_equal :compaction, agent.usage_report(network: false)[:cache_cause]
   end
 
-  # What /context and the panel print: the label, in words, on its own line.
-  def test_the_context_report_prints_the_cause
+  # What /context prints: figures, not a verdict. The cause of a miss is a log
+  # line (Rubot.debug?), because it reads like a fault in a report — especially
+  # `ttl_expiry`, which is only the provider's five minutes running out.
+  def test_the_context_report_does_not_print_the_cause
     agent = build_zero_cache_agent("cause-render")
     agent.process("halo", stream: false)
 
     text = Rubot::UsageReport.render(agent.usage_report(network: false))
 
-    assert_includes text, "Sebab:"
-    assert_includes text, "request pertama sesi ini"
+    refute_includes text, "Sebab"
+    refute_includes text, "request pertama sesi ini"
   end
 end

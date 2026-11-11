@@ -1096,26 +1096,34 @@ class TestSessionCacheStreakWarning < Minitest::Test
     err
   end
 
-  # Two misses can be bad luck. Three in a row, with the prefix intact, is a
-  # pattern: the warning arrives while the session is still open.
+  # Every record also logs the diagnosis of that request (see
+  # Session#log_cache_cause); these tests are about the streak line, so they
+  # look for that one instead of expecting a silent stderr.
   def test_three_zero_reads_in_a_row_are_warned_about_once
-    assert_empty record(0), "one miss is not a warning"
-    assert_empty record(0), "two misses are not a warning"
+    refute_match(/berurutan/, record(0), "one miss is not a warning")
+    refute_match(/berurutan/, record(0), "two misses are not a warning")
     assert_match(/3 request berurutan/, record(0))
-    assert_empty record(0), "a long streak warns at three and then every ten"
+    refute_match(/berurutan/, record(0), "a long streak warns at three and then every ten")
   end
 
   def test_a_read_resets_the_streak
     record(0)
     record(0)
     refute_match(/berurutan/, record(8_000))
-    assert_empty record(0)
+    refute_match(/berurutan/, record(0))
   end
 
   # A trimmed window is an explained miss, not a provider problem.
   def test_a_trim_does_not_count_toward_the_streak
     record(0)
     refute_match(/berurutan/, record(0, diverged_at: 10))
-    assert_empty record(0)
+    refute_match(/berurutan/, record(0))
+  end
+
+  # The cause itself is always logged: it is the only record of why a request
+  # paid full price, and stderr is where the diagnosis belongs.
+  def test_the_cause_of_every_request_is_logged
+    assert_match(/\[cache\] streak: .*/, record(0))
+    assert_match(/\[cache\] streak: hit/, record(40_000))
   end
 end

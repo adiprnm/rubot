@@ -204,8 +204,19 @@ module Rubot
       @cache_records << record
       @cache_records.shift while @cache_records.size > CACHE_RECORDS_LIMIT
       @archive&.record_cache(@id, record)
+      log_cache_cause
       warn_cache_streak(record)
       record
+    end
+
+    # Why the last request did or did not read the cache is a note for whoever
+    # reads the log, not something a conversation needs to say: "cache
+    # kedaluwarsa (>5 menit)" in a row of figures reads like a fault, when it is
+    # only the ordinary end of the provider's five-minute window. The log is
+    # where a diagnosis belongs; no surface a user is reading gets the label.
+    def log_cache_cause
+      cause = CacheDiagnosis.cause(@cache_records)
+      warn "[cache] #{@id}: #{cause ? CacheDiagnosis.describe(cause) : 'hit'}"
     end
 
     # A prefix nobody changed that still reads nothing, three requests running,
