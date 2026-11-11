@@ -3804,9 +3804,11 @@ module Rubot
                         "an idle page has no turn stream, so it needs one of its own"
       end
 
-      # Only the persona that gained a conversation hears about it: a page of
-      # another persona has no row to redraw.
-      def test_a_new_conversation_reaches_only_its_own_personas_pages
+      # Every page hears about it, though each is answered with its own rows:
+      # the roster and the drawer's count speak for the install, so a page of
+      # another persona gains a number without being handed a row that is not
+      # its own.
+      def test_a_new_conversation_reaches_every_page_with_its_own_rows
         channel = channel_with_sessions(personas: {
           "english-tutor" => { "name" => "English Tutor" },
           "kanyaah" => { "name" => "Kanyaah" }
@@ -3816,10 +3818,12 @@ module Rubot
         channel.send(:listen_for_events, "web_english-tutor", listening)
         channel.send(:listen_for_events, "web_kanyaah", elsewhere)
 
-        channel.send(:broadcast_sessions, "english-tutor")
+        channel.send(:broadcast_sessions)
 
         refute listening.empty?, "the persona's page has a sidebar to redraw"
-        assert elsewhere.empty?, "another persona's page has nothing new to draw"
+        refute elsewhere.empty?, "the other page wears the same count on its handle"
+        assert_includes elsewhere.pop, %(id="nav-badge"),
+                        "the second page is told the count, not the row"
       end
 
       def test_a_page_that_went_away_stops_being_written_to
@@ -3828,7 +3832,7 @@ module Rubot
         channel.send(:listen_for_events, "web_english-tutor", queue)
         channel.send(:stop_listening_for_events, queue)
 
-        channel.send(:broadcast_sessions, "english-tutor")
+        channel.send(:broadcast_sessions)
 
         assert queue.empty?, "a stream that has gone away must not be written to"
       end
@@ -5408,6 +5412,64 @@ module Rubot
 
         refute_includes html, "unread-dot"
       end
+
+      # The count is part of the page a reader lands on, not only of the swap
+      # that follows a turn: arriving at a conversation from a link brings the
+      # handle up to date in the same breath as the roster.
+      def test_a_landed_page_draws_the_handle_count
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: { "web_kanyaah" => [ %w[user halo], %w[assistant siap] ],
+                      "web_kanyaah~20261110-090000" => [ %w[user halo juga] ] }
+        )
+        Rubot::Session.store.mark_unread("web_kanyaah~20261110-090000")
+        res = FakeResponse.new
+
+        channel.send(:render_session, res, "web_kanyaah")
+
+        assert_includes res.body, %(data-total="1"),
+                        "the drawer's handle is drawn from the same fact as the roster"
+      end
+
+      # The handle that opens the drawer speaks for the install, not for the
+      # persona on screen: on a phone the roster is behind that drawer, so news
+      # from a second persona has no other place to show up.
+      def test_the_drawer_handle_counts_every_persona
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" },
+                      "english-tutor" => { "name" => "English Tutor" } },
+          messages: { "web_kanyaah" => [ %w[user halo] ],
+                      "web_kanyaah~20261110-090000" => [ %w[user halo lagi] ],
+                      "web_english-tutor" => [ %w[user hello] ] }
+        )
+        Rubot::Session.store.mark_unread("web_kanyaah~20261110-090000")
+        Rubot::Session.store.mark_unread("web_english-tutor")
+
+        markup = channel.send(:sidebar_markup, "web_kanyaah")
+
+        assert_includes markup, %(<span class="nav-badge" id="nav-badge" data-total="2">),
+                        "one waiting conversation here and one in the other persona"
+        assert_includes markup, %(id="chat-head" hx-swap-oob="true"),
+                        "the count rides the header swap, so it needs no swap of its own"
+      end
+
+      # Nothing waiting draws nothing, so a quiet install looks as it always did.
+      def test_a_quiet_install_draws_no_handle_badge
+        html = View.render("_nav_badge", total: 0)
+
+        refute_includes html, "data-total"
+        assert_includes html, %(id="nav-badge"></span>),
+                        "an empty handle has to be really empty for :empty to hide it"
+      end
+
+      # Same cap as the roster: two digits must not spill out of the pill.
+      def test_the_drawer_handle_caps_its_count
+        html = View.render("_nav_badge", total: 12)
+
+        assert_includes html, "9+"
+        assert_includes html, "12 percakapan belum dibaca"
+      end
+
 
       # The roster answers "which persona has something new"; nine and above are
       # drawn as "9+" so a two-digit count cannot spill out of the badge.

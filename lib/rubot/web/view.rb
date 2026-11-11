@@ -846,6 +846,13 @@ module Rubot
           locals.each { |key, value| define_singleton_method(key) { value } }
         end
 
+        # The count the drawer's handle wears. A page drawn outside the channel
+        # — a test, or any caller with no roster to count — has nothing waiting;
+        # the channel passes the real number and its singleton method wins.
+        def unread_total
+          0
+        end
+
         def h(text)
           CGI.escapeHTML(text.to_s)
         end

@@ -3145,6 +3145,7 @@ body.lightbox-open { overflow: hidden; }
     display: grid;
     place-items: center;
     flex: none;
+    position: relative;
     width: 1.9rem;
     height: 1.9rem;
     margin-right: 0.15rem;
@@ -3456,6 +3457,35 @@ a:active,
   border-radius: 50%;
   background: var(--yellow);
 }
+
+/* The drawer's handle wears the roster's number, because on a phone the roster
+   is one tap away and a shut drawer would otherwise hide every other persona's
+   news. Drawn on the corner the way the status bar puts a badge on any icon,
+   and out of the button's own box so the lines underneath stay the same size.
+   Nothing at zero: the span is written empty and hidden by `:empty`, so an
+   install with nothing waiting looks exactly as it did. */
+.nav-badge {
+  position: absolute;
+  top: -0.45rem;
+  right: -0.5rem;
+  display: grid;
+  place-items: center;
+  min-width: 1rem;
+  height: 1rem;
+  padding: 0 0.2rem;
+  border-radius: 999px;
+  border: 1px solid var(--bg);
+  background: var(--yellow);
+  color: var(--on-accent);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  pointer-events: none;
+}
+
+.nav-badge:empty { display: none; }
 
 /* The roster's version of the same fact, as a number: the rail is asking
    "which persona has something new", and two personas with news need to be

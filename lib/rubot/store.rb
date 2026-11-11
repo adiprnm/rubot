@@ -423,6 +423,9 @@ module Rubot
     def clear_unread(session_id)
       id = text_id(session_id)
       @db.execute("UPDATE sessions SET unread_at = NULL WHERE id = ? AND unread_at IS NOT NULL", [id])
+      # Whether a mark was really taken off. A page opened with nothing waiting
+      # changes no badge anywhere, so the caller can skip telling the others.
+      @db.changes.positive?
     end
 
     # One entry per session with something new, drawn for the persona roster: a

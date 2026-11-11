@@ -1161,7 +1161,7 @@ module Rubot
           else
             store.unpin_session(sid)
           end
-          broadcast_sessions(slug)
+          broadcast_sessions
         end
 
         # The row that was open when the pin was pressed, which is what the
@@ -1541,8 +1541,11 @@ module Rubot
         return not_found(res) unless slug
 
         # Opening the conversation is what the mark was waiting for. Cleared
-        # before the page is drawn so the row it renders is already plain.
-        Session.store&.clear_unread(sid)
+        # before the page is drawn so the row it renders is already plain — and
+        # the other open pages are told, so their roster, their rows and the
+        # drawer's count lose it without a reload. Only when something was
+        # really waiting: an ordinary visit changes no other page.
+        broadcast_sessions if Session.store&.clear_unread(sid)
 
         live = live_turn(sid)
         persona = persona_store&.[](slug)
@@ -1553,6 +1556,7 @@ module Rubot
         body = View.render(
           "index",
           personas: persona_rows(slug),
+          unread_total: unread_total,
           groups: session_groups(slug, sid, page: session_page(req)),
           slug: slug,
           session_id: sid,
@@ -1770,6 +1774,13 @@ module Rubot
           slug = PersonaStore.key_for_session(row[:id])
           counts[slug] += 1 if slug
         end
+      end
+
+      # Everything waiting, across every persona. The roster counts per persona
+      # because the roster is a choice between them; the drawer's handle speaks
+      # for the install, because the drawer is where all of them live.
+      def unread_total
+        unread_counts.values.sum
       end
 
       # The conversation as the thread draws it: a prompt, then the turn it
@@ -2422,12 +2433,9 @@ module Rubot
         turn.emit(:sidebar, sidebar_markup(turn.session_id))
         turn.finish(response)
         # A turn that finished while the conversation was not on screen gets a
-        # mark in the list; the pages of the same persona are told so the row
-        # appears without a reload.
-        if mark_unread_unless_watched(turn.session_id)
-          slug = owner_slug(turn.session_id)
-          broadcast_sessions(slug) if slug
-        end
+        # mark in the list; every open page is told, so the row and the counts
+        # appear without a reload.
+        broadcast_sessions if mark_unread_unless_watched(turn.session_id)
         # Measured to the moment the answer was complete, not to the moment the
         # page finished drawing it — the reader waited for the first, and a slow
         # network is not a slow turn.
@@ -2521,12 +2529,18 @@ module Rubot
         rail = View.render("_rail", personas: persona_rows(slug), token_query: token_query)
                    .sub(%(<ul class="rail-list" id="rail-list">),
                         %(<ul class="rail-list" id="rail-list" hx-swap-oob="true">))
+        # The header carries the handle that opens the drawer, and the handle
+        # wears the install's count — one number across every persona, because
+        # on a phone the roster is behind it. Swapping the header is what keeps
+        # that number honest after a turn or a mark, so the badge needs no swap
+        # of its own.
         head = View.render("_chathead",
                            persona_emoji: persona ? persona.emoji_or : "🤖",
                            persona_label: persona_label,
                            session_label: label,
                            session_id: sid,
                            token_query: token_query,
+                           unread_total: unread_total,
                            document_title: document_title(persona_label, label))
                    .sub(%(<header class="chat-head" id="chat-head"),
                         %(<header class="chat-head" id="chat-head" hx-swap-oob="true"))
@@ -2661,13 +2675,26 @@ module Rubot
       end
 
       def after_learning(session_id)
-        slug = owner_slug(session_id)
-        broadcast_sessions(slug) if slug
+        broadcast_sessions if owner_slug(session_id)
       end
 
-      # Tell every open page of this persona that its sidebar has changed. Each
-      # page is answered in its own session id, because that is what decides
-      # which row is the active one.
+      # Tell every open page that the sidebar has changed. Each page is answered
+      # in its own session id, because that is what decides which row is the
+      # active one.
+      #
+      # Every page, not only the persona's own: the roster and the drawer's
+      # count are about the install, so a turn finishing in one persona is news
+      # on a page showing another — the avatar there gains a number. The rows a
+      # page draws are still its own, so the extra work is a re-render, not a
+      # page it should not see.
+      def broadcast_sessions
+        subs = @event_mutex.synchronize { @event_subs.dup }
+        subs.each do |sid, queue|
+          markup = sidebar_markup(sid)
+          queue << markup unless markup.to_s.empty?
+        end
+      end
+
       # A finished turn that nobody had on screen gets a mark in the list.
       #
       # The open pages are the signal: each page holds one event stream,
@@ -2686,16 +2713,6 @@ module Rubot
 
       def watched?(sid)
         @event_mutex.synchronize { @event_subs.any? { |sub, _queue| sub == sid } }
-      end
-
-      def broadcast_sessions(slug)
-        subs = @event_mutex.synchronize { @event_subs.dup }
-        subs.each do |sid, queue|
-          next unless (owner_slug(sid) || default_slug) == slug
-
-          markup = sidebar_markup(sid)
-          queue << markup unless markup.to_s.empty?
-        end
       end
 
       def listen_for_events(sid, queue)
@@ -2827,9 +2844,10 @@ module Rubot
           session.set_session_title(cron_session_title(result))
         end
 
-        # Whoever has this persona open hears about it now, rather than on the
-        # next reload.
-        broadcast_sessions(slug)
+        # Whoever has the app open hears about it now, rather than on the next
+        # reload — any persona's page, because the roster and the drawer's count
+        # are the install's.
+        broadcast_sessions
 
         # And whoever does not: a reminder is the whole point of firing while
         # the app is closed. Pages that are open are skipped by the worker

@@ -1,0 +1,12 @@
+<%# The drawer's handle carries the same news as the roster, for the one case a
+    phone cannot avoid: one screen at a time. A conversation that finished in
+    another persona sits behind a shut drawer, so the count has to live where
+    the drawer is opened from. Same "9+" cap as the rail, and nothing drawn at
+    zero, so a quiet install looks like it always did.
+
+    Drawn inside the handle rather than beside it, and re-rendered whenever the
+    header is: the header is what the sidebar's event stream swaps out of band,
+    so the number arrives with the markup around it instead of on its own.
+    Written without whitespace inside, so that the empty case is really empty
+    and `:empty` can hide the background. -%>
+<span class="nav-badge" id="nav-badge"<% if total.to_i.positive? %> data-total="<%= total.to_i %>"<% end %>><% if total.to_i.positive? %><span aria-hidden="true"><%= total.to_i > 9 ? "9+" : total.to_i %></span><span class="sr-only"> <%= total.to_i %> percakapan belum dibaca</span><% end %></span>

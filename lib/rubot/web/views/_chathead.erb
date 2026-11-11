@@ -14,6 +14,10 @@
          stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
       <path d="M2.5 4h11M2.5 8h11M2.5 12h11" />
     </svg>
+    <%# What is behind the handle. On a phone the roster is a drawer away, so
+        without this the other personas' news would only be found by opening
+        it. -%>
+    <%= View.render("_nav_badge", total: unread_total) %>
   </button>
   <span class="emoji" aria-hidden="true"><%= h(persona_emoji) %></span>
   <b><%= h(persona_label) %></b>
