@@ -102,13 +102,18 @@ module Rubot
     # joined into a single request, which is what keeps extraction from
     # costing one provider call per message). Returns the items that were
     # actually stored (after deduplication), or empty array if nothing.
-    def extract(input)
+    #
+    # `provider:` names the model for this request. The extractor is shared by
+    # every session of a channel, so the provider cannot be decided once in
+    # the constructor: a caller with an auxiliary model passes it per call, and
+    # the one it was built with serves the rest.
+    def extract(input, provider: nil)
       @last_usage = nil
       messages = Array(input).map { |m| m.to_s.strip }.reject(&:empty?)
       messages = messages.reject { |m| skip_message?(m) }
       return [] if messages.empty?
 
-      items = call_extractor(messages)
+      items = call_extractor(messages, provider || @provider)
       return [] if items.values.all?(&:empty?)
 
       stored = []
@@ -164,14 +169,14 @@ module Rubot
     end
 
     # Call the LLM to extract facts from the message(s)
-    def call_extractor(batch)
+    def call_extractor(batch, provider = @provider)
       messages = [
         { "role" => "system", "content" => EXTRACTION_SYSTEM_PROMPT },
         { "role" => "user", "content" => extraction_request(batch) }
       ]
 
-      result = @provider.chat(messages, tools: nil)
-      @last_usage = @provider.last_usage if @provider.respond_to?(:last_usage)
+      result = provider.chat(messages, tools: nil)
+      @last_usage = provider.last_usage if provider.respond_to?(:last_usage)
 
       # Parse the response as JSON
       content = if result.is_a?(Hash)

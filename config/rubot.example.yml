@@ -10,6 +10,13 @@ agents:
     model_preset: primary
     max_tokens: 4096
     temperature: 0.7
+    # Model for the requests that are not the conversation: naming a session
+    # and extracting memory. They ask for a title or a JSON object, so a fast
+    # cheap model is the right one; leaving it unset uses the conversation's
+    # own model, as every build did before. Accepts a `model_presets` name or
+    # a model id the provider knows. Example:
+    #   auxiliary_model: deepseek-v4.1-flash
+    # auxiliary_model:
     system_prompt: "You are Rubot, a helpful AI assistant running in the terminal.\nBe concise and helpful."
     # Maximum agent rounds per user message. One round can run several
     # tools; re-asks and continuations also count. A multi-file coding task

@@ -166,6 +166,30 @@ module Rubot
       agent_defaults["temperature"] || 0.7
     end
 
+    # The model for the requests that are not the conversation: naming a
+    # session, extracting memory. They ask for a title or a JSON object, not
+    # for an answer, so the persona's model is waste — a fast, cheap one costs
+    # a fifth as much and answers in a fraction of the time. Unset means "the
+    # same model as the conversation", which is what every build did before.
+    def auxiliary_model
+      raw = agent_defaults["auxiliary_model"] || agent_defaults["auxiliaryModel"] ||
+            data["auxiliary_model"]
+      text = raw.to_s.strip
+      text.empty? ? nil : text
+    end
+
+    # Settings for the auxiliary model, or nil when it is not configured. A
+    # name that matches a `model_presets` entry takes that preset whole
+    # (model, credentials, pricing), so one line of config can point at a
+    # preset that already exists; anything else is read as a model name the
+    # provider knows, borrowing the conversation's credentials.
+    def auxiliary_settings
+      name = auxiliary_model
+      return nil if name.nil?
+
+      model_preset(name) ? provider_settings_for_preset(name) : provider_settings(name)
+    end
+
     # Command the TUI runs on ctrl+g to edit the prompt before sending it.
     # Resolved from config first; the TUI falls back to $VISUAL, $EDITOR and
     # then `vi`. The command has to block until the file is written (use

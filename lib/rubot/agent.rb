@@ -1828,6 +1828,30 @@ module Rubot
       resolve_rates(model_id, provider_name, preset, network: network).first
     end
 
+    # The provider for the requests that are not the conversation: naming a
+    # session, extracting memory. Unset `auxiliary_model` returns the
+    # conversation's own provider, so a config that says nothing behaves
+    # exactly as before. Built once per agent and then reused, because a
+    # provider is a connection pool, not a value.
+    def auxiliary_provider
+      settings = @config.auxiliary_settings
+      return @provider if settings.nil?
+
+      @auxiliary_provider ||= Provider.build(settings)
+    end
+
+    # What those requests cost, priced against the model that served them. A
+    # cheap auxiliary model billed at the conversation's rate would make the
+    # saving invisible in the session totals.
+    def auxiliary_rates
+      name = @config.auxiliary_model
+      return current_rates(network: false) if name.nil?
+
+      settings = @config.auxiliary_settings
+      preset = @config.model_preset(name) || {}
+      resolve_rates(settings.model, settings.provider, preset, network: false).first
+    end
+
     # Context estimate for the next request. The system prompt is only needed
     # when there is no usable usage anchor (fresh session, after compaction),
     # because an anchor already includes the prompt it was sent with.
@@ -2080,14 +2104,15 @@ module Rubot
       return if @session.memory_backlog.size < every
 
       batch = @session.take_memory_backlog
-      extracted = @memory_extractor.extract(batch)
+      provider = auxiliary_provider
+      extracted = @memory_extractor.extract(batch, provider: provider)
 
       # Extraction is a real provider request; count it in the session totals
       # without overwriting `last_usage`, which `/context` uses for context size.
       if @memory_extractor.last_usage
         @session.record_auxiliary_usage(
-          @memory_extractor.last_usage, provider: @provider.name,
-          rates: current_rates(network: false)
+          @memory_extractor.last_usage, provider: provider.name,
+          rates: auxiliary_rates
         )
       end
 
@@ -2118,13 +2143,13 @@ module Rubot
       prompt = first_user_prompt
       return if prompt.nil?
 
-      namer = SessionNamer.new(provider: @provider)
+      namer = SessionNamer.new(provider: auxiliary_provider)
       title = namer.name(prompt, reply: first_assistant_answer)
 
       if namer.last_usage
         @session.record_auxiliary_usage(
-          namer.last_usage, provider: @provider.name,
-          rates: current_rates(network: false)
+          namer.last_usage, provider: auxiliary_provider.name,
+          rates: auxiliary_rates
         )
       end
       return if title.nil?

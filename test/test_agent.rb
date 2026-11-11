@@ -1370,6 +1370,68 @@ class TestAgentAdaptiveLearning < Minitest::Test
     assert_equal 1, prompt.scan("Do not use em dashes in captions").size
   end
 
+  # A second config in the same sandbox, differing only in the auxiliary model.
+  def config_with_auxiliary(name, presets: nil)
+    data = {
+      "agents" => { "defaults" => {
+        "workspace" => File.join(@tmpdir, "workspace"),
+        "memory" => { "extract_every" => 2 },
+        "auxiliary_model" => name
+      } },
+      "models" => [ { "name" => "test", "model" => "openai/test-model", "api_key" => "sk-test" } ]
+    }
+    data["model_presets"] = presets if presets
+    path = File.join(@tmpdir, "config-auxiliary.yml")
+    File.write(path, data.to_yaml)
+    Rubot::Config.new(path)
+  end
+
+  # Naming and extraction ask for a title and a JSON object, not for an
+  # answer, so they are the requests a fast model should serve. Unset is the
+  # default and stays the old behaviour: the conversation's own provider.
+  def test_without_an_auxiliary_model_the_conversation_provider_serves_them
+    assert_nil @agent.config.auxiliary_model
+    assert_same @provider, @agent.send(:auxiliary_provider),
+                "an unset auxiliary model must not build a second provider"
+  end
+
+  def test_an_auxiliary_model_takes_over_naming_and_extraction
+    fast = CountingProvider.new
+    agent = Rubot::Agent.new(
+      config: config_with_auxiliary("deepseek-v4.1-flash"),
+      provider: @provider,
+      session_id: "auxiliary"
+    )
+
+    Rubot::Provider.stub(:build, fast) do
+      agent.process("first message here", stream: false)
+      agent.flush_learning
+      agent.process("second message here", stream: false)
+      agent.flush_learning
+    end
+
+    assert_equal 1, fast.naming_calls, "the namer must go to the auxiliary model"
+    assert_equal 1, fast.extraction_calls, "the extractor must go too"
+    assert_equal 0, @provider.naming_calls + @provider.extraction_calls,
+                 "the conversation's provider must be left to the conversation"
+    assert_equal "deepseek-v4.1-flash", agent.config.auxiliary_settings.model
+  end
+
+  # The saving has to be visible in the session totals: a cheap model billed at
+  # the conversation's rate would look like it cost the same.
+  def test_auxiliary_requests_are_priced_against_the_auxiliary_model
+    config = config_with_auxiliary("fast", presets: {
+      "fast" => {
+        "model" => "openai/cheap-model",
+        "pricing" => { "input" => 1.0, "output" => 2.0, "cached_input" => 0.1 }
+      }
+    })
+    agent = Rubot::Agent.new(config: config, provider: @provider, session_id: "auxiliary-rates")
+
+    assert_equal 1.0, agent.send(:auxiliary_rates)["input"]
+    assert_equal 2.0, agent.send(:auxiliary_rates)["output"]
+  end
+
   def test_a_failing_extraction_does_not_lose_the_answer
     failing = Class.new(CountingProvider) do
       def chat(messages, tools: nil)
