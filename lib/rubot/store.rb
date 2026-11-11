@@ -79,6 +79,26 @@ module Rubot
       File.join(File.dirname(sessions_dir), DB_FILENAME)
     end
 
+    # The settings an archive has saved, peeked at without opening (or
+    # creating) it. The command line applies these before the session pool
+    # exists, and an install that has never opened the settings page must not
+    # gain a database just because it started.
+    def self.saved_settings(sessions_dir)
+      path = path_for(sessions_dir.to_s)
+      return {} unless File.exist?(path)
+
+      db = SQLite3::Database.new(path, readonly: true)
+      db.execute("SELECT key, value FROM settings").to_h do |(key, value)|
+        [ key.to_s, value ]
+      end
+    rescue SQLite3::Exception, SystemCallError
+      # An archive from before schema 12, or one being written by a running
+      # bot: either way the file's own settings are the answer.
+      {}
+    ensure
+      db&.close
+    end
+
     def initialize(path, cache_kb: DEFAULT_CACHE_KB, migrations_dir: MIGRATIONS_DIR)
       @path = path
       @migrations_dir = migrations_dir

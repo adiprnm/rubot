@@ -409,6 +409,11 @@ Rubot::EnvLoader.load(options[:env_file])
 # Build configuration
 config = Rubot::Config.new(options[:config])
 
+# Settings saved in the browser live in the archive and win over the file —
+# that is the point of saving them there. Applied before the flags below so a
+# one-off `-m` still overrides the saved default for this run.
+config.apply_settings(Rubot::Store.saved_settings(config.sessions_dir))
+
 # Override with CLI options
 config.data["debug"] = true if options[:debug]
 config.data["tools"] = false if options[:no_tools]

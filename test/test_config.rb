@@ -668,4 +668,66 @@ class TestConfigMemory < Minitest::Test
 
     assert_equal 0, config.memory_extract_every
   end
+
+  # The settings page writes three keys and nothing else: the file keeps the
+  # rest, and a saved value is what the process uses from then on.
+  def test_saved_settings_overlay_the_file
+    config = Rubot::Config.from_data(
+      { "provider" => "openai", "model" => "gpt-4o-mini",
+        "agents" => { "defaults" => { "name" => "gpt-4o-mini" } } },
+      config_path: @config_path
+    )
+
+    config.apply_settings({ "provider" => "ollama", "default_model" => "llama3", "api_key" => "sk-baru" })
+
+    assert_equal "ollama", config.provider
+    assert_equal "llama3", config.model
+    assert_equal "sk-baru", config.api_key
+    assert_equal "sk-baru", config.provider_settings.api_key
+  end
+
+  def test_an_empty_saved_setting_hands_the_answer_back_to_the_file
+    config = Rubot::Config.from_data(
+      { "provider" => "openai", "model" => "gpt-4o-mini",
+        "agents" => { "defaults" => { "name" => "gpt-4o-mini" } } },
+      config_path: @config_path
+    )
+    config.apply_settings({ "provider" => "ollama", "default_model" => "llama3" })
+
+    config.apply_settings({ "provider" => "", "default_model" => nil })
+
+    assert_equal "openai", config.provider
+    assert_equal "gpt-4o-mini", config.model
+  end
+
+  # A key saved for the install outranks one written for a single model entry:
+  # it is what the form edited, and a provider switch would otherwise keep
+  # sending the old entry's credential.
+  def test_the_install_key_outranks_a_model_entry_key
+    config = Rubot::Config.from_data(
+      { "models" => [ { "name" => "gpt-4o-mini", "api_key" => "sk-entry" } ],
+        "agents" => { "defaults" => { "name" => "gpt-4o-mini" } } },
+      config_path: @config_path
+    )
+
+    assert_equal "sk-entry", config.api_key
+    assert_equal "sk-entry", config.provider_settings.api_key
+
+    config.apply_settings({ "api_key" => "sk-install" })
+
+    assert_equal "sk-install", config.api_key
+    assert_equal "sk-install", config.provider_settings.api_key
+  end
+
+  def test_settings_from_other_screens_are_left_alone
+    config = Rubot::Config.from_data(
+      { "provider" => "openai", "agents" => { "defaults" => { "temperature" => 0.2 } } },
+      config_path: @config_path
+    )
+
+    config.apply_settings({ "temperature" => "1.9", "tools" => "false", "model_presets" => "{}" })
+
+    assert_equal 0.2, config.temperature
+    assert_equal "openai", config.provider
+  end
 end

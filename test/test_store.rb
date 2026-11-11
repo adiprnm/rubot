@@ -131,6 +131,19 @@ class TestStore < Minitest::Test
     assert_equal({ "default_model" => "llama3", "provider" => "ollama" }, @store.settings)
   end
 
+  # The command line needs the saved settings before any pool exists, so they
+  # are read straight out of the file — and an install that has never opened the
+  # settings page must not get a database just because it started.
+  def test_saved_settings_are_readable_without_opening_the_archive
+    @store.update_settings({ "provider" => "ollama", "default_model" => "llama3" })
+    @store.close
+    @store = nil
+
+    assert_equal({ "default_model" => "llama3", "provider" => "ollama" },
+                 Rubot::Store.saved_settings(@sessions))
+    assert_empty Rubot::Store.saved_settings(File.join(@dir, "tidak-ada", "sessions"))
+  end
+
   def test_sidebar_limit
     5.times do |i|
       @store.append_messages("s#{i}", [build_message("user", "pesan #{i}")])

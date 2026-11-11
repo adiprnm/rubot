@@ -62,6 +62,28 @@ module Rubot
       Marshal.load(Marshal.dump(@data))
     end
 
+    # The settings a form owns, and what they are called in the data: the
+    # provider, the one key for it, and the default model. A page that could
+    # reach the rest of the file would be a config editor wearing a form's
+    # labels, with none of the review.
+    SETTINGS = { "provider" => "provider", "api_key" => "api_key", "default_model" => "model" }.freeze
+
+    # Lay saved settings over what config.yml says.
+    #
+    # An empty value deletes the key rather than writing "": a cleared field
+    # means "whatever the file says", which is the only reading that lets an
+    # install go back to its config.yml without editing the database by hand.
+    def apply_settings(settings)
+      (settings || {}).each do |key, value|
+        target = SETTINGS[key.to_s]
+        next unless target
+
+        text = value.to_s.strip
+        text.empty? ? @data.delete(target) : @data[target] = text
+      end
+      self
+    end
+
     def agent_defaults
       data.dig("agents", "defaults") || {}
     end
@@ -102,7 +124,19 @@ module Rubot
     end
 
     def api_key
-      active_model_entry["api_key"] || ENV["RUBOT_API_KEY"] || ENV["OPENAI_API_KEY"]
+      global_api_key || active_model_entry["api_key"] || ENV["RUBOT_API_KEY"] || ENV["OPENAI_API_KEY"]
+    end
+
+    # A key set for the whole install, in front of the per-model ones.
+    #
+    # This is the field the settings page writes. It is deliberately the last
+    # thing consulted *after* the entry only in the sense that it is one key for
+    # every provider: an install that switched provider would otherwise keep
+    # using the old entry's credential and fail with a 401 nobody could explain
+    # from the form they just saved.
+    def global_api_key
+      text = data["api_key"].to_s.strip
+      text.empty? ? nil : text
     end
 
     def api_base
@@ -140,7 +174,7 @@ module Rubot
       ProviderSettings.new(
         provider: provider_name,
         model: model_id,
-        api_key: base_entry["api_key"] || ENV["RUBOT_API_KEY"] || ENV["OPENAI_API_KEY"],
+        api_key: global_api_key || base_entry["api_key"] || ENV["RUBOT_API_KEY"] || ENV["OPENAI_API_KEY"],
         api_base: base_entry["api_base"] || ENV["RUBOT_API_BASE"] || ENV["OPENAI_API_BASE"],
         max_tokens: max_tokens,
         temperature: temperature,
