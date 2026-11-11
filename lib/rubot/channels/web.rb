@@ -577,6 +577,15 @@ module Rubot
         utf8(raw)
       end
 
+      # Whether the request carried the field at all. `form` answers "" for a
+      # missing key and for an empty one, which is the right default for a text
+      # field and not enough for a picker: "left on Ikut default" and "the form
+      # has no picker" are two different instructions.
+      def form_field?(req, key)
+        query = req.query
+        query.respond_to?(:key?) && query.key?(key)
+      end
+
       def utf8(raw)
         value = raw.to_s
         value = value.dup.force_encoding(Encoding::UTF_8) if value.encoding == Encoding::ASCII_8BIT
@@ -1842,7 +1851,15 @@ module Rubot
         name = form(req, "name").strip
         emoji = form(req, "emoji").strip
         prompt = form(req, "system_prompt").strip
-        model = persona_model_from(req, fallback: current.model)
+
+        # A form without a model field is not asking about the model. `form`
+        # cannot tell "absent" from "empty" — both answer "" — so the field's
+        # presence is read from the query itself: an editor that only knows
+        # name, face and prompt leaves the model and a preset inherited from
+        # the Telegram wizard alone, instead of silently dropping both and
+        # pinning the persona to the global default.
+        keeps_model = !form_field?(req, "model")
+        model = keeps_model ? current.model : persona_model_from(req, fallback: current.model)
 
         store.set(slug, Persona.new(
           slug: slug,
@@ -1850,8 +1867,9 @@ module Rubot
           emoji: emoji.empty? ? current.emoji : emoji,
           accent: current.accent,
           # The picker edits the model itself, so a preset inherited from the
-          # Telegram wizard is replaced rather than left to win the tie.
-          preset: nil,
+          # Telegram wizard is replaced rather than left to win the tie — but
+          # only by a form that actually carries the picker.
+          preset: keeps_model ? current.preset : nil,
           model: model,
           system_prompt: prompt.empty? ? nil : prompt,
           skills: current.skills,
