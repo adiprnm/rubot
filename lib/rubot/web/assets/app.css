@@ -3342,9 +3342,9 @@ body.lightbox-open { overflow: hidden; }
 @media (max-width: 860px) {
   .session-settings { width: calc(100% - 2rem); padding: 0 0.4rem; gap: 0.45rem; }
   .session-setting-model { flex: 1 1 auto; }
-  .session-setting-label { font-size: 11px; }
+  .session-setting-label { font-size: 10px; }
   .session-select {
-    font-size: 14px;
+    font-size: 12px;
     padding: 0.4rem 1rem 0.35rem 0.35rem;
     background-position: right 0.3rem center;
   }
