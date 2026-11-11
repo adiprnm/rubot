@@ -1,0 +1,27 @@
+<%# The provider's own allowance, behind a button of its own. It used to live at
+    the bottom of the report sheet, under a "Kuota" heading three rows down —
+    the one reading a reader checks most often was the one they had to scroll
+    past the token breakdown to reach.
+
+    It is a `<details>` rather than a dialog so it needs no script to open. The
+    panel hangs above the status row instead of pushing it: the row is at the
+    bottom edge of the screen, and a panel below it would open off the page.
+
+    The meters are not drawn with the page. They belong to the account, not to
+    the session, and only the provider knows them — so they cost a request, and
+    the request waits until the reader actually opens this. -%>
+<details class="usage-sheet usage-sheet-quota"
+         hx-get="/s/<%= h(session_id) %>/quota<%= h(token_query) %>"
+         hx-target="#usage-quota"
+         hx-swap="innerHTML"
+         hx-trigger="toggle[this.open]">
+  <summary class="usage-toggle" title="Kuota" aria-label="Kuota">
+    <%= usage_icon(:quota) %>
+  </summary>
+
+  <div class="usage-panel" role="group" aria-label="Kuota">
+    <div id="usage-quota" class="usage-quota">
+      <p class="usage-note">Memeriksa kuota…</p>
+    </div>
+  </div>
+</details>

@@ -2280,8 +2280,8 @@ module Rubot
       def test_each_usage_icon_draws_a_different_shape
         bodies = View::SVG_ICONS.values
 
-        assert_equal 4, bodies.size, "cost, cache, context and the report's own button"
-        assert_equal 4, bodies.uniq.size
+        assert_equal 5, bodies.size, "cost, cache, context, the report and the allowance"
+        assert_equal 5, bodies.uniq.size
         bodies.each { |body| assert_includes body, "<", "every icon needs at least one shape" }
       end
 
@@ -2547,20 +2547,45 @@ module Rubot
       end
 
       # The panel lives inside the page from the first paint — it is a
-      # `<details>`, so it needs no request to open — and only the allowance
-      # waits for the reader.
-      def test_the_usage_panel_is_in_the_page_and_fetches_its_quota_on_open
+      # Two panels, both `<details>` so neither needs a request to open. The
+      # facts ride along with the page; the allowance does not, because it
+      # belongs to the account rather than the session.
+      def test_the_facts_panel_is_in_the_page_and_waits_for_nothing
         html = render_page
-        sheet = html[/<details class="usage-sheet".*?<\/details>/m]
+        sheet = html[/<details class="usage-sheet usage-sheet-facts".*?<\/details>/m]
 
-        refute_nil sheet, "the status row needs its way into the full report"
+        refute_nil sheet, "the status row needs its way into the report"
         assert_includes sheet, %(id="usage-facts")
+        refute_includes sheet, "hx-get", "the facts are drawn with the page"
+        assert html.index('usage-sheet-facts') > html.index('id="usage"'),
+               "the button sits at the end of the row it expands"
+      end
+
+      # The allowance used to sit three rows down inside the report sheet. It is
+      # the reading a reader comes back to most often, so it has its own button,
+      # and the fetch waits for the press.
+      def test_the_allowance_has_a_panel_of_its_own_that_fetches_on_open
+        html = render_page
+        sheet = html[/<details class="usage-sheet usage-sheet-quota".*?<\/details>/m]
+
+        refute_nil sheet, "the allowance needs a way in of its own"
         assert_includes sheet, %(hx-get="/s/web_rubot/quota")
         assert_includes sheet, %(hx-target="#usage-quota")
         assert_includes sheet, "toggle[this.open]",
                         "the allowance costs a request, so it waits for the reader"
-        assert html.index('class="usage-sheet"') > html.index('id="usage"'),
-               "the button sits at the end of the row it expands"
+        refute_includes sheet, "usage-facts", "the report does not come with the allowance"
+        assert html.index('usage-sheet-quota') > html.index('usage-sheet-facts'),
+               "the allowance is the outer of the two buttons"
+      end
+
+      # Both panels hang upward out of the same spot, so two open at once would
+      # be one on top of the other. Opening either closes the other.
+      def test_only_one_status_panel_is_open_at_a_time
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+
+        assert_includes js, ".status-line details.usage-sheet[open]"
+        assert_includes js, 'document.addEventListener("toggle"'
+        assert_includes js, "closeStatusPanels"
       end
 
       # A meter says two things: what is spent, and when the window comes back.
@@ -2574,7 +2599,7 @@ module Rubot
         html = View.render("_quota", meters: meters, note: "")
 
         assert_equal 2, meters.size, "only the windows the provider reported"
-        assert_includes html, "Rolling"
+        assert_includes html, "5 jam", "the provider's window, in the reader's words"
         assert_includes html, "12.5% terpakai"
         assert_includes html, %(style="width: 12.5%")
         assert_includes html, "is-limited", "an allowance that is gone is not green"

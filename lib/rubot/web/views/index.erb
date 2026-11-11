@@ -281,13 +281,16 @@
         a turn is running is said in the band above the field, where the work
         is, and never here.
 
-        The button at the end of it opens the same report written out, plus the
-        provider's allowance — the two questions a glance at three figures
-        actually raises. -%>
+        The two buttons at the end of it answer the two questions a glance at
+        three figures raises: what the figures are made of, and how much
+        allowance the provider has left. They are two panels rather than one
+        because the allowance is a different question, asked of a different
+        party, and it was the one readers had to scroll to reach. -%>
     <div class="status-line">
       <%= View.render("_usage", **usage) %>
       <%= View.render("_usage_sheet", session_id: session_id, token_query: token_query,
                                       facts: usage_facts) %>
+      <%= View.render("_quota_sheet", session_id: session_id, token_query: token_query) %>
     </div>
   </main>
 </div>

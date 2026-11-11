@@ -2858,6 +2858,10 @@ body.lightbox-open { overflow: hidden; }
 .usage-panel .panel-title + .usage-facts { margin-bottom: 1rem; }
 .usage-panel .panel-title:not(:first-child) { margin-top: 0.9rem; }
 
+/* The allowance is three short rows, not a page of token counts: it needs less
+   width than the report it used to hide inside. */
+.usage-sheet-quota .usage-panel { width: min(18rem, 82vw); }
+
 /* Two columns: a name and a figure. The names are machine words (model, cache,
    token), so the left column is mono and the values take the reading colour. */
 .usage-facts {

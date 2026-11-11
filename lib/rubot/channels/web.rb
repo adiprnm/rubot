@@ -123,6 +123,11 @@ module Rubot
       # when neither it nor its persona has chosen: the middle of what the
       # models understand, and the one effort a reasoning model accepts.
       DEFAULT_THINKING = "medium"
+      # The provider names its windows by period; a reader asks by length. The
+      # provider's own words stay on the wire — this is only how the panel says
+      # them.
+      QUOTA_METER_LABELS = { "rolling" => "5 jam", "weekly" => "mingguan",
+                             "monthly" => "bulanan" }.freeze
       PERSONA_SESSIONS_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/sessions\z}
       PERSONA_EDIT_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/edit\z}
       # Where the token form posts. Not under /s/ or /p/ because it belongs to
@@ -2029,7 +2034,7 @@ module Rubot
 
           used = meter["percent"].to_f.clamp(0.0, 100.0)
           {
-            name: name.capitalize,
+            name: QUOTA_METER_LABELS.fetch(name) { name.capitalize },
             used: format("%.1f", used),
             used_label: "#{format('%.1f', used)}% terpakai",
             reset: quota_reset(meter),

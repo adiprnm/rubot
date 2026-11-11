@@ -800,7 +800,13 @@ module Rubot
         # "there is more written down in here".
         usage: %(<rect x="1.5" y="1.6" width="7" height="6.8" rx="1.1"/>) +
                %(<path d="M3.3 4h3.4"/>) +
-               %(<path d="M3.3 6.1h2.1"/>)
+               %(<path d="M3.3 6.1h2.1"/>),
+        # The allowance. A dial rather than the card above: an allowance is a
+        # share of a limit, so the shape that says "meter" is the one an
+        # instrument panel taught everyone to read — an arc with a needle in
+        # it, not another page of numbers.
+        quota: %(<path d="M1.7 7.5a3.3 3.3 0 0 1 6.6 0"/>) +
+               %(<path d="M5 7.5 6.5 4.8"/>)
       }.freeze
 
       # The round marks are drawn for the same reason: ◌ and ◐ are a fallback
