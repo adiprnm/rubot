@@ -1,27 +1,35 @@
 <%# The model and the thinking level this session runs on, under the field
-    the reader types in. A change posts at once — there is no save button to
-    forget — and the answer is this same row again, with the new choice
-    marked, so a stale page cannot drift from what the session really runs
-    on. An empty model means "follow the persona/config default"; an empty
-    thinking level means "follow the config's effort". -%>
+    the reader types in. Both are per-session choices, and both are the kind
+    of thing that changes right before a prompt is sent — so they sit under
+    the composer rather than in a settings page, the same width and centring
+    as the box above them.
+
+    A change posts at once (there is no save button to forget), and the answer
+    is this same row again with the new choice marked: a page cannot drift
+    from what the session really runs on. An empty model means "follow the
+    persona/config default"; an empty level means "follow the config". -%>
 <form id="session-settings" class="session-settings"
+      data-model="<%= h(session_model) %>"
+      data-thinking="<%= h(session_thinking) %>"
       hx-post="/s/<%= h(session_id) %>/settings<%= h(token_query) %>"
       hx-trigger="change from:select"
       hx-target="this"
       hx-swap="outerHTML">
   <label class="session-setting">
-    <span>Model</span>
-    <select name="model" autocomplete="off">
-      <option value=""<%= " selected" if session_model.empty? %>>Ikut default</option>
+    <span class="session-setting-label">model</span>
+    <select class="session-select" name="model" autocomplete="off"
+            aria-label="Model sesi ini">
+      <option value=""<%= " selected" if session_model.empty? %>>ikut default</option>
       <% model_choices.each do |choice| %>
         <option value="<%= h(choice[:value]) %>"<%= " selected" if choice[:value] == session_model %>><%= h(choice[:label]) %></option>
       <% end %>
     </select>
   </label>
-  <label class="session-setting">
-    <span>Thinking</span>
-    <select name="thinking" autocomplete="off">
-      <% [["", "Default"], %w[minimal Minimal], %w[low Low], %w[medium Medium], %w[high High]].each do |value, label| %>
+  <label class="session-setting session-setting-thinking">
+    <span class="session-setting-label">thinking</span>
+    <select class="session-select" name="thinking" autocomplete="off"
+            aria-label="Level thinking sesi ini">
+      <% [["", "default"], %w[minimal minimal], %w[low low], %w[medium medium], %w[high high]].each do |value, label| %>
         <option value="<%= h(value) %>"<%= " selected" if value == session_thinking %>><%= label %></option>
       <% end %>
     </select>

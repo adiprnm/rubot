@@ -3262,38 +3262,89 @@ body.lightbox-open { overflow: hidden; }
   * { animation: none !important; transition: none !important; }
 }
 
-/* Model and thinking level for this session, under the composer. Two small
-   selects on one line; on a narrow phone each keeps its own row. */
+/* ---------- session model and thinking ------------------------ */
+
+/* The two per-session choices, under the field they belong to. Same width and
+   centring as the composer above so the row reads as part of it; the labels
+   stay lowercase and mono, the weight of a caption rather than a form. */
 .session-settings {
   display: flex;
-  gap: 0.6rem;
-  align-items: end;
-  margin: 0.35rem 0 0;
-  padding: 0 0.2rem;
+  align-items: center;
+  gap: 0.85rem;
+  width: calc(100% - 3.2rem);
+  max-width: 52rem;
+  margin: -0.15rem auto 0.5rem;
+  padding: 0 0.8rem;
+  min-width: 0;
 }
 
 .session-setting {
   display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
+  align-items: center;
+  gap: 0.32rem;
   min-width: 0;
-  flex: 1 1 0;
-  font-size: 11px;
-  font-style: italic;
+  flex: 1 1 auto;
+}
+
+/* The model name is the long one and gets the room; a level is one word. */
+.session-setting-thinking { flex: 0 1 9.5rem; }
+
+.session-setting-label {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: -0.02em;
   color: var(--fg-faint);
 }
 
-.session-setting select {
-  font-family: var(--mono);
-  font-size: 11.5px;
-  letter-spacing: -0.03em;
-  padding: 0.3rem 0.4rem;
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  background: var(--bg0);
-  color: var(--fg);
-  outline: none;
+/* A native select is a form control from another decade: grey chrome, a fat
+   arrow, a height that changes per platform. Only the text is wanted here, so
+   the chrome is dropped and the arrow drawn as a background. */
+.session-select {
+  flex: 1 1 auto;
+  min-width: 0;
   max-width: 100%;
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: -0.03em;
+  color: var(--fg-dim);
+  background-color: transparent;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'><path d='M0.7 0.9L4 4.1 7.3 0.9' fill='none' stroke='%237d8478' stroke-width='1.2' stroke-linecap='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 0.15rem center;
+  padding: 0.18rem 0.85rem 0.18rem 0.2rem;
+  border: 0;
+  border-radius: 3px;
+  outline: none;
+  /* The chosen model can be a long id; the closed control keeps its box and
+     lets the label be cut rather than widening the row. */
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
 }
 
-.session-setting select:focus { border-color: var(--green); }
+/* A select stripped of its chrome is only as tall as its text, which is right
+   under a mouse and too small under a thumb. The row sits right above the
+   keyboard on a phone, so it gets a real tap target there and only there. */
+@media (pointer: coarse) {
+  .session-setting select { min-height: 2.2rem; }
+  .session-settings { margin-bottom: 0.4rem; }
+}
+
+.session-select:hover { color: var(--fg); }
+
+.session-select:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+/* An option list is drawn by the platform, so it keeps the page's own colours
+   where the browser lets them through. */
+.session-select option { background: var(--bg0); color: var(--fg); }
+
+/* A phone narrows the composer and the status line together; the row under
+   them has to follow, and it has to be declared after the base rule above or
+   the wider one wins on specificity ties. */
+@media (max-width: 860px) {
+  .session-settings { width: calc(100% - 2rem); padding: 0 0.4rem; gap: 0.6rem; }
+  .session-setting-label { font-size: 9px; }
+}
