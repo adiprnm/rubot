@@ -5355,6 +5355,37 @@ module Rubot
         assert_empty res.body
       end
 
+      # The dot on the row and the number on the roster are the same fact at two
+      # scales, so the swap that carries one has to carry the other: a reader
+      # looking at another conversation of the same persona sees the count grow
+      # without a reload, and only a reload would say so otherwise.
+      def test_a_sidebar_swap_carries_the_roster_count_too
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: { "web_kanyaah" => [ %w[user halo], %w[assistant siap] ],
+                      "web_kanyaah~20261110-090000" => [ %w[user halo juga] ] }
+        )
+        Rubot::Session.store.mark_unread("web_kanyaah~20261110-090000")
+
+        markup = channel.send(:sidebar_markup, "web_kanyaah")
+
+        assert_includes markup, %(<ul class="rail-list" id="rail-list" hx-swap-oob="true">)
+        assert_includes markup, %(<span class="rail-badge" aria-hidden="true">1</span>),
+                        "the roster says how many conversations are waiting"
+      end
+
+      # A read roster draws no badge at all, or every persona would carry a zero.
+      def test_a_roster_with_nothing_unread_draws_no_badge
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: { "web_kanyaah" => [ %w[user halo] ] }
+        )
+
+        markup = channel.send(:sidebar_markup, "web_kanyaah")
+
+        refute_includes markup, "rail-badge"
+      end
+
       # A conversation that finished while its page was closed is marked in the
       # list; the mark must be visible without a reload, so it is drawn from the
       # row itself rather than added by a script afterwards.

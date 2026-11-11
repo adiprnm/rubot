@@ -2514,6 +2514,13 @@ module Rubot
                           token_query: token_query)
                   .sub(%(<nav class="sessions" id="sessions">),
                        %(<nav class="sessions" id="sessions" hx-swap-oob="true">))
+        # The count on the roster belongs to the same fact as the dot on the
+        # row — a conversation of this persona finished unseen — so it travels
+        # with the same swap. Without it the number goes stale the moment a
+        # mark is written, and only a reload would say how many are waiting.
+        rail = View.render("_rail", personas: persona_rows(slug), token_query: token_query)
+                   .sub(%(<ul class="rail-list" id="rail-list">),
+                        %(<ul class="rail-list" id="rail-list" hx-swap-oob="true">))
         head = View.render("_chathead",
                            persona_emoji: persona ? persona.emoji_or : "🤖",
                            persona_label: persona_label,
@@ -2524,7 +2531,7 @@ module Rubot
                    .sub(%(<header class="chat-head" id="chat-head"),
                         %(<header class="chat-head" id="chat-head" hx-swap-oob="true"))
 
-        nav + head
+        nav + rail + head
       end
 
       def prune_turns
@@ -2681,7 +2688,8 @@ module Rubot
         @event_mutex.synchronize { @event_subs.any? { |sub, _queue| sub == sid } }
       end
 
-      def broadcast_sessions(slug)        subs = @event_mutex.synchronize { @event_subs.dup }
+      def broadcast_sessions(slug)
+        subs = @event_mutex.synchronize { @event_subs.dup }
         subs.each do |sid, queue|
           next unless (owner_slug(sid) || default_slug) == slug
 

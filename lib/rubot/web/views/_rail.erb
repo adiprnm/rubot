@@ -1,0 +1,26 @@
+<%# The persona roster, in the narrow column that stays a face rather than a row
+    of text. A partial because the count on it changes on its own: a turn that
+    finishes while the reader is looking at another conversation of the same
+    persona moves the number here, and the sidebar's event stream swaps this
+    list out of band along with the rows. -%>
+<ul class="rail-list" id="rail-list">
+  <% personas.each do |row| %>
+    <li>
+      <a class="rail-item<%= row[:active] ? " is-active" : "" %>"
+         href="/p/<%= h(row[:slug]) %><%= h(token_query) %>"
+         title="<%= h(row[:label]) %>"
+         aria-label="<%= h(row[:label]) %><%= row[:unread].to_i.positive? ? ", #{row[:unread]} percakapan belum dibaca" : "" %>"
+         <%= row[:active] ? 'aria-current="page"' : "" %>>
+        <span class="avatar" aria-hidden="true"><%= h(row[:emoji]) %></span>
+        <%# The count is per persona, unlike the dot on a session row: the
+            roster is asking "where is there something new", and how much
+            is the only thing that separates one mark from another. Nine
+            and above are drawn as "9+" so a two-digit number cannot push
+            the avatar out of its circle. -%>
+        <% if row[:unread].to_i.positive? %>
+          <span class="rail-badge" aria-hidden="true"><%= row[:unread].to_i > 9 ? "9+" : row[:unread] %></span>
+        <% end %>
+      </a>
+    </li>
+  <% end %>
+</ul>
