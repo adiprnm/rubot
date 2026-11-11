@@ -37,6 +37,14 @@ module Rubot
       # than any retry needs: a VAPID token older than this is refused, and one
       # minted per delivery is a signature we cannot cache anyway.
       JWT_LIFETIME = 12 * 60 * 60
+      # The three words RFC 8030 lets a sender say about how much this matters.
+      # They are not decoration: a service told `normal` may hold the message
+      # until the device next wakes, and on both Android and iOS "wakes" is
+      # routinely read as "the reader opens the app". A notification that shows
+      # up twenty minutes late, because the phone was locked, is the exact
+      # failure this constant avoids.
+      URGENCIES = %w[very-low low normal high].freeze
+      DEFAULT_URGENCY = "high"
 
       module_function
 
@@ -170,15 +178,37 @@ module Rubot
 
       # --- delivery ------------------------------------------------------
 
+      # One of the RFC's words, or the default. A caller asking for something
+      # the protocol does not name is a caller with a typo, and a typo must not
+      # turn into a push service rejecting the whole message.
+      def normalize_urgency(value)
+        text = value.to_s.strip.downcase
+        URGENCIES.include?(text) ? text : DEFAULT_URGENCY
+      end
+
+      # The headers every delivery carries. Kept apart from the round trip so
+      # the one thing that decides *when* a notification reaches the device can
+      # be read (and tested) without a network in the way.
+      def delivery_headers(ttl:, urgency:)
+        {
+          "Content-Encoding" => "aes128gcm",
+          "Content-Type" => "application/octet-stream",
+          "TTL" => [ ttl.to_i, 0 ].max.to_s,
+          "Urgency" => normalize_urgency(urgency)
+        }
+      end
+
       # POST one notification to one subscription.
       #
       # The return value is the only thing the caller needs to act on: `:gone`
       # means the browser forgot this subscription (uninstalled, permission
       # revoked, replaced), and the row should stop being asked. Anything else
       # is either fine or a problem that repeats on its own.
-      def deliver(subscription:, payload:, key:, subject:, ttl: DEFAULT_TTL, timeout: 8)
+      def deliver(subscription:, payload:, key:, subject:, ttl: DEFAULT_TTL, timeout: 8,
+                  urgency: DEFAULT_URGENCY)
         deliver_with_status(subscription: subscription, payload: payload, key: key,
-                            subject: subject, ttl: ttl, timeout: timeout).first
+                            subject: subject, ttl: ttl, timeout: timeout,
+                            urgency: urgency).first
       end
 
       # The same delivery, keeping the push service's own answer.
@@ -188,7 +218,8 @@ module Rubot
       # offline, or its worker may decide the app is already on screen). Keeping
       # the status makes that difference visible when something looks delivered
       # but nothing appears.
-      def deliver_with_status(subscription:, payload:, key:, subject:, ttl: DEFAULT_TTL, timeout: 8)
+      def deliver_with_status(subscription:, payload:, key:, subject:, ttl: DEFAULT_TTL, timeout: 8,
+                              urgency: DEFAULT_URGENCY)
         endpoint = subscription["endpoint"].to_s
         authorization_header = authorization(key: key, endpoint: endpoint, subject: subject)
         return [ :invalid, nil ] if authorization_header.nil?
@@ -198,12 +229,7 @@ module Rubot
 
         request = Net::HTTP::Post.new(uri)
         request["Authorization"] = authorization_header
-        request["Content-Encoding"] = "aes128gcm"
-        request["Content-Type"] = "application/octet-stream"
-        request["TTL"] = ttl.to_i.to_s
-        # `normal` keeps a phone quiet at night: a push service may hold it
-        # until the device next wakes instead of waking it.
-        request["Urgency"] = "normal"
+        delivery_headers(ttl: ttl, urgency: urgency).each { |name, value| request[name] = value }
         request.body = body
         request["Content-Length"] = body.bytesize.to_s
 

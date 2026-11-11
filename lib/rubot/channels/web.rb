@@ -191,6 +191,14 @@ module Rubot
         @vapid_mutex = Mutex.new
         @vapid_subject = (channel_config["vapid_subject"] || VapidKey::SUBJECT).to_s
 
+        # How hard a push service should work to wake a sleeping phone. The
+        # default is `high` because the symptom of `normal` is a notification
+        # that appears only once the app is opened — by which time the reader
+        # had to find out on their own. An install that would rather be quiet
+        # at night sets `normal` and accepts the delay.
+        @push_urgency = PushTransport.normalize_urgency(channel_config["push_urgency"] ||
+                                                        PushTransport::DEFAULT_URGENCY)
+
         # How long a turn has to run before its ending is worth a knock on the
         # door. Zero turns the notifications off; a reader who finds the buzz
         # too eager raises the number rather than hunting for a switch.
@@ -787,7 +795,8 @@ module Rubot
       # holding the old one would answer from a stale list of devices.
       def push_notifier
         store = Session.store
-        store && PushNotifier.new(store: store, vapid: vapid, subject: @vapid_subject)
+        store && PushNotifier.new(store: store, vapid: vapid, subject: @vapid_subject,
+                                  urgency: @push_urgency)
       end
 
       # The end of a turn somebody asked to hear about.

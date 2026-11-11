@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "json"
+require_relative "push"
 
 module Rubot
   module Web
@@ -16,10 +17,15 @@ module Rubot
     # Nothing here decides *whether* something is worth announcing; that is the
     # caller's judgement (a fired job, a turn that outlived its reader).
     class Notifier
-      def initialize(store:, vapid:, subject: Vapid::SUBJECT)
+      def initialize(store:, vapid:, subject: Vapid::SUBJECT, urgency: Push::DEFAULT_URGENCY)
         @store = store
         @vapid = vapid
         @subject = subject
+        # How hard the push service should work to reach a sleeping device.
+        # `high` is the default because every notification here means "there is
+        # something to read now"; an install that minds the buzz can say
+        # `normal` in its web channel config and accept later delivery.
+        @urgency = Push.normalize_urgency(urgency)
       end
 
       # Send now and report what happened. The counts are the whole answer the
@@ -33,7 +39,8 @@ module Rubot
         counts = empty_counts
         subscriptions.each do |subscription|
           status, code = Push.deliver_with_status(subscription: subscription, payload: payload,
-                                                  key: @vapid.key, subject: @subject)
+                                                  key: @vapid.key, subject: @subject,
+                                                  urgency: @urgency)
           counts["status"] << code
           case status
           when :ok then counts["sent"] += 1
