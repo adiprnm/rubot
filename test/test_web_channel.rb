@@ -2988,6 +2988,135 @@ module Rubot
         assert_equal 2, groups[:recent_total]
       end
 
+      # A pinned conversation is drawn in the pinned section. When it is also
+      # the one on screen, the recent list used to supply a second row for it —
+      # so the same conversation appeared twice and both rows were marked
+      # active, which reads as two open sessions.
+      def test_an_open_pinned_conversation_is_drawn_once_and_marked_once
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: {
+            "web_kanyaah" => [ [ "user", "yang lain" ] ],
+            "web_kanyaah~pinned" => [ [ "user", "yang di-pin" ] ]
+          }
+        )
+        Rubot::Session.store.pin_session("web_kanyaah~pinned", at: "2026-11-10T09:00:00Z")
+
+        groups = channel.send(:session_groups, "kanyaah", "web_kanyaah~pinned")
+        rows = groups[:pinned] + groups[:recent]
+
+        assert_equal rows.map { |row| row[:id] }.uniq, rows.map { |row| row[:id] },
+                     "the open pinned conversation must not be listed twice"
+        assert_equal 1, rows.count { |row| row[:active] },
+                     "exactly one row may be marked as the open one"
+      end
+
+      # The pinned conversation has no archive row of its own when it is brand
+      # new, so it must still be drawn — in the pinned section, once.
+      def test_a_brand_new_pinned_conversation_keeps_its_single_row
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: { "web_kanyaah" => [ [ "user", "yang lain" ] ] }
+        )
+        Rubot::Session.store.pin_session("web_kanyaah", at: "2026-11-10T09:00:00Z")
+
+        groups = channel.send(:session_groups, "kanyaah", "web_kanyaah")
+        rows = groups[:pinned] + groups[:recent]
+
+        assert_equal 1, rows.count { |row| row[:id] == "web_kanyaah" }
+        assert_equal 1, rows.count { |row| row[:active] }
+      end
+
+      # A name typed by hand outranks the one the model guessed, and it has to
+      # land everywhere the name is used: the header, the row in the sidebar, and
+      # through the header the browser tab.
+      def test_a_conversation_can_be_named_by_hand
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: {
+            "web_kanyaah" => [ [ "user", "isi percakapan" ] ],
+            "web_kanyaah~other" => [ [ "user", "yang lain" ] ]
+          }
+        )
+        stub_title_writer(channel)
+
+        res = FakeResponse.new
+        channel.send(:rename_session, res, "web_kanyaah", form_post("name" => "  Proyek   Templete  "))
+
+        assert_equal "Proyek Templete", stored_title("web_kanyaah"),
+                     "the name is flattened and trimmed on the way in"
+        assert_includes res.body, "Proyek Templete"
+        assert_includes res.body, %(class="chat-head" id="chat-head" hx-swap-oob="true"),
+                        "the header carries the new name, and the tab reads it from there"
+        assert_includes res.body, %(class="sessions" id="sessions" hx-swap-oob="true"),
+                        "the row in the sidebar is renamed with it"
+      end
+
+      # The title is a row in a list, not a paragraph: a newline in it would be
+      # drawn as two rows, and an essay would push the persona name off the
+      # strip. Both are clipped rather than refused, so a paste still works.
+      def test_a_hand_written_name_is_one_short_line
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: { "web_kanyaah" => [ [ "user", "isi percakapan" ] ] }
+        )
+        stub_title_writer(channel)
+
+        long = "kata " * 40
+        channel.send(:rename_session, FakeResponse.new, "web_kanyaah",
+                     form_post("name" => "baris satu\nbaris dua"))
+
+        assert_equal "baris satu baris dua", stored_title("web_kanyaah")
+
+        channel.send(:rename_session, FakeResponse.new, "web_kanyaah", form_post("name" => long))
+        clipped = stored_title("web_kanyaah")
+
+        assert_operator clipped.length, :<=, Rubot::SessionNamer::MAX_TITLE_CHARS
+        assert_operator clipped.length, :>, 40, "the name is clipped, not thrown away"
+        refute_match(/\s\z/, clipped, "no dangling space where the cut fell")
+      end
+
+      # The session actor answers requests between turns, so a rename sent during
+      # one would queue behind the answer and look like a hang. The old name is
+      # left alone and the header is not swapped.
+      def test_a_running_turn_refuses_the_rename
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: { "web_kanyaah" => [ [ "user", "isi percakapan" ] ] }
+        )
+        stub_title_writer(channel)
+        channel.define_singleton_method(:session_running?) { |_sid| true }
+
+        res = FakeResponse.new
+        channel.send(:rename_session, res, "web_kanyaah", form_post("name" => "Nama Baru"))
+
+        assert_equal 409, res.status
+        assert_empty res.body
+        assert_equal "isi percakapan", stored_title("web_kanyaah")
+      end
+
+      def stub_title_writer(channel)
+        store = Rubot::Session.store
+        channel.define_singleton_method(:session_for) do |sid|
+          Object.new.tap do |handle|
+            handle.define_singleton_method(:set_session_title) do |title|
+              store.upsert_session(id: sid, title: title)
+            end
+          end
+        end
+      end
+
+      def stored_title(sid)
+        Rubot::Session.store.sidebar(limit: 50).find { |row| row[:id] == sid }&.fetch(:title)
+      end
+
+      def form_post(fields)
+        request = Struct.new(:query) do
+          def [](key) = key == "HX-Request" ? "true" : nil
+        end
+        request.new(fields)
+      end
+
       # The pin is pressed beside a conversation, not on a page of its own: the
       # answer is the sidebar, and the row the reader was on stays marked.
       def test_pinning_in_place_answers_with_the_sidebar_and_keeps_the_open_row_marked

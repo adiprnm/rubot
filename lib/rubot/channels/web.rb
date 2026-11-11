@@ -306,11 +306,8 @@ module Rubot
       # block at a time, so a reload lands back where the reader was.
       def session_groups(slug, current_sid, page: 1)
         entries = sessions_for(slug)
-        pinned = entries.select { |entry| pinned_entry?(entry) }
-                        .sort_by { |entry| entry[:pinned_at].to_s }
-                        .reverse
-                        .first(PINNED_LIMIT)
-        recent = recent_entries(entries, current_sid)
+        pinned = drawn_pinned(entries)
+        recent = recent_entries(entries, current_sid, drawn: pinned)
         pages = recent_pages(recent)
         loaded = page.to_i.clamp(1, pages)
         window = recent.first(loaded * RECENT_PAGE)
@@ -327,13 +324,24 @@ module Rubot
         }
       end
 
+      # The pinned rows the sidebar actually draws, newest pin first. Both the
+      # full sidebar and the "load more" block measure the list from here, so the
+      # two always agree on where the recent list starts.
+      def drawn_pinned(entries)
+        entries.select { |entry| pinned_entry?(entry) }
+               .sort_by { |entry| entry[:pinned_at].to_s }
+               .reverse
+               .first(PINNED_LIMIT)
+      end
+
       # One block of the recent list, the way the "load more" button asks for
       # it: exactly the rows after the ones already on screen, so appending the
       # answer cannot repeat a row. Past the last block the answer is empty —
       # the list shrank while the button was in hand — and the control goes
       # away with it.
       def recent_block(slug, current_sid, page)
-        recent = recent_entries(sessions_for(slug), current_sid)
+        entries = sessions_for(slug)
+        recent = recent_entries(entries, current_sid, drawn: drawn_pinned(entries))
         pages = recent_pages(recent)
         page = page.to_i
         page = 1 if page < 1
@@ -352,9 +360,14 @@ module Rubot
       # Everything that is not pinned, newest first. A conversation that has
       # not been written yet has no row in the index, so the page supplies one;
       # it belongs at the top, where a reader who just pressed "+" looks.
-      def recent_entries(entries, current_sid)
+      #
+      # A conversation already drawn in the pinned section is not supplied
+      # again: that drew the same conversation twice and rang both rows as the
+      # open one, which read as two sessions being active at once.
+      def recent_entries(entries, current_sid, drawn: [])
         recent = entries.reject { |entry| pinned_entry?(entry) }
-        unless recent.any? { |entry| entry[:id] == current_sid }
+        in_pinned = drawn.any? { |entry| entry[:id] == current_sid }
+        unless in_pinned || recent.any? { |entry| entry[:id] == current_sid }
           recent.unshift({ id: current_sid, title: "", timestamp: nil, pinned_at: nil })
         end
         recent
