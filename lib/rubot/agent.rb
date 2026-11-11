@@ -85,6 +85,11 @@ module Rubot
     # skipped calls still get an answer in the transcript.
     CANCELLED_TOOL_RESULT = "ERROR: cancelled by user (/stop); this tool was not executed."
 
+    # How many of one assistant message's tool calls run at the same time. A
+    # batch is normally two or three reads; the cap only keeps a runaway batch
+    # from opening one process per call.
+    MAX_PARALLEL_TOOLS = 4
+
     # Before/after text kept on a write's tool message so the TUI can redraw
     # its diff when the session is resumed. Skipped for very large files: the
     # session file should not grow by a megabyte for one write.
@@ -433,7 +438,10 @@ module Rubot
           narration = response.to_s.strip
           on_assistant_text&.call(narration) unless narration.empty?
 
-          # Execute each tool call
+          # Deciding what may run comes first, in the order the model asked for
+          # it: the guard may ask the reader a question, and a cancelled turn
+          # must stop before more work starts. Running comes after, all at once.
+          pending = []
           tool_calls.each do |tc|
             tool_name, arguments, arguments_ok = parse_tool_call(tc)
             log_debug("Executing tool: #{tool_name}")
@@ -453,16 +461,16 @@ module Rubot
                 "ERROR: the arguments for #{tool_name} were not a valid JSON " \
                   "object. Re-issue the call with one complete JSON object."
               end
-              on_tool_result&.call(tool_name, tool_error, nil)
-              @session.add("tool", tool_error, tool_call_id: tool_call_id)
+              # Kept in the pending list so its result reaches the transcript in
+              # request order, next to the calls that do run.
+              pending << skipped_call(tool_call_id, tool_name, tool_error)
               next
             end
 
             # Check for dangerous action that could cause data loss
             if @cancellation.cancelled?
               stopped = true
-              on_tool_result&.call(tool_name, CANCELLED_TOOL_RESULT, nil)
-              @session.add("tool", CANCELLED_TOOL_RESULT, tool_call_id: tool_call_id)
+              pending << skipped_call(tool_call_id, tool_name, CANCELLED_TOOL_RESULT)
               next
             end
 
@@ -479,7 +487,7 @@ module Rubot
                 reason = tool.respond_to?(:dangerous_action_reason) ? tool.dangerous_action_reason(arguments) : nil
                 if on_confirm && !on_confirm.call(tool_name, arguments, reason)
                   log_debug("Action cancelled by user: #{tool_name}")
-                  @session.add("tool", "Action cancelled by user.", tool_call_id: tool_call_id)
+                  pending << skipped_call(tool_call_id, tool_name, "Action cancelled by user.")
                   next
                 end
               end
@@ -492,27 +500,28 @@ module Rubot
             ui_snapshot = file_ui_snapshot(tool_name, arguments)
             on_tool_call&.call(tool_name, arguments, ui_snapshot)
 
-            begin
-              tool_result = @tools.execute(tool_name, arguments)
-            rescue StandardError => e
-              tool_result = "ERROR: #{e.class}: #{e.message}"
-            end
+            pending << {
+              name: tool_name,
+              arguments: arguments,
+              id: tool_call_id,
+              snapshot: ui_snapshot
+            }
+          end
 
-            # Tool output can be binary (e.g. reading a PNG); keep the transcript
-            # and the chat message valid UTF-8.
-            tool_result = Session.normalize_utf8(tool_result.to_s)
-
-            # Add tool result to session. A successful write carries its
-            # before/after text so the TUI can rebuild the diff on /resume,
-            # and hands the same text to the channel that just heard the call.
-            ui_diff = file_ui_diff(ui_snapshot, tool_result)
-            on_tool_result&.call(tool_name, tool_result, ui_diff)
+          # The calls were already known to the model when it sent them, so
+          # none of them needs another's output: run them together and report
+          # in request order, which keeps the transcript and the UI identical
+          # to a sequential run.
+          execute_tool_calls(pending).each do |call|
+            tool_result = call[:result]
+            ui_diff = file_ui_diff(call[:snapshot], tool_result)
+            on_tool_result&.call(call[:name], tool_result, ui_diff)
 
             log_debug("Tool result: #{tool_result[0..200]}")
 
-            # Add tool result to session. A successful write carries its
-            # before/after text so the TUI can rebuild the diff on /resume.
-            @session.add("tool", tool_result, tool_call_id: tool_call_id, ui_diff: ui_diff)
+            # A successful write carries its before/after text so the TUI can
+            # rebuild the diff on /resume.
+            @session.add("tool", tool_result, tool_call_id: call[:id], ui_diff: ui_diff)
           end
 
           # Continue the loop to get the next response
@@ -1732,6 +1741,53 @@ module Rubot
       tools
     end
 
+    # A call that will not run (bad arguments, a cancelled turn, a refused
+    # guard question) but still owes the transcript one result per tool call.
+    def skipped_call(id, name, result)
+      { name: name, arguments: {}, id: id, snapshot: nil, result: result }
+    end
+
+    # Run the approved tool calls, several at a time, and return them in the
+    # order they were asked for — a caller walking the result sees a transcript
+    # exactly like the sequential one, with the wall time of the slowest call
+    # instead of the sum. Calls already carrying a result are passed through.
+    def execute_tool_calls(calls)
+      todo = calls.reject { |call| call.key?(:result) }
+      if todo.size < 2
+        return calls.map { |call| call.key?(:result) ? call : call.merge(result: run_one_tool(call)) }
+      end
+
+      queue = Queue.new
+      todo.each { |call| queue << call }
+      results = {}
+      lock = Mutex.new
+
+      [ todo.size, MAX_PARALLEL_TOOLS ].min.times.map do
+        Thread.new do
+          while (call = begin
+            queue.pop(true)
+          rescue ThreadError
+            nil
+          end)
+            result = run_one_tool(call)
+            lock.synchronize { results[call.object_id] = result }
+          end
+        end
+      end.each(&:join)
+
+      calls.map { |call| call.key?(:result) ? call : call.merge(result: results[call.object_id]) }
+    end
+
+    # One tool call, with its output made safe for the transcript and the
+    # request: a read can return a PNG, and an error is reported to the model
+    # rather than raised, because a failed tool is a thing to answer about.
+    def run_one_tool(call)
+      result = @tools.execute(call[:name], call[:arguments])
+      Session.normalize_utf8(result.to_s)
+    rescue StandardError => e
+      "ERROR: #{e.class}: #{e.message}"
+    end
+
     # Returns [name, arguments, parsed_ok]. `parsed_ok` is false when the
     # arguments were not valid JSON — which is what a tool call cut off at the
     # output limit looks like — so the caller can refuse to run it on a
@@ -2008,20 +2064,16 @@ module Rubot
           assistant_msg["reasoning_content"] = reasoning_content if reasoning_content
           local_messages << assistant_msg
 
-          tool_calls.each do |tc|
+          # A cron turn has no guard to ask and nobody watching, so the calls
+          # are collected and run together like a normal turn's.
+          cron_calls = tool_calls.map do |tc|
             tool_name, arguments, = parse_tool_call(tc)
-            begin
-              tool_result = @tools.execute(tool_name, arguments)
-            rescue StandardError => e
-              tool_result = "ERROR: #{e.class}: #{e.message}"
-            end
-
-            # Tool output can be binary (e.g. reading a PNG); keep the transcript
-            # and the chat message valid UTF-8.
-            tool_result = Session.normalize_utf8(tool_result.to_s)
-
             tool_call_id = tc.is_a?(Hash) ? (tc["id"] || tool_name) : tool_name
-            local_messages << { "role" => "tool", "content" => tool_result, "tool_call_id" => tool_call_id }
+            { name: tool_name, arguments: arguments, id: tool_call_id }
+          end
+
+          execute_tool_calls(cron_calls).each do |call|
+            local_messages << { "role" => "tool", "content" => call[:result], "tool_call_id" => call[:id] }
           end
 
           response = ""

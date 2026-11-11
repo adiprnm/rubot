@@ -1662,6 +1662,92 @@ class TestAgentCancellation < Minitest::Test
   end
 end
 
+class TestAgentParallelToolCalls < Minitest::Test
+  # Answers one round with several tool calls, then finishes. The commands are
+  # the knobs: sleeping makes the wall time readable, echoing makes the order.
+  class BatchProvider
+    attr_reader :calls
+
+    def initialize(commands)
+      @commands = commands
+      @calls = 0
+    end
+
+    def name
+      "openai"
+    end
+
+    def chat(_messages, tools: nil)
+      @calls += 1
+      return { "content" => "all done" } if @calls > 1
+
+      {
+        "content" => "Running them.",
+        "tool_calls" => @commands.each_with_index.map do |command, index|
+          {
+            "id" => "call_#{index}",
+            "type" => "function",
+            "function" => {
+              "name" => "shell_exec",
+              "arguments" => JSON.generate({ "command" => command })
+            }
+          }
+        end
+      }
+    end
+    alias chat_stream chat
+  end
+
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(@workspace)
+    @config_path = File.join(@tmpdir, "config.yml")
+    File.write(@config_path, {
+      "agents" => { "defaults" => { "workspace" => @workspace } },
+      "models" => [ { "name" => "test", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ]
+    }.to_yaml)
+    @config = Rubot::Config.new(@config_path)
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if @tmpdir && File.directory?(@tmpdir)
+  end
+
+  def build_agent(commands)
+    Rubot::Agent.new(config: @config, provider: BatchProvider.new(commands), session_id: "parallel")
+  end
+
+  # A batch is only worth sending if answering it costs one round trip instead
+  # of a queue: three half-second commands must finish in about half a second.
+  def test_independent_tool_calls_run_at_the_same_time
+    agent = build_agent([ "sleep 0.6", "sleep 0.6", "sleep 0.6" ])
+
+    before = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    agent.process("do three things", stream: false)
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - before
+
+    assert_operator elapsed, :<, 1.4,
+                    "three 0.6s calls must overlap, not add up (#{elapsed.round(2)}s)"
+    assert_equal 2, agent.provider.calls
+  end
+
+  # Running them together must not shuffle the transcript: the provider
+  # requires one result per call, and the reader sees the answers in the order
+  # the model asked for them.
+  def test_results_keep_the_request_order
+    agent = build_agent([ "echo first", "echo second", "echo third" ])
+
+    agent.process("do three things", stream: false)
+
+    results = agent.session.messages.select { |m| m["role"] == "tool" }.map { |m| m["content"] }
+    assert_equal 3, results.size
+    assert_match(/first/, results[0])
+    assert_match(/second/, results[1])
+    assert_match(/third/, results[2])
+  end
+end
+
 class TestAgentHistoryTrimming < Minitest::Test
   def setup
     @tmpdir = Dir.mktmpdir
