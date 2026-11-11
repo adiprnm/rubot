@@ -18,11 +18,20 @@ Lima aksi dengan dampak terbesar:
 
 | # | Aksi | Dampak |
 |---|------|--------|
-| 1 | **Kirim `cache_control` di provider Anthropic** (sekarang tidak ada sama sekali → caching nol di Claude) | Paling besar: semua token sistem+tools+history berhenti dibayar penuh |
-| 2 | **Instrumentasi sebab-miss** (divergence probe + label penyebab) | Tanpa ini, optimasi berikutnya cuma tebak-tebakan |
+| 1 | **Instrumentasi sebab-miss** (divergence probe + label penyebab) — **sudah dikerjakan (item 1–3)** | Tanpa ini, optimasi berikutnya cuma tebak-tebakan |
+| 2 | **Hilangkan dua mutator tengah-transcript** (`reasoning_tail` per turn, epoch churn) | Mengembalikan hit untuk 1–2 turn terakhir di setiap request |
 | 3 | **Perbaiki akuntansi biaya** (`cached_input` kosong di 2.568/8.832 entri pricing, premium cache-write belum dihitung) | Hit rate bisa benar tapi angka $ bohong → keputusan salah |
-| 4 | **Hilangkan dua mutator tengah-transcript** (`reasoning_tail` per turn, epoch churn) | Mengembalikan hit untuk 1–2 turn terakhir di setiap request |
+| 4 | **Kirim `cache_control` di provider Anthropic** (sekarang tidak ada sama sekali → caching nol di Claude) | Besar untuk persona yang diarahkan ke Claude — **tapi lihat catatan baseline di bawah: akun ini belum punya trafik Anthropic sama sekali** |
 | 5 | **Ganti `/repin` dengan append** (mid-conversation `role: "system"` di model yang mendukung) | Memory/skill baru masuk tanpa membatalkan prefix |
+
+**Catatan dari baseline (2026-11-11, lihat `PROMPT_CACHING_BASELINE.md`):** seluruh
+9.174 request di arsip berjalan ke gateway OpenAI-compatible
+(`deepseek-v4.1-flash`, `glm-5.3-flash`, `mimo-v2.6-flash`) — tidak ada satu pun
+request Anthropic. Jadi aksi `cache_control` tetap benar untuk dikerjakan, tapi
+ia bukan lagi item berdampak terbesar untuk akun ini: ia perbaikan kebenaran
+yang tidak bisa diukur sampai ada persona yang memakai model Claude. Yang bisa
+diukur sekarang adalah distribusi miss di trafik deepseek (median 99,2%, tapi
+22 dari 371 request sampel membaca 0 token dari cache).
 
 Prinsip kerja: **ukur dulu, satu perubahan per commit, dan setiap perubahan harus punya angka sebelum/sesudah** (sesuai preferensi benchmarking).
 
@@ -86,15 +95,19 @@ Prinsip kerja: **ukur dulu, satu perubahan per commit, dan setiap perubahan haru
    `cold`, `model_switch`, `prompt_epoch` (rules/persona/summary/skill/task), `tools_change`, `trim_boundary`, `tool_result_shrink`, `reasoning_tail`, `ttl_expiry`, `below_min_length`, `compaction`, `effort_change`.
 4. **Baseline** yang dicatat sebelum menyentuh apa pun, per provider:
    hit rate median, distribusi hit rate per kategori sesi (interaktif vs cron), token re-read per miss, jumlah miss per sesi, $/turn.
+   **Sudah diambil:** `PROMPT_CACHING_BASELINE.md` (2026-11-11), direproduksi dengan `bin/cache_baseline.rb`.
 
 **Kriteria terima:** `rubot /context` (atau header web) bisa menjelaskan satu miss dengan label, dan baseline tersimpan di file/dokumen sebagai angka awal.
 **Risiko:** rendah — read-only, satu kolom/probing per request.
 
 ---
 
-### Fase 1 — Provider Anthropic: aktifkan caching (dampak terbesar)
+### Fase 1 — Provider Anthropic: aktifkan caching (perbaikan kebenaran, belum terukur di akun ini)
 
 **Tujuan:** Claude berhenti membayar penuh untuk prefix yang identik.
+**Status dampak:** nol trafik Anthropic di arsip (lihat baseline) — kerjakan sebagai
+perbaikan kebenaran, dan ukur dengan satu sesi uji Claude sebelum mengklaim
+perbaikan biaya.
 
 1. `build_payload`: `system` jadi array blok dengan breakpoint di blok terakhir:
    ```ruby
