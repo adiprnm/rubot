@@ -52,6 +52,22 @@ module Rubot
     # enough that the session file does not grow for it.
     CACHE_HISTORY_LIMIT = 12
 
+    # A token-budget cut lands here, not at the budget itself: a cut that
+
+    # sits just under the budget is re-exceeded after a couple of appends,
+
+    # so the front moves again — and every move of the front is a full cache
+
+    # miss. On deepseek-style pricing a cached token costs ~30x less than an
+
+    # uncached one, so the cadence of misses dominates the input cost.
+
+    # Leaving headroom stretches the cycle proportionally: the same history
+
+    # is dropped either way, only in fewer, deeper steps.
+
+    TOKEN_TRIM_TARGET_FRACTION = 0.8
+
     def initialize(id = "default", workspace: nil, sessions_dir: nil, cwd: nil,
                    max_messages: DEFAULT_MAX_MESSAGES, archive: nil)
       @id = id
@@ -318,7 +334,8 @@ module Rubot
       if budget.positive?
         trim_index = 0
         tokens = history.sum { |msg| self.class.message_tokens(msg) }
-        while tokens > budget && trim_index < history.size
+        target = (budget * TOKEN_TRIM_TARGET_FRACTION).to_i
+        while tokens > target && trim_index < history.size
           tokens -= self.class.message_tokens(history[trim_index])
           trim_index += 1
         end
