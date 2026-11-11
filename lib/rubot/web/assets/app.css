@@ -3441,8 +3441,10 @@ a:active,
 
 /* A conversation that finished something while its page was not open. The dot
    sits in the padding the row already had, so a marked row does not reflow the
-   list and the labels of the rows below stay where they were. Yellow because
-   that is what this theme uses for "look here", not red, which means failure. */
+   list and the labels of the rows below stay where they were. Red, the same
+   colour as the counts elsewhere: "unread" is one idea, so it gets one colour,
+   and this theme already reserves yellow for the accent (pins, working) while
+   red is used nowhere but errors — a mark nobody has to interpret. */
 .session-link { position: relative; }
 
 .session.is-unread .session-link { padding-left: 1.05rem; }
@@ -3455,33 +3457,37 @@ a:active,
   height: 5px;
   margin-top: -2px;
   border-radius: 50%;
-  background: var(--yellow);
+  background: var(--red);
 }
 
 /* The drawer's handle wears the roster's number, because on a phone the roster
    is one tap away and a shut drawer would otherwise hide every other persona's
-   news. Drawn on the corner the way the status bar puts a badge on any icon,
-   and out of the button's own box so the lines underneath stay the same size.
-   Nothing at zero: the span is written empty and hidden by `:empty`, so an
-   install with nothing waiting looks exactly as it did. */
+   news. Drawn on the corner the way the status bar puts a badge on any icon.
+   It stays inside the button's own box: the header's strip clips what grows
+   past it (`.chat` is `overflow: hidden`), so an earlier version that hung
+   0.45rem above the button had the top of its circle sliced off, which also
+   made the number look like it sat low. Nothing at zero: the span is written
+   empty and hidden by `:empty`, so an install with nothing waiting looks
+   exactly as it did. */
 .nav-badge {
   position: absolute;
-  top: -0.45rem;
-  right: -0.5rem;
+  top: -0.2rem;
+  right: -0.32rem;
   display: grid;
   place-items: center;
   min-width: 1rem;
   height: 1rem;
-  padding: 0 0.2rem;
+  padding: 0 0.25rem;
   border-radius: 999px;
   border: 1px solid var(--bg);
-  background: var(--yellow);
+  /* Red like the platform badges on every icon a phone owns, and like the
+     roster's numbers below: two surfaces, one colour, nothing to learn. */
+  background: var(--red);
   color: var(--on-accent);
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
   line-height: 1;
-  letter-spacing: -0.03em;
   pointer-events: none;
 }
 
@@ -3502,12 +3508,11 @@ a:active,
   place-items: center;
   border-radius: 999px;
   border: 1px solid var(--bg-dim);
-  background: var(--yellow);
+  background: var(--red);
   color: var(--on-accent);
   font-family: var(--mono);
   font-size: 10px;
   line-height: 1;
-  letter-spacing: -0.03em;
 }
 
 /* ---------- install settings page --------------------------------- */
