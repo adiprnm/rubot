@@ -10,8 +10,9 @@
 <% else -%>
   <ul class="usage-meters">
     <% meters.each do |meter| -%>
-      <li class="usage-meter<%= meter[:limited] ? " is-limited" : "" %>">
+      <li class="usage-meter is-<%= h(meter[:band]) %><%= meter[:limited] ? " is-limited" : "" %>">
         <span class="meter-name"><%= h(meter[:name]) %></span>
+        <span class="meter-used"><%= h(meter[:used_label]) %></span>
         <%# The bar and the figure are the same reading — how much is spent.
             The bar grew towards the limit while the text counted down to it,
             which made a half-spent allowance look like a half-full one in the
@@ -20,7 +21,6 @@
               aria-label="<%= h(meter[:used_label]) %>">
           <span class="meter-fill" style="width: <%= h(meter[:used]) %>%"></span>
         </span>
-        <span class="meter-used"><%= h(meter[:used_label]) %></span>
         <span class="meter-reset"><%= h(meter[:reset]) %></span>
       </li>
     <% end -%>

@@ -2037,10 +2037,21 @@ module Rubot
             name: QUOTA_METER_LABELS.fetch(name) { name.capitalize },
             used: format("%.1f", used),
             used_label: "#{format('%.1f', used)}% terpakai",
+            band: quota_band(used),
             reset: quota_reset(meter),
             limited: meter["limited"] ? true : false
           }
         end
+      end
+
+      # How close to the limit the meter is, in the three words the stylesheet
+      # knows: under half is fine, past half is worth noticing, four fifths and
+      # up is nearly gone. The figure stays exact; this only colours it.
+      def quota_band(used)
+        return "hot" if used >= 80.0
+        return "warm" if used >= 50.0
+
+        "calm"
       end
 
       def quota_reset(meter)

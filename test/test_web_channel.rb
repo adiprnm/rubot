@@ -2621,6 +2621,26 @@ module Rubot
         refute_includes html, "sisa", "the panel counts towards the limit, not away from it"
       end
 
+      # The bar is coloured by how much of the allowance is gone: quiet while
+      # there is room, warm past half, hot near the limit. The figure stays
+      # exact either way — the colour is the second reading, not the only one.
+      def test_the_quota_colours_the_bar_by_how_much_is_spent
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        bands = ->(percent) { channel.send(:quota_meters, { "rolling" => { "percent" => percent } }).first[:band] }
+
+        assert_equal "calm", bands.call(12.5)
+        assert_equal "calm", bands.call(49.9)
+        assert_equal "warm", bands.call(50.0)
+        assert_equal "warm", bands.call(79.9)
+        assert_equal "hot", bands.call(80.0)
+        assert_equal "hot", bands.call(100.0)
+
+        html = View.render("_quota", meters: channel.send(:quota_meters,
+                                                         { "weekly" => { "percent" => 62.0 } }), note: "")
+        assert_includes html, "usage-meter is-warm", "the class the colour hangs on"
+        assert_includes html, "62.0% terpakai", "the number is still there to be read"
+      end
+
       # A provider that sells tokens by the drink has no allowance at all. That
       # is not a failure, and it must not be drawn as an empty box.
       def test_a_provider_without_an_allowance_says_so_in_one_sentence
