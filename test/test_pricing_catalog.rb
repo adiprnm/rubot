@@ -62,8 +62,24 @@ class TestPricingCatalog < Minitest::Test
     assert_in_delta 0.15, rates["input"]
     assert_in_delta 0.60, rates["output"]
     assert_in_delta 0.075, rates["cached_input"]
-    assert_in_delta 0.1875, rates["cache_creation_input"]
+    # The 1.25x of a 5-minute write is Anthropic's number. This model has no
+    # `cache_write`, and an OpenAI-compatible write is billed as ordinary
+    # input — inventing the premium would price it 25% too high.
+    assert_in_delta 0.15, rates["cache_creation_input"]
+    assert_equal true, rates["cache_creation_unknown"]
+    refute rates["cached_input_unknown"], "this model has a cache-read rate"
     assert_equal "models.dev", catalog.source
+  end
+
+  # A missing cache-read rate is not a free cache read. It is priced at the
+  # input rate (an upper bound) and flagged, so no caller can pass the figure
+  # off as a measurement.
+  def test_a_missing_cache_read_rate_is_flagged_and_priced_at_input
+    catalog = StubCatalog.new(config: @config, payload: PAYLOAD)
+    rates = catalog.rates("gemini-2.0-flash", provider: "gemini")
+
+    assert_in_delta 0.10, rates["cached_input"]
+    assert_equal true, rates["cached_input_unknown"]
   end
 
   def test_context_window

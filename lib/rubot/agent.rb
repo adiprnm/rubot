@@ -1013,6 +1013,11 @@ module Rubot
     # figure that collapses the moment the real usage lands.
     def build_cost(usage, rates, live_prompt, live_output, cached_share = 0.0)
       stored = (@session.cost && !@session.cost_partial?) ? @session.cost.dup : Usage.cost(usage, rates)
+      return stored if stored.nil?
+
+      # Sessions priced before `saved` existed keep their totals; the saving is
+      # derived from them rather than left blank.
+      stored["saved"] ||= Usage.cached_savings(usage, rates) if rates
       return stored if live_prompt.zero? && live_output.zero?
 
       live = Usage.new(prompt_tokens: live_prompt, completion_tokens: live_output,
@@ -1020,9 +1025,15 @@ module Rubot
       extra = Usage.cost(live, rates)
       return stored unless extra
 
-      %w[input cached_input cache_creation output total].each_with_object({}) do |key, acc|
+      merged = %w[input cached_input cache_creation output total saved].each_with_object({}) do |key, acc|
         acc[key] = stored[key].to_f + extra[key].to_f
       end
+      # The flag describes the rates, not the request, so it survives the sum:
+      # a figure built from an unknown cache-read rate stays an upper bound.
+      if stored["cache_price_unknown"] || extra["cache_price_unknown"]
+        merged["cache_price_unknown"] = true
+      end
+      merged
     end
 
     # OpenCode Go subscription allowance for the active provider. Returns plain

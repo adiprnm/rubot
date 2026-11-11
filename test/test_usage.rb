@@ -74,6 +74,31 @@ class TestUsage < Minitest::Test
     assert_nil Rubot::Usage.cost(Rubot::Usage.zero, nil)
   end
 
+  # The money the cache kept from being spent: 400k tokens at 1.0 instead of
+  # 0.5 is 0.2 that did not leave the account. It is not part of the total —
+  # adding it would inflate the bill by exactly what was saved.
+  def test_cost_reports_what_the_cache_saved_without_adding_it_to_the_total
+    usage = Rubot::Usage.new(prompt_tokens: 1_000_000, completion_tokens: 0, cached_tokens: 400_000)
+    rates = { "input" => 1.0, "output" => 2.0, "cached_input" => 0.5 }
+
+    cost = Rubot::Usage.cost(usage, rates)
+
+    assert_in_delta 0.2, cost["saved"]
+    assert_in_delta 0.8, cost["total"], 0.001, "input 0.6 + cached 0.2, not minus the saving"
+  end
+
+  def test_cost_carries_the_unknown_cache_price_flag
+    usage = Rubot::Usage.new(prompt_tokens: 1_000_000, completion_tokens: 0, cached_tokens: 400_000)
+    rates = { "input" => 1.0, "output" => 2.0, "cached_input" => 1.0,
+              "cached_input_unknown" => true }
+
+    cost = Rubot::Usage.cost(usage, rates)
+
+    assert_equal true, cost["cache_price_unknown"]
+    assert_in_delta 0.0, cost["saved"], 0.001, "no discount to claim when the rate is unknown"
+    assert_in_delta 1.0, cost["total"], 0.001, "and the upper bound is the full input rate"
+  end
+
   def test_normalizes_deepseek_prompt_cache_hit_tokens
     usage = Rubot::Usage.from({
       "prompt_tokens" => 1_000,
@@ -211,6 +236,9 @@ class TestUsage < Minitest::Test
       assert_in_delta 0.6, report[:cache_hit_rate]
       assert report[:cost]
       assert_in_delta 0.00135, report[:cost]["total"], 0.0000001
+      # 6,000 tokens read from the cache at the cache-read rate instead of the
+      # input rate: the number that makes a hit rate mean something.
+      assert_in_delta 0.00045, report[:cost]["saved"], 0.0000001
     end
   end
 

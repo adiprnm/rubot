@@ -190,8 +190,24 @@ module Rubot
         "cache_creation" => cache_creation_cost,
         "output" => usage.completion_tokens / 1_000_000.0 * output_rate
       }
-      breakdown["total"] = breakdown.values.sum
+      total = breakdown.values.sum
+      # Not part of the total: this is the money the cache kept from being
+      # spent, which is what makes a hit rate mean something in $.
+      breakdown["saved"] = cached_savings(usage, rates)
+      breakdown["total"] = total
+      breakdown["cache_price_unknown"] = true if rates["cached_input_unknown"]
       breakdown
+    end
+
+    # What reading `cached_tokens` from the cache saved over paying the input
+    # rate for them. nil when there are no rates to compare.
+    def self.cached_savings(usage, rates)
+      return nil unless rates.is_a?(Hash) && !rates.empty?
+
+      rates = effective_rates(rates, usage.prompt_tokens)
+      input_rate = rates["input"].to_f
+      cached_rate = (rates["cached_input"] || input_rate).to_f
+      [ input_rate - cached_rate, 0 ].max * usage.cached_tokens / 1_000_000.0
     end
 
     # Pi selects a pricing tier from the request's full input size (cached

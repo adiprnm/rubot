@@ -454,7 +454,14 @@ module Rubot
       end
 
       @cost ||= { "input" => 0.0, "cached_input" => 0.0, "cache_creation" => 0.0, "output" => 0.0, "total" => 0.0 }
-      breakdown.each { |key, value| @cost[key] = (@cost[key] || 0.0) + value.to_f }
+      breakdown.each do |key, value|
+        # `cache_price_unknown` is a flag, not a figure: adding it up would be
+        # `true + 0.0`.
+        next unless value.is_a?(Numeric)
+
+        @cost[key] = (@cost[key] || 0.0) + value.to_f
+      end
+      @cost["cache_price_unknown"] = true if breakdown["cache_price_unknown"]
     end
 
     # True when at least one request could not be priced (no rates known yet).
@@ -465,7 +472,11 @@ module Rubot
     def load_cost(raw)
       return nil unless raw.is_a?(Hash) && !raw.empty?
 
-      raw.each_with_object({}) { |(key, value), acc| acc[key.to_s] = value.to_f }
+      # Figures are stored as numbers, flags as booleans: `true.to_f` would
+      # raise on the way back in.
+      raw.each_with_object({}) do |(key, value), acc|
+        acc[key.to_s] = value.is_a?(Numeric) ? value.to_f : value
+      end
     end
 
     def message_count

@@ -65,10 +65,21 @@ module Rubot
       rates = {
         "input" => entry["input"].to_f,
         "output" => entry["output"].to_f,
-        "cached_input" => (entry["cached_input"] || entry["input"]).to_f,
+        # nil is not zero. A missing cache-read rate would otherwise be priced
+        # at the full input rate *silently*, which reads as a measurement; a
+        # zero is a provider that really bills cache reads at nothing, and that
+        # is one. The input rate here makes the total an upper bound, and the
+        # flag below says it is one.
+        "cached_input" => entry["cached_input"].nil? ? entry["input"].to_f : entry["cached_input"].to_f,
+        # Same reasoning for the write side, minus the premium: the 1.25x of a
+        # 5-minute write is Anthropic's number, and the catalog carries it for
+        # the models that have one. Inventing it for everybody else would price
+        # an OpenAI-compatible write (billed as ordinary input) 25% too high.
         "cache_creation_input" =>
-          (entry["cache_creation_input"] || entry["input"].to_f * Usage::CACHE_WRITE_MULTIPLIER)
+          entry["cache_creation_input"].nil? ? entry["input"].to_f : entry["cache_creation_input"].to_f
       }
+      rates["cached_input_unknown"] = true if entry["cached_input"].nil?
+      rates["cache_creation_unknown"] = true if entry["cache_creation_input"].nil?
       tiers = entry["tiers"]
       rates["tiers"] = tiers if tiers.is_a?(Array) && !tiers.empty?
       rates
