@@ -384,7 +384,7 @@ module Rubot
       end
 
       budget = max_tokens.to_i
-      if budget.positive?
+      if budget.positive? && !history.empty?
         trim_index = 0
         tokens = history.sum { |msg| self.class.message_tokens(msg) }
         target = (budget * TOKEN_TRIM_TARGET_FRACTION).to_i

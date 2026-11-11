@@ -875,6 +875,14 @@ class TestSessionHistoryWindowing < Minitest::Test
     assert_equal "c" * 400, history.first["content"]
   end
 
+  # A session that has no messages yet is the first request of a new
+  # conversation, and a token budget made it raise: the trim index landed on -1
+  # and the guard that skips orphaned tool results then asked the last element
+  # for its role. A budget must not turn "nothing to send yet" into a crash.
+  def test_a_token_budget_on_an_empty_history_is_not_a_crash
+    assert_empty @session.safe_history(max_tokens: 60_000)
+  end
+
   def test_token_budget_does_not_leave_an_orphaned_tool_result
     @session.add("assistant", "working", tool_calls: [
       { "id" => "call-1", "type" => "function", "function" => { "name" => "test" } }
