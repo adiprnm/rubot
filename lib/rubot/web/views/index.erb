@@ -195,6 +195,14 @@
           kirim tes
         </button>
       </div>
+
+      <%# Provider, key and the default model — the one screen that is about the
+          install rather than about a conversation or this device. A link, not a
+          panel: it is a page of its own, and the drawer is already long. -%>
+      <div class="settings-picker">
+        <span class="theme-label">install</span>
+        <a class="theme-swatch settings-link" href="/settings<%= h(token_query) %>">pengaturan</a>
+      </div>
     </div>
   </aside>
 </div>

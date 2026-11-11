@@ -1,0 +1,106 @@
+<%# The install's own three settings, as a page rather than a YAML file.
+
+    A whole document, like the gate: what is behind it is not a conversation, so
+    the shell (thread, composer, SSE stream) has nothing to hold. The link back
+    goes to the default persona, which is where a reader arrives from anyway.
+
+    The key is never sent back into the page — it is a password box with a
+    sentence about what is already stored, because a form that echoes a
+    credential is a credential in the page source, the browser's form history
+    and every screenshot of it. -%>
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <script>
+    (function () {
+      var saved = null;
+      try { saved = localStorage.getItem("rubot-theme"); } catch (_e) { /* private mode */ }
+      var theme = saved === "light" || saved === "dark" || saved === "everforest"
+        ? saved
+        : (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
+            ? "light" : "everforest");
+      document.documentElement.setAttribute("data-theme", theme);
+      document.documentElement.style.colorScheme = theme === "light" ? "light" : "dark";
+    })();
+  </script>
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#2b332f">
+  <title>rubot · pengaturan</title>
+  <link rel="stylesheet" href="/assets/app.css?v=<%= h(asset_version) %>">
+</head>
+<body>
+<form class="settings-card" method="post" action="/settings<%= h(token_query) %>">
+  <h1>pengaturan</h1>
+  <p class="settings-lead">
+    Berlaku untuk seluruh install: semua persona memakai provider dan model
+    default ini, kecuali persona yang punya pilihannya sendiri.
+  </p>
+
+  <% if saved %>
+    <p class="settings-saved" role="status">
+      Tersimpan. Sesi baru langsung memakainya; sesi yang sedang menjawab
+      memakainya setelah turn itu selesai.
+    </p>
+  <% end %>
+
+  <% unless archived %>
+    <p class="settings-error">
+      Arsip sesi belum terbuka, jadi belum ada tempat untuk menyimpan.
+    </p>
+  <% end %>
+
+  <label>Provider
+    <select name="provider">
+      <% provider_choices.each do |choice| %>
+        <option value="<%= h(choice) %>"<%= " selected" if choice == provider %>><%= h(choice) %></option>
+      <% end %>
+    </select>
+  </label>
+
+  <label>API key
+    <input type="password" name="api_key" value=""
+           autocomplete="new-password" autocapitalize="off" autocorrect="off"
+           spellcheck="false"
+           placeholder="<%= key_set ? "sudah tersimpan — kosongkan untuk tidak mengubah" : "belum ada" %>">
+  </label>
+  <p class="settings-hint">
+    <% if key_from_archive %>
+      Disimpan di database install. Kosongkan kolom di atas kalau tidak ingin
+      mengubahnya, atau centang hapus untuk kembali ke config.yml.
+    <% elsif key_set %>
+      Masih dari config.yml atau environment. Menyimpan yang baru di sini
+      menaruhnya di database dan mengalahkan keduanya.
+    <% else %>
+      Belum ada kunci. Tanpa kunci, hanya provider lokal seperti ollama yang
+      bisa menjawab.
+    <% end %>
+  </p>
+  <label class="settings-check">
+    <input type="checkbox" name="clear_api_key" value="1">
+    Hapus kunci dari database (kembali ke config.yml)
+  </label>
+
+  <label>Model default
+    <input name="default_model" value="<%= h(default_model) %>"
+           list="settings-models" autocapitalize="off" autocorrect="off"
+           spellcheck="false" placeholder="gpt-4o-mini">
+  </label>
+  <datalist id="settings-models">
+    <% model_choices.each do |name| %>
+      <option value="<%= h(name) %>"></option>
+    <% end %>
+  </datalist>
+  <p class="settings-hint">
+    Nama model yang dikirim ke provider, apa adanya — termasuk id yang belum ada
+    di config.yml.
+  </p>
+
+  <div class="settings-row">
+    <a class="btn" href="/<%= h(token_query) %>">Kembali</a>
+    <button class="btn primary" type="submit">Simpan</button>
+  </div>
+</form>
+</body>
+</html>

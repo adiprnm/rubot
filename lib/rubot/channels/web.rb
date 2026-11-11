@@ -528,6 +528,10 @@ module Rubot
           create_session(res, match[1], req)
         elsif method == "GET" && path == "/search"
           render_search(res, req)
+        elsif method == "GET" && path == "/settings"
+          render_settings(res, req)
+        elsif method == "POST" && path == "/settings"
+          save_settings(res, req)
         elsif method == "GET" && (match = SESSION_PATH.match(path))
           render_session(res, match[1], req)
         elsif method == "GET" && (match = SESSION_HISTORY_PATH.match(path))
@@ -1303,6 +1307,102 @@ module Rubot
 
         value = Integer(form(req, "page"), exception: false)
         value && value.positive? ? value : 1
+      end
+
+      # --- settings -------------------------------------------------------
+
+      # The provider that is not in the offered list, if any, is added by
+      # `settings_provider_choices`; this is only what a fresh install sees.
+      PROVIDER_CHOICES = %w[openai anthropic ollama gemini deepseek groq mistral].freeze
+
+      # The three keys that are not scoped to a persona or a conversation: one
+      # provider, one key, one default model for the whole install.
+      def render_settings(res, req)
+        saved = req.query["saved"].to_s == "1"
+        store = Session.store
+
+        res["Content-Type"] = "text/html; charset=utf-8"
+        res["Cache-Control"] = "no-store"
+        res.body = View.render(
+          "settings",
+          provider: @app_config&.provider.to_s,
+          default_model: @app_config&.model.to_s,
+          key_set: !@app_config&.api_key.to_s.empty?,
+          key_from_archive: !store&.setting("api_key").to_s.strip.empty?,
+          provider_choices: settings_provider_choices,
+          model_choices: Array(@app_config&.models).filter_map { |m| m["name"] if m.is_a?(Hash) },
+          saved: saved,
+          archived: !store.nil?,
+          token_query: token_query,
+          asset_version: asset_version
+        )
+      end
+
+      # The current provider is in the list even when it is not one of the ones
+      # offered: an install on an OpenAI-compatible endpoint it spelled itself
+      # must not be silently moved to "openai" by opening the page and pressing
+      # save.
+      def settings_provider_choices
+        current = @app_config&.provider.to_s
+        list = PROVIDER_CHOICES.dup
+        list.unshift(current) unless current.empty? || list.include?(current)
+        list
+      end
+
+      def save_settings(res, req)
+        store = Session.store
+        return redirect_to(res, settings_url) unless store
+
+        values = {
+          "provider" => form(req, "provider"),
+          "default_model" => form(req, "default_model")
+        }
+        # An empty key field means "leave the key alone": it is a password box,
+        # it never carries the current value back, and a form that blanked the
+        # key because nobody retyped it would take the install down. Clearing is
+        # its own checkbox, and it is what deletes the row.
+        if form(req, "clear_api_key") == "1"
+          values["api_key"] = nil
+        else
+          typed = form(req, "api_key").strip
+          values["api_key"] = typed unless typed.empty?
+        end
+
+        store.update_settings(values)
+        apply_saved_settings
+        redirect_to(res, settings_url(saved: true))
+      end
+
+      # Put the saved settings in front of the running process, without a
+      # restart: the config is laid over, the pool's copy is refreshed for the
+      # actors it spawns next, and the idle actors are dropped so their next turn
+      # builds a provider from the new values.
+      #
+      # A session with a turn in flight is left alone — tearing its actor down
+      # mid-answer would lose the answer to save a form — and it picks the
+      # setting up on the turn after that.
+      def apply_saved_settings
+        store = Session.store
+        return unless store && @app_config
+
+        @app_config.apply_settings(store.settings)
+        return unless @pool
+
+        @pool.refresh_config(@app_config)
+        @pool.session_ids.each do |sid|
+          next if session_running?(sid)
+
+          @pool.invalidate(sid)
+        end
+      rescue StandardError => e
+        warn "[web] settings applied to this process only: #{e.class}: #{e.message}"
+      end
+
+      def settings_url(saved: false)
+        query = []
+        query << "saved=1" if saved
+        query << "token=#{CGI.escape(@token)}" if @token
+        query.empty? ? "/settings" : "/settings?#{query.join("&")}"
       end
 
       # --- search ---------------------------------------------------------

@@ -6,6 +6,70 @@ require "rubot"
 module Rubot
   module Web
     class TestWebChannel < Minitest::Test
+      # --- install settings ------------------------------------------------
+
+      # What the form shows, and what it must not: the key is a capability, so
+      # the page says whether one is stored and never what it is.
+      def test_the_settings_page_shows_the_install_values_and_never_the_key
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+        channel.instance_variable_get(:@app_config).apply_settings(
+          "provider" => "anthropic", "api_key" => "sk-rahasia", "default_model" => "claude-sonnet"
+        )
+
+        res = FakeResponse.new
+        channel.send(:render_settings, res, FakeRequest.new("/settings"))
+
+        assert_includes res.body, %(value="claude-sonnet")
+        assert_includes res.body, %(<option value="anthropic" selected>)
+        assert_includes res.body, "sudah tersimpan"
+        refute_includes res.body, "sk-rahasia", "a credential must not come back in the page"
+      end
+
+      # Saving is the point of the page: the archive holds it, and the process
+      # that is already running uses it from the next turn.
+      def test_saving_settings_writes_the_archive_and_the_running_config
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+
+        res = FakeResponse.new
+        channel.send(:save_settings, res, form_post(
+          { "provider" => "ollama", "default_model" => "llama3", "api_key" => "sk-baru" }
+        ))
+
+        assert_equal 303, res.status
+        assert_includes res.headers["Location"].to_s, "saved=1"
+
+        store = Rubot::Session.store
+        assert_equal "ollama", store.setting("provider")
+        assert_equal "sk-baru", store.setting("api_key")
+
+        config = channel.instance_variable_get(:@app_config)
+        assert_equal "ollama", config.provider
+        assert_equal "llama3", config.model
+        assert_equal "sk-baru", config.api_key
+      end
+
+      # A password box that comes back empty means "I did not touch it", not
+      # "delete the key" — deleting is its own checkbox, because the two are one
+      # keystroke apart and only one of them can be undone from this page.
+      def test_a_blank_key_field_keeps_the_stored_key_until_it_is_cleared
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+        channel.send(:save_settings, FakeResponse.new,
+                     form_post({ "provider" => "openai", "api_key" => "sk-lama" }))
+
+        channel.send(:save_settings, FakeResponse.new,
+                     form_post({ "provider" => "openai", "api_key" => "" }))
+        assert_equal "sk-lama", Rubot::Session.store.setting("api_key")
+
+        channel.send(:save_settings, FakeResponse.new,
+                     form_post({ "provider" => "openai", "api_key" => "", "clear_api_key" => "1" }))
+        assert_nil Rubot::Session.store.setting("api_key"), "the checkbox hands the key back to config.yml"
+      end
+
+      # --- install settings (end) ------------------------------------------
+
       # --- Format ---------------------------------------------------------
 
       def test_markdown_escapes_html
@@ -2680,6 +2744,26 @@ module Rubot
         channel.send(:edit_persona, edit_request("name" => "Hilang"), res, "hilang")
 
         assert_equal 404, res.status
+      end
+
+      # The settings page and its form are two routes, and both have to exist:
+      # a page nobody can reach and a form that posts into the 404 handler look
+      # identical from inside a template.
+      def test_the_settings_routes_reach_their_handlers
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+
+        page = FakeResponse.new
+        channel.send(:dispatch, FakeRequest.new("/settings"), page)
+        assert_equal 200, page.status
+        assert_includes page.body, "pengaturan"
+
+        saved = FakeResponse.new
+        post = FakeRequest.new("/settings", method: "POST",
+                                           query: { "provider" => "ollama", "default_model" => "llama3" })
+        channel.send(:dispatch, post, saved)
+        assert_equal 303, saved.status
+        assert_equal "ollama", Rubot::Session.store.setting("provider")
       end
 
       # The form's action is a route like any other, so the page it was written

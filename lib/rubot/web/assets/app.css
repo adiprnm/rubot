@@ -3479,3 +3479,126 @@ a:active,
   line-height: 1;
   letter-spacing: -0.03em;
 }
+
+/* ---------- install settings page --------------------------------- */
+
+/* The same card the gate uses, wider: three labelled fields and two lines of
+   explanation do not fit in 22rem without the key's hint wrapping into a
+   paragraph nobody reads. Centered and scrollable, because a phone with the
+   keyboard open has about 300px of it. */
+.settings-card {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(calc(100% - 2.4rem), 30rem);
+  height: fit-content;
+  max-height: calc(100% - 2.4rem);
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 1.4rem 1.3rem 1.2rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg1);
+  box-shadow: 0 18px 60px var(--shadow-deep);
+  color: var(--fg);
+  font-family: var(--sans, inherit);
+}
+
+.settings-card h1 {
+  margin: 0 0 0.35rem;
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--fg);
+}
+
+.settings-lead,
+.settings-hint {
+  margin: 0 0 0.9rem;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--fg-dim);
+}
+
+/* The hint belongs to the field above it, so it is read before the next label
+   rather than as a paragraph of its own. */
+.settings-hint { margin: -0.35rem 0 1rem; font-size: 12px; }
+
+.settings-card label {
+  display: block;
+  margin-bottom: 0.75rem;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+.settings-card label > input,
+.settings-card label > select {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 0.25rem;
+  padding: 0.45rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg);
+  /* 16px is the size below which iOS zooms the whole page into the field, and
+     a settings form is exactly where that happens. */
+  font-size: 16px;
+  font-family: inherit;
+}
+
+.settings-check {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 12.5px;
+  color: var(--fg-dim);
+}
+
+.settings-check input { width: auto; margin: 0; }
+
+/* The one line that is not advice: there is nowhere to save. Same voice as the
+   gate's error, because it is the same kind of news. */
+.settings-error {
+  margin: 0 0 0.9rem;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: -0.03em;
+  color: var(--red);
+}
+
+.settings-saved {
+  margin: 0 0 0.9rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--green);
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-top: 1.1rem;
+}
+
+.settings-picker {
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  align-items: center;
+  justify-content: start;
+  gap: 0.2rem 0.25rem;
+  margin-top: 0.55rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--line-soft);
+}
+
+.settings-picker .theme-label { grid-column: 1 / -1; }
+
+.settings-link { text-decoration: none; color: inherit; }
