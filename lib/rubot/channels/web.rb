@@ -1123,7 +1123,8 @@ module Rubot
                                   session_id: sid, token_query: token_query,
                                   model_choices: model_choices,
                                   session_model: session_model(sid),
-                                  session_thinking: session_thinking(sid))
+                                  session_thinking: session_thinking(sid),
+                                  session_requests: session_requests(sid))
         else
           redirect(res, "/s/#{sid}", req)
         end
@@ -1445,6 +1446,7 @@ module Rubot
           model_choices: model_choices,
           session_model: session_model(sid),
           session_thinking: session_thinking(sid),
+          session_requests: session_requests(sid),
           session_label: session_label,
           document_title: document_title(persona_label, session_label),
           page: page,
@@ -1612,6 +1614,13 @@ module Rubot
         return level unless level.empty?
 
         DEFAULT_THINKING
+      end
+
+      # How many requests this session has already paid for. A picker change
+      # costs a re-read proportional to that, which is worth saying before it
+      # happens rather than explaining afterwards in the usage panel.
+      def session_requests(sid)
+        session_meta(sid).dig("usage", "requests").to_i
       end
 
       def session_meta(sid)

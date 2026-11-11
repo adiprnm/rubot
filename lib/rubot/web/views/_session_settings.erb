@@ -44,4 +44,16 @@
       <% end %>
     </select>
   </label>
+
+  <%# A change here is not free once the session has history: the model, and
+      for providers that render them, the thinking instructions, sit inside the
+      prompt — so the whole prefix is read again, uncached. A picker that says
+      nothing would make that look like a regression the next time someone
+      reads the usage panel. A fresh session has nothing to lose, so the note
+      stays away until there is something to lose. -%>
+  <% if session_requests.to_i.positive? %>
+    <p class="session-setting-hint" title="Pergantian model atau level thinking mengubah isi prompt, jadi prefix sesi ini dibaca ulang tanpa cache pada permintaan berikutnya.">
+      ganti model/thinking = prefix dibaca ulang
+    </p>
+  <% end %>
 </form>

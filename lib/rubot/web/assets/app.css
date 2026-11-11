@@ -3280,6 +3280,7 @@ body.lightbox-open { overflow: hidden; }
    lowercase, the weight of a caption rather than a form. */
 .session-settings {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.6rem;
   width: calc(100% - 3.2rem);
@@ -3287,6 +3288,19 @@ body.lightbox-open { overflow: hidden; }
   margin: -0.15rem auto 0.5rem;
   padding: 0 0.8rem;
   min-width: 0;
+}
+
+/* The note about what a change costs belongs under both pickers, because it is
+   about the pair, and it takes a line of its own rather than squeezing the
+   model id. It is the quietest thing in the row on purpose: a warning that
+   shouts gets read as an error, and this one is only a price. */
+.session-setting-hint {
+  flex: 1 0 100%;
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: -0.02em;
+  color: var(--fg-faint);
 }
 
 .session-setting {
@@ -3361,6 +3375,7 @@ body.lightbox-open { overflow: hidden; }
   .session-settings { width: calc(100% - 2rem); padding: 0 0.4rem; gap: 0.45rem; }
   .session-setting-model { flex: 1 1 auto; }
   .session-setting-label { font-size: 10px; }
+  .session-setting-hint { font-size: 9px; }
   .session-select {
     font-size: 12px;
     padding: 0.4rem 1rem 0.35rem 0.35rem;
