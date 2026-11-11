@@ -271,6 +271,9 @@ module Rubot
                  "#{UsageReport.tokens(report[:completion_tokens])} out"
         lines << "Cache: #{UsageReport.tokens(report[:cached_tokens])} cached total " \
                  "(hit rate #{hit} on request terakhir)"
+        if (cause = UsageReport.cause_label(report))
+          lines << "Sebab miss: #{cause}"
+        end
 
         cost = report[:cost]
         if cost

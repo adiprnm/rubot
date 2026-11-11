@@ -211,8 +211,8 @@ module Rubot
         INSERT INTO request_cache(
           session_id, created_at, provider, model, prompt_tokens, cached_tokens,
           cache_creation_tokens, epoch, tools, blocks, turns, auxiliary,
-          fingerprint, diverged_at
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          fingerprint, diverged_at, diverged_kind, diverged_role, summary, effort
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       SQL
       prune_cache_records(id)
       keep_newest_fingerprint(id)
@@ -226,7 +226,7 @@ module Rubot
       rows = @db.execute(<<~SQL, [ id, limit.to_i ])
         SELECT created_at, provider, model, prompt_tokens, cached_tokens,
                cache_creation_tokens, epoch, tools, blocks, turns, auxiliary,
-               fingerprint, diverged_at
+               fingerprint, diverged_at, diverged_kind, diverged_role, summary, effort
         FROM request_cache
         WHERE session_id = ?
         ORDER BY id DESC
@@ -234,7 +234,8 @@ module Rubot
       SQL
       rows.reverse.map do |row|
         created_at, provider, model, prompt, cached, creation, epoch, tools,
-          blocks, turns, auxiliary, fingerprint, diverged_at = row
+          blocks, turns, auxiliary, fingerprint, diverged_at, diverged_kind, diverged_role,
+          summary, effort = row
         {
           "at" => created_at.to_s,
           "provider" => provider.to_s,
@@ -250,7 +251,11 @@ module Rubot
           "fingerprint" => fingerprint,
           # nil (not 0) when there was nothing to compare against: the first
           # request of a session is not a request that matched everything.
-          "diverged_at" => diverged_at.nil? ? nil : diverged_at.to_i
+          "diverged_at" => diverged_at.nil? ? nil : diverged_at.to_i,
+          "diverged_kind" => diverged_kind,
+          "diverged_role" => diverged_role,
+          "summary" => summary.to_s,
+          "effort" => effort.to_s
         }
       end
     end
@@ -949,7 +954,11 @@ module Rubot
         field.call("turns").to_i,
         field.call("auxiliary") ? 1 : 0,
         field.call("fingerprint"),
-        field.call("diverged_at")
+        field.call("diverged_at"),
+        field.call("diverged_kind"),
+        field.call("diverged_role"),
+        field.call("summary"),
+        field.call("effort")
       ]
     end
 

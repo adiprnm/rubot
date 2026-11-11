@@ -230,6 +230,8 @@ module Rubot
       lines << "   Messages: #{report[:messages]} | Requests: #{report[:requests]}"
       lines << "   Tokens:   #{tokens(report[:prompt_tokens])} in / #{tokens(report[:completion_tokens])} out"
       lines << "   Cache:    #{tokens(report[:cached_tokens])} cached total#{hit_rate(report)}"
+      cause = cause_label(report)
+      lines << "   Sebab:    #{cause}" if cause
 
       cost = report[:cost]
       if cost
@@ -263,6 +265,34 @@ module Rubot
       format(" (hit rate %.1f%% on the latest request)", report[:cache_hit_rate].to_f * 100)
     end
 
+    # What a miss is called in front of a reader. The labels are short on
+    # purpose: they sit on a line of a report, and the long version of each is
+    # in the code that derives it (see CacheDiagnosis).
+    CAUSE_LABELS = {
+      cold: "request pertama sesi ini",
+      model_switch: "model berganti",
+      compaction: "compaction membuat ringkasan baru",
+      prompt_epoch: "system prompt berubah",
+      tools_change: "daftar tool berubah",
+      trim_boundary: "jendela history terpotong",
+      tool_result_shrink: "tool result lama dipotong",
+      reasoning_tail: "reasoning turn lama dibuang",
+      history_rewrite: "pesan lama ditulis ulang",
+      below_min_length: "prompt di bawah minimum cache",
+      ttl_expiry: "cache kedaluwarsa (>5 menit)",
+      effort_change: "level thinking berubah (dugaan)",
+      uncached: "prefix sama tapi provider tidak melaporkan cache read",
+      unknown: "sebab tidak diketahui"
+    }.freeze
+
+    # nil when the latest request hit: a hit has no cause worth a line.
+    def cause_label(report)
+      cause = report[:cache_cause]
+      return nil if cause.nil?
+
+      CAUSE_LABELS.fetch(cause.to_sym, cause.to_s)
+    end
+
     # One-line metrics for the TUI footer, e.g.
     #
     #   $0.001 · cache 60% · ctx 8.2%
@@ -281,7 +311,10 @@ module Rubot
       {
         cost: cost_value(report),
         cache: cache_value(report),
-        context: context_value(report)
+        context: context_value(report),
+        # Only when there is something to say: a hit is the normal state and
+        # does not need a word in the row.
+        cause: cause_label(report)
       }
     end
 

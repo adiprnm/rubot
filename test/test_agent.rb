@@ -2799,6 +2799,9 @@ class TestAgentCacheRecords < Minitest::Test
     assert_operator record["blocks"], :>, record["turns"],
                     "blocks count the system prompt and every tool on top of the turns"
     assert_equal false, record["auxiliary"]
+    assert_equal "", record["summary"], "no compaction yet, so no summary digest"
+    assert_equal @agent.thinking_level.to_s, record["effort"],
+                 "and the thinking level the request went out with"
   end
 
   # The whole point of the pin: two requests in one session must carry the same
@@ -2927,5 +2930,60 @@ class TestAgentCacheDivergence < Minitest::Test
 
     assert_equal(-1, record["diverged_at"],
                  "the reloaded fingerprint matched, so the prefix was still intact")
+  end
+
+  # Item 3: the record is only useful if the report says what it means.
+  class ZeroCacheProvider < UsageProvider
+    def last_usage
+      {
+        "input_tokens" => 5_000,
+        "cache_read_input_tokens" => 0,
+        "cache_creation_input_tokens" => 0,
+        "output_tokens" => 5
+      }
+    end
+  end
+
+  def build_zero_cache_agent(id)
+    Rubot::Agent.new(config: @config, provider: ZeroCacheProvider.new, session_id: id)
+  end
+
+  def test_the_report_names_a_cold_start
+    agent = build_zero_cache_agent("cause-cold")
+    agent.process("halo", stream: false)
+
+    assert_equal :cold, agent.usage_report(network: false)[:cache_cause]
+  end
+
+  def test_the_report_says_nothing_when_the_last_request_hit
+    agent = build_agent("cause-hit")
+    agent.process("halo", stream: false)
+
+    assert_nil agent.usage_report(network: false)[:cache_cause],
+               "a hit has no cause worth a line"
+  end
+
+  # A summary is written because the transcript outgrew the budget. It rewrites
+  # the prompt, but the fix is not "stop editing the prompt" — it is "the
+  # conversation reached a compaction", which is why it gets its own label.
+  def test_a_new_summary_is_reported_as_a_compaction
+    agent = build_zero_cache_agent("cause-compaction")
+    agent.process("halo", stream: false)
+
+    agent.session.summary = "ringkasan dari compaction"
+    agent.process("lagi", stream: false)
+
+    assert_equal :compaction, agent.usage_report(network: false)[:cache_cause]
+  end
+
+  # What /context and the panel print: the label, in words, on its own line.
+  def test_the_context_report_prints_the_cause
+    agent = build_zero_cache_agent("cause-render")
+    agent.process("halo", stream: false)
+
+    text = Rubot::UsageReport.render(agent.usage_report(network: false))
+
+    assert_includes text, "Sebab:"
+    assert_includes text, "request pertama sesi ini"
   end
 end

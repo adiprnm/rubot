@@ -1764,7 +1764,8 @@ module Rubot
         {
           cost: metrics&.dig(:cost) || "—",
           cache: metrics&.dig(:cache) || "—",
-          ctx: metrics&.dig(:context) || "—"
+          ctx: metrics&.dig(:context) || "—",
+          cause: metrics&.dig(:cause).to_s
         }
       end
 
@@ -1809,6 +1810,7 @@ module Rubot
           reasoning: report[:reasoning_tokens].to_i.zero? ? "" : Rubot::UsageReport.tokens(report[:reasoning_tokens]),
           cache: cache_fact(report),
           cache_history: cache_history_fact(report),
+          cache_cause: Rubot::UsageReport.cause_label(report).to_s,
           ctx: context_fact(report)
         }
       end

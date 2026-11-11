@@ -638,8 +638,20 @@ class TestStore < Minitest::Test
       "tools" => "tools-digest",
       "blocks" => 41,
       "turns" => 33,
-      "auxiliary" => false
+      "auxiliary" => false,
+      "diverged_kind" => "m",
+      "diverged_role" => "tool"
     }.merge(overrides)
+  end
+
+  def test_the_block_that_moved_is_kept_with_the_record
+    @store.append_cache_record("s1", build_cache_record("diverged_at" => 5))
+
+    record = @store.cache_records("s1").last
+
+    assert_equal "m", record["diverged_kind"], "a message block, not the prompt or a tool"
+    assert_equal "tool", record["diverged_role"],
+                 "and it was a tool result: the rewrite that shortened it"
   end
 
   def test_a_request_record_round_trips_with_its_shape

@@ -983,6 +983,10 @@ module Rubot
         # after a compaction is expected. Without this a reader can only see the
         # latest request and has to guess which one it is looking at.
         cache_history: @session.cache_history.dup,
+        # Why the latest request missed, when it did: a label derived from the
+        # last two records, not a guess (see CacheDiagnosis). nil means the
+        # latest request hit and there is nothing to explain.
+        cache_cause: CacheDiagnosis.cause(@session.cache_records),
         last_prompt_tokens: last.prompt_tokens,
         total_tokens: usage.total_tokens + live_prompt + live_output,
         # Priced per request when it was recorded, so switching model mid-way
@@ -1979,6 +1983,8 @@ end
       sent = messages || @session.messages
       fingerprint = CacheProbe.fingerprint(system: system_prompt, tools: tools, messages: sent)
       previous = @session.cache_records.last
+      diverged_at = CacheProbe.first_divergence(previous && previous["fingerprint"], fingerprint)
+      kind, role = diverged_block(diverged_at, tools: tools, messages: sent)
       {
         "provider" => @provider.name.to_s,
         "model" => active_model_name.to_s,
@@ -1987,9 +1993,30 @@ end
         "blocks" => CacheProbe.block_count(fingerprint),
         "turns" => sent.size,
         "fingerprint" => fingerprint,
-        "diverged_at" => CacheProbe.first_divergence(previous && previous["fingerprint"], fingerprint),
+        "diverged_at" => diverged_at,
+        "diverged_kind" => kind,
+        "diverged_role" => role,
+        "summary" => digest_of(@session.summary_text.to_s),
+        "effort" => thinking_level.to_s,
         "auxiliary" => auxiliary
       }
+    end
+
+    # What sits at the block the fingerprint broke on: the system prompt, one
+    # tool definition, or a message with a role. Recorded with the request
+    # because only here is the sent list still in hand — a later reader would
+    # have to guess the boundary between tools and messages from counts that a
+    # trim in the same request can move.
+    def diverged_block(diverged_at, tools:, messages:)
+      return [ nil, nil ] unless diverged_at.is_a?(Integer) && diverged_at >= 0
+
+      return [ CacheProbe::SYSTEM, nil ] if diverged_at.zero?
+      return [ CacheProbe::TOOL, nil ] if diverged_at <= tools.size
+
+      message = messages[diverged_at - tools.size - 1]
+      return [ CacheProbe::MESSAGE, nil ] if message.nil?
+
+      [ CacheProbe::MESSAGE, message["role"].to_s ]
     end
 
     # Publish live figures to a caller that wants them mid-turn. Failing to

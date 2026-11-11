@@ -675,11 +675,11 @@ module Rubot
                     document_title: "rubot · Rubot", live_turn: live_turn,
                     live_prompt_shown: false, token_query: "",
                     page: { entries: [], more: false, before: 0 }, older_url: "",
-                    usage: { cost: "—", cache: "—", ctx: "—" },
+                    usage: { cost: "—", cache: "—", ctx: "—", cause: "" },
                     usage_facts: { model: "m · openai", cost: "—", breakdown: "",
                                    requests: "0", messages: "0", tokens_in: "0",
                                    tokens_out: "0", reasoning: "", cache: "—",
-                                   cache_history: "", ctx: "—" })
+                                   cache_history: "", cache_cause: "", ctx: "—" })
       end
 
       # Enough of a WEBrick::HTTPResponse for the channel's rendering paths: it
@@ -1733,11 +1733,11 @@ module Rubot
                            session_short: "web_rubot", session_label: "Sesi baru",
                            document_title: "rubot · Rubot", live_turn: nil, token_query: "",
                            page: { entries: [], more: false, before: 0 }, older_url: "",
-                           usage: { cost: "—", cache: "—", ctx: "—" },
+                           usage: { cost: "—", cache: "—", ctx: "—", cause: "" },
                            usage_facts: { model: "m", cost: "—", breakdown: "", requests: "0",
                                           messages: "0", tokens_in: "0", tokens_out: "0",
                                           reasoning: "", cache: "—",
-                                          cache_history: "", ctx: "—" })
+                                          cache_history: "", cache_cause: "", ctx: "—" })
 
         assert_includes html, 'id="composer-notice"', "the composer needs a notice slot"
         assert_match(/id="composer-notice"[^>]*hidden/, html,
@@ -2123,7 +2123,7 @@ module Rubot
       end
 
       def test_status_row_renders_three_icons_and_no_words
-        html = View.render("_usage", cost: "$0.023", cache: "99.6%", ctx: "2.5%")
+        html = View.render("_usage", cost: "$0.023", cache: "99.6%", ctx: "2.5%", cause: "")
 
         assert_equal 3, html.scan(%(<svg class="metric-icon")).size
         assert_includes html, "$0.023"
@@ -2140,6 +2140,25 @@ module Rubot
         assert_includes html, "context window model"
         refute_match(%r{class="value">cost}, html)
         refute_includes html, "cache 99"
+      end
+
+      # The row says why the last request missed, when it did. Without it a
+      # reader sees "cache 0%" and has to open the panel to find out whether
+      # their prompt moved or the provider simply had nothing cached.
+      def test_status_row_names_the_cause_of_a_miss
+        html = View.render("_usage", cost: "$0.1", cache: "0%", ctx: "1%",
+                           cause: "model berganti")
+
+        assert_includes html, "model berganti"
+        assert_includes html, "metric-cause"
+      end
+
+      # A hit is the normal state. A word for it in the row would take width
+      # from the composer to say nothing.
+      def test_status_row_stays_quiet_when_the_request_hit
+        html = View.render("_usage", cost: "$0.1", cache: "99%", ctx: "1%", cause: "")
+
+        refute_includes html, "metric-cause"
       end
 
       # Each icon is a different drawing; a copy-paste slip would make two
@@ -2220,10 +2239,10 @@ module Rubot
       # must not — otherwise the first swap would try to swap twice.
       def test_usage_markup_marks_the_fragment_as_out_of_band
         channel = Rubot::Channels::Web.new(channel_config: {})
-        markup = channel.send(:usage_markup_with, { cost: "$0.1", cache: "50%", ctx: "1%" })
+        markup = channel.send(:usage_markup_with, { cost: "$0.1", cache: "50%", ctx: "1%", cause: "" })
 
         assert_includes markup, %(hx-swap-oob="true")
-        refute_includes View.render("_usage", cost: "$0.1", cache: "50%", ctx: "1%"), "hx-swap-oob"
+        refute_includes View.render("_usage", cost: "$0.1", cache: "50%", ctx: "1%", cause: ""), "hx-swap-oob"
       end
 
       # The figures have to move while the turn is still running, and the
@@ -2391,6 +2410,38 @@ module Rubot
         assert_includes html, "belum diketahui"
         assert_includes html, %(id="usage-facts")
         refute_includes html, "$0.0000"
+      end
+
+      # The panel is where the label is spelled out: the row says a short
+      # phrase, this says which of the causes it is and what it means.
+      def test_the_panel_names_the_cause_of_a_miss
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        facts = channel.send(:usage_facts, {
+          model: "m", provider: "anthropic", messages: 4, requests: 4,
+          prompt_tokens: 4_000, completion_tokens: 40, cached_tokens: 0,
+          cache_hit_rate: 0.0, cache_hit_rate_session: 0.0,
+          cache_cause: :trim_boundary,
+          context_used: 900, context_window: 128_000, context_percent: 0.7,
+          cost: { "total" => 0.01 }
+        })
+        html = View.render("_usage_facts", **facts)
+
+        assert_includes html, "sebab miss"
+        assert_includes html, "jendela history terpotong",
+                        "the label is written out, not the symbol"
+      end
+
+      def test_the_panel_omits_the_cause_row_when_the_request_hit
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        facts = channel.send(:usage_facts, {
+          model: "m", provider: "anthropic", messages: 4, requests: 4,
+          prompt_tokens: 4_000, completion_tokens: 40, cached_tokens: 3_900,
+          cache_hit_rate: 0.97, cache_hit_rate_session: 0.9,
+          context_used: 900, context_window: 128_000, context_percent: 0.7,
+          cost: { "total" => 0.01 }
+        })
+
+        refute_includes View.render("_usage_facts", **facts), "sebab miss"
       end
 
       # The panel lives inside the page from the first paint — it is a
@@ -4416,11 +4467,11 @@ module Rubot
                            session_short: "web_rubot", session_label: "Sesi baru",
                            document_title: "rubot · Rubot", live_turn: nil, token_query: "",
                            page: { entries: [], more: false, before: 0 }, older_url: "",
-                           usage: { cost: "—", cache: "—", ctx: "—" },
+                           usage: { cost: "—", cache: "—", ctx: "—", cause: "" },
                            usage_facts: { model: "m", cost: "—", breakdown: "", requests: "0",
                                           messages: "0", tokens_in: "0", tokens_out: "0",
                                           reasoning: "", cache: "—",
-                                          cache_history: "", ctx: "—" })
+                                          cache_history: "", cache_cause: "", ctx: "—" })
 
         assert_equal 1, html.scan(%(id="lightbox")).size
         assert_match(/id="lightbox"[^>]*hidden/, html)
