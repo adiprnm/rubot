@@ -3265,12 +3265,12 @@ body.lightbox-open { overflow: hidden; }
 /* ---------- session model and thinking ------------------------ */
 
 /* The two per-session choices, under the field they belong to. Same width and
-   centring as the composer above so the row reads as part of it; the labels
-   stay lowercase and mono, the weight of a caption rather than a form. */
+   centring as the composer above so the row reads as part of it: mono,
+   lowercase, the weight of a caption rather than a form. */
 .session-settings {
   display: flex;
   align-items: center;
-  gap: 0.85rem;
+  gap: 0.6rem;
   width: calc(100% - 3.2rem);
   max-width: 52rem;
   margin: -0.15rem auto 0.5rem;
@@ -3281,13 +3281,16 @@ body.lightbox-open { overflow: hidden; }
 .session-setting {
   display: flex;
   align-items: center;
-  gap: 0.32rem;
+  gap: 0.3rem;
   min-width: 0;
-  flex: 1 1 auto;
 }
 
-/* The model name is the long one and gets the room; a level is one word. */
-.session-setting-thinking { flex: 0 1 9.5rem; }
+/* A model id is the long thing here and a level is one word. The model takes
+   the room it needs and then stops well short of the column: a picker as wide
+   as the composer reads as a field to fill in, not as a setting to glance
+   at. */
+.session-setting-model { flex: 0 1 17rem; }
+.session-setting-thinking { flex: 0 0 auto; }
 
 .session-setting-label {
   flex: 0 0 auto;
@@ -3326,25 +3329,31 @@ body.lightbox-open { overflow: hidden; }
   cursor: pointer;
 }
 
-/* A select stripped of its chrome is only as tall as its text, which is right
-   under a mouse and too small under a thumb. The row sits right above the
-   keyboard on a phone, so it gets a real tap target there and only there. */
-@media (pointer: coarse) {
-  .session-setting select { min-height: 2.2rem; }
-  .session-settings { margin-bottom: 0.4rem; }
-}
-
 .session-select:hover { color: var(--fg); }
-
 .session-select:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
 /* An option list is drawn by the platform, so it keeps the page's own colours
    where the browser lets them through. */
 .session-select option { background: var(--bg0); color: var(--fg); }
 
-/* A phone narrows the composer and the status line together; the row under
-   them has to follow, and it has to be declared after the base rule above or
-   the wider one wins on specificity ties. */
+/* A phone has no hover and no room for a caption the reader has to squint at:
+   the row grows to a thumb-sized control and its letters grow with it, with
+   the model picker taking the width the row can spare. The breakpoint is the
+   one the composer and the status line already change at. */
 @media (max-width: 860px) {
-  .session-settings { width: calc(100% - 2rem); padding: 0 0.4rem; gap: 0.6rem; }
-  .session-setting-label { font-size: 9px; }
+  .session-settings { width: calc(100% - 2rem); padding: 0 0.4rem; gap: 0.45rem; }
+  .session-setting-model { flex: 1 1 auto; }
+  .session-setting-label { font-size: 11px; }
+  .session-select {
+    font-size: 14px;
+    padding: 0.4rem 1rem 0.35rem 0.35rem;
+    background-position: right 0.3rem center;
+  }
+}
+
+/* Stripped of its chrome a select is only as tall as its text, which is right
+   under a mouse and too small under a thumb. The row sits right above the
+   keyboard on a phone, so it gets a real tap target there. */
+@media (pointer: coarse) {
+  .session-setting select { min-height: 2.6rem; }
+  .session-settings { margin-bottom: 0.4rem; }
 }
