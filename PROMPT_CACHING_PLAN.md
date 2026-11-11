@@ -142,6 +142,22 @@ perbaikan biaya.
    - OpenAI-compatible / DeepSeek: **jangan pernah** menulis `reasoning_content` ke transcript yang dikirim (`reasoning_in_history: false`) → transcript stabil.
    - Anthropic dengan thinking: biarkan thinking block apa adanya (dokumen: block yang dikembalikan apa adanya menjaga cache; block yang di-drop membatalkan dari posisi itu).
    Tambahkan test yang memastikan payload turn N+1 identik dengan turn N untuk semua blok sebelum pesan user baru.
+
+   **Terverifikasi bukan sumber miss (2026-11-11) — jangan diubah tanpa data baru.**
+   Dua alasan, keduanya dari pengukuran:
+   - Pada 72 record `request_cache` dari sesi web live, tidak ada satu pun yang divergen
+     di ekor transcript. Divergensi yang tercatat semuanya di tengah (`diverged_at` 10–339),
+     artinya blok yang berubah adalah blok yang dipotong/ditulis ulang, bukan reasoning.
+   - Reasoning hanya dibuang **sekali** per batas turn, bukan tiap request: `reasoning_tail`
+     membuang reasoning milik jawaban yang sudah selesai, dan sejak request berikutnya
+     blok itu tidak berubah lagi. Harness simulasi (`/tmp/reasoning_sim.rb`, 200 turn)
+     menghasilkan **0** penulisan ulang berulang — biayanya satu blok per turn, bukan
+     satu blok per request.
+
+   Jadi yang tersisa dari item ini bukan kode, melainkan catatan: kebijakan sekarang
+   sudah memberi hasil yang diinginkan (transcript stabil setelah satu request), dan
+   `reasoning_in_history: false` akan menghapus konteks yang masih dipakai model
+   OpenAI-compatible tanpa menghemat satu token pun. **Ditutup sebagai terverifikasi.**
 2. **Epoch churn → append, bukan rebuild.** Untuk model yang mendukung mid-conversation `role: "system"` (Opus 5.5/4.8/5, Sonnet 5.5, Haiku 5.5, Fable/Mythos), memory/skill/AGENTS.md baru dikirim sebagai pesan system tambahan di `messages` → prefix tetap valid, hanya blok baru yang diproses. `/repin` tetap ada untuk rebuild penuh. Model yang tidak mendukung (Sonnet 5) jatuh ke perilaku sekarang.
 3. **Kebijakan model/effort:** ganti model di tengah sesi = miss penuh (sudah ditangani lewat epoch), tapi ganti `thinking level` juga mengubah `reasoning_effort` → menurut tabel OpenAI & Claude itu memotong cache. UI picker di bawah composer sebaiknya menandai ini (ikon/warning kecil) dan mencatat `effort_change` di metrik, bukan memperlakukannya sebagai regresi.
 4. **Pertahankan** block-alignment di `safe_history` dan `trim_old_tool_results!`; tambahkan penghitung "pergerakan batas per sesi" supaya bisa dibedakan dari penyebab lain.
@@ -233,3 +249,55 @@ Target setelah semua fase: hit rate median **≥ 85%** untuk sesi interaktif mul
 | 6 | Guardrail, alert, CI | S | Menjaga hasil tidak mundur |
 
 Satu fase = satu commit (atau beberapa commit kecil per langkah), masing-masing dengan angka sebelum/sesudah di pesan commit.
+
+---
+
+## 8. Temuan pengukuran, 2026-11-11 malam (item 22)
+
+Diukur dengan `bin/cache_loss.rb`, bukan dengan perasaan: 245 request, 2 sesi web,
+gateway OpenAI-compatible (`deepseek-v4.1-flash`), 23,3 juta prompt token.
+
+| sebab | n | token dibaca ulang | share |
+|---|---|---|---|
+| `window` — trim keras di depan transcript | 9 | 951.957 | 51,0% |
+| `intact` — prefix utuh, provider tidak melaporkan cache | 3 | 350.952 | 18,8% |
+| `boundary` — batas hasil-tool bergeser | 15 | 281.274 | 15,1% |
+| `partial` — ekor turn berjalan (selalu ada) | 216 | 180.377 | 9,7% |
+| `cold` — request pertama | 2 | 102.711 | 5,5% |
+
+Total re-read 1,87 juta token = **8,0%** dari semua prompt token.
+
+**Yang mengejutkan: bukan redaksi args tool yang mahal.** Item 22(b) menduga trim
+dan redaksi jatuh berurutan sehingga ada dua re-read beruntun. Ternyata keduanya
+memang berada di boundary yang sama (satu `older` block, satu request), dan biaya
+gabungannya cuma 15% dengan rata-rata 18.751 token per event, jarak yang berubah
+selalu 21–44 blok dari ujung — persis `tool_result_keep: 10`. **Tidak ada yang perlu
+diubah di sana; usulan 22(b) ditutup.**
+
+**Yang mahal adalah trim keras `max_messages`.** Setiap kali transcript menyentuh
+cap (400 pesan di config ini), `Session#trim!` membuang satu blok pesan dari depan.
+Itu menggeser blok pertama transcript → seluruh prefix setelah system+tools tidak
+bisa dipakai lagi → satu re-read penuh ~110.000 token. Terukur 9 kali dalam 245
+request, ~1.000.000 token (51% dari semua re-read), dan trim hanya membuang ~5–40
+pesan tiap kali. Jadi biayanya tidak sebanding dengan yang dihemat.
+
+Contoh dari data (2026-11-11 12:54–13:04):
+
+```
+12:54:31  turns=400  p=124.735  c=123.648   ← cap tersentuh, hit normal
+12:54:42  turns=361  p=117.796  c=      0   ← trim: blok 10 berubah, re-read penuh
+12:55:00  turns=363  p=119.221  c=      0   ← intact: provider belum punya prefix baru
+12:55:07  turns=365  p=119.396  c=119.168   ← pulih
+```
+
+Baris `intact` mengikuti trim dengan pola yang sama tiga kali (12:54:10, 12:55:00,
+12:58:57): request pertama setelah prefix berubah tidak mendapat cache read sama
+sekali, request berikutnya pulih. Itu tanda entry baru belum terlihat (write lag)
+atau mesin lain yang melayani, dan tidak ada yang bisa diperbaiki dari sisi prompt.
+`prompt_cache_key` (item 18) hanya dikirim ke OpenAI, jadi gateway tidak tertolong
+olehnya. Yang bisa dihindari adalah *penyebab* prefix berubah: trim-nya sendiri.
+
+**Kesimpulan → item 23 (baru):** jangan biarkan trim keras terjadi. Transcript
+sebaiknya di-*compaction* lebih dulu, karena compaction juga satu re-read penuh
+tapi hasilnya lebih kecil (ringkasan + 10 pesan terakhir, bukan 360 pesan) dan
+informasinya tidak hilang. Harness pengukur: `bin/cache_loss.rb`.
