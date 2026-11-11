@@ -23,7 +23,11 @@ module Rubot
       # first, so their bodies can be highlighted before anything is escaped;
       # everything else is escaped up front, so the only tags that can appear
       # are the ones written here.
-      def markdown(text)
+      #
+      # `quotable` adds the mark that hands a paragraph back to the composer:
+      # only the chat views want it, so the plain renderer (and everything that
+      # tests it block by block) stays free of page controls.
+      def markdown(text, quotable: false)
         blocks = []
         source, notes, numbers = extract_footnotes(extract_fences(text.to_s, blocks))
         source = CGI.escapeHTML(source)
@@ -45,7 +49,8 @@ module Rubot
           # A paragraph is a <p>, not a bare run of text: without the element
           # there is no block for a margin to sit on, so the heading above it
           # collapsed to nothing and read as glued to the line before.
-          paragraphs << "<p>#{paragraph.map { |line| inline(line, state) }.join("<br>")}</p>"
+          body = paragraph.map { |line| inline(line, state) }.join("<br>")
+          paragraphs << (quotable ? quotable_paragraph(body, paragraph) : "<p>#{body}</p>")
           paragraph.clear
         end
 
@@ -63,15 +68,25 @@ module Rubot
           next if list.nil?
 
           close_level.call(list[:html], list[:stack]) while list[:stack].any?
-          paragraphs << list[:html]
+          # Every item is counted, nested ones included: the chip says how much
+          # context the list carries, and a nested item is quoted with it.
+          items = list[:html].scan("<li").length
+          paragraphs << (quotable ? quotable_block("div", "para-list", list[:html], list[:source],
+                                                    label: LIST_QUOTE_LABEL,
+                                                    kind: "Daftar · #{items} butir") : list[:html])
           list = nil
         end
 
         # Lists nest by indentation, so the open lists are kept on a stack: a
         # deeper item opens a list inside the item above it, and a shallower
         # one closes levels until it has a home.
-        add_item = lambda do |tag, indent, body, task|
-          list ||= { stack: [], html: +"" }
+        #
+        # `line` is the source as it was written, kept in `source` so a list can
+        # be quoted as the Markdown it came from rather than as its rendered
+        # items.
+        add_item = lambda do |tag, indent, body, task, line|
+          list ||= { stack: [], html: +"", source: [] }
+          list[:source] << line
           html = list[:html]
           stack = list[:stack]
 
@@ -99,7 +114,13 @@ module Rubot
             top[:open] = false
           end
 
-          html << (task ? %(<li class="task#{task == :done ? " is-done" : ""}">) : "<li>")
+          # Every item carries its own source line as well as the list carrying
+          # the whole run: a long press on one item quotes just that item, and
+          # the line it was written as is the only honest copy of it.
+          item_attrs = +""
+          item_attrs << %( class="task#{task == :done ? " is-done" : ""}") if task
+          item_attrs << quotable_attribute(line.strip) if quotable
+          html << "<li#{item_attrs}>"
           if task
             done = task == :done
             html << %(<span class="task-box" aria-hidden="true"></span>)
@@ -141,12 +162,13 @@ module Rubot
             paragraphs << table[:html]
             i = table[:next]
             next
-          elsif (task = stripped.match(/\A[-*+] +\[([ xX])\][ \t]*(.*)\z/))
-            add_item.call("ul", indent, task[2], task[1].strip.empty? ? :open : :done)
-          elsif (item = stripped[/\A[-*+] +(.*)\z/, 1])
-            add_item.call("ul", indent, item, nil)
-          elsif (item = stripped[/\A\d+[.)] +(.*)\z/, 1])
-            add_item.call("ol", indent, item, nil)
+          elsif (item = list_item(stripped))
+            # A list is a block of its own, so the text above it is closed as a
+            # paragraph first: without this the paragraph stayed buffered and
+            # the list was emitted ahead of the line that introduced it, then
+            # glued the following line onto that same paragraph.
+            flush_paragraph.call
+            add_item.call(item[:tag], indent, item[:body], item[:task], line)
           elsif (quote = stripped[/\A&gt;[ \t]?(.*)\z/, 1])
             # One blockquote for the whole run, not one per line: a border per
             # line is a stack of separate rules with a gap between each, which
@@ -249,6 +271,20 @@ module Rubot
         { level: match[1].length, text: text }
       end
 
+      # What a list line is, if it is one: the list it belongs to, its body and
+      # — for a task item — whether the box is ticked. One place for the three
+      # forms a list can take, so the caller can close the paragraph above it
+      # once rather than in each branch.
+      def list_item(line)
+        if (task = /\A[-*+] +\[([ xX])\][ \t]*(.*)\z/.match(line))
+          { tag: "ul", body: task[2], task: task[1].strip.empty? ? :open : :done }
+        elsif (item = line[/\A[-*+] +(.*)\z/, 1])
+          { tag: "ul", body: item, task: nil }
+        elsif (item = line[/\A\d+[.)] +(.*)\z/, 1])
+          { tag: "ol", body: item, task: nil }
+        end
+      end
+
       # --- fenced code ----------------------------------------------------
       #
       # Fences are cut out of the raw text, before escaping, so the body of a
@@ -328,6 +364,58 @@ module Rubot
         # to get from the words behind it.
         %(<button type="button" class="code-copy" data-copy title="#{COPY_LABEL}">) +
           %(#{icons}<span class="sr-only" aria-live="polite">#{COPY_LABEL}</span></button>)
+      end
+
+      # Two filled pairs of marks on the same 24-unit grid the other drawn
+      # icons use, scaled down into the gutter. Filled rather than stroked: a
+      # quotation mark drawn as an outline reads as a pair of commas.
+      QUOTE_ICON =
+        %(<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" ) +
+        %(aria-hidden="true" focusable="false">) +
+        %(<path d="M6 17h3l2-4V7H5v6h3zm8 0h3l2-4V7h-6v6h3z"/></svg>)
+
+      QUOTE_LABEL = "Kutip paragraf ini"
+      LIST_QUOTE_LABEL = "Kutip daftar ini"
+
+      # A block the reader can take back to the field as context. The mark
+      # carries the block's own Markdown in `data-quote` — the source, not the
+      # rendered text — so quoting a paragraph full of `code` and **emphasis**
+      # hands the model the same thing the page drew, rather than a flattened
+      # copy of it. Both the paragraph and the list use this: the tag and class
+      # are what the page styles differ on, and the mark sits between the
+      # opening tag and the content so a phone can float it into the top-right
+      # corner.
+      #
+      # The button is rendered here rather than injected by a script: a block
+      # streamed into the page is already quotable the moment it lands. It comes
+      # first rather than last because a mark after a full last line would be
+      # pushed onto a line of its own on a phone. On a pointer device the page
+      # moves it out into the right gutter, where its order in the DOM does not
+      # show. What it does is the composer's business (see app.js).
+      def quotable_block(tag, class_name, html, source, label: QUOTE_LABEL, kind: nil)
+        attrs = %( class="#{class_name}")
+        attrs << quotable_attribute(source.join("\n").strip)
+        # What the block is, said in the chip: a list states its size there,
+        # because "6 butir" is the part of a list's scope a preview cannot show.
+        attrs << %( data-quote-kind="#{CGI.escapeHTML(kind)}") if kind
+        %(<#{tag}#{attrs}>) +
+          %(<button type="button" class="para-quote" title="#{label}" ) +
+          %(aria-label="#{label}">#{QUOTE_ICON}</button>#{html}</#{tag}>)
+      end
+
+      # The source, as the attribute that carries it. The lines have already
+      # been HTML-escaped once for the renderer, so they are unescaped before
+      # being escaped for the attribute: escaping twice would hand the model
+      # `&amp;` where the answer said `&`.
+      def quotable_attribute(source)
+        %( data-quote="#{CGI.escapeHTML(CGI.unescapeHTML(source.to_s))}")
+      end
+
+      # The list is the same contract with a different block: `<ul>` may not
+      # hold the mark itself (a list's children are items), so the mark and the
+      # list share a wrapper that owns the `data-quote` and the gutter.
+      def quotable_paragraph(html, source)
+        quotable_block("p", "para", html, source)
       end
 
       # A small highlighter, not a parser: comments, strings, numbers and
@@ -757,7 +845,7 @@ module Rubot
         end
 
         def fmt(text)
-          Format.markdown(text)
+          Format.markdown(text, quotable: true)
         end
 
         def icon(state)

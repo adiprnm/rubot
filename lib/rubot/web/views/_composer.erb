@@ -11,6 +11,31 @@
       hx-target="#thread"
       hx-swap="beforeend"
       x-data="composer">
+  <%# A paragraph quoted from an answer rides above the field rather than in
+      it: it is carried into the turn as context, and the field stays the place
+      the reader types. One chip per paragraph, droppable before sending, so a
+      wrong quote costs a click instead of a rewrite. Stitching the quote into
+      the message is the composer's job (app.js): the form this element posts
+      carries the typed text, and the quote is added on the way out. -%>
+  <div class="composer-quotes" x-show="quotes.length" x-cloak>
+    <template x-for="quote in quotes" :key="quote.id">
+      <div class="composer-quote">
+        <div class="quote-body">
+          <span class="quote-kind" x-show="quote.kind" x-text="quote.kind"></span>
+          <span class="quote-text" x-text="quote.preview"></span>
+        </div>
+        <button type="button" class="quote-remove"
+                x-on:click="unquote(quote.id)"
+                aria-label="Hapus kutipan" title="Hapus kutipan"><svg viewBox="0 0 12 12"
+                width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.4"
+                stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M3.2 3.2l5.6 5.6M8.8 3.2 3.2 8.8"/></svg></button>
+      </div>
+    </template>
+  </div>
+  <%# The chips are a visual addition, so the count is spoken here instead —
+      outside the block that hides itself, because a live region inside a
+      `display: none` parent announces nothing. -%>
+  <span class="sr-only" aria-live="polite" x-text="quoteStatus"></span>
   <%# The field and its button are one line, so the button sits at the end of
       the text rather than under it: a row is what keeps the two in the same
       band as the field grows. -%>

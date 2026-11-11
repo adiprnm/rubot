@@ -71,6 +71,68 @@ module Rubot
         assert_includes html, %(<div class="code-block streaming">)
       end
 
+      # --- quoting a paragraph --------------------------------------------
+
+      # In the page every paragraph can be handed back to the field as context.
+      # The source Markdown rides in `data-quote` rather than the rendered text,
+      # so a paragraph full of emphasis and code arrives in the composer the way
+      # the model wrote it, and the mark sits beside the text so a paragraph
+      # streamed into the page is already quotable when it lands.
+      def test_a_quotable_paragraph_carries_its_markdown_and_a_mark
+        html = Format.markdown("Halo **dunia** & `kode`.", quotable: true)
+
+        assert_includes html, %(<p class="para" data-quote="Halo **dunia** &amp; `kode`.")
+        assert_includes html, %(<button type="button" class="para-quote")
+        assert_includes html, %(aria-label="Kutip paragraf ini")
+      end
+
+      def test_the_quote_mark_is_opt_in_so_plain_markdown_stays_plain
+        assert_equal "<p>Halo <strong>dunia</strong> &amp; <code>kode</code>.</p>",
+                     Format.markdown("Halo **dunia** & `kode`.")
+      end
+
+      def test_every_paragraph_gets_its_own_quote_mark
+        html = Format.markdown("satu\n\ndua", quotable: true)
+
+        assert_equal 2, html.scan('class="para-quote"').length
+        assert_includes html, %(data-quote="satu")
+        assert_includes html, %(data-quote="dua")
+      end
+
+      # A list is quotable too, and it takes a wrapper: `<ul>` may only hold
+      # items, so the mark cannot live inside it as a child. The wrapper owns
+      # the source and the gutter, and the list keeps its own margins.
+      def test_a_quotable_list_carries_its_own_markdown_and_label
+        html = Format.markdown("- satu\n- dua", quotable: true)
+
+        assert_includes html, %(<div class="para-list" data-quote="- satu\n- dua")
+        assert_includes html, %(data-quote-kind="Daftar · 2 butir")
+        assert_includes html, %(aria-label="Kutip daftar ini")
+        assert_includes html, "<ul><li data-quote=\"- satu\">satu</li>"
+      end
+
+      # Each item carries the line it was written as, so a long press on one
+      # item quotes that item alone. The line is unescaped before being escaped
+      # for the attribute: escaping it twice would send the model `&amp;`.
+      def test_every_list_item_carries_its_own_source_line
+        html = Format.markdown("- satu & dua\n- tiga", quotable: true)
+
+        assert_includes html, %(<li data-quote="- satu &amp; dua">satu &amp; dua</li>)
+        assert_includes html, %(<li data-quote="- tiga">tiga</li>)
+      end
+
+      # The source is kept line for line, so a numbered list with a nested one
+      # arrives in the composer as the same structure rather than as one run.
+      def test_a_quoted_list_keeps_its_numbering_and_nesting
+        html = Format.markdown("1. satu\n2. dua\n   - anak", quotable: true)
+
+        assert_includes html, %(data-quote="1. satu\n2. dua\n   - anak")
+      end
+
+      def test_a_list_is_not_wrapped_unless_the_page_asks
+        assert_equal "<ul><li>satu</li><li>dua</li></ul>", Format.markdown("- satu\n- dua")
+      end
+
       def test_markdown_inline_code_and_bold
         assert_equal "<p><code>x</code> <strong>y</strong></p>", Format.markdown("`x` **y**")
       end
@@ -102,6 +164,16 @@ module Rubot
         assert_includes html, "</ul>", "the list must be closed before the paragraph"
         assert_includes html, "catatan biasa"
         refute_includes html, "<li>catatan biasa"
+      end
+
+      # The line that introduces a list is a paragraph of its own, and it comes
+      # before the list — not buffered until the block after it, which used to
+      # put the list above its own introduction and glue the following line
+      # onto it.
+      def test_the_line_above_a_list_stays_above_it
+        html = Format.markdown("Ringkasnya:\n- satu\ncatatan biasa")
+
+        assert_equal "<p>Ringkasnya:</p>\n<ul><li>satu</li></ul>\n<p>catatan biasa</p>", html
       end
 
       # --- tables ---------------------------------------------------------
@@ -1515,6 +1587,22 @@ module Rubot
                      "the field opens the row"
         assert_includes row[/<div class="composer-actions">.*/m], 'class="btn primary"',
                         "the button rides along at the end of the same row"
+      end
+
+      # A quoted paragraph is carried above the field rather than written into
+      # it, so the composer needs a shelf to put the chip on. The spoken count
+      # lives outside that shelf: a live region inside a block that hides itself
+      # with `x-show` announces nothing.
+      def test_the_composer_carries_the_shelf_a_quoted_paragraph_lands_on
+        html = View.render("_composer", session_id: "web_rubot", token_query: "")
+        shelf = html[%r{<div class="composer-quotes".*?</div>}m]
+
+        refute_nil shelf, "quoted paragraphs need a place above the field"
+        assert_includes shelf, 'x-show="quotes.length"'
+        assert_includes shelf, 'x-for="quote in quotes"'
+        assert_includes shelf, 'class="quote-kind"', "a list says its size on the chip"
+        assert_includes html, 'x-text="quoteStatus"'
+        refute_includes shelf, "quoteStatus", "the count is spoken outside the hiding shelf"
       end
 
       # A phone has no Enter that sends: during a turn the only key the

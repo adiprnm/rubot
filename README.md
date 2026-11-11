@@ -1006,6 +1006,23 @@ rather than injected, so a block that streamed in mid-answer is already
 copyable, and it stays hidden while the fence is still open because the text is
 not finished yet.
 
+A paragraph in an answer can be handed back as context. A quiet quote mark sits
+in the page's right gutter and comes forward under the pointer; on a phone, where
+the gutter is too narrow to hold it, it floats into the paragraph's top-right
+corner and the prose wraps around it. Pressing it
+puts that paragraph on a shelf above the composer as a chip, without touching
+what has already been typed. The chip shows the paragraph as it was read, but
+the quote it carries is the paragraph's own Markdown, so `code` and
+**emphasis** survive the trip, and sending stitches the quotes in front of the
+message as blockquotes — the form the agent already reads as a quotation. A
+list is quotable the same way: the whole list, so its numbering and nesting
+survive as the Markdown they were written in, and its chip says how much it is
+carrying ("Daftar · 6 butir"). On a phone, a long press on a single item quotes
+just that item ("Butir 3") — the way to pull one step out of a long list
+without a second row of marks over the text. A
+chip can be dropped before sending, a paragraph quoted twice is still one piece
+of context, and a refused turn leaves the quotes where they are for the retry.
+
 Personas are the left column: one round avatar per specialist, chosen there and
 created with the `+` beneath them. Each one owns a directory of its own, so its
 `SOUL.md` and its `MEMORY.md` are not shared with the next. Skills are the
