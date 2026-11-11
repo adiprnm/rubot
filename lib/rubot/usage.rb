@@ -247,14 +247,19 @@ module Rubot
       lines << "   Tokens:   #{tokens(report[:prompt_tokens])} in / #{tokens(report[:completion_tokens])} out"
       lines << "   Cache:    #{tokens(report[:cached_tokens])} cached total#{hit_rate(report)}"
       cause = cause_label(report)
+      lines << "   Re-read:  #{tokens(report[:last_re_read_tokens])} token dibayar penuh (turn terakhir)"
       lines << "   Sebab:    #{cause}" if cause
 
       cost = report[:cost]
       if cost
         source = report[:price_source] ? " [#{report[:price_source]}]" : ""
-        lines << "   Cost:     $#{money(cost['total'])} " \
+        bound = cost["cache_price_unknown"] ? " (batas atas)" : ""
+        lines << "   Cost:     $#{money(cost['total'])}#{bound} " \
                  "(in $#{money(cost['input'])}, cache read $#{money(cost['cached_input'])}, " \
                  "cache write $#{money(cost['cache_creation'])}, out $#{money(cost['output'])})#{source}"
+        if cost["saved"].to_f.positive?
+          lines << "   Hemat:    $#{money(cost['saved'])} dari #{tokens(report[:cached_tokens])} token cache"
+        end
       else
         lines << "   Cost:     unknown — set `pricing` on the model preset in config.yml"
       end

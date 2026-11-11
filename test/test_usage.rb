@@ -70,6 +70,42 @@ class TestUsage < Minitest::Test
     assert_in_delta 2.8, cost["total"]
   end
 
+  # A hit rate is a share; a bill is in dollars. These two lines are the
+  # translation: what the last request paid in full, and what the cache kept
+  # from being spent.
+  def test_render_names_the_re_read_tokens_and_the_saving
+    report = {
+      model: "gpt-4o-mini", provider: "openai", context_used: 1_000, context_window: 128_000,
+      messages: 2, requests: 2, prompt_tokens: 10_000, completion_tokens: 100,
+      cached_tokens: 8_000, last_re_read_tokens: 2_000,
+      cost: { "total" => 0.01, "input" => 0.000_3, "cached_input" => 0.000_1,
+              "cache_creation" => 0.0, "output" => 0.000_6, "saved" => 0.0079 }
+    }
+
+    text = Rubot::UsageReport.render(report)
+
+    assert_includes text, "Re-read:"
+    assert_includes text, "2,000"
+    assert_includes text, "Hemat:"
+    assert_includes text, "$0.0079"
+  end
+
+  # A cost built on a rate the catalog does not have must not look exact.
+  def test_render_marks_a_cost_that_is_only_an_upper_bound
+    report = {
+      model: "m", provider: "google", context_used: 1_000, context_window: 1_000_000,
+      messages: 1, requests: 1, prompt_tokens: 1_000, completion_tokens: 10,
+      cached_tokens: 0, last_re_read_tokens: 1_000,
+      cost: { "total" => 0.4, "input" => 0.4, "cached_input" => 0.0,
+              "cache_creation" => 0.0, "output" => 0.0, "saved" => 0.0,
+              "cache_price_unknown" => true }
+    }
+
+    text = Rubot::UsageReport.render(report)
+
+    assert_includes text, "batas atas"
+  end
+
   def test_cost_is_nil_without_rates
     assert_nil Rubot::Usage.cost(Rubot::Usage.zero, nil)
   end
@@ -233,6 +269,7 @@ class TestUsage < Minitest::Test
       assert_in_delta 8.2, report[:context_percent], 0.01
       assert_equal 10_000, report[:prompt_tokens]
       assert_equal 6_000, report[:cached_tokens]
+      assert_equal 4_000, report[:last_re_read_tokens], "what that request paid in full"
       assert_in_delta 0.6, report[:cache_hit_rate]
       assert report[:cost]
       assert_in_delta 0.00135, report[:cost]["total"], 0.0000001

@@ -25,8 +25,18 @@
   <dt>token</dt>
   <dd><%= h(tokens_in) %> masuk · <%= h(tokens_out) %> keluar<% if reasoning.to_s.empty? == false %> · <%= h(reasoning) %> penalaran<% end %></dd>
 
+  <% unless re_read.to_s.empty? -%>
+    <dt>dibaca ulang</dt>
+    <dd title="Bagian dari permintaan terakhir yang dibayar dengan harga penuh: itulah yang dimakan pergeseran prefix."><%= h(re_read) %> token</dd>
+  <% end -%>
+
   <dt>cache</dt>
   <dd><%= h(cache) %></dd>
+
+  <% unless saved.to_s.empty? -%>
+    <dt>dihemat</dt>
+    <dd title="Selisih harga input penuh dengan harga baca cache untuk token yang terbaca dari cache. Bukan bagian dari biaya — ini uang yang tidak keluar.">$<%= h(saved) %></dd>
+  <% end -%>
 
   <% unless cache_history.to_s.empty? -%>
     <dt>riwayat cache</dt>

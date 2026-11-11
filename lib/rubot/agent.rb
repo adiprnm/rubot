@@ -988,6 +988,10 @@ module Rubot
         # latest request hit and there is nothing to explain.
         cache_cause: CacheDiagnosis.cause(@session.cache_records),
         last_prompt_tokens: last.prompt_tokens,
+        # The part of the last request that was paid at the full input rate:
+        # what the prefix churn actually cost. It is the figure a miss is felt
+        # in, and the one to watch when testing a change.
+        last_re_read_tokens: [ last.prompt_tokens - last.cached_tokens - last.cache_creation_tokens, 0 ].max,
         total_tokens: usage.total_tokens + live_prompt + live_output,
         # Priced per request when it was recorded, so switching model mid-way
         # does not re-price earlier turns. Legacy session files have no stored

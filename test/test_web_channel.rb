@@ -679,7 +679,7 @@ module Rubot
                     usage_facts: { model: "m · openai", cost: "—", breakdown: "",
                                    requests: "0", messages: "0", tokens_in: "0",
                                    tokens_out: "0", reasoning: "", cache: "—",
-                                   cache_history: "", cache_cause: "", ctx: "—" })
+                                   cache_history: "", cache_cause: "", re_read: "0", saved: "", ctx: "—" })
       end
 
       # Enough of a WEBrick::HTTPResponse for the channel's rendering paths: it
@@ -1737,7 +1737,7 @@ module Rubot
                            usage_facts: { model: "m", cost: "—", breakdown: "", requests: "0",
                                           messages: "0", tokens_in: "0", tokens_out: "0",
                                           reasoning: "", cache: "—",
-                                          cache_history: "", cache_cause: "", ctx: "—" })
+                                          cache_history: "", cache_cause: "", re_read: "0", saved: "", ctx: "—" })
 
         assert_includes html, 'id="composer-notice"', "the composer needs a notice slot"
         assert_match(/id="composer-notice"[^>]*hidden/, html,
@@ -2429,6 +2429,44 @@ module Rubot
         assert_includes html, "sebab miss"
         assert_includes html, "jendela history terpotong",
                         "the label is written out, not the symbol"
+      end
+
+      # The panel is where the money is explained: what the last request paid
+      # in full, and what the cache kept from being spent.
+      def test_the_panel_says_what_was_re_read_and_what_the_cache_saved
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        facts = channel.send(:usage_facts, {
+          model: "m", provider: "openai", messages: 4, requests: 4,
+          prompt_tokens: 100_000, completion_tokens: 400, cached_tokens: 87_600,
+          cache_hit_rate: 0.876, cache_hit_rate_session: 0.9,
+          last_re_read_tokens: 12_400,
+          context_used: 900, context_window: 128_000, context_percent: 0.7,
+          cost: { "total" => 0.0412, "input" => 0.0017, "cached_input" => 0.0004,
+                  "cache_creation" => 0.0, "output" => 0.000_2, "saved" => 0.0153 }
+        })
+        html = View.render("_usage_facts", **facts)
+
+        assert_includes html, "dibaca ulang"
+        assert_includes html, "12,400"
+        assert_includes html, "dihemat"
+        assert_includes html, "$0.0153"
+      end
+
+      # A rate the catalog does not have is priced at the input rate, which is
+      # an upper bound. The panel says so rather than rounding the doubt away.
+      def test_the_panel_marks_a_cost_that_is_only_an_upper_bound
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        facts = channel.send(:usage_facts, {
+          model: "m", provider: "google", messages: 1, requests: 1,
+          prompt_tokens: 1_000, completion_tokens: 10, cached_tokens: 0,
+          context_used: 900, context_window: 128_000, context_percent: 0.7,
+          cost: { "total" => 0.4, "input" => 0.4, "cached_input" => 0.0,
+                  "cache_creation" => 0.0, "output" => 0.0, "cache_price_unknown" => true }
+        })
+        html = View.render("_usage_facts", **facts)
+
+        assert_includes html, "≤"
+        refute_includes html, "dihemat"
       end
 
       def test_the_panel_omits_the_cause_row_when_the_request_hit
@@ -4471,7 +4509,7 @@ module Rubot
                            usage_facts: { model: "m", cost: "—", breakdown: "", requests: "0",
                                           messages: "0", tokens_in: "0", tokens_out: "0",
                                           reasoning: "", cache: "—",
-                                          cache_history: "", cache_cause: "", ctx: "—" })
+                                          cache_history: "", cache_cause: "", re_read: "0", saved: "", ctx: "—" })
 
         assert_equal 1, html.scan(%(id="lightbox")).size
         assert_match(/id="lightbox"[^>]*hidden/, html)

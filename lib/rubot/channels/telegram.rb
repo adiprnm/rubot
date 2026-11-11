@@ -271,6 +271,7 @@ module Rubot
                  "#{UsageReport.tokens(report[:completion_tokens])} out"
         lines << "Cache: #{UsageReport.tokens(report[:cached_tokens])} cached total " \
                  "(hit rate #{hit} on request terakhir)"
+        lines << "Re-read: #{UsageReport.tokens(report[:last_re_read_tokens])} token dibayar penuh"
         if (cause = UsageReport.cause_label(report))
           lines << "Sebab miss: #{cause}"
         end
@@ -278,11 +279,16 @@ module Rubot
         cost = report[:cost]
         if cost
           source = report[:price_source] ? " [#{report[:price_source]}]" : ""
-          lines << "Estimasi biaya: `$#{UsageReport.money(cost['total'])}` " \
+          bound = cost["cache_price_unknown"] ? " (batas atas)" : ""
+          lines << "Estimasi biaya: `$#{UsageReport.money(cost['total'])}`#{bound} " \
                    "(input $#{UsageReport.money(cost['input'])}, " \
                    "cache read $#{UsageReport.money(cost['cached_input'])}, " \
                    "cache write $#{UsageReport.money(cost['cache_creation'])}, " \
                    "output $#{UsageReport.money(cost['output'])})#{source}"
+          if cost["saved"].to_f.positive?
+            lines << "Dihemat: `$#{UsageReport.money(cost['saved'])}` dari " \
+                     "#{UsageReport.tokens(report[:cached_tokens])} token cache"
+          end
         else
           lines << "Estimasi biaya: belum tersedia — set `pricing` di preset config.yml"
         end

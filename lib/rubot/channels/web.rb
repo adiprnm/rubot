@@ -1801,13 +1801,15 @@ module Rubot
         cost = report[:cost]
         {
           model: [ report[:model], report[:provider] ].compact.map(&:to_s).reject(&:empty?).join(" · "),
-          cost: cost ? format("$%s", Rubot::UsageReport.money(cost["total"])) : "belum diketahui",
+          cost: cost_fact(report),
           breakdown: cost_breakdown(cost),
+          saved: cost.is_a?(Hash) && cost["saved"].to_f.positive? ? Rubot::UsageReport.money(cost["saved"]) : "",
           requests: report[:requests].to_i.to_s,
           messages: report[:messages].to_i.to_s,
           tokens_in: Rubot::UsageReport.tokens(report[:prompt_tokens]),
           tokens_out: Rubot::UsageReport.tokens(report[:completion_tokens]),
           reasoning: report[:reasoning_tokens].to_i.zero? ? "" : Rubot::UsageReport.tokens(report[:reasoning_tokens]),
+          re_read: Rubot::UsageReport.tokens(report[:last_re_read_tokens]),
           cache: cache_fact(report),
           cache_history: cache_history_fact(report),
           cache_cause: Rubot::UsageReport.cause_label(report).to_s,
@@ -1831,6 +1833,17 @@ module Rubot
       # idea why has the same question as one who sees a big cache figure. A
       # report with no breakdown at all gets no line: four zeros under a total
       # is noise pretending to be an explanation.
+      # The total, marked when it is an upper bound: a model the catalog has no
+      # cache-read rate for is priced at the input rate, and a figure that
+      # cannot be exact must not look exact.
+      def cost_fact(report)
+        cost = report[:cost]
+        return "belum diketahui" unless cost.is_a?(Hash)
+
+        total = format("$%s", Rubot::UsageReport.money(cost["total"]))
+        cost["cache_price_unknown"] ? "#{total} ≤" : total
+      end
+
       def cost_breakdown(cost)
         return "" unless cost.is_a?(Hash)
         return "" unless %w[input cached_input cache_creation output].any? { |key| cost[key].to_f.positive? }
