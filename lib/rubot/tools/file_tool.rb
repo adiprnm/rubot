@@ -8,6 +8,10 @@ module Rubot
   module Tools
     class FileTool < Tool
       MAX_READ = 20_000  # characters returned by one read
+      # One call may read several files, but the answer still has to fit in a
+      # request: past this much, the remaining paths are named and left for a
+      # call of their own rather than silently dropped.
+      MAX_BATCH_READ = 60_000
       MAX_READ_LINES = 2_000 # lines returned when offset/limit are used
       MAX_LIST = 100     # entries
       # Compare at most this much of an existing file before deciding whether
@@ -34,7 +38,9 @@ module Rubot
           Operations: read, edit, write, append, delete, list, info
           - read:  Read a file. Pass `offset` (1-based line) and `limit` (lines)
                    to read part of a long file; the reply says which lines were
-                   returned so you can continue from there.
+                   returned so you can continue from there. Pass `paths` (an
+                   array) to read several files in one call: one round trip
+                   instead of one per file, each answered under its own header.
           - edit:  Replace `old_string` with `new_string`. `old_string` must
                    appear exactly once unless `replace_all` is true. This is the
                    preferred way to change an existing file — it does not
@@ -65,7 +71,13 @@ module Rubot
             },
             "path" => {
               "type" => "string",
-              "description" => "File or directory path"
+              "description" => "File or directory path. Optional when `paths` is given."
+            },
+            "paths" => {
+              "type" => "array",
+              "items" => { "type" => "string" },
+              "description" => "Several paths to read in one call (read operation). " \
+                               "Cheaper than one call per file: each is answered under its own header."
             },
             "content" => {
               "type" => "string",
@@ -92,7 +104,7 @@ module Rubot
               "description" => "How many lines to read (read operation, optional)"
             }
           },
-          "required" => [ "operation", "path" ]
+          "required" => [ "operation" ]
         }
       end
 
@@ -101,12 +113,13 @@ module Rubot
         # operation out for the most common case, and rejecting it burned a
         # full provider round every time.
         operation = arguments["operation"].to_s
-        operation = "read" if operation.empty? && !arguments["path"].to_s.empty?
+        paths = Array(arguments["paths"]).map { |entry| entry.to_s }.reject(&:empty?)
         path = arguments["path"]
+        operation = "read" if operation.empty? && !(path.to_s.empty? && paths.empty?)
         content = arguments["content"]
 
         case operation
-        when "read"    then read_file(path, offset: arguments["offset"], limit: arguments["limit"])
+        when "read"    then read_files(paths, path, offset: arguments["offset"], limit: arguments["limit"])
         when "edit"    then edit_file(path, arguments["old_string"], arguments["new_string"],
                                        replace_all: arguments["replace_all"])
         when "write"   then write_file(path, content)
@@ -217,6 +230,33 @@ module Rubot
         end
         warn "[file:safety] restrict=#{guard.restrict_to_workspace} #{operation}=#{path}" if Rubot.debug?
         guard.check_path(path, operation: operation)
+      end
+
+      # One read for several files. They are answered under their own headers
+      # because that is how the model tells them apart, and a path that could
+      # not be read is reported in place: one bad path must not hide the files
+      # that did load.
+      def read_files(paths, path, offset: nil, limit: nil)
+        return read_file(path, offset: offset, limit: limit) if paths.empty?
+
+        budget = MAX_BATCH_READ
+        out = +""
+        paths.each do |candidate|
+          body = begin
+            read_file(candidate, offset: offset, limit: limit)
+          rescue StandardError => e
+            "ERROR: #{e.class}: #{e.message}"
+          end
+
+          if out.length + body.length > budget
+            out << "\n=== #{candidate} ===\n(read skipped: #{budget} characters already " \
+                   "returned; read this one in a call of its own)\n"
+            next
+          end
+
+          out << "\n=== #{candidate} ===\n" << body << "\n"
+        end
+        out.sub(/\A\n/, "")
       end
 
       def read_file(path, offset: nil, limit: nil)

@@ -748,6 +748,47 @@ class TestTools < Minitest::Test
     assert_includes result, "offset/limit"
   end
 
+  # One round trip can cover several files. A round is what a turn costs, so
+  # reading four files one call at a time is four provider requests for one
+  # step of work.
+  def test_file_read_takes_several_paths_in_one_call
+    first = File.join(@tmpdir, "first.rb")
+    second = File.join(@tmpdir, "second.rb")
+    File.write(first, "one\n")
+    File.write(second, "two\n")
+
+    result = @registry.execute("file_ops", { "operation" => "read", "paths" => [ first, second ] })
+
+    assert_includes result, "=== #{first} ==="
+    assert_includes result, "=== #{second} ==="
+    assert_includes result, "one"
+    assert_includes result, "two"
+  end
+
+  def test_a_batch_read_reports_a_missing_path_without_losing_the_rest
+    present = File.join(@tmpdir, "present.rb")
+    File.write(present, "here\n")
+
+    result = @registry.execute("file_ops", {
+      "operation" => "read",
+      "paths" => [ File.join(@tmpdir, "gone.rb"), present ]
+    })
+
+    assert_includes result, "File not found"
+    assert_includes result, "here", "the file that loaded must still be there"
+  end
+
+  # `paths` alone is a read: the operation is the most common one, and making
+  # the model repeat it costs the same as forgetting it.
+  def test_a_batch_read_does_not_need_the_operation_spelled_out
+    present = File.join(@tmpdir, "solo.rb")
+    File.write(present, "alone\n")
+
+    result = @registry.execute("file_ops", { "paths" => [ present ] })
+
+    assert_includes result, "alone"
+  end
+
   # --- Precise edits ---------------------------------------------------
 
   def test_file_edit_replaces_a_unique_block
