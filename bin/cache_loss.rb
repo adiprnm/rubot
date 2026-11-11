@@ -29,6 +29,7 @@
 # change, tool catalog change, a trim that moved the window) are counted
 # separately: they are the price of doing the work, not a defect.
 require "sqlite3"
+require "time"
 
 ARGV_CLEAN = ARGV.dup
 session_flag = ARGV_CLEAN.index("--session")
@@ -127,6 +128,56 @@ puts
 
 EXPLAINED = %w[cold model compaction epoch tools window].freeze
 suspicious = events.reject { |e| EXPLAINED.include?(e[:reason]) }
+
+# --- Jeda antar-request ---------------------------------------------------
+#
+# A cache entry expires; how long it lives is the provider's rule, but the gap
+# between two requests is ours. A hit rate that collapses past five minutes says
+# the work is arriving in bursts with long pauses between them, which is a
+# cadence question -- batch the pauses, or pay the re-read.
+#
+# Only consecutive requests in the same session count: the gap between two
+# sessions is not a gap in one prefix.
+def gap_bucket(seconds)
+  return "<30s" if seconds < 30
+  return "30-60s" if seconds < 60
+  return "1-5m" if seconds < 300
+  return "5-60m" if seconds < 3600
+
+  ">1h"
+end
+
+gap_rows = []
+by_session.each_value do |session_rows|
+  session_rows.each_cons(2) do |previous, row|
+    next unless previous["auxiliary"] == row["auxiliary"]
+
+    before = Time.parse(previous["created_at"].to_s)
+    after = Time.parse(row["created_at"].to_s)
+    gap = (after - before).to_f
+    prompt = row["prompt_tokens"].to_i
+    next unless prompt.positive?
+
+    gap_rows << { gap: gap, bucket: gap_bucket(gap), hit: row["cached_tokens"].to_i.to_f / prompt }
+  end
+end
+
+if gap_rows.any?
+  puts "== jeda antar-request dan hit berikutnya =="
+  puts format("%-8s %5s %10s %10s", "jeda", "n", "hit rata2", "hit median")
+  %w[<30s 30-60s 1-5m 5-60m >1h].each do |bucket|
+    list = gap_rows.select { |g| g[:bucket] == bucket }
+    next if list.empty?
+
+    hits = list.map { |g| g[:hit] }.sort
+    mean = hits.sum / hits.size
+    puts format("%-8s %5d %10s %10s", bucket, list.size, pct(mean), pct(hits[hits.size / 2]))
+  end
+  gaps = gap_rows.map { |g| g[:gap] }.sort
+  puts format("median jeda %.0f detik, p90 %.0f detik, terpanjang %.0f menit",
+              gaps[gaps.size / 2], gaps[(gaps.size * 0.9).floor], gaps.last / 60)
+  puts
+end
 puts "== miss yang bisa dijelaskan: #{events.count { |e| EXPLAINED.include?(e[:reason]) }} event, " \
      "#{n(events.select { |e| EXPLAINED.include?(e[:reason]) }.sum { |e| e[:reread] })} token =="
 puts "== miss yang perlu dilihat: #{suspicious.size} event, #{n(suspicious.sum { |e| e[:reread] })} token =="
