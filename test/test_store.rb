@@ -624,10 +624,98 @@ class TestStore < Minitest::Test
                        .get_first_value("SELECT LENGTH(tool_text) FROM messages WHERE role = 'tool'")
   end
 
+  # --- request cache diagnosis ---------------------------------------
+
+  def build_cache_record(overrides = {})
+    {
+      "at" => "2026-11-11T04:00:00Z",
+      "provider" => "anthropic",
+      "model" => "claude-sonnet-5",
+      "prompt_tokens" => 12_000,
+      "cached_tokens" => 9_000,
+      "cache_creation_tokens" => 2_000,
+      "epoch" => "epoch-digest",
+      "tools" => "tools-digest",
+      "blocks" => 41,
+      "turns" => 33,
+      "auxiliary" => false
+    }.merge(overrides)
+  end
+
+  def test_a_request_record_round_trips_with_its_shape
+    @store.append_cache_record("web_rubot", build_cache_record)
+
+    record = @store.cache_records("web_rubot").first
+
+    assert_equal "anthropic", record["provider"]
+    assert_equal "claude-sonnet-5", record["model"]
+    assert_equal 12_000, record["prompt_tokens"]
+    assert_equal 9_000, record["cached_tokens"]
+    assert_equal 2_000, record["cache_creation_tokens"]
+    assert_equal "epoch-digest", record["epoch"],
+                 "the prompt digest is what says whether the prefix moved"
+    assert_equal "tools-digest", record["tools"]
+    assert_equal 41, record["blocks"]
+    assert_equal 33, record["turns"]
+    assert_equal false, record["auxiliary"]
+    assert_equal "2026-11-11T04:00:00Z", record["at"]
+  end
+
+  def test_records_come_back_oldest_first
+    @store.append_cache_record("s1", build_cache_record("cached_tokens" => 0))
+    @store.append_cache_record("s1", build_cache_record("cached_tokens" => 5))
+    @store.append_cache_record("s1", build_cache_record("cached_tokens" => 9))
+
+    assert_equal [ 0, 5, 9 ], @store.cache_records("s1").map { |r| r["cached_tokens"] },
+                 "a reader walks the records in the order the requests were made"
+  end
+
+  def test_records_are_kept_per_session
+    @store.append_cache_record("s1", build_cache_record("model" => "a"))
+    @store.append_cache_record("s2", build_cache_record("model" => "b"))
+
+    assert_equal [ "a" ], @store.cache_records("s1").map { |r| r["model"] }
+    assert_equal [ "b" ], @store.cache_records("s2").map { |r| r["model"] }
+  end
+
+  def test_the_record_window_drops_the_oldest_instead_of_growing
+    kept = Rubot::Store::CACHE_RECORDS_KEPT
+    (kept + 5).times { |i| @store.append_cache_record("s1", build_cache_record("turns" => i)) }
+
+    records = @store.cache_records("s1", limit: kept + 10)
+
+    assert_equal kept, records.size
+    assert_equal 5, records.first["turns"], "the oldest five are the ones that went"
+    assert_equal kept + 4, records.last["turns"]
+  end
+
+  def test_reading_a_limit_returns_the_newest_records
+    @store.append_cache_record("s1", build_cache_record("turns" => 1))
+    @store.append_cache_record("s1", build_cache_record("turns" => 2))
+    @store.append_cache_record("s1", build_cache_record("turns" => 3))
+
+    assert_equal [ 2, 3 ], @store.cache_records("s1", limit: 2).map { |r| r["turns"] }
+  end
+
+  def test_deleting_a_session_takes_its_request_records
+    @store.append_messages("s1", [ build_message("user", "halo") ])
+    @store.append_cache_record("s1", build_cache_record)
+
+    @store.delete_session("s1")
+
+    assert_empty @store.cache_records("s1"), "a deleted conversation leaves no diagnosis behind"
+  end
+
+  def test_an_auxiliary_record_is_stored_as_such
+    @store.append_cache_record("s1", build_cache_record("auxiliary" => true))
+
+    assert_equal true, @store.cache_records("s1").first["auxiliary"],
+                 "a cron or naming request is counted, but it is not the conversation's turn"
+  end
+
   private
 
-  def write_session(id, messages, title: nil)
-    data = {
+  def write_session(id, messages, title: nil)    data = {
       "id" => id,
       "created_at" => "2026-11-10T03:00:00Z",
       "updated_at" => "2026-11-10T03:05:00Z",

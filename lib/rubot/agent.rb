@@ -390,7 +390,7 @@ module Rubot
           break
         end
 
-        record_usage(result)
+        record_usage(result, messages: messages)
         # The moment this request's tokens land, cost, cache and context have
         # moved. Publishing here, not at the end of the turn, is what lets a
         # channel show live figures while the turn is still running.
@@ -1938,19 +1938,46 @@ end
     # `auxiliary` is for requests that are not the user-facing turn (cron,
     # memory extraction, summarization): they count toward the totals without
     # replacing the context anchor.
-    def record_usage(result, auxiliary: false)
+    def record_usage(result, auxiliary: false, messages: nil)
       raw = result.is_a?(Hash) ? result["usage"] : nil
       raw ||= @provider.last_usage if @provider.respond_to?(:last_usage)
       return if raw.nil?
 
       rates = current_rates(network: false)
+      shape = cache_request_shape(messages, auxiliary: auxiliary)
       if auxiliary
-        @session.record_auxiliary_usage(raw, provider: @provider.name, rates: rates)
+        @session.record_auxiliary_usage(raw, provider: @provider.name, rates: rates, shape: shape)
       else
-        @session.record_usage(raw, provider: @provider.name, rates: rates)
+        @session.record_usage(raw, provider: @provider.name, rates: rates, shape: shape)
       end
     rescue StandardError => e
       warn "[usage] Failed to record usage: #{e.class}: #{e.message}" if @config.debug?
+    end
+
+    # The request as the prompt cache sees it: a digest of the pinned system
+    # prompt, a digest of the tool catalog, how many blocks the provider will
+    # hash, and how many turns the live window carried.
+    #
+    # Digests rather than copies, because the question they answer is only ever
+    # "is this the same as last time?". A hit rate says a request missed; the
+    # first record whose digest differs says where the prefix moved — the system
+    # prompt, the tools, or the history in front of the cache breakpoint.
+    #
+    # `blocks` counts what a provider hashes as separate pieces: the system
+    # prompt, each tool definition, each message. Anthropic's lookback window is
+    # measured in blocks (twenty of them), so this is the number that tells a
+    # growing conversation whether it has walked past the last cache write.
+    def cache_request_shape(messages, auxiliary: false)
+      tools = tool_definitions || []
+      {
+        "provider" => @provider.name.to_s,
+        "model" => active_model_name.to_s,
+        "epoch" => digest_of(build_system_prompt),
+        "tools" => digest_of(tools.map { |tool| [ tool.name, tool.description, tool.parameters ] }.to_json),
+        "blocks" => (messages ? messages.size : @session.messages.size) + tools.size + 1,
+        "turns" => @session.messages.size,
+        "auxiliary" => auxiliary
+      }
     end
 
     # Publish live figures to a caller that wants them mid-turn. Failing to
@@ -2133,7 +2160,7 @@ end
         result = @provider.chat(local_messages, tools: tool_definitions)
         # A cron run is a separate, local transcript: count its tokens and cost,
         # but never let it become the anchor for /context's context size.
-        record_usage(result, auxiliary: true)
+        record_usage(result, auxiliary: true, messages: local_messages)
 
         if result.is_a?(Hash)
           response = result["content"] || ""

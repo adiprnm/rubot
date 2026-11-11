@@ -44,13 +44,18 @@ module Rubot
     DEFAULT_MAX_MESSAGES = 400
 
     attr_reader :id, :messages, :workspace, :usage, :last_usage, :cost
-    attr_reader :task, :cwd, :cache_history
+    attr_reader :task, :cwd, :cache_history, :cache_records
     attr_accessor :summary, :forced_skill, :model_override, :model_preset, :thinking_level, :title
 
     # How many recent requests keep their cache share. Enough to see a pattern
     # (a run of zeros is a busted cache, a stray zero is a compaction), short
     # enough that the session file does not grow for it.
     CACHE_HISTORY_LIMIT = 12
+
+    # How many request records the session keeps in hand. The archive keeps
+    # more (Store::CACHE_RECORDS_KEPT) and prunes the oldest; this is the window
+    # a reader asks about, and it is what a file-only session can persist.
+    CACHE_RECORDS_LIMIT = 50
 
     # A token-budget cut lands here, not at the budget itself: a cut that
 
@@ -125,6 +130,9 @@ module Rubot
       @system_prompt_epoch = nil
       # Cache share of the last few requests, oldest first.
       @cache_history = []
+      # The request records behind those numbers: what each request was made
+      # of, and what the provider said the cache did with it.
+      @cache_records = []
       @memory_backlog = []
       load!
     end
@@ -134,7 +142,7 @@ module Rubot
     # are the prices in effect for the model that served the request, so the
     # cost is frozen at request time instead of being re-priced later with
     # whatever model the session happens to end on (Pi prices per message).
-    def record_usage(raw, provider: nil, rates: nil)
+    def record_usage(raw, provider: nil, rates: nil, shape: nil)
       delta = Usage.from(raw, provider: provider)
       return nil if delta.nil?
 
@@ -143,6 +151,7 @@ module Rubot
       @usage = @usage.merge(delta)
       push_cache_history(delta)
       add_cost(delta, rates)
+      record_cache_record(delta, shape) if shape
       save!
       delta
     end
@@ -161,14 +170,36 @@ module Rubot
     # (memory extraction, summarization, cron). It adds to the totals without
     # replacing `last_usage` or the context anchor, which is what `/context`
     # uses to estimate how full the next request's context will be.
-    def record_auxiliary_usage(raw, provider: nil, rates: nil)
+    def record_auxiliary_usage(raw, provider: nil, rates: nil, shape: nil)
       delta = Usage.from(raw, provider: provider)
       return nil if delta.nil?
 
       @usage = @usage.merge(delta)
       add_cost(delta, rates)
+      record_cache_record(delta, shape) if shape
       save!
       delta
+    end
+
+    # Keep what the request was made of next to what the provider said the
+    # cache did with it. `cache_history` keeps the hit rate as a bare number,
+    # which says a request missed but not why; the shape (prompt digest, tool
+    # digest, block count) is what turns that number into a diagnosis.
+    #
+    # The record goes to the archive immediately when there is one — a request
+    # that is later followed by a crash should still be readable — and to the
+    # JSON file with the rest of the state otherwise.
+    def record_cache_record(delta, shape)
+      record = {
+        "at" => Time.now.utc.iso8601,
+        "prompt_tokens" => delta.prompt_tokens,
+        "cached_tokens" => delta.cached_tokens,
+        "cache_creation_tokens" => delta.cache_creation_tokens
+      }.merge(shape.to_h { |key, value| [ key.to_s, value ] })
+      @cache_records << record
+      @cache_records.shift while @cache_records.size > CACHE_RECORDS_LIMIT
+      @archive&.record_cache(@id, record)
+      record
     end
 
     # User messages queued for the next memory extraction. Kept on the session
@@ -870,6 +901,7 @@ module Rubot
       data["cost_partial"] = true if @cost_partial
       data["last_usage_watermark"] = @last_usage_watermark if @last_usage_watermark
       data["cache_history"] = @cache_history if @cache_history && !@cache_history.empty?
+      data["cache_records"] = @cache_records if @cache_records && !@cache_records.empty?
       data["system_prompt"] = @system_prompt if @system_prompt
       data["system_prompt_epoch"] = @system_prompt_epoch if @system_prompt_epoch
       data["memory_backlog"] = @memory_backlog if @memory_backlog && !@memory_backlog.empty?
@@ -1085,6 +1117,9 @@ module Rubot
       @cost_partial = data["cost_partial"] == true
       @last_usage_watermark = data["last_usage_watermark"].is_a?(Integer) ? data["last_usage_watermark"] : nil
       @cache_history = Array(data["cache_history"]).map(&:to_f).last(CACHE_HISTORY_LIMIT)
+      @cache_records = Array(data["cache_records"])
+        .select { |record| record.is_a?(Hash) }
+        .last(CACHE_RECORDS_LIMIT)
       @system_prompt = data["system_prompt"].to_s.empty? ? nil : data["system_prompt"].to_s
       @system_prompt_epoch = data["system_prompt_epoch"].is_a?(Hash) ? data["system_prompt_epoch"] : nil
       @memory_backlog = Array(data["memory_backlog"]).map(&:to_s)
@@ -1098,7 +1133,13 @@ module Rubot
       return nil unless loaded
 
       @archive_offset = loaded[:start].to_i
-      (loaded[:meta] || {}).merge("messages" => loaded[:messages] || [])
+      (loaded[:meta] || {}).merge(
+        "messages" => loaded[:messages] || [],
+        # The records live in their own table, not in the meta blob: they are
+        # written per request and pruned, which a blob rewritten on every save
+        # would make expensive and a race.
+        "cache_records" => @archive.cache_records(@id, limit: CACHE_RECORDS_LIMIT)
+      )
     end
 
     def file_state

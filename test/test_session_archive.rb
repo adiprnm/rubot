@@ -152,6 +152,73 @@ class TestSessionArchive < Minitest::Test
     assert_equal before, after, "a reloaded session must build the same request payload"
   end
 
+  # The records exist so a hit rate can be explained. A record that does not
+  # survive the reload cannot explain the request that came before it, which is
+  # exactly the request a diagnosis is asked about.
+  def test_request_records_survive_a_reload_through_the_archive
+    s = session
+    s.add("user", "halo")
+    s.record_usage(
+      { "input_tokens" => 500, "cache_read_input_tokens" => 9_000,
+        "cache_creation_input_tokens" => 1_500, "output_tokens" => 20 },
+      provider: "anthropic",
+      shape: { "provider" => "anthropic", "model" => "claude-sonnet-5",
+               "epoch" => "epoch-1", "tools" => "tools-1", "blocks" => 12,
+               "turns" => 1, "auxiliary" => false }
+    )
+
+    record = session.cache_records.last
+
+    assert_equal "anthropic", record["provider"]
+    assert_equal "claude-sonnet-5", record["model"]
+    assert_equal 11_000, record["prompt_tokens"], "prompt is read + write + uncached"
+    assert_equal 9_000, record["cached_tokens"]
+    assert_equal 1_500, record["cache_creation_tokens"]
+    assert_equal "epoch-1", record["epoch"]
+    assert_equal "tools-1", record["tools"]
+    assert_equal 12, record["blocks"]
+    assert_equal false, record["auxiliary"]
+  end
+
+  def test_an_auxiliary_request_is_recorded_as_auxiliary
+    s = session
+    s.record_auxiliary_usage(
+      { "prompt_tokens" => 800, "cached_tokens" => 0, "completion_tokens" => 5 },
+      provider: "openai",
+      shape: { "provider" => "openai", "model" => "gpt-4o-mini", "epoch" => "e",
+               "tools" => "t", "blocks" => 4, "turns" => 2, "auxiliary" => true }
+    )
+
+    assert_equal true, session.cache_records.last["auxiliary"]
+  end
+
+  def test_a_request_without_a_shape_writes_no_record
+    s = session
+
+    s.record_usage({ "prompt_tokens" => 10, "completion_tokens" => 2 }, provider: "openai")
+
+    assert_empty session.cache_records,
+                 "a request whose shape is unknown would only add noise to the diagnosis"
+  end
+
+  def test_the_session_keeps_a_bounded_window_of_records
+    s = session
+    (Rubot::Session::CACHE_RECORDS_LIMIT + 5).times do |i|
+      s.record_usage(
+        { "prompt_tokens" => 10, "completion_tokens" => 2 },
+        provider: "openai",
+        shape: { "provider" => "openai", "model" => "m", "epoch" => "e#{i}",
+                 "tools" => "t", "blocks" => i, "turns" => 1, "auxiliary" => false }
+      )
+    end
+
+    records = session.cache_records
+
+    assert_equal Rubot::Session::CACHE_RECORDS_LIMIT, records.size
+    assert_equal Rubot::Session::CACHE_RECORDS_LIMIT + 4, records.last["blocks"],
+                 "the newest request is the one still in the window"
+  end
+
   def test_a_reload_keeps_the_same_pinned_prompt_for_the_same_epoch
     s = session
     s.add("user", "halo")

@@ -49,6 +49,17 @@ module Rubot
       request(:message_count, session_id: id)
     end
 
+    # One row per provider request, for the cache diagnosis (see
+    # Store#append_cache_record). `record` is a plain hash of strings and
+    # numbers so it can cross the port.
+    def record_cache(id, record)
+      request(:append_cache_record, session_id: id, record: record)
+    end
+
+    def cache_records(id, limit: 50)
+      request(:cache_records, session_id: id, limit: limit)
+    end
+
     private
 
     def request(operation, **arguments)

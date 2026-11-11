@@ -2731,3 +2731,88 @@ class TestAgentThinkingLevel < Minitest::Test
                  "and it survives a restart"
   end
 end
+
+# Item 1 of the prompt-caching plan: every request leaves a record of what it
+# was made of, so a hit rate of zero can be explained instead of guessed at.
+class TestAgentCacheRecords < Minitest::Test
+  class UsageProvider
+    attr_reader :requests
+
+    def initialize
+      @requests = 0
+    end
+
+    def name
+      "anthropic"
+    end
+
+    def last_usage
+      {
+        "input_tokens" => 400,
+        "cache_read_input_tokens" => 8_000,
+        "cache_creation_input_tokens" => 600,
+        "output_tokens" => 12
+      }
+    end
+
+    def chat(_messages, tools: nil)
+      @requests += 1
+      { "content" => "jawaban #{@requests}" }
+    end
+
+    def chat_stream(messages, tools: nil)
+      chat(messages, tools: tools)
+    end
+  end
+
+  def setup
+    @tmpdir = Dir.mktmpdir
+    workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(workspace)
+    @config_path = File.join(@tmpdir, "config.yml")
+    File.write(@config_path, {
+      "agents" => { "defaults" => { "workspace" => workspace } },
+      "models" => [ { "name" => "test", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ]
+    }.to_yaml)
+    @config = Rubot::Config.new(@config_path)
+    @provider = UsageProvider.new
+    @agent = Rubot::Agent.new(config: @config, provider: @provider, session_id: "cache-record")
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+  end
+
+  def test_a_turn_records_what_the_request_was_made_of
+    @agent.process("halo", stream: false)
+
+    record = @agent.session.cache_records.last
+
+    refute_nil record, "a request must leave a record behind"
+    assert_equal "anthropic", record["provider"]
+    assert_equal "gpt-4o-mini", record["model"]
+    assert_equal 9_000, record["prompt_tokens"], "prompt is read + creation + uncached"
+    assert_equal 8_000, record["cached_tokens"]
+    assert_equal 600, record["cache_creation_tokens"]
+    assert_equal 40, record["epoch"].to_s.length, "the prompt digest is a sha1"
+    assert_equal 40, record["tools"].to_s.length, "and so is the tool catalog digest"
+    assert_operator record["blocks"], :>, record["turns"],
+                    "blocks count the system prompt and every tool on top of the turns"
+    assert_equal false, record["auxiliary"]
+  end
+
+  # The whole point of the pin: two requests in one session must carry the same
+  # prompt, and the record has to say so. If the digest moved, the record would
+  # blame the prefix and send the reader looking at the wrong thing.
+  def test_the_prompt_and_tools_digest_hold_while_the_prompt_is_pinned
+    @agent.process("halo", stream: false)
+    first = @agent.session.cache_records.last
+
+    @agent.process("lagi", stream: false)
+    second = @agent.session.cache_records.last
+
+    assert_equal first["epoch"], second["epoch"], "a pinned prompt keeps its digest"
+    assert_equal first["tools"], second["tools"], "and so does the tool catalog"
+    assert_operator second["turns"], :>, first["turns"], "the history grew in between"
+  end
+end

@@ -42,6 +42,26 @@ class TestSession < Minitest::Test
     JSON.parse(raw) # must not raise
   end
 
+  # A file-backed session (no archive) carries its records in the JSON export,
+  # so a diagnosis is available there too — bounded, because the file is
+  # rewritten on every save and this is not the transcript.
+  def test_request_records_round_trip_through_the_json_file
+    session = Rubot::Session.new("cache-json", workspace: @workspace)
+    session.record_usage(
+      { "prompt_tokens" => 2_000, "cached_tokens" => 1_500, "completion_tokens" => 40 },
+      provider: "openai",
+      shape: { "provider" => "openai", "model" => "gpt-4o-mini", "epoch" => "epoch-9",
+               "tools" => "tools-9", "blocks" => 20, "turns" => 12, "auxiliary" => false }
+    )
+
+    reloaded = Rubot::Session.new("cache-json", workspace: @workspace)
+
+    record = reloaded.cache_records.last
+    assert_equal "epoch-9", record["epoch"]
+    assert_equal 1_500, record["cached_tokens"]
+    assert_equal 20, record["blocks"]
+  end
+
   def test_load_ignores_empty_session_file
     dir = File.join(@workspace, "sessions")
     FileUtils.mkdir_p(dir)

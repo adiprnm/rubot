@@ -125,6 +125,16 @@ module Rubot
         @store.message_count(arguments.fetch(:session_id))
       when :session_ids
         @store.session_ids
+      when :append_cache_record
+        @store.append_cache_record(
+          arguments.fetch(:session_id),
+          arguments.fetch(:record)
+        )
+        # The record hash came from another Ractor; answering with `true` keeps
+        # the reply trivially shareable, exactly like upsert_session.
+        true
+      when :cache_records
+        @store.cache_records(arguments.fetch(:session_id), limit: arguments.fetch(:limit, 50))
       when :counts
         @store.counts
       else

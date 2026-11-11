@@ -182,8 +182,69 @@ module Rubot
       in_transaction do
         @db.execute("DELETE FROM messages WHERE session_id = ?", [id])
         @db.execute("DELETE FROM sessions WHERE id = ?", [id])
+        @db.execute("DELETE FROM request_cache WHERE session_id = ?", [ id ])
       end
       true
+    end
+
+    # --- cache diagnostics --------------------------------------------
+    #
+    # One row per provider request: what the request was made of and what the
+    # provider said the cache did with it. `cache_history` in the session meta
+    # keeps the last twelve hit rates as bare numbers; a number says a request
+    # missed but not why, and this is the why.
+    #
+    # Written by the turn that made the request, read by /context and by
+    # whatever asks "did the prefix move, and where". Not part of the archive:
+    # `export_json` and search ignore it, and a session that ran for a thousand
+    # requests must not carry a thousand rows.
+
+    # How many records one session keeps. The questions these answer are asked
+    # about the last few turns, so the window is small on purpose.
+    CACHE_RECORDS_KEPT = 400
+
+    # Append one request record. Returns the record as given, so a caller can
+    # hand the same shape to a reader without a second query.
+    def append_cache_record(session_id, record)
+      id = text_id(session_id)
+      @db.execute(<<~SQL, [ id, *cache_record_values(record) ])
+        INSERT INTO request_cache(
+          session_id, created_at, provider, model, prompt_tokens, cached_tokens,
+          cache_creation_tokens, epoch, tools, blocks, turns, auxiliary
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      SQL
+      prune_cache_records(id)
+      record
+    end
+
+    # The most recent records for one session, oldest first, so a reader walks
+    # them in the order the requests were made.
+    def cache_records(session_id, limit: 50)
+      id = text_id(session_id)
+      rows = @db.execute(<<~SQL, [ id, limit.to_i ])
+        SELECT created_at, provider, model, prompt_tokens, cached_tokens,
+               cache_creation_tokens, epoch, tools, blocks, turns, auxiliary
+        FROM request_cache
+        WHERE session_id = ?
+        ORDER BY id DESC
+        LIMIT ?
+      SQL
+      rows.reverse.map do |row|
+        created_at, provider, model, prompt, cached, creation, epoch, tools, blocks, turns, auxiliary = row
+        {
+          "at" => created_at.to_s,
+          "provider" => provider.to_s,
+          "model" => model.to_s,
+          "prompt_tokens" => prompt.to_i,
+          "cached_tokens" => cached.to_i,
+          "cache_creation_tokens" => creation.to_i,
+          "epoch" => epoch.to_s,
+          "tools" => tools.to_s,
+          "blocks" => blocks.to_i,
+          "turns" => turns.to_i,
+          "auxiliary" => auxiliary.to_i == 1
+        }
+      end
     end
 
     # --- reading -------------------------------------------------------
@@ -860,6 +921,39 @@ module Rubot
       Time.iso8601(iso.to_s).to_f
     rescue ArgumentError, TypeError
       0.0
+    end
+
+    # The columns of a request record, in the order the INSERT names them. A
+    # record is a plain hash so it can cross a Ractor port; symbol keys are
+    # accepted for the same reason.
+    def cache_record_values(record)
+      field = ->(key) { record.key?(key) ? record[key] : record[key.to_sym] }
+      [
+        (field.call("at") || Time.now.utc.iso8601).to_s,
+        field.call("provider").to_s,
+        field.call("model").to_s,
+        field.call("prompt_tokens").to_i,
+        field.call("cached_tokens").to_i,
+        field.call("cache_creation_tokens").to_i,
+        field.call("epoch").to_s,
+        field.call("tools").to_s,
+        field.call("blocks").to_i,
+        field.call("turns").to_i,
+        field.call("auxiliary") ? 1 : 0
+      ]
+    end
+
+    # Keep the newest CACHE_RECORDS_KEPT rows for this session. Deleting by the
+    # kept ids rather than by `MAX(id) - N` matters because sessions interleave:
+    # an arithmetic bound would drop more than it should from the busy one.
+    def prune_cache_records(session_id)
+      @db.execute(<<~SQL, [ session_id, session_id, CACHE_RECORDS_KEPT ])
+        DELETE FROM request_cache
+        WHERE session_id = ?
+          AND id NOT IN (
+            SELECT id FROM request_cache WHERE session_id = ? ORDER BY id DESC LIMIT ?
+          )
+      SQL
     end
   end
 end
