@@ -103,6 +103,34 @@ class TestStore < Minitest::Test
     assert_empty @store.unread_sessions
   end
 
+  def test_settings_start_empty_and_round_trip
+    assert_empty @store.settings
+    assert_nil @store.setting("provider")
+
+    @store.set_setting("provider", "openai")
+    @store.set_setting("default_model", "gpt-4o-mini")
+
+    assert_equal "openai", @store.setting("provider")
+    assert_equal({ "default_model" => "gpt-4o-mini", "provider" => "openai" }, @store.settings)
+  end
+
+  # The form has one empty text field for "no key here", and config.yml is what
+  # stands behind it. Leaving the two states in the table would mean a cleared
+  # field kept overriding the file with nothing.
+  def test_an_empty_setting_is_a_deleted_setting
+    @store.set_setting("api_key", "sk-lama")
+    @store.set_setting("api_key", "   ")
+
+    assert_nil @store.setting("api_key")
+    assert_empty @store.settings
+  end
+
+  def test_settings_are_written_as_one_form
+    @store.update_settings({ "provider" => "ollama", "default_model" => "llama3", "api_key" => nil })
+
+    assert_equal({ "default_model" => "llama3", "provider" => "ollama" }, @store.settings)
+  end
+
   def test_sidebar_limit
     5.times do |i|
       @store.append_messages("s#{i}", [build_message("user", "pesan #{i}")])
