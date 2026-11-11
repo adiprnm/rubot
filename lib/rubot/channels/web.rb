@@ -2264,6 +2264,22 @@ module Rubot
         end
       end
 
+      # Naming, memory extraction and correction-learning are a provider
+      # request or two that say nothing about the answer the reader already
+      # has, so this channel hands them to the learning queue and ends the turn
+      # as soon as the answer is complete. When the queue is done with the
+      # session, the open pages are told: that is the moment the new name
+      # exists, and redrawing the header and the sidebar is all it takes to
+      # show it.
+      def defer_learning?
+        true
+      end
+
+      def after_learning(session_id)
+        slug = owner_slug(session_id)
+        broadcast_sessions(slug) if slug
+      end
+
       # Tell every open page of this persona that its sidebar has changed. Each
       # page is answered in its own session id, because that is what decides
       # which row is the active one.

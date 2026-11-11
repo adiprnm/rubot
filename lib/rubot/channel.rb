@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "net/http"
+require_relative "learning"
 
 module Rubot
   # Base class for all communication channels.
@@ -42,6 +43,8 @@ module Rubot
       @owned_pool = false
       @running_handles = {}
       @running_mutex = Mutex.new
+      @learning_mutex = Mutex.new
+      @learning = nil
 
       build_pool_if_needed
     end
@@ -62,7 +65,16 @@ module Rubot
     def stop
       @running = false
       stop_cron_listener
+      stop_learning_worker
       shutdown_pool
+    end
+
+    # Let queued learning finish, then retire the worker. A memory extraction
+    # is a provider request, so the wait is bounded rather than indefinite.
+    def stop_learning_worker(timeout: 10)
+      return unless @learning
+
+      @learning.stop(timeout: timeout)
     end
 
     # Clean up finished threads and return the list of active threads.
@@ -153,13 +165,9 @@ module Rubot
       result = after_process(message, response)
 
       # The answer has been delivered, so background learning can no longer
-      # delay it. A failure here must not turn a delivered answer into an
-      # error message, hence the separate rescue.
-      begin
-        handle.flush_learning if handle.respond_to?(:flush_learning)
-      rescue StandardError => e
-        warn "[learning] #{e.class}: #{e.message}" if Rubot.debug?
-      end
+      # delay it. A channel that has somewhere better to put that wait hands it
+      # to the learning queue; one that does not waits here, as before.
+      schedule_learning(handle, sid)
 
       result
     rescue StandardError => e
@@ -173,6 +181,66 @@ module Rubot
     # Session id of the message being handled on this thread (if any).
     def request_session_id
       Thread.current[:_rubot_request_session_id] || "default"
+    end
+
+    # Post-answer learning — naming the conversation, extracting memory,
+    # learning from a correction — is a provider request or two. Doing it on
+    # the turn's own thread means the reader waits for work that has nothing
+    # left to say about the answer they already have: the "still working" row
+    # stays up, the stop button stays a stop button, and a turn that took four
+    # seconds feels like twelve. See Rubot::Learning.
+    #
+    # A channel opts in with #defer_learning? and hears back through
+    # #after_learning when the work is done, which is the moment a name written
+    # there can be drawn. Everything else keeps the blocking behaviour — which
+    # is also what a plain agent with no queue would need.
+    def defer_learning?
+      false
+    end
+
+    # Where a channel says "that session has been learned from now".
+    def after_learning(_session_id); end
+
+    def learning
+      @learning_mutex.synchronize do
+        @learning ||= Learning.new { |session_id| after_learning(session_id) }
+      end
+    end
+
+    def schedule_learning(handle, session_id)
+      return unless handle.respond_to?(:flush_learning)
+
+      unless defer_learning?
+        run_learning(handle, session_id)
+        return
+      end
+
+      learning.submit(session_id) { handle.flush_learning }
+    end
+
+    # Wait until the queue has been worked off. For tests and for a shutdown
+    # that would rather not cut a memory extraction in half.
+    def drain_learning(timeout: 30)
+      return unless @learning
+
+      @learning.drain(timeout: timeout)
+    end
+
+    def learning_pending?
+      !@learning.nil? && @learning.pending?
+    end
+
+    def run_learning(handle, session_id)
+      handle.flush_learning
+    rescue StandardError => e
+      # A failure here must never cost the user an answer they already have.
+      warn "[learning] #{e.class}: #{e.message}" if Rubot.debug?
+    ensure
+      begin
+        after_learning(session_id)
+      rescue StandardError => e
+        warn "[learning] after_learning failed: #{e.class}: #{e.message}" if Rubot.debug?
+      end
     end
 
     # Stop the turn currently running in a session. Returns false when

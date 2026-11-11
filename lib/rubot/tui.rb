@@ -207,6 +207,10 @@ module Rubot
       # Resolved on the worker thread (agent.config may cross a Ractor
       # boundary), then only read from the App thread.
       @external_editor = nil
+      # Naming, memory extraction and correction-learning run after the answer
+      # is on screen: the prompt should come back the moment the agent stops
+      # talking, not when the provider is done being asked about it.
+      @learning = Learning.new
     end
 
     # Current session handle: a legacy in-process Agent or a Ractor-backed
@@ -235,6 +239,7 @@ module Rubot
     # Request a stop from any thread (signal traps, channel lifecycle).
     def stop
       @stopped = true
+      @learning&.stop
       @app&.quit
     end
 
@@ -993,8 +998,9 @@ module Rubot
         streamed << chunk.to_s
       end
       show_unstreamed_tail(final, streamed, stopped: stopped)
-      # The answer is on screen, so learning may safely run now.
-      agent.flush_learning
+      # The answer is on screen, so learning may safely run now — on the
+      # queue, so the prompt comes back without waiting for a naming request.
+      learn_in_background
     rescue Interrupt
       agent&.cancel! if agent.respond_to?(:cancel!)
       @events << [ :error_text, "⏹️ cancelled" ]
@@ -1304,12 +1310,27 @@ module Rubot
         $stdout.flush
       end
       puts "\n"
-      agent.flush_learning
+      learn_in_background
     rescue Interrupt
       agent&.cancel! if agent.respond_to?(:cancel!)
       puts "\n⏹️ Cancelled.\n"
     rescue StandardError => e
       puts "\n❌ Error: #{e.message}\n"
+    end
+
+    # Post-answer learning, off the worker's back: the prompt comes back the
+    # moment the answer is complete, and naming or memory extraction happens
+    # while the reader is already typing the next thing. The handle is read
+    # here rather than inside the job, so switching session (or the pool
+    # handing out another one) cannot redirect the work to the wrong session.
+    def learn_in_background
+      handle = agent
+      return unless handle.respond_to?(:flush_learning)
+
+      session_id = @session_id
+      @learning.submit(session_id) { handle.flush_learning }
+    rescue StandardError => e
+      warn "[learning] #{e.class}: #{e.message}" if Rubot.debug?
     end
 
     def print_banner_text

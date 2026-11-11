@@ -141,7 +141,16 @@ module Rubot
         stop_cron_scheduler
         # Wait for active request threads to finish
         wait_for_threads
+        stop_learning_worker
         shutdown_pool
+      end
+
+      # A chat turn is over the moment the answer has been sent. Anything the
+      # session does afterwards — naming the conversation, extracting memory,
+      # learning from a correction — is a provider request the person on the
+      # other end is not waiting for, so it runs on the learning queue.
+      def defer_learning?
+        true
       end
 
       # Wait for all spawned request threads to complete.
