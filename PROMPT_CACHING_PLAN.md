@@ -171,7 +171,9 @@ perbaikan biaya.
 ### Fase 6 — Guardrail & alert
 
 1. Alert: **3 request berurutan dengan hit rate 0** pada prefix yang sama → log warning berisi `first_divergence`.
+   - *Dikerjakan (commit `2ec184e`):* `CacheDiagnosis.miss_streak` menghitung read 0 berurutan pada prefix yang **tidak bergerak** (model, epoch, katalog tool sama, `diverged_at` negatif). Miss yang sudah dijelaskan — trim, tulisan ulang — memutus rentetan, karena prefix yang berubah memang tidak punya apa pun untuk dipakai ulang. `Session#record_cache_record` memperingatkan di hitungan ke-3 lalu tiap 10 setelahnya.
 2. Laporan mingguan: hit rate + token re-read per provider/model; bandingkan dengan baseline Fase 0.
+   - *Dikerjakan:* `bin/cache_weekly.rb [db] [--days 7]` membaca `request_cache` satu jendela, menampilkan hit weighted/median, request 0%, token re-read, tabel per model, daftar prefix yang bergeser beserta ukuran re-read-nya, dan rentetan 0% pada prefix utuh — semuanya di sebelah angka baseline.
 3. Test regresi payload (lihat checklist di bawah) dijalankan di CI supaya perubahan prompt tidak diam-diam mematikan cache.
 
 ---
