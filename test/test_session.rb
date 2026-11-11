@@ -1045,3 +1045,45 @@ class TestSessionHistoryWindowing < Minitest::Test
     assert_equal "default-stamp", Rubot::Session.fresh_id(nil, stamp: "stamp")
   end
 end
+
+class TestSessionCacheStreakWarning < Minitest::Test
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @session = Rubot::Session.new("streak", workspace: @tmpdir)
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+  end
+
+  def record(cached, epoch: "e1", diverged_at: -1)
+    delta = Rubot::Usage.new(prompt_tokens: 50_000, completion_tokens: 10, cached_tokens: cached)
+    shape = { "model" => "deepseek-v4.1-flash", "epoch" => epoch, "tools" => "t1",
+              "blocks" => 40, "turns" => 20, "diverged_at" => diverged_at }
+    _out, err = capture_io { @session.record_cache_record(delta, shape) }
+    err
+  end
+
+  # Two misses can be bad luck. Three in a row, with the prefix intact, is a
+  # pattern: the warning arrives while the session is still open.
+  def test_three_zero_reads_in_a_row_are_warned_about_once
+    assert_empty record(0), "one miss is not a warning"
+    assert_empty record(0), "two misses are not a warning"
+    assert_match(/3 request berurutan/, record(0))
+    assert_empty record(0), "a long streak warns at three and then every ten"
+  end
+
+  def test_a_read_resets_the_streak
+    record(0)
+    record(0)
+    refute_match(/berurutan/, record(8_000))
+    assert_empty record(0)
+  end
+
+  # A trimmed window is an explained miss, not a provider problem.
+  def test_a_trim_does_not_count_toward_the_streak
+    record(0)
+    refute_match(/berurutan/, record(0, diverged_at: 10))
+    assert_empty record(0)
+  end
+end

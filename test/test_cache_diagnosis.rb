@@ -163,4 +163,54 @@ class TestCacheDiagnosis < Minitest::Test
       refute_includes rendered, label.to_s, "#{label} would print its own symbol"
     end
   end
+
+  # A prefix nobody touched that still reads nothing, three requests running:
+  # that is the one miss no rule on our side explains, and the only one worth
+  # a warning while the session is open.
+  def test_a_streak_of_zero_reads_on_an_unchanged_prefix_is_counted
+    records = [
+      record("cached_tokens" => 0),
+      record("cached_tokens" => 0),
+      record("cached_tokens" => 0)
+    ]
+
+    assert_equal 3, Rubot::CacheDiagnosis.miss_streak(records)
+  end
+
+  def test_a_streak_stops_at_the_first_read
+    records = [
+      record("cached_tokens" => 0),
+      record("cached_tokens" => 8_000),
+      record("cached_tokens" => 0),
+      record("cached_tokens" => 0)
+    ]
+
+    assert_equal 2, Rubot::CacheDiagnosis.miss_streak(records)
+  end
+
+  # An explained miss is not part of a streak: the prompt moved, so the next
+  # request had nothing to reuse by design.
+  def test_a_trim_does_not_extend_a_streak
+    records = [
+      record("cached_tokens" => 0),
+      record("cached_tokens" => 0, "diverged_at" => 10, "diverged_role" => "assistant"),
+      record("cached_tokens" => 0)
+    ]
+
+    assert_equal 1, Rubot::CacheDiagnosis.miss_streak(records)
+  end
+
+  def test_a_new_epoch_does_not_extend_a_streak
+    records = [
+      record("cached_tokens" => 0),
+      record("cached_tokens" => 0, "epoch" => "epoch-0"),
+      record("cached_tokens" => 0)
+    ]
+
+    assert_equal 1, Rubot::CacheDiagnosis.miss_streak(records)
+  end
+
+  def test_an_empty_history_has_no_streak
+    assert_equal 0, Rubot::CacheDiagnosis.miss_streak([])
+  end
 end

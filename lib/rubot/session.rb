@@ -204,7 +204,21 @@ module Rubot
       @cache_records << record
       @cache_records.shift while @cache_records.size > CACHE_RECORDS_LIMIT
       @archive&.record_cache(@id, record)
+      warn_cache_streak(record)
       record
+    end
+
+    # A prefix nobody changed that still reads nothing, three requests running,
+    # is the one miss no rule on our side explains. Say it once when it starts
+    # (and every ten after, so a long outage stays visible without filling the
+    # log with the same line).
+    def warn_cache_streak(record)
+      streak = CacheDiagnosis.miss_streak(@cache_records)
+      return unless streak >= CacheDiagnosis::STREAK_ALERT && (streak % 10) == 3
+
+      warn "[cache] #{@id}: #{streak} request berurutan membaca 0 token cache " \
+           "dengan prefix utuh (model #{record['model']}, epoch #{record['epoch']}, " \
+           "#{record['blocks']} blok) — dugaan sisi provider/gateway, bukan perubahan prompt"
     end
 
     # User messages queued for the next memory extraction. Kept on the session

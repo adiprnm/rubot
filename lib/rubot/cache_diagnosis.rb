@@ -33,6 +33,13 @@ module Rubot
     # miss is nobody's fault and nothing needs fixing.
     DEFAULT_TTL_SECONDS = 300
 
+    # How many requests in a row may read nothing from an unchanged prefix
+    # before it stops looking like bad luck. One is a lost entry or a gateway
+    # that routed the request to a replica without the cache; three is a
+    # pattern, and a pattern is worth saying out loud while the session is
+    # still open instead of a week later in a report.
+    STREAK_ALERT = 3
+
     module_function
 
     # The cause of the latest request's result, as a Symbol, or nil when there
@@ -134,6 +141,37 @@ module Rubot
       return :effort_change if latest["effort"].to_s != previous["effort"].to_s
 
       :uncached
+    end
+
+    # How many requests in a row read nothing from a prefix nobody changed.
+    #
+    # Only zero reads on an *unchanged* prefix count: same model, same epoch,
+    # same tool catalog, and no divergence index (the probe compared the two
+    # payloads and found them identical). A miss caused by trimming or a
+    # rewrite is a different story — it is explained, and explained misses do
+    # not repeat on their own.
+    def miss_streak(records)
+      records = Array(records)
+      latest = records.last
+      return 0 if latest.nil?
+
+      streak = 0
+      records.reverse_each do |record|
+        break unless record["cached_tokens"].to_i.zero?
+        break unless same_prefix?(record, latest)
+
+        streak += 1
+      end
+      streak
+    end
+
+    def same_prefix?(record, latest)
+      return false unless record["model"].to_s == latest["model"].to_s
+      return false unless record["epoch"].to_s == latest["epoch"].to_s
+      return false unless record["tools"].to_s == latest["tools"].to_s
+
+      diverged_at = record["diverged_at"]
+      diverged_at.nil? || diverged_at.to_i.negative?
     end
 
     def min_prompt_tokens(model)
