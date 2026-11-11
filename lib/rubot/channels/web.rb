@@ -1335,6 +1335,8 @@ module Rubot
           persona_emoji: persona ? persona.emoji_or : "🤖",
           persona_prompt: persona ? persona.system_prompt.to_s : "",
           persona_model: persona_model(persona),
+          persona_model_value: persona_model_value(persona),
+          model_choices: model_choices,
           session_label: session_label,
           document_title: document_title(persona_label, session_label),
           page: page,
@@ -1369,11 +1371,83 @@ module Rubot
         0
       end
 
-      # What the status line shows: the model this persona actually talks to.
+      # The model this persona actually talks to. A preset it inherited from
+      # the Telegram wizard still resolves, so the header never shows "default"
+      # for a persona that is plainly using something else.
       def persona_model(persona)
         return @app_config&.model.to_s if persona.nil?
 
-        persona.model || persona.preset || @app_config&.model || "default"
+        if persona.preset
+          preset = @app_config&.model_preset(persona.preset)
+          return preset["model"] if preset && preset["model"]
+        end
+
+        persona.model || @app_config&.model || "default"
+      end
+
+      # What the model picker shows as selected. A persona that only carries a
+      # preset is offered the preset's model, because saving the form replaces
+      # the preset with an explicit model.
+      def persona_model_value(persona)
+        return "" unless persona
+        return persona.model if persona.model
+
+        preset = persona.preset && @app_config&.model_preset(persona.preset)
+        preset ? preset["model"].to_s : ""
+      end
+
+      # Every model a persona can be pinned to, by id. The provider's cached
+      # catalog comes first because that is where the real choices are;
+      # config.yml entries follow as named aliases that still resolve through
+      # Config. Nothing here reaches the network.
+      def model_choices
+        config = @app_config
+        return [] unless config
+
+        choices = []
+        seen = {}
+
+        ModelCatalog.cached_entries(config.catalog_dir).each do |entry|
+          id = entry["id"].to_s
+          next if id.empty? || seen[id]
+
+          seen[id] = true
+          label = entry["name"].to_s
+          choices << { value: id, label: label.empty? || label == id ? id : "#{label} (#{id})" }
+        end
+
+        Array(config.models).each do |entry|
+          next unless entry.is_a?(Hash)
+
+          name = entry["name"].to_s
+          next if name.empty? || seen[name]
+
+          seen[name] = true
+          choices << { value: name, label: "#{name} (#{entry['model']})" }
+        end
+
+        choices.sort_by { |choice| [ choice[:label].downcase, choice[:value] ] }
+      end
+
+      # A model from a form, checked against what the provider and config
+      # actually offer so a stale form cannot pin a persona to a model that
+      # does not exist. Empty means "follow the default model"; an unknown
+      # non-empty name falls back to `fallback` so editing a persona does not
+      # quietly wipe the choice it already had.
+      def persona_model_from(req, fallback: nil)
+        name = form(req, "model").strip
+        return nil if name.empty?
+        return name if known_model?(name)
+
+        fallback
+      end
+
+      def known_model?(name)
+        config = @app_config
+        return false unless config
+        return true if config.model_entry_by_name(name)
+
+        ModelCatalog.cached_model_ids(config.catalog_dir).include?(name)
       end
 
       def persona_rows(current_slug)
@@ -1690,6 +1764,7 @@ module Rubot
           slug: slug,
           name: form(req, "name").strip.empty? ? nil : form(req, "name").strip,
           emoji: form(req, "emoji").strip.empty? ? EMOJI_CHOICES.first : form(req, "emoji").strip,
+          model: persona_model_from(req),
           system_prompt: prompt.empty? ? nil : prompt
         ))
         store.prepare_workspace(slug, seed_from: @app_config&.workspace)
@@ -1713,15 +1788,20 @@ module Rubot
         name = form(req, "name").strip
         emoji = form(req, "emoji").strip
         prompt = form(req, "system_prompt").strip
+        model = persona_model_from(req, fallback: current.model)
 
         store.set(slug, Persona.new(
           slug: slug,
           name: name.empty? ? nil : name,
           emoji: emoji.empty? ? current.emoji : emoji,
           accent: current.accent,
-          preset: current.preset,
-          model: current.model,
+          # The picker edits the model itself, so a preset inherited from the
+          # Telegram wizard is replaced rather than left to win the tie.
+          preset: nil,
+          model: model,
           system_prompt: prompt.empty? ? nil : prompt,
+          skills: current.skills,
+          ref: current.ref,
           created_at: current.created_at
         ))
         reload_persona_actors(slug)

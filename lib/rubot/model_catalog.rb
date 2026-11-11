@@ -71,21 +71,24 @@ module Rubot
       File.join(dir.to_s, CACHE_FILENAME)
     end
 
-    # Model ids from the on-disk cache. Used by PersonaStore and Agent to
-    # resolve a provider model id that is not a config.yml entry.
-    def self.cached_model_ids(dir)
+    # Entries from the on-disk cache, without touching the network. What a
+    # caller wants when a slow provider must not block a page.
+    def self.cached_entries(dir)
       path = cache_path(dir)
       return [] unless File.exist?(path)
 
       data = JSON.parse(File.read(path))
       models = data.is_a?(Hash) ? data["models"] : data
-      Array(models).filter_map do |model|
-        next unless model.is_a?(Hash)
-        model["id"] || model["name"]
-      end
+      Array(models).select { |model| model.is_a?(Hash) }
     rescue JSON::ParserError, SystemCallError => e
       warn "[model_catalog] ignoring unreadable #{path}: #{e.message}"
       []
+    end
+
+    # Model ids from the on-disk cache. Used by PersonaStore and Agent to
+    # resolve a provider model id that is not a config.yml entry.
+    def self.cached_model_ids(dir)
+      cached_entries(dir).filter_map { |model| model["id"] || model["name"] }
     end
 
     private
