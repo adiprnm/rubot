@@ -661,6 +661,26 @@ class TestStore < Minitest::Test
     assert_equal "2026-11-11T04:00:00Z", record["at"]
   end
 
+  def test_a_fingerprint_is_kept_only_on_the_newest_record
+    @store.append_cache_record("s1", build_cache_record("fingerprint" => "sabc,tdef", "diverged_at" => nil))
+    @store.append_cache_record("s1", build_cache_record("fingerprint" => "sabc,tdef,m111", "diverged_at" => -1))
+
+    records = @store.cache_records("s1")
+
+    assert_nil records.first["fingerprint"],
+               "the row behind is ~1.5 KB of hex for a comparison already made"
+    assert_equal "sabc,tdef,m111", records.last["fingerprint"],
+               "the newest fingerprint is what the next request compares against"
+  end
+
+  def test_a_divergence_of_zero_is_not_confused_with_no_comparison
+    @store.append_cache_record("s1", build_cache_record("diverged_at" => 0))
+    @store.append_cache_record("s1", build_cache_record("diverged_at" => nil))
+
+    assert_equal [ 0, nil ], @store.cache_records("s1").map { |record| record["diverged_at"] },
+                 "0 is a changed system prompt; nil is the first request of a session"
+  end
+
   def test_records_come_back_oldest_first
     @store.append_cache_record("s1", build_cache_record("cached_tokens" => 0))
     @store.append_cache_record("s1", build_cache_record("cached_tokens" => 5))

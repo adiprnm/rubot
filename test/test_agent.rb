@@ -2816,3 +2816,116 @@ class TestAgentCacheRecords < Minitest::Test
     assert_operator second["turns"], :>, first["turns"], "the history grew in between"
   end
 end
+
+# Item 2 of the prompt-caching plan: the record says where the prefix moved,
+# not just that it did.
+class TestAgentCacheDivergence < Minitest::Test
+  class UsageProvider
+    def name
+      "anthropic"
+    end
+
+    def last_usage
+      {
+        "input_tokens" => 100,
+        "cache_read_input_tokens" => 4_000,
+        "cache_creation_input_tokens" => 200,
+        "output_tokens" => 5
+      }
+    end
+
+    def chat(_messages, tools: nil)
+      { "content" => "ok" }
+    end
+
+    def chat_stream(messages, tools: nil)
+      chat(messages, tools: tools)
+    end
+  end
+
+  def setup
+    @tmpdir = Dir.mktmpdir
+    workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(workspace)
+    @config_path = File.join(@tmpdir, "config.yml")
+    File.write(@config_path, {
+      "agents" => { "defaults" => { "workspace" => workspace } },
+      "models" => [ { "name" => "test", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ]
+    }.to_yaml)
+    @config = Rubot::Config.new(@config_path)
+    @workspace = workspace
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+  end
+
+  def build_agent(id)
+    Rubot::Agent.new(config: @config, provider: UsageProvider.new, session_id: id)
+  end
+
+  def test_the_first_request_has_nothing_to_compare_against
+    agent = build_agent("divergence-first")
+    agent.process("halo", stream: false)
+
+    record = agent.session.cache_records.last
+
+    assert_nil record["diverged_at"], "the first request of a session is not a request that moved"
+    refute_nil record["fingerprint"], "but it still leaves the fingerprint for the next one"
+  end
+
+  def test_an_appended_turn_reports_an_intact_prefix
+    agent = build_agent("divergence-append")
+    agent.process("halo", stream: false)
+    agent.process("lagi", stream: false)
+
+    assert_equal(-1, agent.session.cache_records.last["diverged_at"],
+                 "a turn that only appended has the prefix of a request that should hit")
+  end
+
+  # A rewritten earlier message is the interesting miss: the transcript looks
+  # appended, but one block in the middle changed and everything behind it has
+  # to be read again. This is what `reasoning_tail` does every turn.
+  def test_a_rewritten_message_in_the_history_reports_its_index
+    agent = build_agent("divergence-middle")
+    agent.process("halo", stream: false)
+
+    agent.session.messages.first["content"] = "halo, tapi diubah"
+    agent.process("lagi", stream: false)
+
+    record = agent.session.cache_records.last
+
+    assert_operator record["diverged_at"], :>=, 2,
+                    "the system prompt and the tools did not move, so the divergence is in the messages"
+    assert_operator record["diverged_at"], :<, record["blocks"]
+  end
+
+  def test_a_rebuilt_prompt_reports_zero
+    agent = build_agent("divergence-system")
+    agent.process("halo", stream: false)
+
+    # Clearing the pin alone rebuilds the same text; the prompt has to actually
+    # change for the digest to move, and the summary is quoted into it.
+    agent.session.summary = "ringkasan baru dari compaction"
+    agent.session.clear_system_prompt!
+    agent.process("lagi", stream: false)
+
+    assert_equal 0, agent.session.cache_records.last["diverged_at"],
+                 "a changed system prompt is block 0 and invalidates everything behind it"
+  end
+
+  # The comparison has to survive a restart: the fingerprint is stored with the
+  # newest record precisely so the first request after a boot still knows what
+  # the last request before it looked like.
+  def test_the_comparison_survives_a_restart
+    build_agent("divergence-restart").process("halo", stream: false)
+
+    agent = build_agent("divergence-restart")
+    agent.process("lagi", stream: false)
+
+    record = agent.session.cache_records.last
+
+    assert_equal(-1, record["diverged_at"],
+                 "the reloaded fingerprint matched, so the prefix was still intact")
+  end
+end

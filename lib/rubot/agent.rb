@@ -1967,15 +1967,27 @@ end
     # prompt, each tool definition, each message. Anthropic's lookback window is
     # measured in blocks (twenty of them), so this is the number that tells a
     # growing conversation whether it has walked past the last cache write.
+    #
+    # The per-block `fingerprint` and `diverged_at` narrow the same question to
+    # one block: the whole-prompt digest says the history changed, the
+    # fingerprint says which message. Both are computed from the list that was
+    # actually sent (`messages`), not from the session, so a trimmed window is
+    # fingerprinted as it went out.
     def cache_request_shape(messages, auxiliary: false)
       tools = tool_definitions || []
+      system_prompt = build_system_prompt
+      sent = messages || @session.messages
+      fingerprint = CacheProbe.fingerprint(system: system_prompt, tools: tools, messages: sent)
+      previous = @session.cache_records.last
       {
         "provider" => @provider.name.to_s,
         "model" => active_model_name.to_s,
-        "epoch" => digest_of(build_system_prompt),
+        "epoch" => digest_of(system_prompt),
         "tools" => digest_of(tools.map { |tool| [ tool.name, tool.description, tool.parameters ] }.to_json),
-        "blocks" => (messages ? messages.size : @session.messages.size) + tools.size + 1,
-        "turns" => @session.messages.size,
+        "blocks" => CacheProbe.block_count(fingerprint),
+        "turns" => sent.size,
+        "fingerprint" => fingerprint,
+        "diverged_at" => CacheProbe.first_divergence(previous && previous["fingerprint"], fingerprint),
         "auxiliary" => auxiliary
       }
     end

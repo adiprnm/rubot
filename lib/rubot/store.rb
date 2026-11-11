@@ -210,10 +210,12 @@ module Rubot
       @db.execute(<<~SQL, [ id, *cache_record_values(record) ])
         INSERT INTO request_cache(
           session_id, created_at, provider, model, prompt_tokens, cached_tokens,
-          cache_creation_tokens, epoch, tools, blocks, turns, auxiliary
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          cache_creation_tokens, epoch, tools, blocks, turns, auxiliary,
+          fingerprint, diverged_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       SQL
       prune_cache_records(id)
+      keep_newest_fingerprint(id)
       record
     end
 
@@ -223,14 +225,16 @@ module Rubot
       id = text_id(session_id)
       rows = @db.execute(<<~SQL, [ id, limit.to_i ])
         SELECT created_at, provider, model, prompt_tokens, cached_tokens,
-               cache_creation_tokens, epoch, tools, blocks, turns, auxiliary
+               cache_creation_tokens, epoch, tools, blocks, turns, auxiliary,
+               fingerprint, diverged_at
         FROM request_cache
         WHERE session_id = ?
         ORDER BY id DESC
         LIMIT ?
       SQL
       rows.reverse.map do |row|
-        created_at, provider, model, prompt, cached, creation, epoch, tools, blocks, turns, auxiliary = row
+        created_at, provider, model, prompt, cached, creation, epoch, tools,
+          blocks, turns, auxiliary, fingerprint, diverged_at = row
         {
           "at" => created_at.to_s,
           "provider" => provider.to_s,
@@ -242,7 +246,11 @@ module Rubot
           "tools" => tools.to_s,
           "blocks" => blocks.to_i,
           "turns" => turns.to_i,
-          "auxiliary" => auxiliary.to_i == 1
+          "auxiliary" => auxiliary.to_i == 1,
+          "fingerprint" => fingerprint,
+          # nil (not 0) when there was nothing to compare against: the first
+          # request of a session is not a request that matched everything.
+          "diverged_at" => diverged_at.nil? ? nil : diverged_at.to_i
         }
       end
     end
@@ -939,8 +947,24 @@ module Rubot
         field.call("tools").to_s,
         field.call("blocks").to_i,
         field.call("turns").to_i,
-        field.call("auxiliary") ? 1 : 0
+        field.call("auxiliary") ? 1 : 0,
+        field.call("fingerprint"),
+        field.call("diverged_at")
       ]
+    end
+
+    # Keep the fingerprint on the newest row only. It is ~1.5 KB of hex that
+    # exists for one comparison — the next request's — and keeping it on every
+    # row of a 400-row window would be half a megabyte per session for a
+    # question nobody asks about old requests.
+    def keep_newest_fingerprint(session_id)
+      @db.execute(<<~SQL, [ session_id, session_id ])
+        UPDATE request_cache SET fingerprint = NULL
+        WHERE session_id = ?
+          AND id <> (
+            SELECT MAX(id) FROM request_cache WHERE session_id = ?
+          )
+      SQL
     end
 
     # Keep the newest CACHE_RECORDS_KEPT rows for this session. Deleting by the

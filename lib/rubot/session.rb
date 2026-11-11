@@ -196,6 +196,11 @@ module Rubot
         "cached_tokens" => delta.cached_tokens,
         "cache_creation_tokens" => delta.cache_creation_tokens
       }.merge(shape.to_h { |key, value| [ key.to_s, value ] })
+      # Only the newest record keeps its fingerprint — one request is all the
+      # next comparison needs, and fifty of them would be 65 KB of hex in the
+      # JSON export. The archive applies the same rule in SQL.
+      previous = @cache_records.last
+      previous["fingerprint"] = nil if previous.is_a?(Hash)
       @cache_records << record
       @cache_records.shift while @cache_records.size > CACHE_RECORDS_LIMIT
       @archive&.record_cache(@id, record)

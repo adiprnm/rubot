@@ -230,4 +230,29 @@ class TestSessionArchive < Minitest::Test
 
     assert_equal prompt, reloaded.system_prompt_for(epoch)
   end
+
+  # The fingerprint is what the next request compares against, and the next
+  # request can arrive after a restart — so it has to come back from the store,
+  # not just from memory.
+  def test_the_newest_fingerprint_and_divergence_survive_a_reload
+    s = session
+    s.add("user", "halo")
+    shape = ->(fingerprint, diverged_at) do
+      { "provider" => "anthropic", "model" => "m", "epoch" => "e", "tools" => "t",
+        "blocks" => 2, "turns" => 1, "auxiliary" => false,
+        "fingerprint" => fingerprint, "diverged_at" => diverged_at }
+    end
+    s.record_usage({ "prompt_tokens" => 10, "cached_tokens" => 0, "completion_tokens" => 1 },
+                   provider: "anthropic", shape: shape.call("saaa,tbbb", nil))
+    s.record_usage({ "prompt_tokens" => 12, "cached_tokens" => 10, "completion_tokens" => 1 },
+                   provider: "anthropic", shape: shape.call("saaa,tbbb,mccc", -1))
+
+    records = session.cache_records
+
+    assert_nil records.first["fingerprint"],
+               "the row behind gives up its fingerprint: one comparison is all it is for"
+    assert_equal "saaa,tbbb,mccc", records.last["fingerprint"]
+    assert_equal(-1, records.last["diverged_at"])
+    assert_nil records.first["diverged_at"], "the first request had nothing to compare against"
+  end
 end
