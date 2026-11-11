@@ -1828,6 +1828,67 @@ class TestAgentHistoryTrimming < Minitest::Test
     assert_equal "2" * 200, tools[1]["content"]
   end
 
+def test_old_tool_call_args_are_redacted_but_the_newest_is_kept
+  big_args = JSON.generate({ "operation" => "write", "path" => "a.rb", "content" => "x" * 400 })
+  add_tool_round("call-1", big_args, "ok")
+  add_tool_round("call-2", big_args, "ok")
+
+  messages = @agent.send(:build_messages)
+  old_args = args_of(messages, "call-1")
+  new_args = args_of(messages, "call-2")
+
+  parsed = JSON.parse(old_args)
+  assert_equal "x" * 50, parsed["content"][0, 50]
+  assert_includes parsed["content"], "redacted"
+  assert_equal big_args, new_args
+end
+
+# A small result does not excuse big arguments: redaction is decided by the
+# block boundary, not by the size of the output the call produced.
+def test_old_tool_call_args_are_redacted_even_when_the_result_is_small
+  big_args = JSON.generate({ "content" => "y" * 400 })
+  add_tool_round("call-1", big_args, "ok")
+  add_tool_round("call-2", big_args, "ok")
+
+  messages = @agent.send(:build_messages)
+  assert_includes JSON.parse(args_of(messages, "call-1"))["content"], "redacted"
+end
+
+def test_redaction_never_touches_the_stored_session
+  big_args = JSON.generate({ "content" => "z" * 400 })
+  add_tool_round("call-1", big_args, "ok")
+  add_tool_round("call-2", big_args, "ok")
+
+  @agent.send(:build_messages)
+
+  stored = args_of(@agent.session.messages, "call-1")
+  assert_equal big_args, stored
+end
+
+def test_invalid_json_args_are_left_alone
+  add_tool_round("call-1", "not json {", "ok")
+  add_tool_round("call-2", "not json {", "ok")
+
+  messages = @agent.send(:build_messages)
+  assert_equal "not json {", args_of(messages, "call-1")
+end
+
+private
+
+def add_tool_round(id, args, result)
+  @agent.session.add("assistant", "round", tool_calls: [
+    { "id" => id, "type" => "function",
+      "function" => { "name" => "file_ops", "arguments" => args } }
+  ])
+  @agent.session.add("tool", result, tool_call_id: id)
+end
+
+def args_of(messages, call_id)
+  messages.find do |m|
+    m["role"] == "assistant" && m.dig("tool_calls", 0, "id") == call_id
+  end.dig("tool_calls", 0, "function", "arguments")
+end
+
   # A turn no longer drops messages just because there are many of them: the
   # context window and compaction are the bound. The old 50-message cap made
   # the model forget everything past ~25 tool calls.

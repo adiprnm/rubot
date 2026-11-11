@@ -44,6 +44,14 @@ module Rubot
     # trimmed, so nothing is lost for a later turn that needs to re-read it.
     TRUNCATED_TOOL_RESULT_NOTICE = "\n... [older tool output truncated; re-run the command if you still need it]"
 
+    # Appended to an oversized argument value of an old tool call after its
+
+    # first `tool_result_max_chars` characters. The count tells the model what
+
+    # it is missing without ever sending the body again.
+
+    REDACTED_TOOL_CALL_ARGS_NOTICE = "\n... [%d chars of this old tool call's argument redacted; re-run the tool if you still need them]"
+
     # Sent after a truncated answer. It has to be explicit about *not*
     # restarting: a model asked to "continue" will otherwise begin again at
     # the first sentence.
@@ -1633,44 +1641,100 @@ module Rubot
       [ @session.messages.size - @turn_start_index, 0 ].max
     end
 
-    # Shorten all but the newest `tool_result_keep` tool outputs in place.
-    #
-    # The boundary moves in blocks of `keep`, not one result at a time. A
-    # boundary that advances on every request rewrites a message in the middle
-    # of the transcript each time, and everything from that point on has to be
-    # re-read uncached — in a tool-heavy turn that is a new request every few
-    # seconds. Rounding the count down to a multiple of `keep` keeps the
-    # payload byte-for-byte identical between advances, so the same cached
-    # prefix survives roughly `keep` requests instead of one. The cost is up to
-    # `2 * keep` recent results kept verbatim instead of `keep`.
-    def trim_old_tool_results!(messages)
-      keep = @config.tool_result_keep
-      max_chars = @config.tool_result_max_chars
-      return if max_chars.zero?
+# Shorten all but the newest `tool_result_keep` tool outputs in place, and
+# redact the oversized arguments of the tool calls that produced them.
+#
+# The boundary moves in blocks of `keep`, not one result at a time. A
+# boundary that advances on every request rewrites a message in the middle
+# of the transcript each time, and everything from that point on has to be
+# re-read uncached — in a tool-heavy turn that is a new request every few
+# seconds. Rounding the count down to a multiple of `keep` keeps the
+# payload byte-for-byte identical between advances, so the same cached
+# prefix survives roughly `keep` requests instead of one. The cost is up to
+# `2 * keep` recent results kept verbatim instead of `keep`.
+#
+# Argument redaction rides the same boundary: a tool call whose result is
+# old enough to truncate also loses any oversized argument value (a file
+# written an hour ago does not need to ride along in every request).
+# Sharing one boundary keeps the cache-miss cadence at one per block
+# instead of two.
+def trim_old_tool_results!(messages)
+  keep = @config.tool_result_keep
+  max_chars = @config.tool_result_max_chars
+  return if max_chars.zero?
 
-      indexes = messages.each_index.select { |i| messages[i]["role"] == "tool" }
-      return if keep.positive? && indexes.size <= keep
+  indexes = messages.each_index.select { |i| messages[i]["role"] == "tool" }
+  return if keep.positive? && indexes.size <= keep
 
-      older = if keep.positive?
-        # How many results are past the keep window, rounded down to a block.
-        surplus = indexes.size - keep
-        truncate_count = (surplus / keep) * keep
-        return if truncate_count.zero?
+  older = if keep.positive?
+    # How many results are past the keep window, rounded down to a block.
+    surplus = indexes.size - keep
+    truncate_count = (surplus / keep) * keep
+    return if truncate_count.zero?
 
-        indexes[0, truncate_count].to_a
-      else
-        indexes
-      end
+    indexes[0, truncate_count].to_a
+  else
+    indexes
+  end
 
-      older.each do |i|
-        content = messages[i]["content"].to_s
-        next if content.length <= max_chars
+  older.each do |i|
+    redact_old_tool_call_args!(messages, messages[i]["tool_call_id"], max_chars)
+    content = messages[i]["content"].to_s
+    next if content.length <= max_chars
 
-        messages[i] = messages[i].merge(
-          "content" => content[0...max_chars] + TRUNCATED_TOOL_RESULT_NOTICE
-        )
-      end
-    end
+    messages[i] = messages[i].merge(
+      "content" => content[0...max_chars] + TRUNCATED_TOOL_RESULT_NOTICE
+    )
+  end
+end
+
+# Replace oversized top-level string values in an old tool call's
+# arguments with a notice, on the request copy only (the session transcript
+# keeps the originals). Values are rebuilt through merge/map because
+# conversation_history shares the stored tool_calls arrays by reference —
+# mutating them in place would corrupt the session file.
+def redact_old_tool_call_args!(messages, tool_call_id, max_chars)
+  return unless tool_call_id
+
+  index = messages.index do |m|
+    m["role"] == "assistant" && m["tool_calls"]&.any? { |tc| tc["id"] == tool_call_id }
+  end
+  return unless index
+
+  message = messages[index]
+  calls = message["tool_calls"].map do |tc|
+    next tc unless tc["id"] == tool_call_id
+
+    args = tc.dig("function", "arguments").to_s
+    redacted = redact_json_args(args, max_chars)
+    next tc if redacted == args
+
+    tc.merge("function" => tc["function"].merge("arguments" => redacted))
+  end
+  messages[index] = message.merge("tool_calls" => calls)
+end
+
+# Keep the first `max_chars` of each oversized top-level string value and
+# note how much was dropped, so the model still sees paths and command
+# shapes without carrying whole file bodies. Arguments that are not valid
+# JSON are left alone: a malformed string in history is what the provider
+# already accepted once, and guessing at its shape risks more.
+def redact_json_args(args, max_chars)
+  parsed = JSON.parse(args)
+  return args unless parsed.is_a?(Hash)
+
+  changed = false
+  parsed.each do |key, value|
+    next unless value.is_a?(String) && value.length > max_chars
+
+    parsed[key] = value[0...max_chars] +
+      format(REDACTED_TOOL_CALL_ARGS_NOTICE, value.length - max_chars)
+    changed = true
+  end
+  changed ? JSON.generate(parsed) : args
+rescue JSON::ParserError
+  args
+end
 
     # Build a provider from an immutable settings snapshot. No config
     # mutation is performed, so this is safe to call from any Ractor.
