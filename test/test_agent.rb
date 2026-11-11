@@ -1162,6 +1162,44 @@ class TestAgentCompaction < Minitest::Test
     refute agent.session.summarized?
   end
 
+  # The silent trim in Session#trim! moves the front of the transcript, and the
+  # provider can reuse nothing after that: measured at ~110k tokens per event
+  # for five to forty messages dropped (bin/cache_loss.rb, item 22). Compaction
+  # arrives one block early instead and keeps the information as a summary.
+  def test_auto_compaction_fires_before_the_hard_message_trim
+    write_config(compaction: { "max_messages" => 20 }, context_window: 10_000_000)
+    agent = Rubot::Agent.new(
+      config: Rubot::Config.new(@config_path),
+      provider: SummaryProvider.new,
+      session_id: "compact-near-cap",
+      tools: Rubot::Tools::Registry.new
+    )
+    # One block short of the cap: the next appends would make trim! drop the
+    # oldest messages, which is the miss this is meant to avoid.
+    18.times { |i| agent.session.add(i.even? ? "user" : "assistant", "message #{i} " * 20) }
+    assert_equal 18, agent.session.message_count
+
+    result = agent.send(:run_auto_compaction)
+
+    refute_nil result, "a transcript this close to the cap must compact, not wait to be trimmed"
+    assert agent.session.summarized?
+    assert_operator agent.session.message_count, :<, 18
+  end
+
+  def test_a_short_transcript_is_not_compacted_just_because_the_cap_is_small
+    write_config(compaction: { "max_messages" => 20 }, context_window: 10_000_000)
+    agent = Rubot::Agent.new(
+      config: Rubot::Config.new(@config_path),
+      provider: SummaryProvider.new,
+      session_id: "compact-short",
+      tools: Rubot::Tools::Registry.new
+    )
+    3.times { |i| agent.session.add("user", "message #{i} " * 20) }
+
+    assert_nil agent.send(:run_auto_compaction)
+    refute agent.session.summarized?
+  end
+
   def test_auto_compaction_does_nothing_below_the_threshold
     write_config(context_window: 10_000_000)
     agent = Rubot::Agent.new(

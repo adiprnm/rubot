@@ -497,6 +497,19 @@ module Rubot
       @messages.size
     end
 
+    # True when the next few appends would make #trim! drop the oldest messages.
+    #
+    # One block of headroom, because a trim lands a block below the cap (see
+    # #trim_block_size): asking at the cap itself arrives one append too late,
+    # after the trim has already moved the front of the transcript. Agent asks
+    # this before compaction so the summary takes over instead of the cut.
+    def near_trim_cap?
+      limit = @max_messages
+      return false unless limit.positive?
+
+      @messages.size >= limit - trim_block_size(limit)
+    end
+
     # Pi's `CHARS_PER_TOKEN`. Ruby has no tokenizer, so this is the same
     # text-length heuristic Pi uses for the parts of the transcript that no
     # provider usage report covers yet.

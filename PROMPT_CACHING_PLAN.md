@@ -301,3 +301,11 @@ olehnya. Yang bisa dihindari adalah *penyebab* prefix berubah: trim-nya sendiri.
 sebaiknya di-*compaction* lebih dulu, karena compaction juga satu re-read penuh
 tapi hasilnya lebih kecil (ringkasan + 10 pesan terakhir, bukan 360 pesan) dan
 informasinya tidak hilang. Harness pengukur: `bin/cache_loss.rb`.
+
+**Dikerjakan (item 23):** `Agent#run_auto_compaction` sekarang bertanya lebih dulu
+`Session#near_trim_cap?` — satu blok sebelum `session_max_messages` — dan memanggil
+compaction, bukan menunggu trim. Satu blok lebih awal karena trim mendarat satu blok
+di bawah cap: bertanya tepat di cap akan terlambat satu append, saat trim sudah jalan.
+Dua tes menjaga hubungan itu (`test_auto_compaction_fires_before_the_hard_message_trim`,
+`test_near_trim_cap_reports_one_block_of_headroom`); predikatnya tinggal di `Session`
+bersama trim yang dijaganya supaya keduanya tidak bisa melenceng.

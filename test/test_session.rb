@@ -460,8 +460,32 @@ class TestSessionSummarization < Minitest::Test
     assert_equal 90, session.message_count
   end
 
-  def test_the_hard_trim_never_empties_the_transcript
-    session = Rubot::Session.new("trim-tiny", workspace: @workspace, max_messages: 1)
+  # The predicate compaction asks before it takes over: one block of headroom
+  # before the cap, because the trim lands a block below it. Asking at the cap
+  # arrives one append too late -- by then the front has already moved and the
+  # prefix is gone (see test_the_hard_trim_cuts_a_block_so_the_prefix_stays_put).
+  def test_near_trim_cap_reports_one_block_of_headroom
+    session = Rubot::Session.new("near-cap", workspace: @workspace, max_messages: 100)
+
+    89.times { |i| session.add("user", "Message #{i}") }
+    refute session.near_trim_cap?, "one block of room is still room"
+
+    10.times { |i| session.add("user", "Message #{89 + i}") }
+    assert session.near_trim_cap?, "the next append would make trim! cut"
+    assert_equal 99, session.message_count
+  end
+
+  # `max_messages: 0` falls back to the default cap, so a short transcript must
+  # still read as far from it -- the predicate is a distance, not a flag.
+  def test_a_short_transcript_is_far_from_the_trim_cap
+    session = Rubot::Session.new("short", workspace: @workspace, max_messages: 0)
+
+    20.times { |i| session.add("user", "Message #{i}") }
+
+    refute session.near_trim_cap?
+  end
+
+  def test_the_hard_trim_never_empties_the_transcript    session = Rubot::Session.new("trim-tiny", workspace: @workspace, max_messages: 1)
 
     5.times { |i| session.add("user", "Message #{i}") }
 
