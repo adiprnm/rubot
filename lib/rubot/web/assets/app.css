@@ -182,6 +182,12 @@ html, body {
   margin: 0;
   overflow: hidden;
   overscroll-behavior: none;
+  /* A tap must not paint the browser's blue box over the thing it hit. It is
+     the one part of a phone's default styling that reads as a web page rather
+     than an app: the flash lands on the whole element, ignores the border
+     radius, and shows nothing while the finger is still down. The press state
+     at the end of this file replaces it — drawn by us, on the parts we choose. */
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
@@ -3389,4 +3395,43 @@ body.lightbox-open { overflow: hidden; }
 @media (pointer: coarse) {
   .session-setting select { min-height: 2.6rem; }
   .session-settings { margin-bottom: 0.4rem; }
+}
+
+/* ---------- press feedback ---------------------------------------- */
+
+/* Drawn, not flashed. A phone has no hover, so `:active` is the only state a
+   finger gets before the action happens; the browser's blue box used to be the
+   only thing filling it. Opacity alone on rows: a scale on a full-width session
+   row moves the text beside it a fraction of a pixel, which reads as a wobble
+   at arm's length. A button may scale, because nothing sits inside its box.
+
+   Both hover-capable and coarse pointers are listed: a laptop trackpad shows
+   the same thing on click, and a rule that argued about which device it was on
+   would drift from the one beside it. */
+button:active,
+a:active,
+.btn:active,
+.session-link:active,
+.theme-swatch:active {
+  opacity: 0.72;
+}
+
+.btn:active,
+.theme-swatch:active {
+  transform: scale(0.97);
+}
+
+/* A finger should see the press now, not after the tap is over: the shorter
+   release is what makes it feel like the button moved under the thumb rather
+   than after it. */
+.btn,
+.session-link,
+.theme-swatch {
+  transition: color .12s, border-color .12s, background .12s,
+              opacity .08s, transform .08s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn:active,
+  .theme-swatch:active { transform: none; }
 }
