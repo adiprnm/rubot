@@ -1014,12 +1014,34 @@ module Rubot
     NARRATION_RULE = <<~PROMPT.strip.freeze
       # Progress Narration
 
-      Before every tool call, write one short sentence in the same language as the
+      Before running tools, write one short sentence in the same language as the
       user's message describing what you are about to do and why, for example
       "Let me look at the current structure first." or "Now I'll generate the image."
       Speak in terms of the task, not the tool: never mention tool names, function
       names, JSON arguments, or raw commands in these sentences. The user sees the
       sentence as a chat message while you work.
+
+      # One Message, Every Call That Is Ready
+
+      Every message you send costs a full round trip, and the reader waits through
+      all of them. So narrate once, then issue every tool call whose arguments you
+      already know in that same message: reading four files, checking three paths,
+      or running two searches whose patterns are already clear is one message with
+      four calls, not four messages. Call a tool alone only when its arguments
+      depend on a result you do not have yet. Never split work into separate
+      messages just to report progress between them.
+    PROMPT
+
+    # The same rule again, at the very end of the prompt. Placement is the
+    # point: an instruction read immediately before the question is the one a
+    # model follows most reliably, and this is the instruction that decides how
+    # many round trips a turn costs.
+    BATCH_REMINDER = <<~PROMPT.strip.freeze
+      # Before You Send
+
+      Count the tool calls you are about to make. If one of them does not need
+      another's result, they belong in the same message: one message, every call
+      that is already possible.
     PROMPT
 
     # Handing files back to the user. Kept here rather than left to the tool
@@ -1169,6 +1191,14 @@ module Rubot
     def system_prompt_epoch
       {
         "model" => active_model_name.to_s,
+        # The rules this build ships are an input like any other. Without them
+        # here, adding the batching reminder to the code did nothing for a
+        # session already running: its prompt stayed pinned to the text of the
+        # older build, so the reminder was written, never sent, and the turn went
+        # on making one round trip per tool call. A digest of the shipped text
+        # moves the epoch when the code changes it — one uncached request per
+        # session, once, which is the price of any changed prefix.
+        "rules" => digest_of(shipped_rules),
         # A persona is identity, not context: switching to another one (or
         # removing it) changes who is answering, so the prompt has to move on
         # that exact request. Leaving it out meant /persona reset reported the
@@ -1183,6 +1213,14 @@ module Rubot
         # arrival (early calls build the prompt before any message exists).
         "task" => digest_of(@session&.task_statement)
       }
+    end
+
+    # The instruction text this build appends to every prompt. Kept in one place
+    # because the epoch digests it: a rule that changes in the code has to move
+    # the epoch, or a session that is already running keeps answering under the
+    # rules it was pinned with.
+    def shipped_rules
+      [ FILE_DELIVERY_RULE, FILE_DELIVERY_SINGLE_RULE, NOTIFY_RULE, BATCH_REMINDER ].join("\u0000")
     end
 
     # The persona parts that reach the prompt: its own instructions and the
@@ -1305,6 +1343,13 @@ module Rubot
       # a second time here — that duplicated ~200 tokens per request for no
       # extra information.
       parts << @memory.to_s if @memory.enabled?
+
+      # 8. The batching instruction, restated last on purpose. A round trip is
+      # the expensive part of a turn, and this model follows the instruction it
+      # reads closest to the question: the same rule in the middle of a long
+      # prompt produced 1–2 calls per message, repeated here it produced 4 of
+      # 4 on the same task. Costs ~30 tokens and buys back seconds per turn.
+      parts << BATCH_REMINDER
 
       parts.join("\n\n---\n\n")
     end

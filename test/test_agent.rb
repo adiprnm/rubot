@@ -360,6 +360,19 @@ class TestAgentProgressNarration < Minitest::Test
     assert_includes @agent.build_system_prompt, "Progress Narration"
   end
 
+  # A round trip is the expensive part of a turn, so the batching rule is
+  # restated as the very last thing in the prompt: measured on this model, the
+  # same rule buried in the middle of a long prompt produced one or two calls
+  # per message, while repeating it at the end produced all four.
+  def test_system_prompt_ends_with_the_batching_reminder
+    prompt = @agent.build_system_prompt
+
+    assert_includes prompt, "# Before You Send"
+    assert_includes prompt, "Count the tool calls you are about to make"
+    assert prompt.rstrip.end_with?(Rubot::Agent::BATCH_REMINDER),
+           "the reminder has to be the last thing the model reads"
+  end
+
   # The rule is the request, not the clock: an unprompted announcement repeats
   # what the reader already sees. The one exception is a standing request for a
   # notification at the end of every turn — and nothing smaller counts as it.
@@ -1270,6 +1283,27 @@ class TestAgentAdaptiveLearning < Minitest::Test
     assert_equal 1, @provider.extraction_calls, "two answers plus one batched extraction"
     assert_equal 1, @provider.naming_calls, "a conversation is named once"
     assert_empty @agent.session.memory_backlog
+  end
+
+  # The rules the build ships are part of the prompt's identity. Adding the
+  # batching reminder to the code did nothing for a session that was already
+  # running: its prompt stayed pinned to the text of the older build, so the
+  # reminder was written and never sent.
+  def test_a_prompt_pinned_by_an_older_build_is_rebuilt
+    @agent.process("first message here", stream: false)
+
+    assert_includes @agent.system_prompt_epoch.keys, "rules",
+                    "the shipped rule text has to move the epoch"
+
+    # What an older build left behind: the same prompt, an epoch with no rules.
+    @agent.session.store_system_prompt("teks dari build lama",
+                                       @agent.system_prompt_epoch.except("rules"))
+
+    rebuilt = @agent.build_system_prompt
+
+    assert_includes rebuilt, "Before You Send",
+                    "a prompt pinned under an older epoch must not be reused"
+    refute_includes rebuilt, "teks dari build lama"
   end
 
   def test_a_named_conversation_keeps_its_title
