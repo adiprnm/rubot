@@ -164,6 +164,71 @@ class TestProviders < Minitest::Test
     assert_equal "low", payload["reasoning_effort"]
   end
 
+  # Without prompt_cache_key the provider is free to route each request to a
+  # machine that does not hold this prefix, and the miss reads like a prompt
+  # problem. The value has to cover the prefix and nothing that moves.
+  def test_openai_sends_a_prompt_cache_key_for_its_own_endpoint
+    settings = Rubot::ProviderSettings.new(
+      provider: "openai", model: "gpt-4o-mini", api_key: "sk-test",
+      api_base: "https://api.openai.com/v1", max_tokens: 256, temperature: 0.7
+    )
+    provider = Rubot::Providers::OpenAI.new(settings)
+    messages = [ { "role" => "system", "content" => "SYSTEM" }, { "role" => "user", "content" => "halo" } ]
+
+    payload = provider.send(:build_payload, messages, nil)
+
+    assert_match(/\A[0-9a-f]{40}\z/, payload["prompt_cache_key"])
+  end
+
+  def test_the_prompt_cache_key_ignores_a_growing_conversation
+    settings = Rubot::ProviderSettings.new(
+      provider: "openai", model: "gpt-4o-mini", api_key: "sk-test",
+      api_base: "https://api.openai.com/v1", max_tokens: 256, temperature: 0.7
+    )
+    provider = Rubot::Providers::OpenAI.new(settings)
+    system = { "role" => "system", "content" => "SYSTEM" }
+
+    key_for = lambda do |tail|
+      provider.send(:build_payload, [ system ] + tail, nil)["prompt_cache_key"]
+    end
+
+    first = key_for.call([ { "role" => "user", "content" => "satu" } ])
+    assert_equal first, key_for.call([ { "role" => "user", "content" => "satu" },
+                                       { "role" => "assistant", "content" => "dua" } ]),
+                 "a key that moves with the conversation routes every request elsewhere"
+  end
+
+  def test_the_prompt_cache_key_follows_the_system_prompt_and_the_tools
+    settings = Rubot::ProviderSettings.new(
+      provider: "openai", model: "gpt-4o-mini", api_key: "sk-test",
+      api_base: "https://api.openai.com/v1", max_tokens: 256, temperature: 0.7
+    )
+    provider = Rubot::Providers::OpenAI.new(settings)
+    registry = Rubot::Tools::Registry.new
+    before = provider.send(:build_payload, [ { "role" => "system", "content" => "A" } ], registry.all)
+    after_prompt = provider.send(:build_payload, [ { "role" => "system", "content" => "B" } ], registry.all)
+    after_tools = provider.send(:build_payload, [ { "role" => "system", "content" => "A" } ], registry.all.first(2))
+
+    refute_equal before["prompt_cache_key"], after_prompt["prompt_cache_key"],
+                 "a new system prompt is a new prefix and needs its own partition"
+    refute_equal before["prompt_cache_key"], after_tools["prompt_cache_key"],
+                 "a different tool catalog is a different prefix"
+  end
+
+  # An OpenAI-compatible gateway that does not know the field answers 400, so a
+  # routing hint would become a broken request. The gate is the endpoint.
+  def test_an_openai_compatible_gateway_is_not_sent_a_prompt_cache_key
+    settings = Rubot::ProviderSettings.new(
+      provider: "openai", model: "deepseek-v4.1-flash", api_key: "sk-test",
+      api_base: "https://gateway.example.invalid/v1", max_tokens: 256, temperature: 0.7
+    )
+    provider = Rubot::Providers::OpenAI.new(settings)
+
+    payload = provider.send(:build_payload, [ { "role" => "system", "content" => "S" } ], nil)
+
+    refute payload.key?("prompt_cache_key")
+  end
+
   def test_openai_payload_omits_reasoning_effort_when_unset
     settings = Rubot::ProviderSettings.new(
       provider: "openai", model: "deepseek-v4.1-flash", api_key: "sk-test",

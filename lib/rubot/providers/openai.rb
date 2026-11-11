@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "digest"
 require "json"
 require "net/http"
 require "securerandom"
@@ -98,6 +99,40 @@ module Rubot
         end
       end
 
+      # OpenAI routes a request to whichever machine holds its cache; the key is
+      # how it knows two requests belong to the same prefix. Without one every
+      # request is a free choice, and a request that lands elsewhere pays for
+      # the whole prefix again — the cache hit rate looks like a prompt problem
+      # while the prompt was identical all along.
+      #
+      # The value covers exactly the part that has to be found again: the model,
+      # the pinned system prompt and the tool catalog. Not the conversation —
+      # that grows every turn, and a key that moved with it would route each
+      # request to a different machine, which is the failure this prevents.
+      # It is a digest, so it survives a restart: a request after `rubot` is
+      # started again lands on the same partition as the one before it.
+      #
+      # Only real OpenAI gets it. The field is OpenAI's, and an OpenAI-compatible
+      # gateway that does not recognise it answers 400 — which would turn a
+      # routing hint into a broken request. The gate is the endpoint, not the
+      # `provider:` label, because that label is also how a gateway is named.
+      def prompt_cache_key(messages, tools)
+        return nil unless openai_endpoint?
+
+        system = messages.is_a?(Array) ? messages.first : nil
+        prompt = system.is_a?(Hash) ? (system["content"] || system[:content]).to_s : ""
+        catalog = Array(tools).map { |tool| [ tool.name, tool.description, tool.parameters ] }
+
+        Digest::SHA1.hexdigest(JSON.generate([ @config.model, prompt, catalog ]))
+      end
+
+      def openai_endpoint?
+        host = URI(api_base).host.to_s.downcase
+        host == "api.openai.com" || host.end_with?(".openai.com")
+      rescue URI::InvalidURIError
+        false
+      end
+
       def build_payload(messages, tools, stream: false)
         payload = {
           "model" => @config.model,
@@ -107,6 +142,8 @@ module Rubot
         }
         payload["stream"] = true if stream
         payload["stream_options"] = { "include_usage" => true } if stream
+        cache_key = prompt_cache_key(messages, tools)
+        payload["prompt_cache_key"] = cache_key if cache_key
         effort = @config.respond_to?(:reasoning_effort) ? @config.reasoning_effort : nil
         payload["reasoning_effort"] = effort if effort
         if tools && !tools.empty?
