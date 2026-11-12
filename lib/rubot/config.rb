@@ -360,8 +360,8 @@ module Rubot
       ProviderSettings.new(
         provider: preset["provider"],
         model: preset["model"],
-        api_key: preset["api_key"],
-        api_base: preset["api_base"],
+        api_key: preset["api_key"] || api_key,
+        api_base: preset["api_base"] || api_base,
         max_tokens: preset["max_tokens"] || max_tokens,
         temperature: preset["temperature"] || temperature,
         debug: debug?,
