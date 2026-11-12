@@ -131,12 +131,25 @@ class TestPayloadStability < Minitest::Test
 
   def test_the_anthropic_conversion_appends_without_rewriting
     agent = build_agent
-    before = blocks(anthropic_payload(agent)["messages"])
+    before = blocks(strip_cache_control(anthropic_payload(agent)["messages"]))
 
     agent.session.add("user", "Lanjut")
-    after = blocks(anthropic_payload(agent)["messages"])
+    after = blocks(strip_cache_control(anthropic_payload(agent)["messages"]))
 
     assert after.start_with?(before)
+  end
+
+  def strip_cache_control(messages)
+    Array(messages).map do |message|
+      copy = message.dup
+      content = copy["content"]
+      if content.is_a?(Array)
+        copy["content"] = content.map do |block|
+          block.is_a?(Hash) ? block.reject { |key, _| key == "cache_control" } : block
+        end
+      end
+      copy
+    end
   end
 
   # The tool catalog sits between the system prompt and the transcript, so a

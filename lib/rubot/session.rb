@@ -570,24 +570,28 @@ module Rubot
     # `extra_chars` is the system prompt and is only needed for the fallback:
     # an anchored usage already counted the prompt it was sent with.
     def context_tokens(extra_chars: 0)
+      # Fallback estimate of the whole transcript, used to keep the number honest
+      # when the provider's usage anchor is stale or never grew.
+      fallback_tokens = extra_chars.to_i / CHARS_PER_TOKEN
+      @messages.each { |msg| fallback_tokens += self.class.message_tokens(msg, reasoning: false) }
+
       if context_anchored?
         start = @last_usage_watermark.to_i
-        # The usage describes the request that produced the assistant message
-        # appended right after it. That reply is already in completion_tokens,
-        # so the trailing estimate starts on the message after it.
         start += 1 if @messages[start] && @messages[start]["role"] == "assistant"
         trailing = @messages[start..].to_a.sum { |msg| self.class.message_tokens(msg, reasoning: false) }
         usage_tokens = @last_usage.prompt_tokens + @last_usage.completion_tokens
+        anchored_tokens = usage_tokens + trailing
+        # Never report less than the transcript we are actually about to send:
+        # a stale anchor must not freeze the context size.
+        tokens = [anchored_tokens, fallback_tokens].max
         {
-          tokens: (usage_tokens + trailing).ceil,
+          tokens: tokens.ceil,
           usage_tokens: usage_tokens,
           trailing_tokens: trailing.ceil,
           anchored: true
         }
       else
-        tokens = extra_chars.to_i / CHARS_PER_TOKEN
-        @messages.each { |msg| tokens += self.class.message_tokens(msg, reasoning: false) }
-        { tokens: tokens.ceil, usage_tokens: 0, trailing_tokens: tokens.ceil, anchored: false }
+        { tokens: fallback_tokens.ceil, usage_tokens: 0, trailing_tokens: fallback_tokens.ceil, anchored: false }
       end
     end
 

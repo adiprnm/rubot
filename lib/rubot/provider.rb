@@ -104,6 +104,12 @@ module Rubot
     ].freeze
 
     attr_reader :config, :last_usage
+    # Whether this provider/model supports a mid-conversation `role: "system"`
+    # message without invalidating the cached prefix. Default false: fall back
+    # to the existing /repin behaviour (one uncached request).
+    def supports_mid_conversation_system?
+      false
+    end
 
     # Build the provider implementation for an immutable ProviderSettings.
     # Kept here so callers (Agent, ModelCatalog) share one mapping.

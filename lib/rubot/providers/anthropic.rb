@@ -34,7 +34,7 @@ module Rubot
       end
 
       def format_tools(tools)
-        tools.map do |t|
+        Array(tools).map do |t|
           {
             "name" => t.name,
             "description" => t.description,
@@ -79,17 +79,42 @@ module Rubot
       private
 
       def build_payload(messages, tools, system_prompt, stream: false)
+        mapped = messages.map { |m| anthropic_message(m) }
+        markers = cache_markers_enabled?(system_prompt, tools, mapped)
+
         payload = {
           "model" => @config.model,
-          "messages" => messages.map { |m| anthropic_message(m) },
+          "messages" => mapped,
           "max_tokens" => @config.max_tokens,
           "temperature" => @config.temperature
         }
         payload["stream"] = true if stream
-        payload["system"] = system_prompt if system_prompt
+
+        if system_prompt
+          system_block = { "type" => "text", "text" => system_prompt }
+          system_block["cache_control"] = cache_control_marker if markers
+          payload["system"] = [ system_block ]
+        end
+
         if tools && !tools.empty?
           payload["tools"] = format_tools(tools)
+          # Re-apply marker decision consistently: format_tools already gated on
+          # markers, but it could not see the full prefix, so fix up here.
+          if markers && payload["tools"].is_a?(Array) && !payload["tools"].empty?
+            payload["tools"].last["cache_control"] = cache_control_marker
+          elsif !markers && payload["tools"].is_a?(Array)
+            payload["tools"].each { |t| t.delete("cache_control") }
+          end
         end
+
+        if markers && !mapped.empty?
+          # Rolling breakpoint on the last message of the request.
+          mark_cache_control(mapped.last, cache_control_marker)
+          # Anchor on the last message of the previous turn, when there is one,
+          # so tool-heavy turns keep a stable block inside the lookback window.
+          mark_cache_control(mapped[-2], cache_control_marker) if mapped.size >= 2
+        end
+
         payload
       end
 
@@ -113,7 +138,8 @@ module Rubot
             end
             result["content"] = content
           else
-            result["content"] = msg["content"] || ""
+            text = msg["content"]
+            result["content"] = text.is_a?(Array) ? text : [ { "type" => "text", "text" => text.to_s } ]
           end
           result
         when "tool"
@@ -126,7 +152,40 @@ module Rubot
             } ]
           }
         else
-          { "role" => "user", "content" => msg["content"] || "" }
+          text = msg["content"]
+          content = text.is_a?(Array) ? text : [ { "type" => "text", "text" => text.to_s } ]
+          { "role" => "user", "content" => content }
+        end
+      end
+
+      def cache_control_marker
+        { "type" => "ephemeral" }
+      end
+
+      def cache_markers_enabled?(system_prompt, tools, mapped)
+        estimate = (system_prompt.to_s.length +
+                    Array(tools).map(&:to_s).join.length +
+                    Array(mapped).map(&:to_s).join.length) / 4
+        estimate >= cache_min_tokens
+      end
+
+      def cache_min_tokens
+        model = @config.model.to_s.downcase
+        return 512 if model.match?(/opus-5|sonnet-5\.5|haiku-5\.5|fable|mythos/)
+        return 2048 if model.include?("opus-4.7")
+        return 4096 if model.match?(/opus-4\.[56]|haiku-4\.5/)
+        1024
+      end
+
+      def mark_cache_control(message, marker)
+        return unless message.is_a?(Hash)
+
+        content = message["content"]
+        if content.is_a?(Array) && !content.empty?
+          last = content.last
+          last["cache_control"] = marker.dup if last.is_a?(Hash)
+        elsif content.is_a?(String)
+          message["content"] = [ { "type" => "text", "text" => content, "cache_control" => marker.dup } ]
         end
       end
 
