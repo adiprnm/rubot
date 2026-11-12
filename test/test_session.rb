@@ -501,6 +501,7 @@ class TestSessionSummarization < Minitest::Test
 
     assert_equal "Refactor the auth flow", session.task_statement
     assert_equal "Refactor the auth flow", session.messages.first["content"]
+    refute session.task_anchor_needed?, "the transcript still states the goal itself"
   end
 
   def test_the_task_survives_the_hard_message_trim
@@ -511,6 +512,7 @@ class TestSessionSummarization < Minitest::Test
     assert_operator session.message_count, :<=, 6
     refute_includes session.messages.map { |m| m["content"] }, "Refactor the auth flow"
     assert_equal "Refactor the auth flow", session.task_statement
+    assert session.task_anchor_needed?, "the trimmed transcript no longer states the goal"
   end
 
   def test_the_task_is_persisted_and_loaded

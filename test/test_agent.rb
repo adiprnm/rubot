@@ -553,7 +553,8 @@ class TestAgentProgressNarration < Minitest::Test
     epoch = @agent.send(:system_prompt_epoch)
 
     assert_equal @agent.active_model_name.to_s, epoch["model"]
-    refute_empty epoch["task"], "a session with a task still fingerprints it"
+    assert_equal "", epoch["task"],
+                 "the transcript still carries the request, so there is no anchor to pin"
     assert_equal "", epoch["summary"], "no summary yet, so nothing to pin it to"
     assert_equal "", epoch["persona"], "no persona, so nothing to fingerprint"
 
@@ -1233,6 +1234,22 @@ class TestAgentCompaction < Minitest::Test
     @agent.session.add("user", "hello")
 
     assert_nil @agent.compact_session
+  end
+
+  # The anchor appears exactly when the goal leaves the transcript. Compaction
+  # is the moment that happens, and the pinned prompt has to move with it.
+  def test_the_task_is_restated_once_compaction_drops_the_message_that_stated_it
+    @agent.session.add("user", "Refactor the auth flow across five files")
+    9.times { |i| @agent.session.add("assistant", "step #{i}") }
+
+    refute_includes @agent.send(:build_system_prompt), "# Task",
+                    "the transcript still opens with the request"
+
+    @agent.compact_session
+
+    prompt = @agent.send(:build_system_prompt)
+    assert_includes prompt, "# Task"
+    assert_includes prompt, "Refactor the auth flow across five files"
   end
 
   def test_auto_compaction_triggers_at_the_context_threshold
@@ -2036,14 +2053,18 @@ end
   end
 
   # The task statement lives outside the transcript, so trimming and
-  # compaction cannot lose it. It is re-stated in the system prompt each round.
-  def test_the_task_statement_is_always_in_the_system_prompt
+  # compaction cannot lose it. It reaches the system prompt once the transcript
+  # no longer carries the message that stated it -- not before: while the
+  # conversation still opens with the request, a second, older copy of it in
+  # front of everything is a competing instruction (a session opened with "show
+  # me my todos" kept answering with the list when later told to do the work).
+  def test_the_task_is_not_restated_while_the_transcript_still_carries_it
     @agent.session.add("user", "Refactor auth across five files")
     40.times { |i| @agent.session.add("assistant", "step #{i}") }
 
     prompt = @agent.send(:build_system_prompt)
-    assert_includes prompt, "# Task"
-    assert_includes prompt, "Refactor auth across five files"
+    refute_includes prompt, "# Task"
+    assert_includes @agent.send(:build_messages)[1]["content"], "Refactor auth across five files"
   end
 
   def test_stored_tool_output_is_not_modified
@@ -3026,9 +3047,13 @@ class TestAgentCacheDivergence < Minitest::Test
   def test_a_rewritten_message_in_the_history_reports_its_index
     agent = build_agent("divergence-middle")
     agent.process("halo", stream: false)
-
-    agent.session.messages.first["content"] = "halo, tapi diubah"
     agent.process("lagi", stream: false)
+
+    # A message that was already sent, quoted back with different text. The
+    # first turn's own answer is not one: it arrived with the reply, so a
+    # request that follows can only append it.
+    agent.session.messages[2]["content"] = "lagi, tapi diubah"
+    agent.process("ketiga", stream: false)
 
     record = agent.session.cache_records.last
 

@@ -27,7 +27,7 @@ Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https:
 - 🔒 **Safety guard** — dangerous command filtering (PicoClaw-style sandboxing), without blocking the documented `ruby -e` workflow
 - ✏️ **Precise edits** — `file_ops edit` replaces one exact block instead of rewriting the whole file, and `read` takes `offset`/`limit` so a long file can be read in pieces
 - 🔎 **Search tool** — `search` finds files (`**/*.rb`) or matching lines (`path:line: text`) inside a repo, skipping `.git`, `node_modules` and build output
-- 🎯 **Task anchor** — the user's original request is stored on the session and re-stated in the system prompt, so trimming or compaction cannot make a long task forget its goal
+- 🎯 **Task anchor** — the user's original request is stored on the session and re-stated in the system prompt as soon as trimming or compaction takes it out of the transcript, so a long task cannot forget its goal while a short one is not handed a competing instruction
 - 🎯 **Skills system** — pluggable skill definitions via SKILL.md files in the workspace; loading one shows up in the TUI transcript as its own `✦ skill <name>` row, and flips to `✓` once read
 - 📡 **Multi-channel** — REPL, Telegram and a browser UI, with a pluggable channel architecture
 - 🌐 **Browser channel** — an HTMX page streamed over Server-Sent Events: token streaming, live tool rows and a confirmation card, with no frontend build step

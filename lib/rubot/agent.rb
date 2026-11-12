@@ -1274,7 +1274,9 @@ module Rubot
         "skill" => @session&.forced_skill.to_s,
         # Set from the first user message, so the pin must not survive its
         # arrival (early calls build the prompt before any message exists).
-        "task" => digest_of(@session&.task_statement)
+        # It is the anchor, not the statement: while the transcript still
+        # carries the statement, this stays empty and the epoch stays put.
+        "task" => digest_of(task_anchor)
       }
     end
 
@@ -1303,6 +1305,17 @@ module Rubot
       return "" if value.empty?
 
       Digest::SHA1.hexdigest(value)
+    end
+
+    # The task statement as the prompt should carry it: the text once the
+    # transcript has lost the message that stated it, nil while it still has
+    # it. Both the prompt and its epoch read this, so the anchor appears (one
+    # uncached request) exactly when trimming or compaction actually takes the
+    # goal away, and never sooner.
+    def task_anchor
+      return nil unless @session&.task_anchor_needed?
+
+      @session.task_statement
     end
 
     # Compose the prompt from its sources. Order is deliberate: the parts that
@@ -1375,10 +1388,14 @@ module Rubot
 
       # --- Everything below is volatile: it changes while a session runs. ---
 
-      # 3. The instruction that started this session. Stored outside the
-      # transcript so the hard message trim and compaction cannot delete the
-      # goal of a long, multi-step task.
-      task = @session&.task_statement
+      # 3. The instruction that started this session, but only once the
+      # transcript no longer carries it. Stored outside the transcript so the
+      # hard message trim and compaction cannot delete the goal of a long,
+      # multi-step task -- and kept out of the prompt until then, because a
+      # second, older request sitting in front of the conversation is a
+      # competing instruction, not a reminder (see
+      # Session#task_anchor_needed?).
+      task = task_anchor
       unless task.nil?
         shown = task.length > MAX_TASK_CHARS ? "#{task[0...MAX_TASK_CHARS]}\n... (task truncated)" : task
         parts << "# Task\n\nThe user's original request for this session:\n\n#{shown}"

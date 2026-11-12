@@ -38,7 +38,8 @@ agents:
       threshold_tokens: 120_000
       # Messages kept in the session file before the oldest are dropped. This
       # is only a file-size guard: the user's original request is stored
-      # separately and re-stated in the system prompt, so it is never lost.
+      # separately and re-stated in the system prompt once the transcript no
+      # longer carries it, so it is never lost.
       max_messages: 400
     # What is sent to the provider from the transcript. Reasoning from past
     # turns is never re-sent; only the turn being executed keeps it.

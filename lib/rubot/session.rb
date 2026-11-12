@@ -323,6 +323,27 @@ module Rubot
       text.empty? ? nil : text
     end
 
+    # True when the goal has to be carried outside the transcript, because the
+    # message that stated it is no longer in the window the model is sent.
+    #
+    # This is the whole point of the anchor and the reason it is not injected
+    # unconditionally: a session whose first user message is still in the
+    # transcript already states its own goal, and repeating it in the system
+    # prompt gives the model a second, older request to answer instead. A
+    # session opened with "show me my todos" and later told "do items 3 to 7"
+    # kept answering with the todo list, because the pinned prompt still
+    # called the listing the task. The anchor comes back exactly when the
+    # transcript stops carrying that message -- one compaction or trim later.
+    def task_anchor_needed?
+      goal = task_statement
+      return false if goal.nil?
+
+      first = @messages.first
+      return true if first.nil?
+
+      !(first["role"].to_s == "user" && first["content"].to_s.strip == goal)
+    end
+
     def conversation_history(reasoning_tail: nil)
       # `reasoning_tail` limits reasoning_content to the newest N messages.
       # Providers bill every byte of the prompt, and the thinking of a turn
