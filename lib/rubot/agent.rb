@@ -1855,6 +1855,7 @@ end
     def provider_model_id?(name)
       id = name.to_s
       return true if ModelCatalog.cached_model_ids(@config.catalog_dir).include?(id)
+      return true if provider_model_entries.any? { |entry| entry["name"].to_s == id }
 
       # The catalog loaded in this process knows its ids without a fetch.
       @model_catalog&.cached_ids.to_a.include?(id)
