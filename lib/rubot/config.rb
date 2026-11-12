@@ -101,6 +101,18 @@ module Rubot
 
     alias model_list models
 
+    def providers
+      raw = data["providers"]
+      raw.is_a?(Hash) ? raw : {}
+    end
+
+    def selected_provider
+      name = (data["provider"] || agent_defaults["provider"]).to_s.strip
+      name = "openai" if name.empty?
+      entry = providers[name]
+      entry.is_a?(Hash) ? entry : {}
+    end
+
     def provider
       return data["provider"] if data["provider"]
       return agent_defaults["provider"] if agent_defaults["provider"]
@@ -133,7 +145,7 @@ module Rubot
     end
 
     def api_key
-      global_api_key || active_model_entry["api_key"] || agent_defaults["api_key"] || ENV["RUBOT_API_KEY"] || ENV["OPENAI_API_KEY"]
+      global_api_key || selected_provider["api_key"] || active_model_entry["api_key"] || agent_defaults["api_key"] || ENV["RUBOT_API_KEY"] || ENV["OPENAI_API_KEY"]
     end
 
     # A key set for the whole install, in front of the per-model ones.
@@ -149,7 +161,7 @@ module Rubot
     end
 
     def api_base
-      active_model_entry["api_base"] || agent_defaults["api_base"] || data["api_base"] || ENV["RUBOT_API_BASE"] || ENV["OPENAI_API_BASE"]
+      selected_provider["api_base"] || active_model_entry["api_base"] || agent_defaults["api_base"] || data["api_base"] || ENV["RUBOT_API_BASE"] || ENV["OPENAI_API_BASE"]
     end
 
     # Build an immutable ProviderSettings snapshot for the given model
