@@ -194,7 +194,9 @@ module Rubot
         file[:id] = id.to_s unless id.to_s.empty?
         file[:label] = label.to_s unless label.to_s.empty?
         @mutex.synchronize do
-          last = @items.last
+          # The marker a quick thought leaves draws nothing, so a strip below it
+          # is still the strip the reader is looking at.
+          last = @items[@items.rindex { |item| item[:kind] != :step } || @items.length]
           if last && last[:kind] == :attachments
             last[:list] = last[:list] + [ file ]
           else
@@ -414,19 +416,29 @@ module Rubot
 
       # The last row that belongs to a round. A steering message is the reader
       # talking, not the turn moving on: it is drawn where it was typed, and it
-      # must not stand between a block and its own continuation. Read from the
-      # end rather than trusted to be `@items.last`, because the reader can
-      # speak at any moment — including in the middle of a thought.
+      # must not stand between a block and its own continuation. The same goes
+      # for the marker left by a thought too quick to show (see
+      # close_thinking_locked): it separates two rounds for the compact view,
+      # but it draws no row of its own, so the line the model was writing has to
+      # read straight through it. Read from the end rather than trusted to be
+      # `@items.last`, because the reader can speak at any moment — including in
+      # the middle of a thought.
       def tail_locked
-        index = @items.rindex { |item| item[:kind] != :steer }
+        index = @items.rindex { |item| item[:kind] != :steer && item[:kind] != :step }
         index && @items[index]
+      end
+
+      # Where the last visible row sits, for the writes that have to look at it
+      # (an open thought, a strip of files). Same skipping rule as tail_locked.
+      def tail_index_locked
+        @items.rindex { |item| item[:kind] != :steer && item[:kind] != :step }
       end
 
       # Finish the thinking block. A wait worth noticing collapses to one row,
       # "Thought for 12s"; a quick one is dropped outright, so the timeline
       # only records pauses the reader could feel.
       def close_thinking_locked
-        index = @items.rindex { |item| item[:kind] != :steer }
+        index = tail_index_locked
         return unless index
 
         block = @items[index]
@@ -434,10 +446,18 @@ module Rubot
 
         block[:elapsed] = @clock.call - block[:started_at]
         block[:closed_at] = Time.now.to_f
-        # Dropped by index, not by popping the end: the reader can have spoken
-        # while the model was thinking, and a `pop` would take their message
-        # instead of the pause that is too short to mention.
-        @items.delete_at(index) if block[:elapsed] <= THINKING_SECONDS
+        return if block[:elapsed] > THINKING_SECONDS
+
+        # Too short to earn a row — but not nothing. The pause is where one
+        # round ended and the next began, and the compact view needs that line
+        # even when there is no clock to show for it: without it two rounds of
+        # calls sit side by side and read as one batch, so nothing is ever
+        # collapsed and the takeover the reader asked for never happens.
+        #
+        # Replaced by index, not popped: the reader can have spoken while the
+        # model was thinking, and a `pop` would take their message instead of
+        # the pause that is too short to mention.
+        @items[index] = { kind: :step }
       end
 
       def find_running_tool_locked(name)

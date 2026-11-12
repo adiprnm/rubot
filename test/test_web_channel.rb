@@ -1014,14 +1014,17 @@ module Rubot
 
       # --- thinking -------------------------------------------------------
 
-      def test_quick_thought_leaves_no_row_at_all
+      def test_quick_thought_leaves_no_visible_row
         clock = FakeClock.new
         turn = build(clock)
         turn.thinking("sebentar")
         clock.advance(2.0)
         turn.append_chunk("jawaban")
 
-        assert_equal [ :text ], kinds(turn)
+        # No clock to show, but the round boundary stays: compact mode reads it
+        # to tell one batch of calls from the next.
+        assert_equal [ :step, :text ], kinds(turn)
+        assert_equal "jawaban", turn.items.last[:text]
       end
 
       def test_thought_past_the_threshold_is_kept_with_its_duration

@@ -229,10 +229,12 @@ class TestToolRows < Minitest::Test
     assert_equal %w[read grep], names(turn.items)
   end
 
-  # A thought too quick to record leaves no row behind, so the calls on either
-  # side of it are neighbours: compact keeps both rather than hiding work the
-  # reader never saw finish.
-  def test_a_quick_thought_leaves_the_calls_around_it_in_one_batch
+  # A thought too quick to record draws no row, but it is still the line
+  # between two rounds: the call before it is finished work, not part of the
+  # batch the model is waiting on. Without the marker the two rounds read as one
+  # batch and compact mode has nothing to hide, which is the same as no compact
+  # mode at all on a turn whose thoughts are all quick.
+  def test_a_quick_thought_still_ends_the_batch
     turn, = build_turn("compact")
 
     turn.tool_started("read", "a.rb")
@@ -240,7 +242,20 @@ class TestToolRows < Minitest::Test
     turn.thinking
     turn.tool_started("grep", "wanderer")
 
-    assert_equal %w[read grep], names(turn.items)
+    assert_equal %w[grep], names(turn.items)
+  end
+
+  # …and the marker itself is for the compact view, not the page: nothing draws
+  # it in either mode.
+  def test_the_round_marker_is_never_a_row
+    turn, = build_turn(nil)
+
+    turn.tool_started("read", "a.rb")
+    turn.tool_finished("read", true)
+    turn.thinking
+    turn.tool_started("grep", "wanderer")
+
+    assert_equal %i[tool step tool], turn.items.map { |item| item[:kind] }
   end
 
   # A write is the row a reader comes back for, and the live turn has the same
