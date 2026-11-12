@@ -709,6 +709,60 @@ class TestAgentPersona < Minitest::Test
     refute_includes prompt, "kanyaah-brand"
   end
 
+  # The listing is where a skill announces itself, so a skill a persona
+  # switched off is left out of the prompt entirely: the model is never told
+  # the skill exists, and has no reason to open it.
+  def test_a_switched_off_skill_is_not_listed_in_the_prompt
+    install_skill("kept-skill")
+    install_skill("switched-off-skill")
+
+    agent = build_agent(persona: { "name" => "kanyaah", "model" => "model-a",
+                                   "disabled_skills" => "switched-off-skill" })
+
+    prompt = agent.build_system_prompt
+
+    assert_includes prompt, "kept-skill"
+    refute_includes prompt, "switched-off-skill"
+  end
+
+  # Switching one off is a change to the pinned prompt, not just to the next
+  # build: an open session has to let go of the skill it was advertised.
+  def test_switching_a_skill_off_rebuilds_the_prompt
+    install_skill("kept-skill")
+
+    agent = build_agent(persona: { "name" => "kanyaah", "model" => "model-a" })
+    assert_includes agent.build_system_prompt, "kept-skill"
+
+    agent.apply_persona({ "name" => "kanyaah", "model" => "model-a",
+                          "disabled_skills" => "kept-skill" })
+
+    refute_includes agent.build_system_prompt, "kept-skill"
+  end
+
+  # /use can name anything the registry knows, so a forced skill has to be
+  # checked against the persona too — otherwise the switch is cosmetic.
+  def test_a_switched_off_skill_is_not_forced_into_the_turn
+    install_skill("switched-off-skill")
+
+    agent = build_agent(persona: { "name" => "kanyaah", "model" => "model-a",
+                                   "disabled_skills" => "switched-off-skill" })
+    agent.session.forced_skill = "switched-off-skill"
+
+    prompt = agent.build_system_prompt
+
+    refute_includes prompt, "# Active Skill: switched-off-skill"
+    assert_nil agent.session.forced_skill, "the flag is spent even when it is refused"
+  end
+
+  # Skills are read from the shared directory beside config.yml, the same one
+  # every persona draws on.
+  def install_skill(name)
+    dir = File.join(@tmpdir, "skills", name)
+    FileUtils.mkdir_p(dir)
+    File.write(File.join(dir, "SKILL.md"),
+               "---\nname: #{name}\ndescription: Instruksi #{name}\n---\n\nIsi #{name}.\n")
+  end
+
   def persona_at(model, prompt)
     Rubot::Persona.new(name: "trading", model: model, system_prompt: prompt)
   end

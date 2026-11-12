@@ -172,10 +172,13 @@ module Rubot
       # the configured workspace's copy is the fallback (and is what the
       # Telegram bot always uses, since its workspace is that directory).
       @agents_file = AgentsFile.new(workspace: agents_workspace(config, assets))
-      # Skills stay in the configured workspace even when the agent works out
-      # of a persona's directory: copying a skills tree into every persona
-      # would mean maintaining one copy per specialist.
-      @skill_registry = SkillRegistry.new(workspace: config.skills_workspace)
+      # Skills live in the shared directory (~/.rubot/skills), not in the
+      # workspace: a persona re-roots the workspace at its own directory and
+      # the TUI re-roots it at the project, so a workspace-relative tree would
+      # be copied once per persona. Older installs kept them in the workspace;
+      # those are still read, after the shared directory.
+      @skill_registry = SkillRegistry.new(workspace: config.skills_workspace,
+                                          extra_workspaces: config.legacy_skills_workspaces)
       config.ensure_workspace
 
       # Register the memory tool so the bot can manage its own memory
@@ -1289,7 +1292,8 @@ module Rubot
     def persona_identity
       return "" unless @persona
 
-      [@persona.name, @persona.system_prompt, Array(@persona.skills).join(",")].join("\u0000")
+      [@persona.name, @persona.system_prompt, Array(@persona.skills).join(","),
+       Array(@persona.disabled_skills).join(",")].join("\u0000")
     end
 
     # Stable identity for a piece of text across restarts: String#hash is
@@ -1381,8 +1385,11 @@ module Rubot
       end
 
       # 4. Skills (specialized instruction sets). The list grows as skills are
-      # loaded, so it belongs after the stable block.
-      skill_prompt = @skill_registry.to_system_prompt
+      # loaded, so it belongs after the stable block. A persona that switched
+      # some off does not get them listed at all: the prompt is where a skill
+      # announces itself, so a skill left out here is one the model has no
+      # reason to open.
+      skill_prompt = @skill_registry.to_system_prompt(only: enabled_skill_names)
       parts << skill_prompt unless skill_prompt.empty?
 
       # 5. Forced skill — injected directly to skip LLM tool-call overhead
@@ -2169,6 +2176,17 @@ end
       nil
     end
 
+    # Skills this persona leaves switched on, or nil when it has switched none
+    # off — nil is what SkillRegistry reads as "every skill", so a persona that
+    # never touched the list behaves exactly as before. Read on every prompt
+    # build rather than cached, because the registry is shared and a persona is
+    # edited while its sessions are open.
+    def enabled_skill_names
+      return nil if @persona.nil? || Array(@persona.disabled_skills).empty?
+
+      @persona.enabled_skills(@skill_registry.names)
+    end
+
     # Resolve the forced skill for the current session, return {name, content} or nil.
     # Clears the forced_skill flag after use so it only applies once.
     def resolve_forced_skill
@@ -2178,6 +2196,10 @@ end
       # Clear the flag so it only applies to the next message
       @session.forced_skill = nil
       @session.save! if @session.respond_to?(:save!)
+
+      # A skill the persona switched off is not forced into this turn either:
+      # /use may name anything the registry knows, not just what is left on.
+      return nil unless @persona.nil? || @persona.skill_enabled?(skill_name)
 
       skill = @skill_registry.get(skill_name)
       return nil unless skill && skill.enabled?

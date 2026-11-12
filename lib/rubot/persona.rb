@@ -18,14 +18,15 @@ module Rubot
   # portable and cannot point an agent at an arbitrary path.
   class Persona
     attr_reader :slug, :name, :emoji, :accent, :preset, :model, :thinking, :system_prompt,
-                :skills, :ref, :created_at
+                :skills, :disabled_skills, :ref, :created_at
 
     # The reasoning efforts a model understands, in the order the pickers show
     # them. A level outside this list is not a preference, it is a typo.
     THINKING_LEVELS = %w[minimal low medium high].freeze
 
     def initialize(slug: nil, name: nil, emoji: nil, accent: nil, preset: nil, model: nil,
-                   thinking: nil, system_prompt: nil, skills: nil, ref: nil, created_at: nil)
+                   thinking: nil, system_prompt: nil, skills: nil, disabled_skills: nil,
+                   ref: nil, created_at: nil)
       @slug = normalize_string(slug)
       @name = normalize_string(name)
       @emoji = normalize_string(emoji)
@@ -35,6 +36,7 @@ module Rubot
       @thinking = normalize_thinking(thinking)
       @system_prompt = normalize_string(system_prompt)
       @skills = normalize_list(skills)
+      @disabled_skills = normalize_list(disabled_skills)
       @ref = normalize_string(ref)
       @created_at = created_at || Time.now.utc.iso8601
     end
@@ -59,6 +61,7 @@ module Rubot
         thinking: fetch.call("thinking"),
         system_prompt: fetch.call("system_prompt"),
         skills: fetch.call("skills"),
+        disabled_skills: fetch.call("disabled_skills"),
         ref: fetch.call("ref"),
         created_at: fetch.call("created_at")
       )
@@ -76,6 +79,7 @@ module Rubot
         "thinking" => @thinking,
         "system_prompt" => @system_prompt,
         "skills" => @skills,
+        "disabled_skills" => @disabled_skills,
         "ref" => @ref,
         "created_at" => @created_at
       }
@@ -99,6 +103,20 @@ module Rubot
 
     def emoji_or(default = "🤖")
       @emoji || default
+    end
+
+    # Skills are shared by the whole install; this persona is the place that
+    # says which of them it leaves switched off. A skill it *requires* (see
+    # #skills) always stays on, so the two lists can never contradict each
+    # other in the prompt.
+    def skill_enabled?(name)
+      key = name.to_s
+      @skills.include?(key) || !@disabled_skills.include?(key)
+    end
+
+    # `names` narrowed to the skills this persona may use.
+    def enabled_skills(names)
+      Array(names).map(&:to_s).select { |name| skill_enabled?(name) }
     end
 
     private

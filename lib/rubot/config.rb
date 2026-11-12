@@ -486,11 +486,10 @@ module Rubot
     # facts, preferences and context with it. Sessions stay in the central
     # directory (see #sessions_dir); only the working root moves.
     #
-    # Skills are the exception: they stay in the configured workspace, because
-    # they are tooling every persona may draw on and copying a skills tree into
-    # every persona would mean updating it once per specialist.
+    # Skills are the exception: they stay in the shared skills directory (see
+    # #skills_workspace), which the persona workspace does not move, so every
+    # persona reads one copy and updating a skill updates it everywhere.
     def with_persona_workspace(path)
-      central = workspace
       copy = self.class.from_data(snapshot, config_path: config_path)
       agents = copy.data["agents"]
       agents = copy.data["agents"] = {} unless agents.is_a?(Hash)
@@ -498,10 +497,14 @@ module Rubot
       defaults = agents["defaults"] = {} unless defaults.is_a?(Hash)
 
       full = File.expand_path(path)
+      # The skills fallbacks are pinned before the workspace moves: `workspace`
+      # is re-rooted at the persona and would otherwise take the old tree out
+      # of the list, hiding the skills an upgrade left behind.
+      previous = legacy_skills_workspaces
       defaults["workspace"] = full
       defaults["assets_workspace"] = full
       defaults["sessions_cwd"] = full
-      defaults["skills_workspace"] ||= central
+      defaults["legacy_skills_workspaces"] = previous unless previous.empty?
       defaults["memory_in_workspace"] = true
       copy
     end
@@ -597,13 +600,37 @@ module Rubot
       raw && !raw.to_s.strip.empty? ? File.expand_path(raw.to_s) : workspace
     end
 
-    # Where skills/ is read from. A persona re-roots `assets_workspace` at its
-    # own directory but must not lose the skills it exists to use: those stay
-    # in the configured workspace, one copy shared by every persona, and a
-    # persona's prompt says which of them it needs.
+    # Where skills live: next to config.yml (~/.rubot/skills by default), not
+    # inside the workspace. A persona re-roots its workspace at its own
+    # directory and the TUI re-roots it at whatever project it was launched
+    # from, so a workspace-relative skills tree would be copied once per
+    # persona or lost in a project. One directory serves every persona and
+    # every project; a persona's prompt says which of them it may use.
+    #
+    # Like a workspace, this is the *root* the registry appends `skills/` to,
+    # so the default lands on ~/.rubot/skills; a config that still names one
+    # keeps it.
     def skills_workspace
       raw = agent_defaults["skills_workspace"]
-      raw && !raw.to_s.strip.empty? ? File.expand_path(raw.to_s) : assets_workspace
+      raw && !raw.to_s.strip.empty? ? File.expand_path(raw.to_s) : catalog_dir
+    end
+
+    # The shared skills directory itself: `~/.rubot/skills`, the sibling of
+    # config.yml, so a custom config directory takes its skills along.
+    def global_skills_dir
+      File.join(skills_workspace, SkillRegistry::SKILLS_DIR_NAME)
+    end
+
+    # Directories an install may still keep skills in: before the shared
+    # directory, skills were read from the workspace (and, for a channel that
+    # re-roots it, from the assets workspace). Leaving those out would make
+    # every existing skill vanish on upgrade, so they are read after the
+    # shared one — nothing is moved, and a skill dropped in the old place
+    # keeps working.
+    def legacy_skills_workspaces
+      extra = Array(agent_defaults["legacy_skills_workspaces"])
+      roots = [workspace, assets_workspace, *extra].compact
+      roots.map { |path| File.expand_path(path.to_s) }.uniq - [skills_workspace]
     end
 
     def restrict_to_workspace

@@ -620,6 +620,25 @@ module Rubot
         value.valid_encoding? ? value : value.scrub
       end
 
+      # Every value a form field carried, in the order it appeared. #query keeps
+      # only the last of a repeated key, which is right for a text input and
+      # useless for a group of checkboxes: `skill=a&skill=b` has to come back as
+      # both, and the raw query string is the only place both still exist.
+      def form_values(req, key)
+        raw = +""
+        query = req.request_uri&.query
+        raw << query.to_s if query
+        body = req.body.to_s
+        raw << "&" << body unless body.empty?
+
+        raw.split(/[&;]/).filter_map do |pair|
+          name, value = pair.split("=", 2)
+          next if name.nil?
+
+          utf8(WEBrick::HTTPUtils.unescape(name)) == key ? utf8(WEBrick::HTTPUtils.unescape(value.to_s)) : nil
+        end
+      end
+
       def authorized?(req)
         return true if @token.nil?
 
@@ -1567,6 +1586,8 @@ module Rubot
           persona_model: persona_model(persona),
           persona_model_value: persona_model_value(persona),
           persona_thinking: persona_thinking(persona),
+          skill_choices: persona_skill_choices(persona),
+          skills_dir: skills_dir_label,
           model_choices: model_choices,
           session_model: session_model(sid),
           session_thinking: session_thinking(sid),
@@ -2093,6 +2114,55 @@ module Rubot
 
       # --- personas (create, edit) ---------------------------------------
 
+      # The skills directory as the agent sees it: one tree for the whole
+      # install, so what the form lists and what a session may load are the
+      # same set of names. The same legacy fallbacks the agent reads are
+      # included, or the form would hide skills the prompt still advertises.
+      # Scanned per render rather than kept, because a skill installed by hand
+      # should show up on the next page load and not on the next restart.
+      def skills_for_form
+        config = @app_config
+        SkillRegistry.new(workspace: config&.skills_workspace,
+                          extra_workspaces: config ? config.legacy_skills_workspaces : [])
+      end
+
+      # Where a skill has to be dropped to show up in the picker, shortened to
+      # ~ so the hint stays one line. The picker is a list of switches, so it
+      # says where skills live instead of offering to install one.
+      def skills_dir_label
+        dir = skills_for_form.skills_dir
+        return "" if dir.nil? || dir.to_s.empty?
+
+        home = Dir.home.to_s
+        home != "/" && dir.start_with?("#{home}/") ? "~#{dir.delete_prefix(home)}" : dir
+      end
+
+      # One row per installed skill, carrying the state both persona forms need:
+      # whether this persona has it switched on, and whether the persona
+      # requires it (a required skill cannot be switched off from here).
+      def persona_skill_choices(persona = nil)
+        skills_for_form.all.values.map do |skill|
+          {
+            name: skill.name,
+            description: skill.description.to_s,
+            enabled: persona.nil? || persona.skill_enabled?(skill.name),
+            required: persona ? Array(persona.skills).include?(skill.name) : false
+          }
+        end
+      end
+
+      # The skills a submitted persona form left unticked, or nil when the form
+      # carried no list at all — another editor of the same record, which must
+      # not be read as "switched everything off". The list is stored as the
+      # exceptions, so a skill installed later is on for every persona until
+      # someone decides otherwise.
+      def persona_disabled_from(req, required: [])
+        return nil unless form_field?(req, "skills_present")
+
+        chosen = form_values(req, "skill")
+        skills_for_form.names - chosen - Array(required).map(&:to_s)
+      end
+
       def create_persona(req, res)
         store = persona_store
         return bad_request(res) unless store
@@ -2111,7 +2181,8 @@ module Rubot
           emoji: form(req, "emoji").strip.empty? ? EMOJI_CHOICES.first : form(req, "emoji").strip,
           model: persona_model_from(req),
           thinking: persona_thinking_from(req, fallback: DEFAULT_THINKING),
-          system_prompt: prompt.empty? ? nil : prompt
+          system_prompt: prompt.empty? ? nil : prompt,
+          disabled_skills: persona_disabled_from(req)
         ))
         store.prepare_workspace(slug, seed_from: @app_config&.workspace)
 
@@ -2146,6 +2217,12 @@ module Rubot
         keeps_thinking = !form_field?(req, "thinking")
         thinking = keeps_thinking ? current.thinking : persona_thinking_from(req, fallback: current.thinking)
 
+        # The same rule for the skills: a form that posts no list is not
+        # saying anything about them, and the personas created by the Telegram
+        # wizard never post one.
+        disabled_skills = persona_disabled_from(req, required: current.skills)
+        disabled_skills = current.disabled_skills if disabled_skills.nil?
+
         store.set(slug, Persona.new(
           slug: slug,
           name: name.empty? ? nil : name,
@@ -2159,6 +2236,7 @@ module Rubot
           thinking: thinking,
           system_prompt: prompt.empty? ? nil : prompt,
           skills: current.skills,
+          disabled_skills: disabled_skills,
           ref: current.ref,
           created_at: current.created_at
         ))

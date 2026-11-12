@@ -486,6 +486,89 @@ body {
   color: var(--fg-dim);
 }
 
+/* ---------- skills (per persona) --------------------------------- */
+
+/* The skills tree belongs to the whole install, so this is a list of switches
+   rather than a place to install anything. It scrolls instead of stretching the
+   dialog: an install with twenty skills would otherwise push the save button
+   off the screen. */
+.skill-picker {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.skill-picker legend {
+  padding: 0;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--fg-faint);
+}
+
+.skill-list {
+  list-style: none;
+  margin: 0.3rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-height: 11rem;
+  overflow-y: auto;
+}
+
+/* A row is the checkbox and two lines of text, with the box held to the size
+   the browser gives it rather than the field styles the panel applies to
+   inputs. */
+.rail-panel .skill-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.15rem 0.1rem;
+  border-radius: 3px;
+  font-style: normal;
+  cursor: pointer;
+}
+
+.rail-panel .skill-row:hover { background: var(--bg2); }
+
+.rail-panel .skill-row input[type="checkbox"] {
+  padding: 0;
+  border: 0;
+  margin: 0;
+  width: 0.8rem;
+  height: 0.8rem;
+  accent-color: var(--green);
+  background: none;
+  cursor: pointer;
+}
+
+.skill-name {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: -0.03em;
+  color: var(--fg);
+}
+
+.skill-desc {
+  grid-column: 2;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--fg-faint);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* A required skill is drawn as a settled fact, not a control: dimmed, and the
+   box is the browser's own disabled state rather than ours. */
+.rail-panel .skill-row.locked { cursor: default; }
+.rail-panel .skill-row.locked .skill-name { color: var(--fg-dim); }
+.rail-panel .skill-row.locked:hover { background: none; }
+
 /* ---------- edit persona ----------------------------------------- */
 
 /* A pencil sits at the end of the persona's name and opens the same dialog the

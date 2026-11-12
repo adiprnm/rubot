@@ -150,16 +150,20 @@ class TestConfigMemoryPaths < Minitest::Test
     assert_equal "workspace", @config.memory_scope_label
   end
 
-  # Skills are tooling, not identity: one copy in the configured workspace,
-  # shared by every persona, instead of a tree per specialist.
-  def test_skills_stay_in_the_configured_workspace_for_a_persona
+  # Skills are tooling, not identity: one copy in the shared skills directory
+  # next to config.yml, shared by every persona and every project, instead of a
+  # tree per specialist.
+  def test_skills_live_in_the_shared_directory_for_a_persona
     File.write(@config.config_path, {
       "agents" => { "defaults" => { "workspace" => File.join(@tmpdir, "main") } }
     }.to_yaml)
     config = Rubot::Config.new(@config.config_path)
     persona = config.with_persona_workspace(File.join(@tmpdir, "personas", "trainer"))
 
-    assert_equal File.join(@tmpdir, "main"), persona.skills_workspace
+    assert_equal @tmpdir, persona.skills_workspace,
+                 "the root is the config directory, so the registry appends skills/"
+    assert_equal File.join(@tmpdir, "skills"), persona.global_skills_dir
+    assert_equal File.join(@tmpdir, "skills"), @config.global_skills_dir
     assert_equal File.join(@tmpdir, "personas", "trainer"), persona.assets_workspace
   end
 

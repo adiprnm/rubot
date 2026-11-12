@@ -735,6 +735,7 @@ module Rubot
                     persona_model: "m", session_id: "web_rubot",
                     persona_model_value: "", model_choices: [],
                     session_model: "", session_thinking: "medium", persona_thinking: "medium",
+                    skill_choices: [], skills_dir: "~/.rubot/skills",
                     session_short: "web_rubot", session_label: "Sesi baru",
                     document_title: "rubot · Rubot", live_turn: live_turn,
                     live_prompt_shown: false, token_query: "",
@@ -769,11 +770,29 @@ module Rubot
       class FakeRequest
         attr_reader :path, :request_method, :query, :header
 
-        def initialize(path, method: "GET", query: {})
+        def initialize(path, method: "GET", query: {}, body: "")
           @path = path
           @request_method = method
           @query = query
           @header = {}
+          @body = body
+        end
+
+        # A group of checkboxes posts the same key more than once, so the raw
+        # body is the only place every value still exists; #query keeps just the
+        # last of them.
+        def body
+          @body.to_s
+        end
+
+        def request_uri
+          URI.parse("http://localhost#{@path}")
+        end
+
+        # WEBrick answers a missing header field with nil, and a redirect reads
+        # the token cookie through it.
+        def [](_key)
+          nil
         end
       end
 
@@ -1794,6 +1813,7 @@ module Rubot
                            persona_model: "m", session_id: "web_rubot",
                     persona_model_value: "", model_choices: [],
                     session_model: "", session_thinking: "medium", persona_thinking: "medium",
+                    skill_choices: [], skills_dir: "~/.rubot/skills",
                            session_short: "web_rubot", session_label: "Sesi baru",
                            document_title: "rubot · Rubot", live_turn: nil, token_query: "",
                            page: { entries: [], more: false, before: 0 }, older_url: "",
@@ -2770,6 +2790,192 @@ module Rubot
         channel.send(:edit_persona, edit_request("name" => "Hilang"), res, "hilang")
 
         assert_equal 404, res.status
+      end
+
+      # The picker is drawn from the directory the agent loads, so the form and
+      # a session can never disagree about which skills exist.
+      def test_the_persona_form_lists_every_installed_skill_switched_on
+        channel = channel_with_skills(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          skills: { "writing" => "Menulis rapi", "opencode-usage" => "Cek kuota" }
+        )
+
+        choices = channel.send(:persona_skill_choices, channel.send(:persona_store)["kanyaah"])
+
+        assert_equal %w[opencode-usage writing], choices.map { |choice| choice[:name] }.sort
+        assert choices.all? { |choice| choice[:enabled] }, "a new persona starts with every skill on"
+        assert_equal ["Cek kuota", "Menulis rapi"],
+                     choices.map { |choice| choice[:description] },
+                     "the box shows the skill's own summary, not its folder name"
+      end
+
+      # What the persona switched off comes back unticked, and a skill it
+      # requires is marked as one it cannot switch off from here.
+      def test_the_picker_shows_what_the_persona_left_on
+        channel = channel_with_skills(
+          personas: { "kanyaah" => { "name" => "Kanyaah", "skills" => "writing",
+                                     "disabled_skills" => "opencode-usage" } },
+          skills: { "writing" => "Menulis rapi", "opencode-usage" => "Cek kuota" }
+        )
+
+        choices = channel.send(:persona_skill_choices, channel.send(:persona_store)["kanyaah"]).to_h do |choice|
+          [choice[:name], choice]
+        end
+
+        assert choices["writing"][:enabled]
+        assert choices["writing"][:required], "an allow-listed skill is required, so it is not a switch"
+        refute choices["opencode-usage"][:enabled]
+        refute choices["opencode-usage"][:required]
+      end
+
+      # The partial is the form's half of the contract: every skill gets a box,
+      # the hidden marker says the list arrived, and a required skill is drawn
+      # checked and locked.
+      def test_the_picker_renders_a_box_per_skill
+        html = View.render(
+          "_skill_picker",
+          skill_choices: [
+            { name: "writing", description: "Menulis rapi", enabled: true, required: true },
+            { name: "opencode-usage", description: "Cek kuota", enabled: false, required: false }
+          ],
+          skills_dir: "~/.rubot/skills"
+        )
+
+        assert_includes html, %(name="skills_present" value="1")
+        assert_includes html, %(name="skill" value="writing")
+        assert_includes html, %(name="skill" value="opencode-usage")
+        assert_match(/value="writing"\s+checked\s+disabled/, html, "a required skill is on and locked")
+        assert_includes html, "writing · wajib", "the box says why it cannot be unticked"
+      end
+
+      def test_the_picker_says_so_when_no_skill_is_installed
+        html = View.render("_skill_picker", skill_choices: [], skills_dir: "~/.rubot/skills")
+
+        assert_includes html, "Belum ada skill terpasang"
+        assert_includes html, %(name="skills_present" value="1"),
+                       "an empty list still arrives as a choice, not as an absent form field"
+      end
+
+      # A form that posts no list is another editor of the same record, not a
+      # persona that switched everything off.
+      def test_a_form_without_a_list_keeps_the_skills_it_had
+        channel = channel_with_skills(
+          personas: { "kanyaah" => { "name" => "Kanyaah", "disabled_skills" => "opencode-usage" } },
+          skills: { "writing" => "Menulis rapi", "opencode-usage" => "Cek kuota" }
+        )
+
+        channel.send(:edit_persona, edit_request("name" => "Kanyaah"), FakeResponse.new, "kanyaah")
+
+        assert_equal %w[opencode-usage], channel.send(:persona_store)["kanyaah"].disabled_skills
+      end
+
+      def test_unticking_a_skill_switches_it_off_for_that_persona
+        channel = channel_with_skills(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          skills: { "writing" => "Menulis rapi", "opencode-usage" => "Cek kuota" }
+        )
+
+        channel.send(:edit_persona, persona_form_request("/p/kanyaah/edit",
+                                                        "name" => "Kanyaah",
+                                                        "skills_present" => "1",
+                                                        "skill" => "writing"),
+                     FakeResponse.new, "kanyaah")
+
+        assert_equal %w[opencode-usage], channel.send(:persona_store)["kanyaah"].disabled_skills
+      end
+
+      # Every box empty posts no `skill` at all — the whole list is the
+      # exceptions, which is what the marker is there to say out loud.
+      def test_unticking_every_skill_switches_them_all_off
+        channel = channel_with_skills(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          skills: { "writing" => "Menulis rapi", "opencode-usage" => "Cek kuota" }
+        )
+
+        channel.send(:edit_persona, persona_form_request("/p/kanyaah/edit",
+                                                        "name" => "Kanyaah",
+                                                        "skills_present" => "1"),
+                     FakeResponse.new, "kanyaah")
+
+        assert_equal %w[opencode-usage writing], channel.send(:persona_store)["kanyaah"].disabled_skills.sort
+      end
+
+      # A required skill is locked in the form, so it must not end up in the
+      # exceptions just because no box was sent for it.
+      def test_a_required_skill_is_never_written_as_switched_off
+        channel = channel_with_skills(
+          personas: { "kanyaah" => { "name" => "Kanyaah", "skills" => "writing" } },
+          skills: { "writing" => "Menulis rapi", "opencode-usage" => "Cek kuota" }
+        )
+
+        channel.send(:edit_persona, persona_form_request("/p/kanyaah/edit",
+                                                        "name" => "Kanyaah",
+                                                        "skills_present" => "1",
+                                                        "skill" => "opencode-usage"),
+                     FakeResponse.new, "kanyaah")
+
+        assert_empty channel.send(:persona_store)["kanyaah"].disabled_skills
+      end
+
+      # The new-persona dialog gets the same list, so a persona can be born with
+      # a skill switched off instead of being edited twice.
+      def test_a_new_persona_can_be_created_with_a_skill_switched_off
+        channel = channel_with_skills(skills: { "writing" => "Menulis rapi",
+                                                "opencode-usage" => "Cek kuota" })
+
+        res = FakeResponse.new
+        channel.send(:create_persona, persona_form_request("/personas",
+                                                           "slug" => "kanyaah",
+                                                           "name" => "Kanyaah",
+                                                           "skills_present" => "1",
+                                                           "skill" => "writing"), res)
+
+        persona = channel.send(:persona_store)["kanyaah"]
+
+        assert_equal 303, res.status
+        assert_equal %w[opencode-usage], persona.disabled_skills
+      end
+
+      # A form POST as WEBrick hands it over. The repeated `skill` keys survive
+      # only in the raw body, which is why it is built here rather than as a
+      # plain hash.
+      def persona_form_request(path, fields)
+        pairs = fields.flat_map do |key, value|
+          Array(value).map { |item| [key.to_s, item.to_s] }
+        end
+        body = pairs.map do |key, value|
+          "#{URI.encode_www_form_component(key)}=#{URI.encode_www_form_component(value)}"
+        end.join("&")
+        FakeRequest.new(path, method: "POST", query: pairs.to_h, body: body)
+      end
+
+      # A channel over a throwaway ~/.rubot that also has skills installed. The
+      # picker reads the shared directory, so the test owns a catalog of its own
+      # instead of the one on this machine.
+      def channel_with_skills(personas: {}, skills: {})
+        dir = Dir.mktmpdir("rubot-web-skills")
+        @fixtures << dir
+        workspace = File.join(dir, "workspace")
+        catalog = File.join(dir, "catalog")
+        FileUtils.mkdir_p(File.join(dir, "sessions"))
+        FileUtils.mkdir_p(workspace)
+        skills.each do |name, description|
+          skill_dir = File.join(catalog, "skills", name)
+          FileUtils.mkdir_p(skill_dir)
+          File.write(File.join(skill_dir, "SKILL.md"),
+                     "---\nname: #{name}\ndescription: #{description}\n---\n\nIsi.\n")
+        end
+        File.write(File.join(dir, "personas.json"), JSON.generate(personas))
+
+        config = Rubot::Config.from_data(
+          { "agents" => { "defaults" => { "workspace" => workspace,
+                                          "skills_workspace" => catalog } } },
+          config_path: File.join(dir, "config.yml")
+        )
+
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        channel.instance_variable_set(:@app_config, config)
+        channel
       end
 
       # The settings page and its form are two routes, and both have to exist:
@@ -4630,6 +4836,7 @@ module Rubot
                            persona_model: "m", session_id: "web_rubot",
                     persona_model_value: "", model_choices: [],
                     session_model: "", session_thinking: "medium", persona_thinking: "medium",
+                    skill_choices: [], skills_dir: "~/.rubot/skills",
                            session_short: "web_rubot", session_label: "Sesi baru",
                            document_title: "rubot · Rubot", live_turn: nil, token_query: "",
                            page: { entries: [], more: false, before: 0 }, older_url: "",
@@ -5462,6 +5669,7 @@ module Rubot
                            slug: "a", persona_label: "A", persona_emoji: "🤖", persona_prompt: "",
                            persona_model: "m", session_id: "web_a", persona_model_value: "", model_choices: [],
                            session_model: "", session_thinking: "medium", persona_thinking: "medium",
+                    skill_choices: [], skills_dir: "~/.rubot/skills",
                            session_short: "web_a", session_label: "Sesi baru",
                            document_title: "rubot · A", live_turn: nil, live_prompt_shown: false, token_query: "",
                            page: { entries: [], more: false, before: 0 }, older_url: "",

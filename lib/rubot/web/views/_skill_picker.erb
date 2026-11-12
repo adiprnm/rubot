@@ -1,0 +1,33 @@
+<%# The skills a persona may draw on. The skills themselves belong to the whole
+    install (~/.rubot/skills); a persona only says which of them it leaves off,
+    so this is a list of switches rather than a place to install anything.
+
+    `locked` is what the form saves as an exception but cannot turn off: a skill
+    the persona requires (set from the Telegram wizard) stays on, and its box
+    says so instead of pretending to be a choice. The hidden marker is how the
+    handler tells "every box unticked" from "this form has no list" — a group of
+    checkboxes posts nothing at all in the first case. -%>
+<fieldset class="skill-picker">
+  <legend>Skills</legend>
+  <input type="hidden" name="skills_present" value="1">
+  <% if skill_choices.empty? %>
+    <p class="panel-hint">Belum ada skill terpasang<% unless skills_dir.to_s.empty? %> di <code><%= h(skills_dir) %></code><% end %>.</p>
+  <% else %>
+    <ul class="skill-list">
+      <% skill_choices.each do |choice| %>
+        <% on = choice[:enabled] || choice[:required] %>
+        <li>
+          <label class="skill-row<%= " locked" if choice[:required] %>"
+                 title="<%= h(choice[:description]) %>">
+            <input type="checkbox" name="skill" value="<%= h(choice[:name]) %>"
+                   <%= "checked" if on %><%= " disabled" if choice[:required] %>>
+            <span class="skill-name"><%= h(choice[:name]) %><%= " · wajib" if choice[:required] %></span>
+            <% unless choice[:description].to_s.empty? %>
+              <span class="skill-desc"><%= h(choice[:description]) %></span>
+            <% end %>
+          </label>
+        </li>
+      <% end %>
+    </ul>
+  <% end %>
+</fieldset>

@@ -217,5 +217,97 @@ module Rubot
       registry = SkillRegistry.new(workspace: nil)
       assert_nil registry.skills_dir
     end
+
+    # --- an install that still keeps skills where they used to live ---
+
+    def test_reads_skills_from_an_extra_workspace
+      write_skill(@tmpdir, "old-place", description: "Left behind by an upgrade")
+      shared = File.join(@tmpdir, "shared")
+      FileUtils.mkdir_p(shared)
+
+      registry = SkillRegistry.new(workspace: shared, extra_workspaces: [ @tmpdir ])
+
+      assert_equal [ "old-place" ], registry.names
+      assert_equal "Left behind by an upgrade", registry.get("old-place").summary
+    end
+
+    def test_shared_workspace_wins_a_name_clash
+      write_skill(@tmpdir, "frontend-design", description: "The old copy")
+      shared = File.join(@tmpdir, "shared")
+      write_skill(shared, "frontend-design", description: "The shared copy")
+
+      registry = SkillRegistry.new(workspace: shared, extra_workspaces: [ @tmpdir ])
+
+      assert_equal "The shared copy", registry.get("frontend-design").summary
+    end
+
+    def test_install_goes_to_the_shared_workspace_not_the_fallback
+      write_skill(@tmpdir, "old-place")
+      shared = File.join(@tmpdir, "shared")
+      FileUtils.mkdir_p(shared)
+      registry = SkillRegistry.new(workspace: shared, extra_workspaces: [ @tmpdir ])
+
+      registry.install("new-skill", "# New")
+
+      assert File.exist?(File.join(shared, "skills", "new-skill", "SKILL.md"))
+      refute File.exist?(File.join(@tmpdir, "skills", "new-skill"))
+    end
+
+    def test_uninstall_reaches_the_fallback_copy
+      dir = write_skill(@tmpdir, "old-place")
+      shared = File.join(@tmpdir, "shared")
+      FileUtils.mkdir_p(shared)
+      registry = SkillRegistry.new(workspace: shared, extra_workspaces: [ @tmpdir ])
+
+      assert registry.uninstall("old-place")
+      refute Dir.exist?(dir)
+    end
+
+    # --- narrowing the list to what a persona enabled ---
+
+    def test_select_skills_without_a_filter_returns_everything
+      write_skill(@tmpdir, "one")
+      write_skill(@tmpdir, "two")
+      registry = SkillRegistry.new(workspace: @tmpdir)
+
+      assert_equal %w[one two], registry.select_skills.map(&:name)
+    end
+
+    def test_select_skills_keeps_only_the_named_ones
+      write_skill(@tmpdir, "one")
+      write_skill(@tmpdir, "two")
+      registry = SkillRegistry.new(workspace: @tmpdir)
+
+      assert_equal [ "two" ], registry.select_skills(only: [ "two" ]).map(&:name)
+    end
+
+    def test_an_empty_filter_drops_the_skills_section_entirely
+      write_skill(@tmpdir, "one")
+      registry = SkillRegistry.new(workspace: @tmpdir)
+
+      assert_equal "", registry.to_system_prompt(only: [])
+    end
+
+    def test_to_system_prompt_lists_only_the_filtered_skills
+      write_skill(@tmpdir, "keep-me")
+      write_skill(@tmpdir, "leave-me")
+      registry = SkillRegistry.new(workspace: @tmpdir)
+
+      prompt = registry.to_system_prompt(only: [ "keep-me" ])
+
+      assert_includes prompt, "<name>keep-me</name>"
+      refute_includes prompt, "leave-me"
+    end
+
+    private
+
+    # A skill directory with a SKILL.md, named after the directory.
+    def write_skill(root, name, description: nil)
+      dir = File.join(root, "skills", name)
+      FileUtils.mkdir_p(dir)
+      body = description ? "---\nname: #{name}\ndescription: #{description}\n---\n\n# #{name}\n" : "# #{name}\n"
+      File.write(File.join(dir, "SKILL.md"), body)
+      dir
+    end
   end
 end

@@ -235,6 +235,36 @@ class TestPersonaStore < Minitest::Test
 
     assert_equal %w[kanyaah-brand marketing-strategist], @store.get(123, 7).skills
   end
+
+  # A persona only records what it switched off, so a skill installed later is
+  # on by default instead of having to be added to every persona by hand.
+  def test_disabled_skills_survive_a_round_trip
+    @store.set("123:7", Rubot::Persona.new(name: "Kanyaah", disabled_skills: "writing, opencode-usage"))
+
+    assert_equal %w[writing opencode-usage], @store.get(123, 7).disabled_skills
+  end
+
+  def test_a_skill_is_enabled_unless_the_persona_switched_it_off
+    persona = Rubot::Persona.new(name: "Kanyaah", disabled_skills: "writing")
+
+    assert persona.skill_enabled?("writing") == false
+    assert persona.skill_enabled?("installed-later")
+  end
+
+  def test_a_required_skill_cannot_be_switched_off
+    persona = Rubot::Persona.new(name: "Kanyaah", skills: "kanyaah-brand",
+                                 disabled_skills: "kanyaah-brand")
+
+    assert persona.skill_enabled?("kanyaah-brand")
+  end
+
+  def test_enabled_skills_narrows_the_installed_list
+    persona = Rubot::Persona.new(name: "Kanyaah", skills: "kanyaah-brand",
+                                 disabled_skills: "writing")
+
+    assert_equal %w[kanyaah-brand opencode-usage],
+                 persona.enabled_skills(%w[kanyaah-brand opencode-usage writing])
+  end
 end
 
 class TestPersonaStorePresets < Minitest::Test

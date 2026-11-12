@@ -54,6 +54,7 @@
         <label>System prompt
           <textarea name="system_prompt" rows="3" placeholder="Kamu spesialis …"></textarea>
         </label>
+        <%= View.render("_skill_picker", skill_choices: skill_choices, skills_dir: skills_dir) %>
         <button class="btn primary" type="submit">Buat</button>
         <p class="form-error"></p>
       </form>
@@ -105,6 +106,7 @@
             <textarea name="system_prompt" rows="6"
                       placeholder="Kosongkan untuk memakai prompt bawaan"><%= h(persona_prompt) %></textarea>
           </label>
+          <%= View.render("_skill_picker", skill_choices: skill_choices, skills_dir: skills_dir) %>
           <input type="hidden" name="session_id" value="<%= h(session_id) %>">
           <button class="btn primary" type="submit">Simpan</button>
           <p class="form-error edit-error"></p>
