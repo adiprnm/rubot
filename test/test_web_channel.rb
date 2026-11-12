@@ -5199,6 +5199,24 @@ module Rubot
         refute_match(/\.tool-row\.running::after/, css)
       end
 
+      # A turn redraws its whole timeline on every event, so the call row is a
+      # new node each time and an animation written straight onto the stylesheet
+      # would replay on every stream tick. app.js adds the class when the row's
+      # *identity* changes instead, and reads that identity off the markup — so
+      # the row has to name itself, and the animation the class starts has to
+      # exist under the name the script uses.
+      def test_a_swapped_call_row_can_say_when_it_changed
+        row = View.render("_timeline",
+                          items: [ { kind: :tool, name: "shell", detail: "ls",
+                                     state: :ok, elapsed: 1.0 } ])
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+
+        assert_includes row, 'data-tool-key="shell·ls"'
+        assert_match(/\.tool-row\.is-swapped \{ animation: tool-row-swap/, css)
+        assert_includes js, "is-swapped", "the class the stylesheet animates"
+      end
+
       # The thought wears the half disc and keeps it still: a shape that means
       # "this is happening" does not have to turn, and a drawn ring that is not
       # turning reads as a spinner that stopped. The glow is the thing that

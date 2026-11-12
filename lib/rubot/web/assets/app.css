@@ -2237,6 +2237,26 @@ body {
 .tool-row.failed .mark { color: var(--red); }
 .tool-row.unknown .mark { color: var(--fg-faint); }
 
+/* One call giving way to the next. The row is redrawn on every event of the
+   turn, so an animation written into the stylesheet would replay on each tick;
+   the class is added by app.js only when the row's identity changes. Fade and
+   a hair of rise: the row arrives where the last one stood, which is a change
+   the eye reads without being told. A crossfade was the other option and was
+   not taken — two layers of 10px mono text over each other is a blur for
+   150ms, and a line of text is not a picture worth dissolving. */
+.tool-row.is-swapped { animation: tool-row-swap 180ms ease-out both; }
+
+@keyframes tool-row-swap {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 /* An open call says it with the turning ring on its left and nothing else. A
    sweep across the whole row was tried and taken out: beside a spinner it is the
    same sentence twice, and the row already has one thing that moves. */
