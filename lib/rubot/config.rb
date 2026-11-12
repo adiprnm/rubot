@@ -474,7 +474,6 @@ module Rubot
       agents = copy.data["agents"] = {} unless agents.is_a?(Hash)
       defaults = agents["defaults"]
       defaults = agents["defaults"] = {} unless defaults.is_a?(Hash)
-      defaults["assets_workspace"] ||= original
       defaults["workspace"] = File.expand_path(path)
       # The directory the TUI was launched from. Sessions are stored centrally
       # (see #sessions_dir), so this marker is what lets /resume show only the
@@ -604,7 +603,7 @@ module Rubot
     # the agent keeps its identity and memory.
     def assets_workspace
       raw = agent_defaults["assets_workspace"]
-      raw && !raw.to_s.strip.empty? ? File.expand_path(raw.to_s) : workspace
+      raw && !raw.to_s.strip.empty? ? File.expand_path(raw.to_s) : catalog_dir
     end
 
     # Where skills live: next to config.yml (~/.rubot/skills by default), not

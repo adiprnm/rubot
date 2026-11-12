@@ -158,14 +158,14 @@ The TUI uses the directory `rubot` was launched from as its working directory.
 sessions, cron jobs and the safety guard follow the project you are standing in
 — the TUI ignores `agents.defaults.workspace` from `config.yml` for those.
 
-Identity and knowledge are different: `SOUL.md`, `AGENTS.md` and `skills/` are
-still read from the configured workspace, so launching the TUI inside a project
-does not throw away the assistant you set up. Point
-`agents.defaults.assets_workspace` at another directory to keep them somewhere
-else. Memory works the other way round: `~/.rubot/MEMORY.md` is shared by
-everything, and each project gets its own file under `~/.rubot/memory/`. Other
-channels (Telegram) and one-shot `-m` runs use the configured workspace for
-everything.
+Identity and knowledge are different: `SOUL.md`, `AGENTS.md` and `skills/`
+are read from the shared directory next to `config.yml` (`~/.rubot` by
+default), so launching the TUI inside a project does not throw away the
+assistant you set up. Point `agents.defaults.assets_workspace` at another
+directory to keep them somewhere else. Memory works the other way round:
+`~/.rubot/MEMORY.md` is shared by everything, and each project gets its own
+file under `~/.rubot/memory/`. Other channels (Telegram) and one-shot `-m`
+runs use the configured workspace for everything.
 
 ### REPL Commands
 

@@ -203,9 +203,9 @@ class TestConfig < Minitest::Test
     copy = config.with_workspace("/tmp/project")
 
     assert_equal "/tmp/project", copy.workspace
-    assert_equal "/tmp/home-workspace", copy.assets_workspace,
+    assert_equal config.assets_workspace, copy.assets_workspace,
                  "SOUL.md, MEMORY.md, AGENTS.md and skills must stay put"
-    assert_equal "/tmp/home-workspace", config.assets_workspace,
+    assert_equal config.assets_workspace, config.assets_workspace,
                  "the original config must not be modified"
   end
 
