@@ -5347,6 +5347,22 @@ module Rubot
                      "and only itself: the call that came before stays put"
       end
 
+      # A file tool's row has to say what it was asked to do. The name and the
+      # path cannot tell a read from a write on their own, and the chip is the
+      # one word that can — so it is drawn, and a tool that was given no
+      # operation is left without one rather than with an empty box.
+      def test_a_file_tool_row_wears_the_operation_it_was_given
+        edited = View.render("_timeline",
+                             items: [ { kind: :tool, name: "file_ops", detail: "lib/a.rb",
+                                        op: "edit", state: :ok, elapsed: nil } ])
+        assert_includes edited, %(<span class="tool-op">edit</span>)
+
+        plain = View.render("_timeline",
+                            items: [ { kind: :tool, name: "shell_exec", detail: "ls",
+                                       state: :ok, elapsed: nil } ])
+        refute_includes plain, "tool-op"
+      end
+
       # The thought wears the half disc and keeps it still: a shape that means
       # "this is happening" does not have to turn, and a drawn ring that is not
       # turning reads as a spinner that stopped. The glow is the thing that
