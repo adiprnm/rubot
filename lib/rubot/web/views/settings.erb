@@ -33,10 +33,6 @@
 <body>
 <form class="settings-card" method="post" action="/settings<%= h(token_query) %>">
   <h1>pengaturan</h1>
-  <p class="settings-lead">
-    Berlaku untuk seluruh install: semua persona memakai provider dan model
-    default ini, kecuali persona yang punya pilihannya sendiri.
-  </p>
 
   <% if saved %>
     <p class="settings-saved" role="status">
@@ -65,18 +61,17 @@
            spellcheck="false"
            placeholder="<%= key_set ? "sudah tersimpan — kosongkan untuk tidak mengubah" : "belum ada" %>">
   </label>
-  <p class="settings-hint">
-    <% if key_from_archive %>
+  <% if key_from_archive %>
+    <p class="settings-hint">
       Disimpan di database install. Kosongkan kolom di atas kalau tidak ingin
       mengubahnya, atau centang hapus untuk kembali ke config.yml.
-    <% elsif key_set %>
-      Masih dari config.yml atau environment. Menyimpan yang baru di sini
-      menaruhnya di database dan mengalahkan keduanya.
-    <% else %>
+    </p>
+  <% elsif !key_set %>
+    <p class="settings-hint">
       Belum ada kunci. Tanpa kunci, hanya provider lokal seperti ollama yang
       bisa menjawab.
-    <% end %>
-  </p>
+    </p>
+  <% end %>
   <label class="settings-check">
     <input type="checkbox" name="clear_api_key" value="1">
     Hapus kunci dari database (kembali ke config.yml)
