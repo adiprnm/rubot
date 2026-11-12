@@ -1608,6 +1608,46 @@ module Rubot
                         "the page still joins the stream"
       end
 
+      # The turn writes each round to the session file and keeps the same rows
+      # in memory, so a page refreshed between two rounds held both: the call
+      # the file already had was drawn from the transcript and then again from
+      # the turn, one row under the other. The running turn owns the tail it is
+      # writing — the transcript keeps only what came before it.
+      def test_a_refreshed_page_draws_an_already_written_call_once
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        dir = channel.instance_variable_get(:@app_config).sessions_dir
+        File.write(File.join(dir, "web_kanyaah.json"), JSON.generate(
+          "id" => "web_kanyaah", "updated_at" => Time.now.utc.iso8601,
+          "messages" => [
+            { "role" => "user", "content" => "Cek folder dulu" },
+            { "role" => "assistant", "content" => "", "tool_calls" => [
+              { "id" => "call_1", "type" => "function",
+                "function" => { "name" => "shell_exec",
+                                "arguments" => JSON.generate({ "command" => "ls" }) } }
+            ] },
+            { "role" => "tool", "tool_call_id" => "call_1", "content" => "a.txt" }
+          ]
+        ))
+
+        turn = Turn.new(id: "tabc", session_id: "web_kanyaah", prompt: "Cek folder dulu")
+        turn.tool_started("shell_exec", "ls")
+        turn.tool_finished("shell_exec", true)
+        channel.instance_variable_get(:@turns)["tabc"] = turn
+        channel.instance_variable_get(:@active)["web_kanyaah"] = "tabc"
+
+        res = FakeResponse.new
+        channel.send(:render_session, res, "web_kanyaah")
+        html = res.body
+
+        assert_equal 1, html.scan(%(data-tool-key="shell_exec·ls")).size,
+                     "one call, one row — the turn is drawing the tail"
+        assert_equal 1, html.scan(%(class="msg user")).size,
+                     "and one prompt, one bubble"
+        assert_includes html, "Cek folder dulu", "the bubble comes from the turn"
+        assert_includes html, %(sse-connect="/turns/tabc/stream"),
+                        "the page still joins the stream"
+      end
+
       # Steering used to reach the model but not the page: the bubble only
       # appeared after a refresh, which left the reader unsure whether the
       # message had been sent at all.
@@ -2563,7 +2603,7 @@ module Rubot
         refute_nil sheet, "the status row needs its way into the report"
         assert_includes sheet, %(id="usage-facts")
         refute_includes sheet, "hx-get", "the facts are drawn with the page"
-        assert html.index('usage-sheet-facts') > html.index('id="usage"'),
+        assert html.index("usage-sheet-facts") > html.index(%(id="usage")),
                "the button sits at the end of the row it expands"
       end
 
@@ -2580,7 +2620,7 @@ module Rubot
         assert_includes sheet, "toggle[this.open]",
                         "the allowance costs a request, so it waits for the reader"
         refute_includes sheet, "usage-facts", "the report does not come with the allowance"
-        assert html.index('usage-sheet-quota') > html.index('usage-sheet-facts'),
+        assert html.index("usage-sheet-quota") > html.index("usage-sheet-facts"),
                "the allowance is the outer of the two buttons"
       end
 
@@ -2809,7 +2849,7 @@ module Rubot
 
         assert_equal %w[opencode-usage writing], choices.map { |choice| choice[:name] }.sort
         assert choices.all? { |choice| choice[:enabled] }, "a new persona starts with every skill on"
-        assert_equal ["Cek kuota", "Menulis rapi"],
+        assert_equal [ "Cek kuota", "Menulis rapi" ],
                      choices.map { |choice| choice[:description] },
                      "the box shows the skill's own summary, not its folder name"
       end
@@ -2824,7 +2864,7 @@ module Rubot
         )
 
         choices = channel.send(:persona_skill_choices, channel.send(:persona_store)["kanyaah"]).to_h do |choice|
-          [choice[:name], choice]
+          [ choice[:name], choice ]
         end
 
         assert choices["writing"][:enabled]
@@ -3008,7 +3048,7 @@ module Rubot
       # plain hash.
       def persona_form_request(path, fields)
         pairs = fields.flat_map do |key, value|
-          Array(value).map { |item| [key.to_s, item.to_s] }
+          Array(value).map { |item| [ key.to_s, item.to_s ] }
         end
         body = pairs.map do |key, value|
           "#{URI.encode_www_form_component(key)}=#{URI.encode_www_form_component(value)}"
@@ -4870,9 +4910,9 @@ module Rubot
         assert_equal "laporan.pdf", document[:name]
       end
 
-      # A compact persona's transcript shows the same single row its live turn
-      # showed: the calls one prompt made collapse to the last of them.
-      def test_a_compact_persona_s_transcript_shows_only_the_last_call
+      # A compact persona's transcript shows the row its live turn showed: the
+      # call the answer belongs to stays under it, not the batch it came in.
+      def test_a_compact_persona_s_transcript_keeps_the_call_before_the_answer
         channel = channel_with_sessions(
           personas: { "rubot" => { "name" => "Rubot", "tool_output" => "compact" } },
           sessions: { "web_rubot" => "Cek dua file" }
@@ -4883,6 +4923,37 @@ module Rubot
 
         assert_equal %w[b.rb], items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
         assert_includes items.map { |item| item[:kind] }, :text, "the answer is not part of the log"
+      end
+
+      # A second round of work is where the first one lets go: the transcript
+      # reads the same boundary the live turn draws, so only the calls the
+      # model is on come back from the log.
+      def test_a_compact_persona_s_transcript_drops_the_round_before_the_last
+        channel = channel_with_sessions(
+          personas: { "rubot" => { "name" => "Rubot", "tool_output" => "compact" } },
+          sessions: { "web_rubot" => "Cek dua file" }
+        )
+        write_two_rounds(channel)
+
+        items = channel.send(:history, "web_rubot").last[:items]
+
+        assert_equal %w[b.rb], items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
+      end
+
+      # The transcript carries the round each row came from, so the view can cut
+      # the log where the live turn cut it instead of guessing from neighbours.
+      def test_a_replayed_transcript_stamps_which_round_each_row_came_from
+        channel = channel_with_sessions(personas: { "rubot" => { "name" => "Rubot" } },
+                                        sessions: { "web_rubot" => "Cek dua file" })
+        write_two_rounds(channel)
+
+        items = channel.send(:history, "web_rubot").last[:items]
+
+        tools = items.select { |item| item[:kind] == :tool }
+        assert_equal [ 1, 2 ], tools.map { |item| item[:round] }, "each call its own round"
+        assert_equal 3, items.select { |item| item[:kind] == :text }.map { |item| item[:round] }.max,
+                     "the answer is a round after the call it answers"
+        assert_equal 2, items.find { |item| item[:kind] == :step }[:round]
       end
 
       def test_a_verbose_persona_s_transcript_keeps_every_call
@@ -4897,9 +4968,28 @@ module Rubot
         assert_equal %w[a.rb b.rb], items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
       end
 
-      # One prompt, two calls, one answer — the unit a live turn is, so the
-      # unit the transcript collapses.
+      # One prompt, one message from the model asking twice, one answer — the
+      # batch a live turn draws as two rows at once.
       def write_two_reads(channel)
+        sid = "web_rubot"
+        calls = %w[a.rb b.rb].each_with_index.map do |path, index|
+          { "id" => "c#{index + 1}",
+            "function" => { "name" => "file_ops",
+                            "arguments" => JSON.generate({ "path" => path }) } }
+        end
+        write_messages(channel, sid, [
+                         { "role" => "user", "content" => "Cek dua file" },
+                         { "role" => "assistant", "content" => "", "tool_calls" => calls },
+                         { "role" => "tool", "tool_call_id" => "c1", "content" => "isi a" },
+                         { "role" => "tool", "tool_call_id" => "c2", "content" => "isi b" },
+                         { "role" => "assistant", "content" => "Dua-duanya oke." }
+                       ])
+        sid
+      end
+
+      # One prompt, one call, another call, then the answer: the model came
+      # back after the first result, so the second call is a round of its own.
+      def write_two_rounds(channel)
         sid = "web_rubot"
         call = lambda do |id, path|
           { "role" => "assistant", "content" => "",
@@ -5618,8 +5708,8 @@ module Rubot
         # model-b is what the config runs on by default; model-a is the
         # change this test makes.
         channel.instance_variable_get(:@app_config).data["models"] =
-          [{ "name" => "model-b", "model" => "openai/gpt-4o", "api_key" => "sk-test" },
-           { "name" => "model-a", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" }]
+          [ { "name" => "model-b", "model" => "openai/gpt-4o", "api_key" => "sk-test" },
+            { "name" => "model-a", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ]
 
         handle = Class.new do
           attr_reader :model, :thinking
@@ -5691,8 +5781,8 @@ module Rubot
                                      "thinking" => "high" } }
         )
         channel.instance_variable_get(:@app_config).data["models"] =
-          [{ "name" => "model-a", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" },
-           { "name" => "model-b", "model" => "openai/gpt-4o", "api_key" => "sk-test" }]
+          [ { "name" => "model-a", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" },
+            { "name" => "model-b", "model" => "openai/gpt-4o", "api_key" => "sk-test" } ]
 
         res = FakeResponse.new
         channel.send(:render_session, res, "web_kanyaah", FakeRequest.new("/s/web_kanyaah"))
@@ -5856,7 +5946,6 @@ module Rubot
         assert_includes html, "9+"
         assert_includes html, "3 percakapan belum dibaca"
       end
-
     end
   end
 end

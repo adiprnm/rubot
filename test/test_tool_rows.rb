@@ -27,6 +27,11 @@ class TestToolRows < Minitest::Test
     { kind: :thinking, elapsed: elapsed, closed_at: elapsed }
   end
 
+  # A thought still running: the round it opens has not reached for anything.
+  def open_thought
+    { kind: :thinking, elapsed: nil, closed_at: nil }
+  end
+
   def names(items)
     items.select { |item| item[:kind] == :tool }.map { |item| item[:name] }
   end
@@ -50,32 +55,56 @@ class TestToolRows < Minitest::Test
   # it, because that is the order the turn took.
   def test_compact_keeps_the_call_it_is_on_and_the_thought_that_led_into_it
     items = [ text("Aku cek dulu, bentar."), tool("read"),
-              thought(4), tool("grep"), thought(2) ]
+              thought(4), tool("grep") ]
 
     kept = Rubot::Web::ToolRows.collapse(items)
 
     assert_equal %w[grep], names(kept)
-    assert_equal %i[text thinking tool thinking], kinds(kept)
-    assert_equal [ 4, 2 ], kept.select { |item| item[:kind] == :thinking }.map { |item| item[:elapsed] }
+    assert_equal %i[text thinking tool], kinds(kept)
+    assert_equal [ 4 ], kept.select { |item| item[:kind] == :thinking }.map { |item| item[:elapsed] }
   end
 
-  # One answer, four calls in the same breath: showing one of them would claim
-  # the model did one thing when it did four at once.
-  def test_compact_keeps_a_batch_whole
-    items = [ tool("write"),
-              tool("read"), tool("grep"), tool("read"), tool("grep") ]
+  # The pause opens the round below it, so the moment the model stops to think
+  # again the calls it finished are gone: what the reader watches is one row
+  # replacing one row, never a thought appearing under a call that then leaves.
+  def test_a_pause_leaves_the_calls_of_the_round_it_ended_behind
+    quick = [ tool("read"), { kind: :step } ]
+    slow = [ tool("read"), open_thought ]
 
-    assert_equal %w[write read grep read grep], names(Rubot::Web::ToolRows.collapse(items))
+    assert_equal %i[step], kinds(Rubot::Web::ToolRows.collapse(quick))
+    assert_equal %i[thinking], kinds(Rubot::Web::ToolRows.collapse(slow))
+    assert_empty names(Rubot::Web::ToolRows.collapse(slow))
+  end
+
+  # One answer, four calls in the same breath: the timeline is read one row at a
+  # time, so the fourth call is the row on screen — the first three are the same
+  # work half-told, not four rows stacked.
+  def test_compact_reads_a_batch_one_row_at_a_time
+    items = [ tool("read"), tool("grep"), tool("read"), tool("grep") ]
+
+    assert_equal %w[grep], names(Rubot::Web::ToolRows.collapse(items))
+  end
+
+  # …but a call the reader has to come back for keeps its own row: the batch is
+  # not a licence to hide a file the turn changed.
+  def test_a_batch_still_shows_the_call_that_changed_a_file
+    items = [ tool("file_ops", op: "edit"), tool("read"), tool("grep") ]
+
+    assert_equal %w[file_ops grep], names(Rubot::Web::ToolRows.collapse(items))
   end
 
   # The reader talking does not split a batch: it is one moment of the turn with
-  # the reader's words in the middle of it.
+  # the reader's words in the middle of it, and the row on screen is still the
+  # call the model reached for last.
   def test_a_steering_message_does_not_split_the_batch
     items = [ text("Aku cek dulu."), tool("read"),
               { kind: :steer, text: "jangan lupa b.rb" },
               tool("grep") ]
 
-    assert_equal %w[read grep], names(Rubot::Web::ToolRows.collapse(items))
+    kept = Rubot::Web::ToolRows.collapse(items)
+
+    assert_equal %w[grep], names(kept)
+    assert_includes kinds(kept), :steer
   end
 
   # The sentences around the calls are the model talking to the reader, and
@@ -91,6 +120,55 @@ class TestToolRows < Minitest::Test
     assert_equal [ "Aku cek dulu.", "Ketemu.", "Ini hasilnya." ],
                  kept.select { |item| item[:kind] == :text }.map { |item| item[:text] }
   end
+
+  # A model does not always think between two calls: it finishes one, answers,
+  # and reaches for the next. The answer is the line between the rounds, so the
+  # call above it is the log — reading only the pause left it on screen next to
+  # the call the turn is on now.
+  def test_an_answer_splits_the_round_without_a_pause
+    items = [ tool("ls"), text("Bentar, aku lihat lagi."), tool("grep") ]
+
+    assert_equal %w[grep], names(Rubot::Web::ToolRows.collapse(items))
+  end
+
+  # The whole shape of a live compact turn, in the order the rows arrive: two
+  # finished rounds, an answer, the call it is on now.
+  def test_the_round_it_is_on_is_the_only_call_drawn
+    items = [ text("Aku cek dulu."), { kind: :step }, tool("ls"),
+              { kind: :step }, tool("pwd"),
+              text("Lanjut yang kedua."), tool("grep") ]
+
+    kept = Rubot::Web::ToolRows.collapse(items)
+
+    assert_equal %w[grep], names(kept)
+    assert_equal [ "Aku cek dulu.", "Lanjut yang kedua." ],
+                 kept.select { |item| item[:kind] == :text }.map { |item| item[:text] }
+  end
+
+  # A row that vanishes under a spinning clock reads as work disappearing
+  # mid-flight: the call it is on is drawn even when a round marker lands below
+  # it before the result is back.
+  def test_a_running_call_is_not_hidden_by_the_round_that_opened_below_it
+    items = [ tool("grep", state: :running), { kind: :step }, tool("read") ]
+
+    assert_equal %w[grep read], names(Rubot::Web::ToolRows.collapse(items))
+  end
+
+
+  # The answer is not a round that did anything: the call it reports on stays
+  # above it, because a row that vanished the moment the answer started
+  # streaming is the flicker the reader was promised not to see.
+  def test_the_answer_keeps_the_call_it_reports_on
+    items = [ text("Aku cek dulu."), { kind: :step }, tool("grep"),
+              text("Ini hasilnya.") ]
+
+    kept = Rubot::Web::ToolRows.collapse(items)
+
+    assert_equal %w[grep], names(kept)
+    assert_equal [ "Aku cek dulu.", "Ini hasilnya." ],
+                 kept.select { |item| item[:kind] == :text }.map { |item| item[:text] }
+  end
+
 
   # A diff is drawn under the row that made the edit, so it is part of that
   # row's fate: hiding the call while leaving its diff would show a patch no
@@ -143,9 +221,10 @@ class TestToolRows < Minitest::Test
     assert_equal %w[read], names(kept)
   end
 
-  # A thought belongs to the call it led into: the row for that call is gone, so
-  # the thought goes with it. Left behind, the timeline would read "thought,
-  # thought, call" instead of thought, call, thought — the order of the turn.
+  # A thought belongs to the round it opened: the calls of the round above it
+  # are finished work, so they leave together with the thought that led into
+  # them. What stays is the pause the turn is on and whatever it reached for
+  # after it.
   def test_a_thought_leaves_with_the_call_it_led_into
     items = [ thought(4), tool("read"),
               thought(5), tool("grep"),
@@ -153,8 +232,18 @@ class TestToolRows < Minitest::Test
 
     kept = Rubot::Web::ToolRows.collapse(items)
 
+    assert_equal %i[thinking], kinds(kept)
+    assert_equal 6, kept.first[:elapsed]
+  end
+
+  # …and its call is drawn under it the moment the model reaches for it.
+  def test_the_round_it_is_on_keeps_its_own_call
+    items = [ thought(4), tool("read"), thought(5), tool("grep") ]
+
+    kept = Rubot::Web::ToolRows.collapse(items)
+
+    assert_equal %i[thinking tool], kinds(kept)
     assert_equal %w[grep], names(kept)
-    assert_equal [ 5, 6 ], kept.select { |item| item[:kind] == :thinking }.map { |item| item[:elapsed] }
   end
 
   # A thought that took a while is closed into a "Thought for Ns" row before the
@@ -183,6 +272,66 @@ class TestToolRows < Minitest::Test
     assert_equal 3, items.size
   end
 
+  # --- round ids ---------------------------------------------------------
+
+  # Every row says which pass of the model it came from: what the model said
+  # and the call it reached for are one round, a thought opens the next, and a
+  # call joins the round it was reached for instead of opening one of its own.
+  # That is what the compact view reads — the line it draws is the first row
+  # carrying the round of the last call, never a count of the rows above it.
+  def test_a_turn_stamps_the_round_each_row_came_from
+    turn, = build_turn("verbose")
+
+    turn.append_chunk("Aku cek dulu.")
+    turn.tool_started("read", "a.rb")
+    turn.tool_finished("read", true)
+    turn.thinking
+    turn.tool_started("grep", "wanderer")
+    turn.append_chunk("Ini hasilnya.")
+
+    assert_equal %i[text tool step tool text], kinds(turn.items)
+    assert_equal [ 1, 1, 2, 2, 3 ], turn.items.map { |item| item[:round] }
+  end
+
+  # The pause that was too quick to earn a row still knows which round it
+  # opened: the marker keeps the number, so the calls below it stay a round of
+  # their own even though nothing on screen says a pause happened.
+  def test_a_pause_too_quick_to_show_still_carries_its_round
+    turn, = build_turn("compact")
+
+    turn.append_chunk("Bentar.")
+    turn.tool_started("read", "a.rb")
+    turn.tool_finished("read", true)
+    turn.thinking
+    turn.tool_started("grep", "wanderer")
+
+    step = turn.items.find { |item| item[:kind] == :step }
+    refute_nil step, "the boundary stays even without a clock"
+    assert_equal 2, step[:round]
+    assert_equal %w[grep], names(turn.items)
+  end
+
+  # Two calls that came from different rounds are not one batch, even with
+  # nothing between them to see: the number on the row decides, not the kind of
+  # the row above it.
+  def test_the_round_decides_not_the_row_above
+    items = [ text("Bentar."), tool("read").merge(round: 1), tool("grep").merge(round: 2) ]
+
+    kept = Rubot::Web::ToolRows.collapse(items)
+
+    assert_equal %w[grep], names(kept)
+    assert_equal [ "Bentar." ], kept.select { |item| item[:kind] == :text }.map { |item| item[:text] }
+  end
+
+  # A timeline with no rounds — a transcript written before they existed — is
+  # read the way it always was, so nothing breaks for the sessions already on
+  # disk.
+  def test_a_timeline_without_rounds_is_read_by_position
+    items = [ text("Bentar."), tool("read"), thought(4), tool("grep") ]
+
+    assert_equal %w[grep], names(Rubot::Web::ToolRows.collapse(items))
+  end
+
   # --- the live turn -----------------------------------------------------
 
   # A turn whose clock the test drives, so a thought can be slow enough to earn
@@ -194,28 +343,53 @@ class TestToolRows < Minitest::Test
   end
 
   # The shape the rule is about: what the model said, the call it made, the
-  # thought it took, the next call, the thought it is taking now.
-  def test_a_compact_turn_reads_text_call_thought_call_thought
+  # thought it took, the next call, the thought it is taking now. The reader
+  # watches one round at a time — the row it is on replaces the row before it,
+  # and starting to think again is what ends the round above.
+  def test_a_compact_turn_reads_one_round_at_a_time
     turn, advance = build_turn("compact")
 
     turn.append_chunk("Aku cek dulu, bentar.")
     turn.tool_started("read", "a.rb")
     turn.tool_finished("read", true)
+    assert_equal %i[text tool], kinds(turn.items), "the call it is on"
+
     advance.(5)
     turn.thinking
+    assert_equal %i[text thinking], kinds(turn.items), "the finished call leaves as the thought opens"
+
     advance.(4)
     turn.tool_started("grep", "wanderer")
     turn.tool_finished("grep", true)
+    assert_equal %i[text thinking tool], kinds(turn.items), "the thought stays above the call it led into"
+    assert_equal %w[grep], names(turn.items)
+
     advance.(6)
     turn.thinking
-
-    assert_equal %w[grep], names(turn.items)
-    assert_equal %i[text thinking tool thinking], kinds(turn.items)
+    assert_equal %i[text thinking], kinds(turn.items), "the next round takes the batch above it"
+    assert_empty names(turn.items)
   end
 
-  # Two calls asked for in the same breath are one batch even when the first
-  # result is already back: both stay, or the reader cannot tell what is running.
-  def test_a_compact_turn_keeps_the_batch_it_is_on
+  # The model answering between two calls is what ends the round above, even
+  # when it never stopped to think: the reader watches one call at a time.
+  def test_an_answer_ends_the_round_in_a_live_turn
+    turn, = build_turn("compact")
+
+    turn.append_chunk("Aku cek dulu.")
+    turn.tool_started("read", "a.rb")
+    turn.tool_finished("read", true)
+    turn.append_chunk("Lanjut yang lain.")
+    turn.tool_started("grep", "wanderer")
+
+    assert_equal %w[grep], names(turn.items)
+    assert_equal [ "Aku cek dulu.", "Lanjut yang lain." ],
+                 turn.items.select { |item| item[:kind] == :text }.map { |item| item[:text] }
+  end
+
+  # Two calls asked for in the same breath are one moment of the turn: the row
+  # on screen is the one it reached for last. The call before it was answered
+  # for by the next one, so it is not a row of its own.
+  def test_a_compact_turn_keeps_the_row_it_is_on
     turn, advance = build_turn("compact")
 
     turn.tool_started("read", "a.rb")
@@ -226,7 +400,7 @@ class TestToolRows < Minitest::Test
     turn.tool_started("read", "b.rb")
     turn.tool_started("grep", "wanderer")
 
-    assert_equal %w[read grep], names(turn.items)
+    assert_equal %w[grep], names(turn.items)
   end
 
   # A thought too quick to record draws no row, but it is still the line

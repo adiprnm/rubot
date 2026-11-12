@@ -222,10 +222,11 @@
         </p>
       <% end %>
       <%# A turn still in flight is drawn after the history and opens its own
-          stream again: the prompt it is answering may not be in the session file
-          yet, so this fragment is the only record of it on a refreshed page.
-          When the file has caught up, `live_prompt_shown` says so and the bubble
-          is left to the history — one prompt, one bubble. -%>
+          stream again: on the newest page the running turn owns its tail, so
+          this fragment is the only record of the prompt and of the rows written
+          so far. A page someone jumped into by search keeps the transcript as
+          it found it, and `live_prompt_shown` leaves that prompt bubble alone —
+          one prompt, one bubble either way. -%>
       <% if live_turn %>
         <%= View.render("_turn", turn: live_turn,
                         text: live_prompt_shown ? nil : live_turn.prompt,

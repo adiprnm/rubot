@@ -5,13 +5,13 @@
 <% case item[:kind] -%>
 <% when :thinking -%>
 <% if item[:closed_at] -%>
-<p class="row thinking done"><span class="mark think" aria-hidden="true"><%= mark(:thought) %></span><span class="label">Thought for <%= dur(item[:elapsed]) %></span></p>
+<p class="row thinking done"<%= round_attr(item) %>><span class="mark think" aria-hidden="true"><%= mark(:thought) %></span><span class="label">Thought for <%= dur(item[:elapsed]) %></span></p>
 <% else -%>
-<p class="row thinking" data-since="<%= item[:epoch] %>" data-threshold="<%= Turn::THINKING_SECONDS %>"><span class="mark think" aria-hidden="true"><%= mark(:think) %></span><span class="label glow" aria-label="Thinking…"><%= glow("Thinking…") %></span><span class="live-clock"></span></p>
+<p class="row thinking"<%= round_attr(item) %> data-since="<%= item[:epoch] %>" data-threshold="<%= Turn::THINKING_SECONDS %>"><span class="mark think" aria-hidden="true"><%= mark(:think) %></span><span class="label glow" aria-label="Thinking…"><%= glow("Thinking…") %></span><span class="live-clock"></span></p>
 <% end -%>
 <% when :tool -%>
 <% slow = item[:elapsed] && item[:elapsed] >= Turn::SLOW_TOOL_SECONDS -%>
-<div class="tool-row <%= item[:state] %><%= " is-swapped" if item[:swap_ms] %>" data-tool-key="<%= h("#{item[:name]}·#{item[:detail]}") %>"<% if item[:swap_ms] %> style="animation-delay: -<%= item[:swap_ms] %>ms"<% end %><% if item[:state] == :running %> data-since="<%= item[:epoch] %>" data-threshold="<%= Turn::SLOW_TOOL_SECONDS %>"<% end %>>
+<div class="tool-row <%= item[:state] %><%= " is-swapped" if item[:swap_ms] %>"<%= round_attr(item) %> data-tool-key="<%= h("#{item[:name]}·#{item[:detail]}") %>"<% if item[:swap_ms] %> style="animation-delay: -<%= item[:swap_ms] %>ms"<% end %><% if item[:state] == :running %> data-since="<%= item[:epoch] %>" data-threshold="<%= Turn::SLOW_TOOL_SECONDS %>"<% end %>>
   <span class="mark <%= item[:state] %>" aria-hidden="true"><%= state_mark(item[:state]) %></span>
   <span class="tool-name"><%= h(item[:name]) %></span>
   <span class="tool-detail"><%= h(item[:detail]) %></span>

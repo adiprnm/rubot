@@ -78,6 +78,14 @@ module Rubot
         # into the keyframes with it (see note_entering_locked).
         @entered = {}
         @row_seq = 0
+        # Which round of the turn a row belongs to. A round is one pass of the
+        # model: the thought it took, what it said, and the batch of calls it
+        # reached for. The number is stamped on every row as it arrives (see
+        # Rubot::Web::ToolRows), so the compact view knows what the turn is on
+        # from the row itself instead of guessing it from adjacency — a pause
+        # that left no row, or a call that came without one, no longer shifts
+        # the line the reader sees.
+        @round = 0
         @confirm = nil
         @response = nil
         @confirm_mutex = Mutex.new
@@ -135,7 +143,7 @@ module Rubot
             block[:text] << text
             block[:live] = true
           else
-            @items << { kind: :text, text: +text, live: true }
+            @items << { kind: :text, text: +text, live: true, round: (@round += 1) }
           end
           publish_locked
         end
@@ -164,7 +172,7 @@ module Rubot
           # one instead of being split in half by it.
           seal_text_locked
           @items << { kind: :thinking, started_at: @clock.call, epoch: epoch_now,
-                      closed_at: nil, elapsed: nil }
+                      closed_at: nil, elapsed: nil, round: (@round += 1) }
           publish_locked
         end
       end
@@ -176,9 +184,13 @@ module Rubot
           # What it said before the call stays above the row, as its own
           # block; the answer that follows the result opens a new one.
           seal_text_locked
+          # A call joins the round that is open instead of opening one of its
+          # own. Calls asked for in the same breath are one batch, and a batch
+          # reads as one act; only a thought or a sentence opens a round, which
+          # is exactly when the model decided the previous batch was done.
           row = { kind: :tool, name: name.to_s, detail: detail.to_s, state: :running,
                   started_at: @clock.call, epoch: epoch_now, elapsed: nil,
-                  row_id: @row_seq += 1 }
+                  row_id: @row_seq += 1, round: @round }
           # The operation a file tool was asked for. The compact view keeps a
           # row that changed a file even when it has no diff to show (see
           # Rubot::Web::ToolRows), and the name alone cannot tell a read from a
@@ -217,7 +229,7 @@ module Rubot
           if last && last[:kind] == :attachments
             last[:list] = last[:list] + [ file ]
           else
-            @items << { kind: :attachments, list: [ file ], epoch: epoch_now }
+            @items << { kind: :attachments, list: [ file ], epoch: epoch_now, round: @round }
           end
           publish_locked
         end
@@ -232,7 +244,7 @@ module Rubot
         return if body.empty?
 
         @mutex.synchronize do
-          @items << { kind: :diff, html: body, epoch: epoch_now }
+          @items << { kind: :diff, html: body, epoch: epoch_now, round: @round }
           publish_locked
         end
       end
@@ -497,7 +509,7 @@ module Rubot
         # Replaced by index, not popped: the reader can have spoken while the
         # model was thinking, and a `pop` would take their message instead of
         # the pause that is too short to mention.
-        @items[index] = { kind: :step }
+        @items[index] = { kind: :step, round: block[:round] }
       end
 
       def find_running_tool_locked(name)
