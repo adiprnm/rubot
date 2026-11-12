@@ -1259,6 +1259,17 @@ module Rubot
     # uncached request: the prefix changes, so nothing in front of the change is
     # reusable. That is the trade, and it is why this is a deliberate request
     # rather than something that happens on every memory write.
+    # Append a system-level addition without rewriting the cached prefix.
+    # Skeleton: only supported providers/models opt in; otherwise fall back to
+    # repin. The delta computation is intentionally left to a follow-up.
+    def append_system_addition(text)
+      return repin_system_prompt unless @provider.respond_to?(:supports_mid_conversation_system?) && @provider.supports_mid_conversation_system?
+
+      return false if text.to_s.strip.empty?
+      @session.add("system", text.to_s) if @session.respond_to?(:add)
+      true
+    end
+
     def repin_system_prompt
       return false unless @session
 
