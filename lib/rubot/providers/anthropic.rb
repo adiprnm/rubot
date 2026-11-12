@@ -33,6 +33,11 @@ module Rubot
         make_stream_request(payload, &on_chunk)
       end
 
+      def supports_mid_conversation_system?
+        model = @config.model.to_s.downcase
+        model.match?(/opus-5|sonnet-5\.5|haiku-5\.5|fable|mythos|opus-4\.8/)
+      end
+
       def format_tools(tools)
         Array(tools).map do |t|
           {
