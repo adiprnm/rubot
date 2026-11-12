@@ -2237,12 +2237,15 @@ body {
 .tool-row.failed .mark { color: var(--red); }
 .tool-row.unknown .mark { color: var(--fg-faint); }
 
-/* One call giving way to the next. The row is redrawn on every event of the
-   turn, so an animation written into the stylesheet would replay on each tick;
-   the class is added by app.js only when the row's identity changes. Fade and
-   a hair of rise: the row arrives where the last one stood, which is a change
-   the eye reads without being told. A crossfade was the other option and was
-   not taken — two layers of 10px mono text over each other is a blur for
+/* One call giving way to the next. The row is a new element on every event of
+   a turn, so the animation would begin at zero twenty times a second and read
+   as a blink; Rubot::Web::Turn sends the row's age along and the template turns
+   it into a negative animation-delay, which seeks the fresh node to the frame
+   the last one had reached. The fade is then one fade, however many redraws
+   land inside it, and the reduced-motion rule below still switches it off.
+   Fade and a hair of rise: the row arrives where the last one stood, which is a
+   change the eye reads without being told. A crossfade was the other option and
+   was not taken — two layers of 10px mono text over each other is a blur for
    150ms, and a line of text is not a picture worth dissolving. */
 .tool-row.is-swapped { animation: tool-row-swap 180ms ease-out both; }
 

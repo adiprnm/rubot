@@ -5204,20 +5204,58 @@ module Rubot
 
       # A turn redraws its whole timeline on every event, so the call row is a
       # new node each time and an animation written straight onto the stylesheet
-      # would replay on every stream tick. app.js adds the class when the row's
-      # *identity* changes instead, and reads that identity off the markup — so
-      # the row has to name itself, and the animation the class starts has to
-      # exist under the name the script uses.
-      def test_a_swapped_call_row_can_say_when_it_changed
-        row = View.render("_timeline",
+      # would replay on every stream tick. The row therefore carries its own age
+      # — as a negative animation-delay, which seeks the fresh node to the frame
+      # the last one had reached — and the class that names the animation.
+      def test_a_swapped_call_row_can_say_how_long_it_has_been_here
+        fresh = View.render("_timeline",
+                            items: [ { kind: :tool, name: "shell", detail: "ls",
+                                       state: :ok, elapsed: 1.0, swap_ms: 0 } ])
+        mid = View.render("_timeline",
                           items: [ { kind: :tool, name: "shell", detail: "ls",
-                                     state: :ok, elapsed: 1.0 } ])
+                                     state: :ok, elapsed: 1.0, swap_ms: 120 } ])
+        settled = View.render("_timeline",
+                              items: [ { kind: :tool, name: "shell", detail: "ls",
+                                         state: :ok, elapsed: 1.0 } ])
         css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
         js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
 
-        assert_includes row, 'data-tool-key="shell·ls"'
+        assert_includes fresh, 'data-tool-key="shell·ls"'
+        assert_includes fresh, "is-swapped"
+        assert_includes fresh, 'style="animation-delay: -0ms"'
+        assert_includes mid, 'style="animation-delay: -120ms"',
+                        "each redraw resumes the fade where the last frame was"
+        refute_includes settled, "is-swapped", "a row past the fade is left alone"
+        refute_includes settled, "animation-delay"
         assert_match(/\.tool-row\.is-swapped \{ animation: tool-row-swap/, css)
-        assert_includes js, "is-swapped", "the class the stylesheet animates"
+        refute_includes js, "is-swapped",
+                        "the browser does not guess: the server sends the age"
+      end
+
+      # The age is the turn's to know: it is the only place that remembers what
+      # the timeline showed a moment ago, since every redraw throws the nodes
+      # away. So a call row that has just arrived is marked as arriving, keeps
+      # the mark while the fade lasts — through its own state change, which is
+      # not an arrival — and loses it afterwards.
+      def test_a_fresh_call_row_carries_the_age_of_its_fade
+        now = 100.0
+        turn = Turn.new(id: "t1", session_id: "s1", clock: -> { now }, epoch_clock: -> { now })
+
+        turn.tool_started("shell_exec", "ls")
+        assert_equal 0, turn.items.last[:swap_ms]
+
+        now += 0.05
+        turn.tool_finished("shell_exec", true)
+        assert_equal 50, turn.items.last[:swap_ms],
+                     "the same call turning ok does not start the fade over"
+
+        now += 0.2
+        assert_nil turn.items.last[:swap_ms], "past the fade, the row is left alone"
+
+        turn.tool_started("file_ops", "a.rb", op: "edit")
+        assert_equal 0, turn.items.last[:swap_ms], "the next call starts its own fade"
+        assert_equal 1, turn.items.count { |item| item[:kind] == :tool && item[:swap_ms] },
+                     "and only itself: the call that came before stays put"
       end
 
       # The thought wears the half disc and keeps it still: a shape that means

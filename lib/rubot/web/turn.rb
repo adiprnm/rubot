@@ -30,6 +30,12 @@ module Rubot
       # wonder whether it hung.
       SLOW_TOOL_SECONDS = 3.0
 
+      # How long a call row takes to fade in once it stands where the previous
+      # one stood. The stylesheet owns the keyframes (tool-row-swap); the number
+      # is here because the turn has to know when the fade is over and stop
+      # asking for it.
+      SWAP_SECONDS = 0.18
+
       attr_reader :id, :session_id, :response, :epoch, :prompt
 
       # `clock` is injectable so the timing rules can be tested without
@@ -64,6 +70,14 @@ module Rubot
         # thought that led into it, the answer that came out. The compact view
         # reads that order back (see Rubot::Web::ToolRows).
         @items = []
+        # When each call row was first drawn, by row id, and the id itself. The
+        # timeline is redrawn whole on every event of a turn, so a row is a new
+        # node every fifty milliseconds and a fade written into the stylesheet
+        # would start over on each one — the reader saw a flash instead of a
+        # fade. The age travels with the row instead, and the stylesheet seeks
+        # into the keyframes with it (see note_entering_locked).
+        @entered = {}
+        @row_seq = 0
         @confirm = nil
         @response = nil
         @confirm_mutex = Mutex.new
@@ -83,16 +97,18 @@ module Rubot
       # still appending to. The mode decides which rows survive: a compact turn
       # keeps only the call it is on (see Rubot::Web::ToolRows).
       def items
-        list = @mutex.synchronize do
-          @items.map do |item|
+        @mutex.synchronize do
+          list = @items.map do |item|
             copy = item.dup
             copy[:text] = item[:text].dup if item[:text]
             copy[:html] = item[:html].dup if item[:html]
             copy[:list] = item[:list].dup if item[:list]
             copy
           end
+          list = ToolRows.collapse(list) if ToolRows.compact?(@tool_output)
+          note_entering_locked(list)
+          list
         end
-        ToolRows.compact?(@tool_output) ? ToolRows.collapse(list) : list
       end
 
       # --- producer side (agent callbacks) --------------------------------
@@ -161,7 +177,8 @@ module Rubot
           # block; the answer that follows the result opens a new one.
           seal_text_locked
           row = { kind: :tool, name: name.to_s, detail: detail.to_s, state: :running,
-                  started_at: @clock.call, epoch: epoch_now, elapsed: nil }
+                  started_at: @clock.call, epoch: epoch_now, elapsed: nil,
+                  row_id: @row_seq += 1 }
           # The operation a file tool was asked for. The compact view keeps a
           # row that changed a file even when it has no diff to show (see
           # Rubot::Web::ToolRows), and the name alone cannot tell a read from a
@@ -393,6 +410,29 @@ module Rubot
 
       def epoch_now
         @epoch_clock.call
+      end
+
+      # Marks a call row that has just arrived with how long it has been here,
+      # so the stylesheet can resume its fade instead of restarting it. Each
+      # event of a turn sends the whole timeline again, which makes every row a
+      # fresh node: an animation that begins at zero on each one blinks once per
+      # stream tick. `animation-delay: -120ms` puts the new node at the point the
+      # last node had reached, so what the reader sees is one fade of 180ms
+      # rather than a dozen flashes of nothing.
+      #
+      # The age stops being sent once the fade is over, and rows that left the
+      # timeline are forgotten, so the bookkeeping is as long as the turn is.
+      def note_entering_locked(list)
+        now = epoch_now
+        live = {}
+        list.each do |item|
+          next unless item[:kind] == :tool && item[:row_id]
+
+          live[item[:row_id]] = true
+          age = now - (@entered[item[:row_id]] ||= now)
+          item[:swap_ms] = (age * 1000).round if age < SWAP_SECONDS
+        end
+        @entered.keep_if { |row_id, _| live[row_id] }
       end
 
       # An answer that never streamed lands here instead.
