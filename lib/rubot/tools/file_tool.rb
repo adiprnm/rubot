@@ -22,6 +22,7 @@ module Rubot
       DESTRUCTIVE_WRITE_RATIO = 0.7
 
       attr_accessor :safety_guard
+      attr_reader :last_read_path
 
       def initialize(safety_guard: nil)
         @safety_guard = safety_guard
@@ -41,9 +42,10 @@ module Rubot
                    returned so you can continue from there. Pass `paths` (an
                    array) to read several files in one call: one round trip
                    instead of one per file, each answered under its own header.
-          - edit:  Replace `old_string` with `new_string`. `old_string` must
-                   appear exactly once unless `replace_all` is true. This is the
-                   preferred way to change an existing file — it does not
+          - edit:  Replace `old_string` with `new_string` in the file at
+                   `path`. Both `path` and `old_string` are required; `old_string`
+                   must appear exactly once unless `replace_all` is true. This is
+                   the preferred way to change an existing file — it does not
                    rewrite the parts you did not touch.
           - write: Write content to a file (overwrites the whole file)
           - append: Append content to a file
@@ -121,7 +123,8 @@ module Rubot
         case operation
         when "read"    then read_files(paths, path, offset: arguments["offset"], limit: arguments["limit"])
         when "edit"    then edit_file(path, arguments["old_string"], arguments["new_string"],
-                                       replace_all: arguments["replace_all"])
+                                       replace_all: arguments["replace_all"],
+                                       offset: arguments["offset"], limit: arguments["limit"])
         when "write"   then write_file(path, content)
         when "append"  then append_file(path, content)
         when "delete"  then delete_file(path)
@@ -290,11 +293,13 @@ module Rubot
       end
 
       def read_file(path, offset: nil, limit: nil)
+        raise "No path provided (the file to read)" if path.nil? || path.to_s.strip.empty?
         check_path(path, operation: :read)
         p = safe_path(path)
         raise "File not found: #{path}" unless File.exist?(p)
         raise "Not a file: #{path}" unless File.file?(p)
 
+        @last_read_path = p.to_s
         content = File.read(p, encoding: "UTF-8")
 
         if offset.nil? && limit.nil?
@@ -327,18 +332,56 @@ module Rubot
 
       # Replace an exact block of text. Far safer and cheaper than rewriting a
       # whole file, which is what a multi-file change used to require.
-      def edit_file(path, old_string, new_string, replace_all: false)
+      def edit_file(path, old_string, new_string, replace_all: false, offset: nil, limit: nil)
+        if path.nil? || path.to_s.strip.empty?
+          if @last_read_path
+            path = @last_read_path
+          else
+            raise "No path provided (the file to edit)"
+          end
+        end
         check_path(path, operation: :write)
         raise "Cannot edit MEMORY.md — use the memory tool instead." if memory_file?(path)
 
         old_text = old_string.to_s
-        raise "No old_string provided (the exact text to replace)" if old_text.empty?
 
         p = safe_path(path)
         raise "File not found: #{path}" unless File.exist?(p)
         raise "Not a file: #{path}" unless File.file?(p)
 
+        @last_read_path = p.to_s
         content = File.read(p, encoding: "UTF-8")
+
+        # Line-range edit: when old_string is omitted but offset is given, replace
+        # those lines with new_string. Models that address a target by line number
+        # (offset/limit) instead of exact text land here.
+        if old_text.empty? && !offset.nil?
+          lines = content.lines
+          total = lines.size
+          start = offset.to_i
+          start = 1 if start < 1
+          count = limit.to_i
+          count = 1 if count < 1
+          ending = [start - 1 + count, total].min
+          prefix = lines[0...(start - 1)].join
+          suffix = (ending < total) ? lines[ending..].join : ""
+          replacement = new_string.to_s
+          replacement += "\n" unless replacement.empty? || replacement.end_with?("\n")
+          # If the file did not end with a newline and we are replacing the last
+          # line, keep it that way.
+          if suffix.empty? && !content.end_with?("\n") && replacement.end_with?("\n")
+            replacement = replacement.chomp("\n")
+          end
+          updated = prefix + replacement + suffix
+          File.write(p, updated, encoding: "UTF-8")
+          verify_written!(p, updated)
+          return "Edited #{p}: replaced lines #{start}-#{[start + count - 1, total].min} "                  "with #{new_string.to_s.length} chars"
+        end
+
+        if old_text.empty?
+          raise "No old_string provided (the exact text to replace)"
+        end
+
         pattern = Regexp.new(Regexp.escape(old_text), Regexp::MULTILINE)
         occurrences = content.scan(pattern).size
 
@@ -366,23 +409,39 @@ module Rubot
       end
 
       def write_file(path, content)
+        if path.nil? || path.to_s.strip.empty?
+          if @last_read_path
+            path = @last_read_path
+          else
+            raise "No path provided (the file to write)"
+          end
+        end
         check_path(path, operation: :write)
         raise "Cannot overwrite MEMORY.md — use the memory tool (append/update_section) instead. Memory cannot be reset." if memory_file?(path)
         raise "No content provided" if content.nil?
         p = safe_path(path)
         FileUtils.mkdir_p(File.dirname(p))
+        @last_read_path = p.to_s
         File.write(p, content, encoding: "UTF-8")
         verify_written!(p, content)
         "Written #{content.length} characters to #{p}"
       end
 
       def append_file(path, content)
+        if path.nil? || path.to_s.strip.empty?
+          if @last_read_path
+            path = @last_read_path
+          else
+            raise "No path provided (the file to append to)"
+          end
+        end
         check_path(path, operation: :write)
         # FIX (VULN-9): Block append to MEMORY.md — same protection as write
         raise "Cannot append to MEMORY.md — use the memory tool (append/update_section) instead. Memory cannot be reset." if memory_file?(path)
         raise "No content provided" if content.nil?
         p = safe_path(path)
         FileUtils.mkdir_p(File.dirname(p))
+        @last_read_path = p.to_s
         File.open(p, "a", encoding: "UTF-8") { |f| f.write(content) }
         verify_appended!(p, content)
         "Appended #{content.length} characters to #{p}"
@@ -391,6 +450,7 @@ module Rubot
       # Removing a whole file. Directories are refused so a stray call cannot
       # take a tree with it; the caller deletes their files one by one.
       def delete_file(path)
+        raise "No path provided (the file to delete)" if path.nil? || path.to_s.strip.empty?
         check_path(path, operation: :write)
         raise "Cannot delete MEMORY.md — use the memory tool instead. Memory cannot be reset." if memory_file?(path)
         p = safe_path(path)
@@ -403,6 +463,7 @@ module Rubot
       end
 
       def list_dir(path)
+        raise "No path provided (the directory to list)" if path.nil? || path.to_s.strip.empty?
         check_path(path, operation: :read)
         p = safe_path(path)
         raise "Directory not found: #{path}" unless Dir.exist?(p)
@@ -423,6 +484,7 @@ module Rubot
       end
 
       def file_info(path)
+        raise "No path provided (the path to inspect)" if path.nil? || path.to_s.strip.empty?
         check_path(path, operation: :read)
         p = safe_path(path)
         raise "Path not found: #{path}" unless File.exist?(p)
@@ -445,6 +507,7 @@ module Rubot
       # file directly. That covers the global MEMORY.md / MEMORY_ARCHIVE.md and
       # the per-workspace <slug>.md / <slug>_ARCHIVE.md in the memory directory.
       def memory_file?(path)
+        return false if path.nil? || path.to_s.strip.empty?
         basename = File.basename(path).downcase
         return true if basename == "memory.md" || basename == "memory_archive.md"
 
