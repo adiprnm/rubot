@@ -413,7 +413,7 @@ agents:
       auto: true
       threshold_percent: 60
       threshold_tokens: 120000
-      keep_recent_messages: 10
+      keep_recent_messages: 40
     memory:
       extract_every: 3       # batch memory extraction (0 disables it)
       consolidate: true      # dedupe and cap MEMORY.md sections
@@ -609,7 +609,7 @@ agents:
     compaction:
       auto: true               # default: true
       threshold_percent: 60    # default: 60 (0.6 is also accepted)
-      keep_recent_messages: 6  # default: 6
+      keep_recent_messages: 40 # default: 40
       max_messages: 400        # messages kept in the session file
 ```
 
@@ -621,9 +621,16 @@ summarized), and very long transcripts are summarized in chunks so the
 summarizer request itself stays within the window.
 
 Each compaction **merges** the previous running summary into the new one
-instead of appending a paragraph, and only the newest 6,000 characters of the
+instead of appending a paragraph, and only the newest 12,000 characters of the
 summary are injected into the system prompt. Without that, every compaction
 added another paragraph to a block that was paid for on every request.
+
+The summary is written to the size of the material it replaces (about one word
+per 40 characters, never under 200 or over 1,200 words), and a compaction that
+runs in the middle of a turn never summarizes the messages of that turn: they
+are what the turn is still working from. A turn with more messages than
+`keep_recent_messages` keeps all of its own, and only the turns before it are
+summarized.
 
 On a model with a very large window the percentage threshold can be
 unreachable in practice (50% of 1M tokens is 500k). `threshold_tokens` adds an
@@ -644,8 +651,12 @@ without a summary replacing it — the worst of both worlds. `history.limit` and
 only bound.
 
 The user's original request is stored on the session separately from the
-transcript and re-stated in the system prompt as `# Task`. The hard message
-trim and compaction can drop old turns, but never the goal of the task.
+transcript and re-stated in the system prompt as `# Task` once the transcript
+no longer carries it. The hard message trim and compaction can drop old turns,
+but never the goal of the task. While the message that stated the goal is
+still in the window, nothing is re-stated: the conversation already says it,
+and an older request sitting in front of everything is an instruction to
+answer instead of the one the user just gave.
 
 #### Request size
 

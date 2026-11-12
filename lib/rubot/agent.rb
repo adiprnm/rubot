@@ -902,12 +902,37 @@ module Rubot
     # Force a compaction of the current session transcript, regardless of the
     # automatic threshold. Used by /compact. Returns plain data so it can
     # cross a Ractor boundary, or nil when there is nothing to compact.
-    def compact_session
-      @session.compact!(
+    #
+    # `protect_current_turn` is what the mid-turn callers ask for: the messages
+    # of the turn being executed are never summarized away, because the turn
+    # still needs them (the file it just read, the edit it just made, the
+    # failing command it is about to fix). Summarizing them keeps a paragraph
+    # about the work and drops the work itself, which is what a long turn that
+    # suddenly re-explores the repo looks like from the outside. /compact at
+    # rest keeps the plain rule: there is no turn to protect.
+    def compact_session(protect_current_turn: false)
+      keep = protect_current_turn ? compaction_keep_recent : @config.compact_keep_recent_messages
+      result = @session.compact!(
         provider: @provider,
-        keep_recent: @config.compact_keep_recent_messages,
+        keep_recent: keep,
         system_prompt: build_system_prompt
       )
+      return nil unless result
+
+      # Compaction drops messages from the front, so the mark that says where
+      # this turn began has to move with them. Left alone it points past the
+      # end of a shrunken transcript, `current_turn_message_count` collapses to
+      # zero, and the rest of the turn is sent without its own reasoning.
+      if @turn_start_index
+        @turn_start_index = [ @turn_start_index - result[:summarized_messages].to_i, 0 ].max
+      end
+      result
+    end
+
+    # How many messages compaction has to keep verbatim: the configured window,
+    # or the whole turn in flight when that is longer.
+    def compaction_keep_recent
+      [ @config.compact_keep_recent_messages.to_i, current_turn_message_count ].max
     end
 
     # Approximate size of the next request: transcript + system prompt. Uses
@@ -2520,6 +2545,9 @@ end
     # share of the model's context window. The estimate is recomputed from the
     # transcript each time, so a compaction immediately lowers it and the next
     # round does not compact again.
+    #
+    # Both branches run in the middle of a turn, so both hand the turn in flight
+    # to compact_session as something it may not summarize.
     def run_auto_compaction
       return unless @config.auto_compact?
       return if @session.message_count <= @config.compact_keep_recent_messages
@@ -2531,7 +2559,7 @@ end
       # same one request and leaves a summary plus the recent messages: smaller
       # and it keeps what the trim throws away. So compact a block before the
       # trim would fire.
-      return compact_session if transcript_near_the_trim_cap?
+      return compact_session(protect_current_turn: true) if transcript_near_the_trim_cap?
 
       window = context_window_tokens
       # An unknown model used to disable compaction entirely, which left an
@@ -2545,7 +2573,7 @@ end
       used = estimated_context_tokens
       return if used < threshold
 
-      result = compact_session
+      result = compact_session(protect_current_turn: true)
       if result && Rubot.debug?
         warn "[compaction] auto: #{result[:summarized_messages]} messages summarized, " \
              "context #{result[:context_before]} -> #{result[:context_after]} tokens (estimated)"

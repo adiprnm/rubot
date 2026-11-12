@@ -23,7 +23,24 @@ module Rubot
     # session). The newest part is the relevant one; older paragraphs are
     # dropped from the prompt (the file keeps them until the next compaction
     # merges everything into one).
-    MAX_SUMMARY_CHARS = 6_000
+    #
+    # The cap has to leave room for a summary that is actually a summary: with
+    # the length the summarizer is now allowed (see #summary_word_budget), one
+    # compaction of a long, tool-heavy transcript lands around 8 KB. Capping at
+    # 6 KB clipped the newest part of exactly those summaries while the file
+    # kept the rest.
+    MAX_SUMMARY_CHARS = 12_000
+    # How long a summary may be, in words, for a given amount of material.
+    #
+    # A fixed 200-word answer to 278 messages was not a summary, it was a
+    # caption: the model got one paragraph, could not tell what it had already
+    # read or changed, and spent the next turn re-exploring the repo. One word
+    # per 40 characters keeps the summary near 15% of what it replaces, which
+    # is where a summary is worth reading and the prompt is still smaller than
+    # the transcript it stands in for.
+    SUMMARY_CHARS_PER_WORD = 40
+    MIN_SUMMARY_WORDS = 200
+    MAX_SUMMARY_WORDS = 1_200
     # User messages waiting to be extracted into MEMORY.md. Bounded so a long
     # stretch between extractions cannot grow the session file without limit.
     MAX_MEMORY_BACKLOG = 20
@@ -658,7 +675,10 @@ module Rubot
       return nil if cutoff <= 0
 
       to_summarize = @messages[0...cutoff]
-      summary_text = call_summarizer(provider, system_prompt, to_summarize, previous: summary_text)
+      # The merge input is the whole running summary, not the capped view the
+      # prompt shows: the summarizer is the one place where dropping the older
+      # part is a decision, and it can only make it with the text in hand.
+      summary_text = call_summarizer(provider, system_prompt, to_summarize, previous: @summary)
       return nil if summary_text.nil? || summary_text.strip.empty?
 
       prompt_chars = system_prompt.to_s.length
@@ -1121,26 +1141,93 @@ module Rubot
     # itself stays within the model's context window.
     def call_summarizer(provider, system_prompt, messages, previous: nil)
       batches = split_summary_batches(messages)
-      summaries = batches.map do |batch|
+      carry = words_in(previous)
+      # Each part carries the length it is allowed as well as its text, so the
+      # merge can keep what the parts between them could hold instead of
+      # answering in the length of one of them.
+      parts = batches.map do |batch|
         # A single batch can take the previous summary directly in its prompt;
-        # with several batches the merge step below does that instead.
-        summarize_batch(provider, system_prompt, batch,
-                        previous: batches.size == 1 ? previous : nil)
+        # with several batches the merge step below does that instead. Its own
+        # budget carries what the summary already says, so merging more
+        # material never makes the summary shorter than it was.
+        budget = summary_word_budget(batch_chars(batch)) + (batches.size == 1 ? carry : 0)
+        text = summarize_batch(provider, system_prompt, batch,
+                               previous: batches.size == 1 ? previous : nil,
+                               word_budget: budget)
+        text && { "text" => text, "words" => budget.clamp(MIN_SUMMARY_WORDS, MAX_SUMMARY_WORDS) }
       end.compact
-      return nil if summaries.empty?
-      return summaries.first if summaries.size == 1
+      return nil if parts.empty?
+      return parts.first["text"] if parts.size == 1
 
-      merged = summarize_batch(
-        provider,
-        system_prompt,
-        summaries.map { |text| { "role" => "assistant", "content" => text } },
-        merging: true,
-        previous: previous
-      )
-      merged || [ previous, *summaries ].compact.join("\n\n")
+      merge_summaries(provider, system_prompt, parts, previous) ||
+        [ previous, *parts.map { |part| part["text"] } ].compact.join("\n\n")
     end
 
-    def summarize_batch(provider, system_prompt, messages, merging: false, previous: nil)
+    # Fold the partial summaries into one, a group at a time, until one is left.
+    #
+    # Merging them all in a single request is what a compaction with many
+    # batches would do, and the request grows with the number of batches -- the
+    # one thing the per-batch limit exists to prevent. A part is never re-written
+    # alone: a group of one is already a summary.
+    def merge_summaries(provider, system_prompt, parts, previous)
+      first_round = true
+      while parts.size > 1
+        before = parts.size
+        merged = summary_groups(parts).map do |group|
+          next group.first if group.size == 1
+
+          budget = group.sum { |part| part["words"] }.clamp(MIN_SUMMARY_WORDS, MAX_SUMMARY_WORDS)
+          text = summarize_batch(
+            provider,
+            system_prompt,
+            group.map { |part| { "role" => "assistant", "content" => part["text"] } },
+            merging: true,
+            previous: first_round ? previous : nil,
+            word_budget: budget
+          )
+          text && { "text" => text, "words" => budget }
+        end.compact
+        first_round = false
+
+        return nil if merged.empty?
+        parts = merged
+        return parts.first["text"] if parts.size == 1
+        # No progress (every group held a single part): the join is honest
+        # about having several summaries instead of looping forever.
+        break if parts.size >= before
+      end
+      parts.map { |part| part["text"] }.join("\n\n")
+    end
+
+    # Parts packed greedily into groups that stay inside one summarizer request.
+    def summary_groups(parts)
+      groups = []
+      current = []
+      current_chars = 0
+
+      parts.each do |part|
+        size = part["text"].to_s.bytesize
+        if !current.empty? && current_chars + size > MAX_SUMMARY_INPUT_CHARS
+          groups << current
+          current = []
+          current_chars = 0
+        end
+        current << part
+        current_chars += size
+      end
+      groups << current unless current.empty?
+      groups
+    end
+
+    # How many words a summary of `chars` characters may take. It is a policy
+    # number rather than a detail of the prompt string, so it lives in one
+    # place and the tests can read it.
+    def summary_word_budget(chars)
+      (chars.to_i / SUMMARY_CHARS_PER_WORD).clamp(MIN_SUMMARY_WORDS, MAX_SUMMARY_WORDS)
+    end
+
+    def summarize_batch(provider, system_prompt, messages, merging: false, previous: nil,
+                        word_budget: nil)
       context = messages.map do |msg|
         role = msg["role"]
         content = msg["content"] || ""
@@ -1148,10 +1235,13 @@ module Rubot
       end.join("\n")
 
       instruction = if merging
-        "Merge the following partial summaries into one concise paragraph."
+        "Merge the following partial summaries into one cohesive summary."
       else
-        "Summarize the following conversation history into a concise paragraph."
+        "Summarize the following conversation history."
       end
+
+      budget = (word_budget || summary_word_budget(context.length)).clamp(MIN_SUMMARY_WORDS,
+                                                                         MAX_SUMMARY_WORDS)
 
       previous_block = previous.to_s.strip.empty? ? "" : <<~PREV
         Existing summary of even older turns. Merge it with the new material
@@ -1163,8 +1253,10 @@ module Rubot
       summarize_prompt = <<~PROMPT.strip
         #{instruction}
         #{previous_block}
-        Preserve important facts, decisions, and outcomes. Omit pleasantries
-        and redundant exchanges. Keep it under 200 words.
+        Preserve important facts, decisions, and outcomes: what was asked for,
+        which files were read or changed and what changed in them, what failed
+        and why, what is still open. Omit pleasantries and redundant exchanges.
+        Keep it under #{budget} words.
 
         Conversation:
         #{context}
@@ -1181,6 +1273,19 @@ module Rubot
     rescue StandardError => e
       warn "[session:summarize] Failed: #{e.class}: #{e.message}" if Rubot.debug?
       nil
+    end
+
+    # A batch's total size, the same figure split_summary_batches limits by.
+    def batch_chars(messages)
+      messages.sum do |msg|
+        size = msg["content"].to_s.bytesize
+        size += JSON.generate(msg["tool_calls"]).bytesize if msg["tool_calls"]
+        size
+      end
+    end
+
+    def words_in(text)
+      text.to_s.scan(/\S+/).size
     end
 
     # Split messages so no single summarizer request exceeds

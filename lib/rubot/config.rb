@@ -27,7 +27,13 @@ module Rubot
     DEFAULT_MAX_TOOL_ITERATIONS = DEFAULT_MAX_ROUNDS
     DEFAULT_AUTO_COMPACT = true
     DEFAULT_COMPACT_THRESHOLD_PERCENT = 60.0
-    DEFAULT_COMPACT_KEEP_RECENT = 6
+    # Messages kept verbatim next to the summary. Six was a caption's worth: a
+    # turn reads four files and runs two commands in that many messages, so a
+    # compaction in the middle of it left the summary describing work the model
+    # could no longer see. Forty holds a real stretch of a tool-heavy turn, and
+    # still leaves the summary doing its job (the prompt is a fraction of the
+    # transcript it replaces).
+    DEFAULT_COMPACT_KEEP_RECENT = 40
     DEFAULT_TOOL_RESULT_KEEP = 3
     DEFAULT_TOOL_RESULT_MAX_CHARS = 2_000
     # Messages kept in the session file before the oldest are dropped.

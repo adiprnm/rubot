@@ -1252,6 +1252,23 @@ class TestAgentCompaction < Minitest::Test
     assert_includes prompt, "Refactor the auth flow across five files"
   end
 
+  # A compaction that runs in the middle of a turn must leave that turn alone:
+  # the messages it is still working from are not something to summarize.
+  def test_a_mid_turn_compaction_keeps_the_turn_it_runs_in
+    8.times { |i| @agent.session.add(i.even? ? "user" : "assistant", "old #{i}") }
+    @agent.instance_variable_set(:@turn_start_index, @agent.session.messages.size)
+    6.times { |i| @agent.session.add("assistant", "working #{i}", reasoning_content: "why #{i}") }
+
+    result = @agent.compact_session(protect_current_turn: true)
+
+    refute_nil result
+    assert_equal 8, result[:summarized_messages]
+    assert_equal (0...6).map { |i| "working #{i}" }, @agent.session.messages.map { |m| m["content"] }
+    # The mark that says where the turn began moved with the messages, so the
+    # turn keeps its own reasoning for the requests that follow.
+    assert_equal 6, @agent.send(:current_turn_message_count)
+  end
+
   def test_auto_compaction_triggers_at_the_context_threshold
     fill_session(10)
 

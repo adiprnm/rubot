@@ -495,7 +495,7 @@ class TestConfigCompaction < Minitest::Test
 
     assert config.auto_compact?
     assert_in_delta 60.0, config.compact_threshold_percent
-    assert_equal 6, config.compact_keep_recent_messages
+    assert_equal 40, config.compact_keep_recent_messages
   end
 
   def test_nested_settings

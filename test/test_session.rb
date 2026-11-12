@@ -342,6 +342,41 @@ class TestSessionSummarization < Minitest::Test
     assert_equal 70, @session.message_count
   end
 
+  # The summary has to be the size of the material it replaces. A fixed 200
+  # words was a caption, not a summary: 278 messages of tool work became one
+  # paragraph, and the turn that followed spent its rounds re-reading the repo
+  # to find out what it had already done.
+  def test_the_summary_budget_follows_the_amount_of_conversation
+    provider = CapturingSummarizeProvider.new
+    @session.add("user", "refactor the importer\n" + ("a line of context\n" * 1_300))
+    @session.add("assistant", "working")
+    @session.add("assistant", "done")
+
+    @session.compact!(provider: provider, keep_recent: 2, system_prompt: "")
+
+    budget = summary_budget_in(provider.requests.last)
+    assert_operator budget, :>, 200, "a 20k-character batch is more than a caption"
+    assert_operator budget, :<=, Rubot::Session::MAX_SUMMARY_WORDS
+  end
+
+  def test_a_short_conversation_keeps_the_summary_floor
+    provider = CapturingSummarizeProvider.new
+    @session.add("user", "rename the helper")
+    @session.add("assistant", "done")
+    @session.add("assistant", "done too")
+
+    @session.compact!(provider: provider, keep_recent: 2, system_prompt: "")
+
+    assert_equal 200, summary_budget_in(provider.requests.last)
+  end
+
+  def summary_budget_in(request)
+    prompt = request.last["content"]
+    match = prompt.match(/Keep it under (\d+) words/)
+    refute_nil match, "the summarizer has to be told how long it may be"
+    match[1].to_i
+  end
+
   def test_estimated_tokens_grows_with_the_transcript
     session = Rubot::Session.new("estimate", workspace: @workspace)
     empty = session.estimated_tokens
@@ -705,6 +740,22 @@ class TestSessionSummarization < Minitest::Test
       @calls += 1
       raise StandardError, "Provider error" if @raise_error
       @response
+    end
+  end
+
+  # Keeps every request, so a test can read the prompt the summarizer was
+  # actually handed instead of guessing at it.
+  class CapturingSummarizeProvider < FakeSummarizeProvider
+    attr_reader :requests
+
+    def initialize
+      super
+      @requests = []
+    end
+
+    def chat(messages, tools: nil)
+      @requests << messages
+      super
     end
   end
 end

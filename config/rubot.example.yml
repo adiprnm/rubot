@@ -25,11 +25,13 @@ agents:
     # Context compaction. When the conversation reaches `threshold_percent` of
     # the model's context window, older turns are summarized into the running
     # summary and the most recent `keep_recent_messages` are kept verbatim.
-    # Use `/compact` to trigger it manually at any time.
+    # Use `/compact` to trigger it manually at any time. A turn that is still
+    # running is never summarized away, and the summary is written to a length
+    # that follows the amount of conversation it replaces.
     compaction:
       auto: true
       threshold_percent: 60   # 0.6 is also accepted
-      keep_recent_messages: 10
+      keep_recent_messages: 40
       # Optional absolute ceiling, in estimated tokens. Useful with a large
       # context window (e.g. 1M tokens), where a percentage alone is
       # unreachable in practice. 0 disables it; the lower of this and
