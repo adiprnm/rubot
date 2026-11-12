@@ -24,9 +24,15 @@ module Rubot
     # them. A level outside this list is not a preference, it is a typo.
     THINKING_LEVELS = %w[minimal low medium high].freeze
 
+    # How this persona's turns draw their tool calls. `verbose` is the timeline
+    # as it happened; `compact` keeps only the call the agent is on right now,
+    # which is what a busy turn needs when the calls are not the answer.
+    TOOL_OUTPUT_MODES = %w[verbose compact].freeze
+    DEFAULT_TOOL_OUTPUT = "verbose"
+
     def initialize(slug: nil, name: nil, emoji: nil, accent: nil, preset: nil, model: nil,
                    thinking: nil, system_prompt: nil, skills: nil, disabled_skills: nil,
-                   ref: nil, created_at: nil)
+                   ref: nil, created_at: nil, tool_output: nil)
       @slug = normalize_string(slug)
       @name = normalize_string(name)
       @emoji = normalize_string(emoji)
@@ -38,6 +44,9 @@ module Rubot
       @skills = normalize_list(skills)
       @disabled_skills = normalize_list(disabled_skills)
       @ref = normalize_string(ref)
+      # Only a mode that differs from the default is stored, so a persona that
+      # never chose stays out of the file (and an older file reads as verbose).
+      @tool_output = normalize_tool_output(tool_output)
       @created_at = created_at || Time.now.utc.iso8601
     end
 
@@ -63,6 +72,7 @@ module Rubot
         skills: fetch.call("skills"),
         disabled_skills: fetch.call("disabled_skills"),
         ref: fetch.call("ref"),
+        tool_output: fetch.call("tool_output"),
         created_at: fetch.call("created_at")
       )
       persona.empty? ? nil : persona
@@ -81,13 +91,14 @@ module Rubot
         "skills" => @skills,
         "disabled_skills" => @disabled_skills,
         "ref" => @ref,
+        "tool_output" => @tool_output,
         "created_at" => @created_at
       }
     end
 
     def empty?
-      [ @slug, @name, @emoji, @accent, @preset, @model, @thinking, @system_prompt, @ref ]
-        .all? { |value| value.nil? || value.empty? }
+      [ @slug, @name, @emoji, @accent, @preset, @model, @thinking, @system_prompt, @ref,
+        @tool_output ].all? { |value| value.nil? || value.to_s.empty? }
     end
 
     # A topic that borrows another persona instead of defining one.
@@ -103,6 +114,20 @@ module Rubot
 
     def emoji_or(default = "🤖")
       @emoji || default
+    end
+
+    # How this persona's turns draw their tool calls. The default is a mode
+    # nobody had to choose, which is why it is answered here rather than
+    # stored: a persona that never touched the setting says nothing in the
+    # file and still reads as verbose.
+    def tool_output
+      @tool_output || DEFAULT_TOOL_OUTPUT
+    end
+
+    # True when a turn should show only the call it is on, not the log of every
+    # call it made.
+    def compact_tool_output?
+      tool_output == "compact"
     end
 
     # Skills are shared by the whole install; this persona is the place that
@@ -135,6 +160,16 @@ module Rubot
       return nil if text.nil?
 
       THINKING_LEVELS.include?(text) ? text : nil
+    end
+
+    # A stored mode, or nil for the default. Anything the picker cannot produce
+    # is a typo in a hand-edited file, so it is dropped rather than carried
+    # around as a third mode nothing implements.
+    def normalize_tool_output(value)
+      text = normalize_string(value)&.downcase
+      return nil if text.nil? || text == DEFAULT_TOOL_OUTPUT
+
+      TOOL_OUTPUT_MODES.include?(text) ? text : nil
     end
 
     # Skill names the persona always works with. A plain string is accepted so

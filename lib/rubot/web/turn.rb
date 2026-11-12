@@ -37,9 +37,13 @@ module Rubot
       # stamp themselves with, injectable for the same reason: the working row
       # and a restarted clock are microseconds apart, and a poor thing to
       # assert on.
-      def initialize(id:, session_id:, prompt: nil, clock: nil, epoch_clock: nil)
+      def initialize(id:, session_id:, prompt: nil, clock: nil, epoch_clock: nil, tool_output: nil)
         @id = id
         @session_id = session_id
+        # How the reader asked this turn's calls to be drawn (see
+        # Rubot::Web::ToolRows). The turn holds it, not the renderer, so the
+        # live timeline and the transcript it becomes agree.
+        @tool_output = tool_output.to_s
         # The prompt is kept here because the session file only learns about it
         # when the turn is written at the end. A page refreshed mid-answer has
         # to draw the bubble it is answering, and this is the only copy.
@@ -73,9 +77,10 @@ module Rubot
       end
 
       # A copy, so the renderer never shares a String the producer thread is
-      # still appending to.
+      # still appending to. The mode decides which rows survive: a compact turn
+      # keeps only the call it is on (see Rubot::Web::ToolRows).
       def items
-        @mutex.synchronize do
+        list = @mutex.synchronize do
           @items.map do |item|
             copy = item.dup
             copy[:text] = item[:text].dup if item[:text]
@@ -84,6 +89,7 @@ module Rubot
             copy
           end
         end
+        ToolRows.compact?(@tool_output) ? ToolRows.collapse(list) : list
       end
 
       # --- producer side (agent callbacks) --------------------------------

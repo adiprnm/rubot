@@ -1,0 +1,14 @@
+<%# Which tool rows a turn draws. Both persona forms ask this, so the options
+    live here once: a mode added to Persona::TOOL_OUTPUT_MODES shows up in the
+    edit panel and the new-persona panel at the same time. -%>
+<% mode_labels = {
+     "verbose" => "Verbose — semua panggilan tool tetap tampil",
+     "compact" => "Compact — hanya panggilan tool terbaru yang tampil"
+   } -%>
+<label>Tool output
+  <select name="tool_output">
+    <% Persona::TOOL_OUTPUT_MODES.each do |mode| %>
+      <option value="<%= h(mode) %>"<%= " selected" if mode == selected %>><%= h(mode_labels[mode] || mode) %></option>
+    <% end %>
+  </select>
+</label>

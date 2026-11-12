@@ -15,6 +15,7 @@ require_relative "../web/diff"
 require_relative "../web/highlight"
 require_relative "../web/notifier"
 require_relative "../web/push"
+require_relative "../web/tool_rows"
 require_relative "../web/turn"
 require_relative "../web/view"
 
@@ -153,6 +154,9 @@ module Rubot
       Turn = Rubot::Web::Turn
       View = Rubot::Web::View
       Format = Rubot::Web::Format
+      # The rule that decides how much of a turn's tool log survives on the
+      # page. Replayed pages and the live turn must agree, so both read it here.
+      ToolRows = Rubot::Web::ToolRows
       # Web Push, named apart from `Web` for the same reason. `Push` is the
       # protocol (seal a payload, sign a request); `Vapid` is the key that
       # signs, kept in one file for this install.
@@ -1586,6 +1590,7 @@ module Rubot
           persona_model: persona_model(persona),
           persona_model_value: persona_model_value(persona),
           persona_thinking: persona_thinking(persona),
+          persona_tool_output: persona ? persona.tool_output : Persona::DEFAULT_TOOL_OUTPUT,
           skill_choices: persona_skill_choices(persona),
           skills_dir: skills_dir_label,
           model_choices: model_choices,
@@ -1725,6 +1730,23 @@ module Rubot
         fallback
       end
 
+      # The tool-row view a posted form asks for. A value the picker cannot
+      # produce is not a third mode nothing draws, it is a fallback.
+      def persona_tool_output_from(req, fallback: nil)
+        mode = form(req, "tool_output").to_s.strip.downcase
+        return fallback if mode.empty?
+        return mode if Persona::TOOL_OUTPUT_MODES.include?(mode)
+
+        fallback
+      end
+
+      # How this conversation draws the tool calls of its turns: its persona's
+      # choice, since a call log is noisy in the same way for every turn.
+      def session_tool_output(sid)
+        persona = persona_store&.[](owner_slug(sid))
+        persona ? persona.tool_output : Persona::DEFAULT_TOOL_OUTPUT
+      end
+
       # The model this session runs on. The picker lists real models only, so
       # it has to start on the one the session would actually use: its own
       # override, the persona's, or the config's default.
@@ -1860,7 +1882,18 @@ module Rubot
           end
         end
 
-        turns
+        ToolRows.compact?(session_tool_output(sid)) ? compact_tool_rows(turns) : turns
+      end
+
+      # A compact persona's transcript shows the same single tool row its live
+      # turn showed: the calls one prompt made are collapsed to the last of
+      # them. A prompt is the unit, because that is the unit a live turn is.
+      def compact_tool_rows(turns)
+        turns.map do |turn|
+          next turn unless turn[:kind] == :turn
+
+          turn.merge(items: ToolRows.collapse(turn[:items]))
+        end
       end
 
       # Tool output is stored after the call that asked for it, so the id is
@@ -2181,6 +2214,7 @@ module Rubot
           emoji: form(req, "emoji").strip.empty? ? EMOJI_CHOICES.first : form(req, "emoji").strip,
           model: persona_model_from(req),
           thinking: persona_thinking_from(req, fallback: DEFAULT_THINKING),
+          tool_output: persona_tool_output_from(req, fallback: Persona::DEFAULT_TOOL_OUTPUT),
           system_prompt: prompt.empty? ? nil : prompt,
           disabled_skills: persona_disabled_from(req)
         ))
@@ -2216,6 +2250,8 @@ module Rubot
         model = keeps_model ? current.model : persona_model_from(req, fallback: current.model)
         keeps_thinking = !form_field?(req, "thinking")
         thinking = keeps_thinking ? current.thinking : persona_thinking_from(req, fallback: current.thinking)
+        keeps_tool_output = !form_field?(req, "tool_output")
+        tool_output = keeps_tool_output ? current.tool_output : persona_tool_output_from(req, fallback: current.tool_output)
 
         # The same rule for the skills: a form that posts no list is not
         # saying anything about them, and the personas created by the Telegram
@@ -2234,6 +2270,7 @@ module Rubot
           preset: keeps_model ? current.preset : nil,
           model: model,
           thinking: thinking,
+          tool_output: tool_output,
           system_prompt: prompt.empty? ? nil : prompt,
           skills: current.skills,
           disabled_skills: disabled_skills,
@@ -2442,7 +2479,8 @@ module Rubot
           return
         end
 
-        turn = Turn.new(id: "t#{SecureRandom.hex(6)}", session_id: sid, prompt: text)
+        turn = Turn.new(id: "t#{SecureRandom.hex(6)}", session_id: sid, prompt: text,
+                        tool_output: session_tool_output(sid))
 
         @turns_mutex.synchronize do
           # A second POST while one turn is running must not queue behind it:

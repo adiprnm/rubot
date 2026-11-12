@@ -727,7 +727,7 @@ module Rubot
 
       # The shell of the page with nothing in it but what these view tests need:
       # a persona, one open session, and whatever turn is still in flight.
-      def render_page(live_turn: nil, persona_prompt: "")
+      def render_page(live_turn: nil, persona_prompt: "", persona_tool_output: "verbose")
         View.render("index",
                     personas: [], groups: { pinned: [], recent: [], page: 1, pages: 1, recent_total: 0, pinned_limit: 10, current: "web_rubot" },
                     slug: "rubot", persona_label: "Rubot", persona_emoji: "🤖",
@@ -735,6 +735,7 @@ module Rubot
                     persona_model: "m", session_id: "web_rubot",
                     persona_model_value: "", model_choices: [],
                     session_model: "", session_thinking: "medium", persona_thinking: "medium",
+                    persona_tool_output: persona_tool_output,
                     skill_choices: [], skills_dir: "~/.rubot/skills",
                     session_short: "web_rubot", session_label: "Sesi baru",
                     document_title: "rubot · Rubot", live_turn: live_turn,
@@ -1813,6 +1814,7 @@ module Rubot
                            persona_model: "m", session_id: "web_rubot",
                     persona_model_value: "", model_choices: [],
                     session_model: "", session_thinking: "medium", persona_thinking: "medium",
+                    persona_tool_output: "verbose",
                     skill_choices: [], skills_dir: "~/.rubot/skills",
                            session_short: "web_rubot", session_label: "Sesi baru",
                            document_title: "rubot · Rubot", live_turn: nil, token_query: "",
@@ -2917,8 +2919,70 @@ module Rubot
         assert_empty channel.send(:persona_store)["kanyaah"].disabled_skills
       end
 
-      # The new-persona dialog gets the same list, so a persona can be born with
-      # a skill switched off instead of being edited twice.
+      # Both persona forms offer the choice: the empty "Persona baru" panel and
+      # the edit panel of an existing persona. One partial draws it, so the two
+      # cannot end up listing different modes.
+      def test_both_persona_forms_offer_every_mode
+        html = render_page(persona_tool_output: "compact")
+
+        selects = html.scan(%r{<select name="tool_output".*?</select>}m)
+
+        assert_equal 2, selects.size
+        selects.each do |select|
+          assert_includes select, 'value="verbose"'
+          assert_includes select, 'value="compact"'
+        end
+        # The new-persona panel is the first of the two and starts on the
+        # default; the edit panel starts on what the persona already runs on.
+        assert_includes selects.first, '<option value="verbose" selected>'
+        assert_includes selects.last, '<option value="compact" selected>'
+      end
+
+      # The persona form is where the mode is chosen; saving it is what the
+      # live turn and every replayed page then read.
+      def test_the_persona_form_saves_the_tool_output_mode
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+
+        channel.send(:edit_persona, edit_request("name" => "Kanyaah", "tool_output" => "compact"),
+                     FakeResponse.new, "kanyaah")
+
+        assert_equal "compact", channel.send(:persona_store)["kanyaah"].tool_output
+      end
+
+      # A form posted by an older page has no such field. That is not a request
+      # for the default: it is a form that does not know about the setting.
+      def test_a_form_without_the_mode_keeps_the_one_the_persona_had
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah", "tool_output" => "compact" } }
+        )
+
+        channel.send(:edit_persona, edit_request("name" => "Kanyaah"), FakeResponse.new, "kanyaah")
+
+        assert_equal "compact", channel.send(:persona_store)["kanyaah"].tool_output
+      end
+
+      def test_a_mode_no_picker_can_produce_is_not_a_third_mode
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+
+        channel.send(:edit_persona, edit_request("name" => "Kanyaah", "tool_output" => "ringkas"),
+                     FakeResponse.new, "kanyaah")
+
+        assert_equal "verbose", channel.send(:persona_store)["kanyaah"].tool_output
+      end
+
+      # A new persona can be born in the mode instead of being edited twice.
+      def test_a_new_persona_can_be_created_compact
+        channel = channel_with_sessions(personas: {})
+
+        res = FakeResponse.new
+        channel.send(:create_persona, persona_form_request("/personas", "slug" => "kanyaah",
+                                                                         "name" => "Kanyaah",
+                                                                         "tool_output" => "compact"), res)
+
+        assert_equal 303, res.status
+        assert_equal "compact", channel.send(:persona_store)["kanyaah"].tool_output
+      end
+
       def test_a_new_persona_can_be_created_with_a_skill_switched_off
         channel = channel_with_skills(skills: { "writing" => "Menulis rapi",
                                                 "opencode-usage" => "Cek kuota" })
@@ -4803,6 +4867,54 @@ module Rubot
         assert_equal "laporan.pdf", document[:name]
       end
 
+      # A compact persona's transcript shows the same single row its live turn
+      # showed: the calls one prompt made collapse to the last of them.
+      def test_a_compact_persona_s_transcript_shows_only_the_last_call
+        channel = channel_with_sessions(
+          personas: { "rubot" => { "name" => "Rubot", "tool_output" => "compact" } },
+          sessions: { "web_rubot" => "Cek dua file" }
+        )
+        write_two_reads(channel)
+
+        items = channel.send(:history, "web_rubot").last[:items]
+
+        assert_equal %w[b.rb], items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
+        assert_includes items.map { |item| item[:kind] }, :text, "the answer is not part of the log"
+      end
+
+      def test_a_verbose_persona_s_transcript_keeps_every_call
+        channel = channel_with_sessions(
+          personas: { "rubot" => { "name" => "Rubot" } },
+          sessions: { "web_rubot" => "Cek dua file" }
+        )
+        write_two_reads(channel)
+
+        items = channel.send(:history, "web_rubot").last[:items]
+
+        assert_equal %w[a.rb b.rb], items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
+      end
+
+      # One prompt, two calls, one answer — the unit a live turn is, so the
+      # unit the transcript collapses.
+      def write_two_reads(channel)
+        sid = "web_rubot"
+        call = lambda do |id, path|
+          { "role" => "assistant", "content" => "",
+            "tool_calls" => [ { "id" => id,
+                                "function" => { "name" => "file_ops",
+                                                "arguments" => JSON.generate({ "path" => path }) } } ] }
+        end
+        write_messages(channel, sid, [
+                         { "role" => "user", "content" => "Cek dua file" },
+                         call.call("c1", "a.rb"),
+                         { "role" => "tool", "tool_call_id" => "c1", "content" => "isi a" },
+                         call.call("c2", "b.rb"),
+                         { "role" => "tool", "tool_call_id" => "c2", "content" => "isi b" },
+                         { "role" => "assistant", "content" => "Dua-duanya oke." }
+                       ])
+        sid
+      end
+
       # The prompt is what the reader typed, and nothing else: pictures from the
       # composer are not part of this channel yet.
       def test_a_prompt_is_drawn_as_text_only
@@ -4836,6 +4948,7 @@ module Rubot
                            persona_model: "m", session_id: "web_rubot",
                     persona_model_value: "", model_choices: [],
                     session_model: "", session_thinking: "medium", persona_thinking: "medium",
+                    persona_tool_output: "verbose",
                     skill_choices: [], skills_dir: "~/.rubot/skills",
                            session_short: "web_rubot", session_label: "Sesi baru",
                            document_title: "rubot · Rubot", live_turn: nil, token_query: "",
@@ -5669,6 +5782,7 @@ module Rubot
                            slug: "a", persona_label: "A", persona_emoji: "🤖", persona_prompt: "",
                            persona_model: "m", session_id: "web_a", persona_model_value: "", model_choices: [],
                            session_model: "", session_thinking: "medium", persona_thinking: "medium",
+                    persona_tool_output: "verbose",
                     skill_choices: [], skills_dir: "~/.rubot/skills",
                            session_short: "web_a", session_label: "Sesi baru",
                            document_title: "rubot · A", live_turn: nil, live_prompt_shown: false, token_query: "",

@@ -260,6 +260,7 @@ module Rubot
         system_prompt: persona.system_prompt,
         skills: persona.skills,
         disabled_skills: persona.disabled_skills,
+        tool_output: persona.tool_output,
         ref: persona.ref,
         created_at: persona.created_at
       )

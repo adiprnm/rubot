@@ -51,6 +51,7 @@
             <% end %>
           </select>
         </label>
+        <%= View.render("_tool_output_picker", selected: Persona::DEFAULT_TOOL_OUTPUT) %>
         <label>System prompt
           <textarea name="system_prompt" rows="3" placeholder="Kamu spesialis …"></textarea>
         </label>
@@ -102,6 +103,7 @@
               <% end %>
             </select>
           </label>
+          <%= View.render("_tool_output_picker", selected: persona_tool_output) %>
           <label>System prompt
             <textarea name="system_prompt" rows="6"
                       placeholder="Kosongkan untuk memakai prompt bawaan"><%= h(persona_prompt) %></textarea>
