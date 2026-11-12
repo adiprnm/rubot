@@ -20,31 +20,26 @@ module Rubot
         mode.to_s == "compact"
       end
 
-      # `items` with the earlier tool rows taken out: the last call of the turn
-      # stays, everything before it goes. A diff belongs to the call above it —
-      # in both producers the two are adjacent — so it leaves with the row it
-      # was drawn under; an attachment is a file the reader may still want, so
-      # it stays.
+      # The kinds that carry the conversation rather than the state of a call:
+      # what the model said, what the reader steered with, the files a tool
+      # handed back. These stay wherever they happened.
+      CONTENT = %i[text steer attachments].freeze
+
+      # `items` with the earlier rounds taken out: the last call of the turn
+      # stays, everything before it goes. A round is the call plus the thought
+      # that led into it and the diff it drew, so all three leave together —
+      # dropping the row but keeping the thought above it would pile "Thought
+      # for 4s" over "Thought for 7s" and read as if the model had thought
+      # twice before its first call, when the turn actually went call, thought,
+      # call, thought. What the model said in an earlier round stays: it is
+      # text the reader is in the middle of reading.
       def self.collapse(items)
         list = Array(items)
         last = list.rindex { |item| item[:kind] == :tool }
         return list if last.nil?
 
-        hidden = false
-        list.each_with_index.each_with_object([]) do |(item, index), kept|
-          case item[:kind]
-          when :tool
-            hidden = index != last
-            kept << item unless hidden
-          when :diff
-            kept << item unless hidden
-          else
-            # Anything else ends the call it followed, so a diff can never be
-            # mistaken for the tail of a row that is still drawn.
-            hidden = false
-            kept << item
-          end
-        end
+        kept = list[0...last].select { |item| CONTENT.include?(item[:kind]) }
+        kept + list[last..]
       end
     end
   end

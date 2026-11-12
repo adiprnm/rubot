@@ -21,6 +21,10 @@ class TestToolRows < Minitest::Test
     { kind: :diff, html: html }
   end
 
+  def thought(elapsed)
+    { kind: :thinking, elapsed: elapsed, closed_at: elapsed }
+  end
+
   def names(items)
     items.select { |item| item[:kind] == :tool }.map { |item| item[:name] }
   end
@@ -74,6 +78,29 @@ class TestToolRows < Minitest::Test
 
     assert_equal %w[read], names(kept)
     assert_includes kept.map { |item| item[:kind] }, :attachments
+  end
+
+  # A thought belongs to the call it led into: the row for that call is gone,
+  # so the thought goes with it. Left behind, three rounds would read
+  # "thought, thought, thought, call" instead of the call, thought, call,
+  # thought the turn actually took.
+  def test_a_thought_leaves_with_the_call_it_led_into
+    items = [ thought(4), tool("read"), thought(5), tool("grep"), thought(6) ]
+
+    kept = Rubot::Web::ToolRows.collapse(items)
+
+    assert_equal %w[grep], names(kept)
+    assert_equal [ 6 ], kept.select { |item| item[:kind] == :thinking }.map { |item| item[:elapsed] }
+  end
+
+  # The thought after the surviving call is the turn's current state, so it is
+  # the one row that must survive: the reader watches it tick.
+  def test_the_thought_after_the_surviving_call_stays_last
+    items = [ tool("read"), thought(4), tool("grep"), thought(2), text("Ini hasilnya.") ]
+
+    kept = Rubot::Web::ToolRows.collapse(items)
+
+    assert_equal %i[tool thinking text], kept.map { |item| item[:kind] }
   end
 
   def test_a_timeline_with_no_calls_is_unchanged
