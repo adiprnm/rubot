@@ -1,0 +1,47 @@
+<%# The face a persona wears, in the form that creates it and the one that
+    edits it — the same partial in both, because a roster that differs between
+    the two panels would let a persona be given a face it can never get back.
+
+    The field is one button showing the face in use, not a grid of forty cells:
+    a grid that large pushes the rest of the form off the panel, and the panel
+    is the thing being read. Behind the button is a search across every emoji
+    Unicode ships — far too much to send with the page, so it arrives as its
+    own script the first time a picker is opened (see app.js), and the roster
+    below is what the picker shows before that script lands.
+
+    The cell that is picked writes the hidden field the form submits, and
+    clears the free field beside it, so a click is never overruled by the echo
+    of the face that was already there. The free field keeps the roster open:
+    a face that is not in it is typed there and wins over any cell, which is
+    the only way to say "none of those". On the edit form the field arrives
+    already holding the current face when that face is off-roster; the channel
+    treats a field still holding exactly that as unedited. Either answer is
+    clipped to a single grapheme by the server, since the rail draws a face in
+    a twenty-pixel circle.
+
+    `selected` is the face already in use, `choices` the short roster that is
+    shown first. -%>
+<%
+  face = selected.to_s
+  listed = choices.include?(face)
+-%>
+<fieldset class="emoji-picker" data-emoji-picker data-emoji-recent="<%= h(choices.join(" ")) %>">
+  <legend>Emoji</legend>
+  <div class="emoji-head">
+    <button type="button" class="emoji-face" data-emoji-toggle aria-expanded="false"
+            aria-label="Pilih emoji" title="Pilih emoji"><%= h(face) %></button>
+    <input type="search" class="emoji-search" data-emoji-search placeholder="Cari emoji…"
+           aria-label="Cari emoji" autocomplete="off" spellcheck="false">
+  </div>
+  <input type="hidden" name="emoji" value="<%= h(face) %>" data-emoji-input>
+  <div class="emoji-panel" data-emoji-panel hidden>
+    <div class="emoji-groups" data-emoji-groups></div>
+    <div class="emoji-grid" data-emoji-grid></div>
+    <p class="emoji-note" data-emoji-note></p>
+  </div>
+  <label class="emoji-other">
+    <input type="text" name="emoji_custom" value="<%= listed ? "" : h(face) %>"
+           maxlength="16" placeholder="Emoji lain…" aria-label="Emoji lain"
+           autocomplete="off" spellcheck="false">
+  </label>
+</fieldset>

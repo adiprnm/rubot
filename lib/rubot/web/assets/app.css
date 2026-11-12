@@ -471,15 +471,15 @@ body {
 .rail-panel textarea:focus,
 .rail-panel select:focus { border-color: var(--green); }
 
-/* Icon picker for a persona's face: a grid of radio buttons that look like
-   a palette instead of a dropdown, so the choice is visible at a glance. */
+/* Icon picker for a persona's face. The face in use is one button beside the
+   search field — a cell it is, so the field reads as a face and not as a text
+   input — and the roster opens under it. Nothing is drawn until a face is
+   asked for, which is why the panel starts hidden rather than inside a
+   disclosure of its own. */
 .emoji-picker {
   border: 1px solid var(--line);
   border-radius: 4px;
   padding: 0.45rem 0.5rem;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(2.1rem, 1fr));
-  gap: 0.3rem;
 }
 .emoji-picker legend {
   font-size: 12px;
@@ -487,27 +487,96 @@ body {
   color: var(--fg-faint);
   padding: 0 0.25rem;
 }
-.emoji-choice {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-}
-.emoji-choice input { position: absolute; opacity: 0; pointer-events: none; }
-.emoji-choice span {
-  font-size: 15px;
+.emoji-head { display: flex; gap: 0.35rem; align-items: stretch; }
+.emoji-face {
+  flex: 0 0 auto;
+  width: 2.4rem;
+  font-size: 17px;
   line-height: 1;
-  padding: 0.3rem;
+  padding: 0;
   border: 1px solid var(--line);
   border-radius: 4px;
   background: var(--bg0);
+  cursor: pointer;
   transition: border-color 0.12s, background 0.12s;
 }
-.emoji-choice:has(input:checked) span {
+.emoji-face:hover,
+.emoji-face[aria-expanded="true"] {
   border-color: var(--green);
   background: color-mix(in srgb, var(--green) 14%, var(--bg0));
 }
-.emoji-choice:hover span { border-color: var(--fg-faint); }
+.emoji-search { flex: 1 1 auto; min-width: 0; }
+
+/* The roster scrolls inside a box of its own: the panel around it must not
+   grow to the height of every emoji Unicode ships. */
+.emoji-panel {
+  margin-top: 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.4rem;
+  max-height: 13rem;
+  overflow-y: auto;
+}
+.emoji-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-bottom: 0.4rem;
+  position: sticky;
+  top: -0.4rem;
+  padding: 0.15rem 0 0.35rem;
+  background: var(--bg0);
+}
+.emoji-group {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-faint);
+  cursor: pointer;
+}
+.emoji-group:hover { color: var(--fg); border-color: var(--fg-faint); }
+.emoji-group[aria-pressed="true"] {
+  color: var(--green);
+  border-color: var(--green);
+  background: color-mix(in srgb, var(--green) 12%, var(--bg0));
+}
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(1.9rem, 1fr));
+  gap: 0.15rem;
+}
+.emoji-cell {
+  font-size: 16px;
+  line-height: 1;
+  padding: 0.25rem 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.emoji-cell:hover { border-color: var(--line); background: var(--bg2); }
+.emoji-cell[aria-selected="true"] {
+  border-color: var(--green);
+  background: color-mix(in srgb, var(--green) 14%, var(--bg0));
+}
+.emoji-note {
+  margin: 0.35rem 0 0;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--fg-faint);
+}
+.emoji-note:empty { display: none; }
+
+/* The free field takes a row of its own, so it reads as "or something else"
+   rather than as one more cell. */
+.emoji-other { margin-top: 0.35rem; }
+.emoji-other input { width: 100%; box-sizing: border-box; }
 
 /* The slug cannot be edited, so it is shown rather than asked for: a field
    that refuses every keystroke reads as a bug, a line of text does not. */

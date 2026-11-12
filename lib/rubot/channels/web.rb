@@ -165,10 +165,6 @@ module Rubot
       # The part that decides who gets told and what it costs in round trips.
       PushNotifier = Rubot::Web::Notifier
 
-      # What a newly created persona starts with when the form leaves a field
-      # blank.
-      EMOJI_CHOICES = %w[🤖 🧭 ✍️ 📚 🧪 🎨 🛠️ 🔍 🧠 💼].freeze
-
       attr_reader :host, :port
 
       def initialize(agent: nil, pool: nil, app_config: nil, channel_config: {})
@@ -1587,6 +1583,7 @@ module Rubot
           session_short: sid.delete_prefix("web_"),
           persona_label: persona_label,
           persona_emoji: persona ? persona.emoji_or : "🤖",
+          emoji_choices: Persona::EMOJI_CHOICES,
           persona_prompt: persona ? persona.system_prompt.to_s : "",
           persona_model: persona_model(persona),
           persona_model_value: persona_model_value(persona),
@@ -1701,6 +1698,23 @@ module Rubot
         return name if known_model?(name)
 
         fallback
+      end
+
+      # The face a persona form submits, or `fallback` when it names none.
+      # The picker offers a fixed roster plus a free field ("Emoji lain…"); the
+      # free field wins when it is filled, since that is the only way to say
+      # "none of those". Either answer is clipped to a single grapheme — the
+      # rail draws a face in a twenty-pixel circle, and a pasted string would
+      # overflow it.
+      def emoji_from(req, fallback: nil, current: nil)
+        custom = form(req, "emoji_custom").strip
+        choice = form(req, "emoji").strip
+        # The field is filled only when the face in use is not on the roster, so
+        # a field that still holds exactly that face was not typed — it is the
+        # panel's own echo, and a cell clicked afterwards must win over it.
+        typed = custom.empty? || custom == current.to_s ? nil : custom
+        clipped = (typed || choice).scan(/\X/).first.to_s
+        clipped.empty? ? fallback : clipped
       end
 
       def known_model?(name)
@@ -2228,7 +2242,7 @@ module Rubot
         store.set(slug, Persona.new(
           slug: slug,
           name: form(req, "name").strip.empty? ? nil : form(req, "name").strip,
-          emoji: form(req, "emoji").strip.empty? ? EMOJI_CHOICES.first : form(req, "emoji").strip,
+          emoji: emoji_from(req, fallback: Persona::EMOJI_CHOICES.first),
           model: persona_model_from(req),
           thinking: persona_thinking_from(req, fallback: DEFAULT_THINKING),
           tool_output: persona_tool_output_from(req, fallback: Persona::DEFAULT_TOOL_OUTPUT),
@@ -2279,7 +2293,7 @@ module Rubot
         store.set(slug, Persona.new(
           slug: slug,
           name: name.empty? ? nil : name,
-          emoji: emoji.empty? ? current.emoji : emoji,
+          emoji: emoji_from(req, fallback: current.emoji, current: current.emoji),
           accent: current.accent,
           # The picker edits the model itself, so a preset inherited from the
           # Telegram wizard is replaced rather than left to win the tie — but

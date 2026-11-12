@@ -853,6 +853,13 @@ module Rubot
           0
         end
 
+        # The faces the persona forms offer. Same reason as the count above: a
+        # page drawn outside the channel still has to draw a whole form, and the
+        # roster is the persona's own, not the channel's.
+        def emoji_choices
+          Persona::EMOJI_CHOICES
+        end
+
         def h(text)
           CGI.escapeHTML(text.to_s)
         end

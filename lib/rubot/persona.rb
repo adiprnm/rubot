@@ -30,6 +30,17 @@ module Rubot
     TOOL_OUTPUT_MODES = %w[verbose compact].freeze
     DEFAULT_TOOL_OUTPUT = "verbose"
 
+    # The faces a persona form offers. It is a suggestion, not a rule — the form
+    # has a field for a face that is not here — but the roster is what makes the
+    # choice a glance instead of a search through an emoji keyboard. The first
+    # entry is the one a new persona wears when the form names none.
+    EMOJI_CHOICES = %w[
+      🤖 🧭 ✍️ 📚 🧪 🎨 🛠️ 🔍
+      🧠 💼 🧑‍💻 📝 🎧 📷 💬 🧩
+      🌱 🚀 🧾 🗂️ 🛰️ 🔮 🎯 🧵
+      🥷 🦉 🐙 🍀 ☕ ⚡ 🌙 🎓
+    ].freeze
+
     def initialize(slug: nil, name: nil, emoji: nil, accent: nil, preset: nil, model: nil,
                    thinking: nil, system_prompt: nil, skills: nil, disabled_skills: nil,
                    ref: nil, created_at: nil, tool_output: nil)
