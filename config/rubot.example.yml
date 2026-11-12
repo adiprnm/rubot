@@ -5,6 +5,9 @@ agents:
   defaults:
     workspace: ~/.rubot/workspace
     name: gpt-4o-mini
+    model: openai/gpt-4o-mini
+    api_key: sk-your-key
+    api_base: https://api.openai.com/v1
     # Preset used by new sessions. Remove it to use the implicit `default`
     # preset built from the direct model fields above.
     model_preset: primary
@@ -95,20 +98,6 @@ model_presets:
   #   model: llama3
   #   provider: ollama
   #   api_base: http://localhost:11434
-
-models:
-  # Entries here are always available. When the provider exposes GET /models
-  # (OpenAI-compatible APIs such as OpenCode Go), /preset models lists the
-  # provider's full catalog. The catalog is cached in model_catalog.json
-  # next to config.yml and a selected catalog model reuses this entry's
-  # api_base/api_key.
-  - name: gpt-4o-mini
-    model: openai/gpt-4o-mini
-    api_key: sk-your-key
-    api_base: https://api.openai.com/v1
-  - name: llama3
-    model: ollama/llama3
-    api_base: http://localhost:11434
 
 tools:
   shell_exec:
