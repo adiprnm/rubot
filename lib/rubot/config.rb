@@ -204,7 +204,7 @@ module Rubot
     end
 
     def temperature
-      agent_defaults["temperature"] || 0.7
+      agent_defaults["temperature"] || 0.3
     end
 
     # The model for the requests that are not the conversation: naming a

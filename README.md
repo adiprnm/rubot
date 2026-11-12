@@ -406,7 +406,7 @@ agents:
     name: gpt-4o-mini
     model_preset: primary        # preset used by new sessions
     max_tokens: 4096
-    temperature: 0.7
+    temperature: 0.3
     system_prompt: "You are Rubot, a helpful AI assistant."
     max_rounds: 120
     compaction:
@@ -422,7 +422,7 @@ model_presets:
   primary:
     model: opencode-go          # config model entry, or a provider model id
     max_tokens: 4096
-    temperature: 0.7
+    temperature: 0.3
   fast:
     model: deepseek-v4.1-flash
     temperature: 0.2
@@ -495,7 +495,7 @@ model_presets:
   primary:
     model: opencode-go            # a `models` entry name...
     max_tokens: 4096
-    temperature: 0.7
+    temperature: 0.3
   deep:
     model: deepseek-v4-pro        # ...or a provider catalog model id
     max_tokens: 8192
@@ -1193,7 +1193,7 @@ individual tool enable/disable settings.
 name: Rubot
 model: gpt-4o-mini
 max_tokens: 4096
-temperature: 0.7
+temperature: 0.3
 max_rounds: 50
 tools:
   exec: true
