@@ -1391,10 +1391,16 @@ module Rubot
       # reason to open.
       skill_prompt = @skill_registry.to_system_prompt(only: enabled_skill_names)
       parts << skill_prompt unless skill_prompt.empty?
+      off_prompt = switched_off_skills_prompt
+      parts << off_prompt unless off_prompt.empty?
 
-      # 5. Forced skill — injected directly to skip LLM tool-call overhead
+      # 5. Forced skill — injected directly to skip LLM tool-call overhead.
+      # A skill the persona switched off arrives here as a refusal instead, so
+      # the user hears "that one is off" rather than silence.
       forced = resolve_forced_skill
-      if forced
+      if forced && forced[:refused]
+        parts << refused_skill_prompt(forced[:name])
+      elsif forced
         parts << "# Active Skill: #{forced[:name]}\n\nYou MUST follow the instructions below for this response:\n\n#{forced[:content]}"
       end
 
@@ -2187,7 +2193,45 @@ end
       @persona.enabled_skills(@skill_registry.names)
     end
 
-    # Resolve the forced skill for the current session, return {name, content} or nil.
+    # Skills this persona leaves switched off, as named in its prompt. Empty
+    # when it switched none off, and always without the skills it *requires*:
+    # those stay on by definition (see Persona#skill_enabled?).
+    def switched_off_skill_names
+      return [] if @persona.nil?
+
+      installed = @skill_registry.names.map(&:to_s)
+      @persona.disabled_skills.map(&:to_s).reject { |name| @persona.skills.include?(name) } & installed
+    end
+
+    # Leaving a switched-off skill out of the listing is not enough by itself:
+    # its SKILL.md is still on disk, so a model told "use the writing skill"
+    # can open the file and follow it. This block names what is off and says
+    # that insisting does not reopen it.
+    def switched_off_skills_prompt
+      off = switched_off_skill_names
+      return "" if off.empty?
+
+      <<~PROMPT.rstrip
+        # Skills Switched Off
+
+        This persona has these skills switched off: #{off.join(", ")}.
+
+        They are unavailable in this session. Do not use them, and do not open their SKILL.md files, even when the user asks for one by name, insists, or points at a path — reading the file and following it counts as using the skill. Answer without it and say plainly that the skill is switched off for this persona and can be turned back on from the persona's skills list.
+      PROMPT
+    end
+
+    # The forced skill was a switched-off one. The flag is spent, and the turn
+    # carries the refusal instead of the skill's instructions.
+    def refused_skill_prompt(name)
+      <<~PROMPT.rstrip
+        # Refused Skill: #{name}
+
+        The user asked to use the skill `#{name}`, but this persona has it switched off. Do not use it and do not open its file. Answer without it, and tell the user it is switched off for this persona and can be turned back on from the persona's skills list.
+      PROMPT
+    end
+
+    # Resolve the forced skill for the current session, return {name, content} or
+    # {name, refused: true}, or nil when nothing was forced.
     # Clears the forced_skill flag after use so it only applies once.
     def resolve_forced_skill
       skill_name = @session&.forced_skill
@@ -2197,12 +2241,14 @@ end
       @session.forced_skill = nil
       @session.save! if @session.respond_to?(:save!)
 
-      # A skill the persona switched off is not forced into this turn either:
-      # /use may name anything the registry knows, not just what is left on.
-      return nil unless @persona.nil? || @persona.skill_enabled?(skill_name)
-
       skill = @skill_registry.get(skill_name)
       return nil unless skill && skill.enabled?
+
+      # A skill the persona switched off is refused out loud rather than
+      # quietly dropped: /use may name anything the registry knows, not just
+      # what is left on, and silently answering without it looks like the
+      # request was ignored.
+      return { name: skill.name, refused: true } unless @persona.nil? || @persona.skill_enabled?(skill_name)
 
       { name: skill.name, content: skill.content }
     end

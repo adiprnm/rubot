@@ -1907,18 +1907,45 @@ module Rubot
       skills = agent.skill_registry
       if skill_name.nil?
         say("Usage: /use <skill-name>", :warn)
-        say_text("Available skills: #{skills.all.keys.join(', ') || '(none)'}")
+        say_text("Available skills: #{available_skills_text}")
         return
       end
 
-      if skills.get(skill_name)&.enabled?
+      skill = skills.get(skill_name)
+
+      # A skill this persona switched off is not loaded into the turn, and
+      # saying so beats letting the model quietly answer without it.
+      if skill && persona_skill_off?(skill_name)
+        say("Skill '#{skill_name}' is switched off for this persona.", :err)
+        say_text("Turn it back on from the persona's skills list.")
+        return
+      end
+
+      if skill&.enabled?
         agent.session.forced_skill = skill_name
         agent.session.save! if agent.session.respond_to?(:save!)
         say("Skill '#{skill_name}' will be used for the next message.", :ok)
       else
         say("Skill '#{skill_name}' not found or not enabled.", :err)
-        say_text("Available skills: #{skills.all.keys.join(', ') || '(none)'}")
+        say_text("Available skills: #{available_skills_text}")
       end
+    end
+
+    # Registry names narrowed to the ones this persona left on.
+    def available_skill_names
+      names = agent.skill_registry.all.keys
+      persona = agent.persona
+      persona ? persona.enabled_skills(names) : names
+    end
+
+    def available_skills_text
+      names = available_skill_names
+      names.empty? ? "(none)" : names.join(", ")
+    end
+
+    def persona_skill_off?(name)
+      persona = agent.persona
+      !persona.nil? && !persona.skill_enabled?(name)
     end
 
     # ------------------------------------------------------------------

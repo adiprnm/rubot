@@ -853,6 +853,12 @@ module Rubot
         registry.reload!
         skill = registry.get(skill_name)
 
+        # /use can name anything installed; a skill this persona switched off
+        # is refused here so the refusal is visible, not silent.
+        if skill && ra.persona && !ra.persona.skill_enabled?(skill_name)
+          return [ :skip, "🚫 Skill '#{skill_name}' is switched off for this persona.\n\nTurn it back on from the persona's skills list." ]
+        end
+
         if skill && skill.enabled?
           ra.session.forced_skill = skill_name
           ra.session.save! if ra.session.respond_to?(:save!)
@@ -911,7 +917,12 @@ module Rubot
         registry.reload!
         return "No skills installed." unless registry.any?
 
-        registry.all.values.map { |s| "• **#{s.name}** — #{s.summary}" }.join("\n")
+        skills = registry.all.values
+        persona = ra.persona
+        skills = skills.select { |s| persona.skill_enabled?(s.name) } if persona
+        return "No skills are switched on for this persona." if skills.empty?
+
+        skills.map { |s| "• **#{s.name}** — #{s.summary}" }.join("\n")
       end
 
       # --------------- Long Polling ---------------

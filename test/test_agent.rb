@@ -710,8 +710,9 @@ class TestAgentPersona < Minitest::Test
   end
 
   # The listing is where a skill announces itself, so a skill a persona
-  # switched off is left out of the prompt entirely: the model is never told
-  # the skill exists, and has no reason to open it.
+  # switched off is not advertised with its description and location. It is
+  # still named once, as switched off: its file is on disk, so a model told
+  # "use the writing skill" could otherwise open it by hand.
   def test_a_switched_off_skill_is_not_listed_in_the_prompt
     install_skill("kept-skill")
     install_skill("switched-off-skill")
@@ -722,7 +723,27 @@ class TestAgentPersona < Minitest::Test
     prompt = agent.build_system_prompt
 
     assert_includes prompt, "kept-skill"
-    refute_includes prompt, "switched-off-skill"
+    refute_includes prompt, "Instruksi switched-off-skill", "the description is not offered as a task match"
+    refute_includes prompt, "skills/switched-off-skill/SKILL.md", "the model is not handed the file path"
+
+    assert_includes prompt, "# Skills Switched Off"
+    assert_includes prompt, "skills switched off: switched-off-skill"
+    assert_includes prompt, "insists"
+  end
+
+  # Requiring a skill wins over switching it off, so the two lists cannot
+  # contradict each other: it stays listed and is never called switched off.
+  def test_a_required_skill_stays_on_and_is_not_called_switched_off
+    install_skill("kept-skill")
+
+    agent = build_agent(persona: { "name" => "kanyaah", "model" => "model-a",
+                                   "skills" => %w[kept-skill],
+                                   "disabled_skills" => "kept-skill" })
+
+    prompt = agent.build_system_prompt
+
+    assert_includes prompt, "Instruksi kept-skill"
+    refute_includes prompt, "# Skills Switched Off"
   end
 
   # Switching one off is a change to the pinned prompt, not just to the next
@@ -731,16 +752,18 @@ class TestAgentPersona < Minitest::Test
     install_skill("kept-skill")
 
     agent = build_agent(persona: { "name" => "kanyaah", "model" => "model-a" })
-    assert_includes agent.build_system_prompt, "kept-skill"
+    assert_includes agent.build_system_prompt, "Instruksi kept-skill"
 
     agent.apply_persona({ "name" => "kanyaah", "model" => "model-a",
                           "disabled_skills" => "kept-skill" })
 
-    refute_includes agent.build_system_prompt, "kept-skill"
+    refute_includes agent.build_system_prompt, "Instruksi kept-skill"
   end
 
   # /use can name anything the registry knows, so a forced skill has to be
-  # checked against the persona too — otherwise the switch is cosmetic.
+  # checked against the persona too — otherwise the switch is cosmetic. The
+  # refusal replaces the skill's instructions, so the user is told rather than
+  # answered as if the request never happened.
   def test_a_switched_off_skill_is_not_forced_into_the_turn
     install_skill("switched-off-skill")
 
@@ -751,7 +774,26 @@ class TestAgentPersona < Minitest::Test
     prompt = agent.build_system_prompt
 
     refute_includes prompt, "# Active Skill: switched-off-skill"
+    refute_includes prompt, "Isi switched-off-skill", "its instructions never reach the turn"
+
+    assert_includes prompt, "# Refused Skill: switched-off-skill"
     assert_nil agent.session.forced_skill, "the flag is spent even when it is refused"
+  end
+
+  # The refusal is one turn long: a skill left on afterwards is forced as
+  # usual, so the switch does not stick to the session.
+  def test_a_skill_left_on_is_still_forced
+    install_skill("kept-skill")
+
+    agent = build_agent(persona: { "name" => "kanyaah", "model" => "model-a",
+                                   "disabled_skills" => "switched-off-skill" })
+    agent.session.forced_skill = "kept-skill"
+
+    prompt = agent.build_system_prompt
+
+    assert_includes prompt, "# Active Skill: kept-skill"
+    assert_includes prompt, "Isi kept-skill"
+    refute_includes prompt, "# Refused Skill"
   end
 
   # Skills are read from the shared directory beside config.yml, the same one
