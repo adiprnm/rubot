@@ -72,21 +72,23 @@
       bisa menjawab.
     </p>
   <% end %>
-  <label class="settings-check">
-    <input type="checkbox" name="clear_api_key" value="1">
-    Hapus kunci dari database (kembali ke config.yml)
-  </label>
+  <% if key_from_archive %>
+    <label class="settings-check">
+      <input type="checkbox" name="clear_api_key" value="1">
+      Hapus kunci dari database (kembali ke config.yml)
+    </label>
+  <% end %>
 
   <label>Model default
-    <input name="default_model" value="<%= h(default_model) %>"
-           list="settings-models" autocapitalize="off" autocorrect="off"
-           spellcheck="false" placeholder="gpt-4o-mini">
+    <select name="default_model">
+      <% model_choices.each do |choice| %>
+        <option value="<%= h(choice[:value]) %>"<%= " selected" if choice[:value] == default_model %>><%= h(choice[:label]) %></option>
+      <% end %>
+      <% unless default_model.empty? || model_choices.any? { |choice| choice[:value] == default_model } %>
+        <option value="<%= h(default_model) %>" selected><%= h(default_model) %></option>
+      <% end %>
+    </select>
   </label>
-  <datalist id="settings-models">
-    <% model_choices.each do |name| %>
-      <option value="<%= h(name) %>"></option>
-    <% end %>
-  </datalist>
   <p class="settings-hint">
     Nama model yang dikirim ke provider, apa adanya — termasuk id yang belum ada
     di config.yml.

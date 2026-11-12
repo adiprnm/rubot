@@ -1366,7 +1366,7 @@ module Rubot
           key_set: !@app_config&.api_key.to_s.empty?,
           key_from_archive: !store&.setting("api_key").to_s.strip.empty?,
           provider_choices: settings_provider_choices,
-          model_choices: Array(@app_config&.models).filter_map { |m| m["name"] if m.is_a?(Hash) },
+          model_choices: model_choices,
           saved: saved,
           archived: !store.nil?,
           token_query: token_query,
