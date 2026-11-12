@@ -1842,10 +1842,19 @@ module Rubot
 
     # The models configured in config.yml.
     def config_model_entries
+      entries = []
       models = agent.config.models
-      return [] unless models.is_a?(Array)
+      entries.concat(models.select { |model| model.is_a?(Hash) && model["name"] }) if models.is_a?(Array)
 
-      models.select { |model| model.is_a?(Hash) && model["name"] }
+      # Fall back to (and merge with) whatever the provider's /models endpoint
+      # reports, so a config without a `models:` block still has a picker.
+      begin
+        entries.concat(agent.provider_model_entries)
+      rescue StandardError
+        nil
+      end
+
+      entries.uniq { |model| model["name"].to_s }
     rescue StandardError
       []
     end

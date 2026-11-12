@@ -722,6 +722,23 @@ module Rubot
 
     # Switch to a different model for the current session (legacy entry-based
     # API). Prefer #use_model_preset.
+    # Model ids reported by the provider's /models endpoint, cached for the
+    # lifetime of this agent. Used as a fallback when config.yml does not list
+    # any models, and merged into the TUI model picker.
+    def provider_model_entries
+      @provider_model_entries ||= begin
+        ids = @provider.respond_to?(:list_models) ? @provider.list_models : []
+        Array(ids).filter_map do |id|
+          text = id.to_s.strip
+          next if text.empty?
+
+          { "name" => text, "model" => text }
+        end
+      rescue StandardError
+        []
+      end
+    end
+
     def use_model(model_name)
       model_name = model_name.to_s.strip
       return nil if model_name.empty?
