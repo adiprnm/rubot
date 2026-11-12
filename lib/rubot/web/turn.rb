@@ -60,6 +60,9 @@ module Rubot
         @cond = ConditionVariable.new
         @events = []
         @closed = false
+        # The timeline in the order the turn produced it: a batch of calls, the
+        # thought that led into it, the answer that came out. The compact view
+        # reads that order back (see Rubot::Web::ToolRows).
         @items = []
         @confirm = nil
         @response = nil
@@ -150,15 +153,21 @@ module Rubot
         end
       end
 
-      def tool_started(name, detail)
+      def tool_started(name, detail, op: nil)
         @mutex.synchronize do
           # Thinking is over once the model has decided what to run.
           close_thinking_locked
           # What it said before the call stays above the row, as its own
           # block; the answer that follows the result opens a new one.
           seal_text_locked
-          @items << { kind: :tool, name: name.to_s, detail: detail.to_s, state: :running,
-                      started_at: @clock.call, epoch: epoch_now, elapsed: nil }
+          row = { kind: :tool, name: name.to_s, detail: detail.to_s, state: :running,
+                  started_at: @clock.call, epoch: epoch_now, elapsed: nil }
+          # The operation a file tool was asked for. The compact view keeps a
+          # row that changed a file even when it has no diff to show (see
+          # Rubot::Web::ToolRows), and the name alone cannot tell a read from a
+          # write.
+          row[:op] = op.to_s unless op.to_s.empty?
+          @items << row
           publish_locked
         end
       end
@@ -417,12 +426,18 @@ module Rubot
       # "Thought for 12s"; a quick one is dropped outright, so the timeline
       # only records pauses the reader could feel.
       def close_thinking_locked
-        block = tail_locked
-        return unless block && block[:kind] == :thinking && block[:closed_at].nil?
+        index = @items.rindex { |item| item[:kind] != :steer }
+        return unless index
+
+        block = @items[index]
+        return unless block[:kind] == :thinking && block[:closed_at].nil?
 
         block[:elapsed] = @clock.call - block[:started_at]
         block[:closed_at] = Time.now.to_f
-        @items.pop if block[:elapsed] <= THINKING_SECONDS
+        # Dropped by index, not by popping the end: the reader can have spoken
+        # while the model was thinking, and a `pop` would take their message
+        # instead of the pause that is too short to mention.
+        @items.delete_at(index) if block[:elapsed] <= THINKING_SECONDS
       end
 
       def find_running_tool_locked(name)

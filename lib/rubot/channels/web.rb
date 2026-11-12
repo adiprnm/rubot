@@ -1863,12 +1863,19 @@ module Rubot
             items = []
             text = Session.text_content(msg["content"]).to_s.strip
             items << { kind: :text, text: text, live: false } unless text.empty?
-            Array(msg["tool_calls"]).each { |call| items.concat(history_tool_items(call, results, diffs, sid)) }
+            Array(msg["tool_calls"]).each do |call|
+              items.concat(history_tool_items(call, results, diffs, sid))
+            end
             next if items.empty?
 
-            # Rounds of one prompt belong to one turn: the model answering,
-            # calling out, and answering again is a single exchange.
+            # The assistant messages of one prompt belong to one turn: the
+            # model answering, calling out, and answering again is a single
+            # exchange. A second message from the model means it came back
+            # after the tool results, which is the boundary the live turn draws
+            # as the thought it took — the transcript has no clock to draw, so
+            # it leaves the marker that compact mode reads and no view shows.
             if current
+              current[:items] << { kind: :step }
               current[:items].concat(items)
               current[:last] = idx
             else
@@ -1926,15 +1933,20 @@ module Rubot
       def history_tool_items(call, results, diffs, sid)
         function = call["function"] || {}
         name = function["name"].to_s
+        arguments = parse_arguments(function["arguments"])
         result = results[call["id"].to_s]
 
-        items = [ {
+        row = {
           kind: :tool,
           name: name,
-          detail: summarize_arguments(parse_arguments(function["arguments"])),
+          detail: summarize_arguments(arguments),
           state: result.nil? ? :unknown : (tool_ok?(result) ? :ok : :failed),
           elapsed: nil
-        } ]
+        }
+        op = arguments["operation"].to_s
+        row[:op] = op unless op.empty?
+
+        items = [ row ]
 
         spec = diffs[call["id"].to_s]
         html = spec ? Rubot::Web::Diff.render(spec["before"], spec["after"], path: spec["path"]) : nil
@@ -2527,7 +2539,7 @@ module Rubot
           on_tool_call: lambda do |name, args, _snapshot|
             announcement = args.to_h["message"].to_s.strip if name.to_s == "notify"
             announcement ||= ""
-            turn.tool_started(name, summarize_arguments(args))
+            turn.tool_started(name, summarize_arguments(args), op: args.to_h["operation"])
           end,
           on_tool_result: ->(name, result, diff) { tool_finished(turn, name, result, diff) },
           on_reasoning: ->(delta) { turn.thinking(delta) },
