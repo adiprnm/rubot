@@ -642,9 +642,6 @@ agents:
       threshold_tokens: 120000  # 0 = disabled (default)
 ```
 
-Keep `history.limit` at `0` (no count cap). If the request is trimmed by count before
-the compaction threshold is reached, the model loses the beginning of the task
-without a summary replacing it — the worst of both worlds. `history.limit` defaults to `0` (no cap) precisely so compaction is the only bound.
 
 The user's original request is stored on the session separately from the
 transcript and re-stated in the system prompt as `# Task` once the transcript
@@ -663,16 +660,10 @@ does not re-send its entire transcript on each round:
   currently running is sent (a tool loop continues from it). Reasoning from
   earlier turns is never needed again and can be the largest part of a
   tool-heavy prompt.
-- **Old tool output is shortened.** The newest `tool_result_keep` results are
-  sent verbatim; older ones are cut to `tool_result_max_chars`. The session
-  file keeps the full output, so `/compact` and later turns still have it.
 ```yaml
 agents:
   defaults:
     history:
-      limit: 0                     # 0 = no message-count cap (default)
-      tool_result_keep: 10         # newest tool outputs kept in full
-      tool_result_max_chars: 6000  # older ones are cut to this
 ```
 
 Telegram commands:

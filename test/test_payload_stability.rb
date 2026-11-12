@@ -171,46 +171,4 @@ class TestPayloadStability < Minitest::Test
   # The trim rewrites old tool results, and it must stop there: the messages
   # after the boundary still have to be byte-identical, or the saving is paid
   # back as a re-read of everything that follows.
-  def test_trimming_old_results_does_not_touch_the_messages_after_them
-    Dir.mktmpdir do |dir|
-      workspace = File.join(dir, "workspace")
-      FileUtils.mkdir_p(workspace)
-      path = File.join(dir, "config.yml")
-      File.write(path, {
-        "agents" => { "defaults" => {
-          "workspace" => workspace,
-          "history" => { "tool_result_keep" => 2, "tool_result_max_chars" => 10 }
-        } },
-        "models" => [
-          { "name" => "model-a", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" }
-        ]
-      }.to_yaml)
-      agent = Rubot::Agent.new(config: Rubot::Config.new(path), session_id: "trim",
-                              tools: @tools)
-
-      # Four results with keep=2: the oldest block of two is shortened, the two
-      # newest stay verbatim.
-      4.times do |i|
-        agent.session.add("assistant", "round #{i}", tool_calls: [
-          { "id" => "call-#{i}", "type" => "function", "function" => { "name" => "shell_exec" } }
-        ])
-        agent.session.add("tool", "#{i}" * 60, tool_call_id: "call-#{i}")
-      end
-      agent.session.add("user", "dan setelah itu?")
-
-      messages = agent.send(:build_messages)
-      body = messages.reject { |m| m["role"] == "system" }
-
-      shortened = body.select { |m| m["content"].to_s.include?("older tool output truncated") }
-      results = body.select { |m| m["role"] == "tool" }
-
-      assert_equal 2, shortened.size,
-                   "one whole block of two results is shortened, not one per request"
-      assert_equal "0" * 10, shortened.first["content"][0, 10],
-                   "the shortened body keeps its first max_chars characters"
-      assert_equal [ "#{"2" * 60}", "#{"3" * 60}" ], results.last(2).map { |m| m["content"] },
-                   "the newest block is still sent verbatim"
-      assert_equal "dan setelah itu?", body.last["content"]
-    end
-  end
 end

@@ -1723,10 +1723,8 @@ module Rubot
       # Add conversation history (limited by messages and, optionally, tokens).
       # `reasoning_tail` keeps reasoning only for the turn being executed.
       recent_messages = @session.safe_history(
-        limit: @config.history_limit,
         reasoning_tail: current_turn_message_count
       )
-      trim_old_tool_results!(recent_messages)
 
       recent_messages.each do |msg|
         formatted = { "role" => msg["role"], "content" => msg["content"] }
@@ -1767,52 +1765,6 @@ module Rubot
       [ @session.messages.size - @turn_start_index, 0 ].max
     end
 
-# Shorten all but the newest `tool_result_keep` tool outputs in place, and
-# redact the oversized arguments of the tool calls that produced them.
-#
-# The boundary moves in blocks of `keep`, not one result at a time. A
-# boundary that advances on every request rewrites a message in the middle
-# of the transcript each time, and everything from that point on has to be
-# re-read uncached — in a tool-heavy turn that is a new request every few
-# seconds. Rounding the count down to a multiple of `keep` keeps the
-# payload byte-for-byte identical between advances, so the same cached
-# prefix survives roughly `keep` requests instead of one. The cost is up to
-# `2 * keep` recent results kept verbatim instead of `keep`.
-#
-# Argument redaction rides the same boundary: a tool call whose result is
-# old enough to truncate also loses any oversized argument value (a file
-# written an hour ago does not need to ride along in every request).
-# Sharing one boundary keeps the cache-miss cadence at one per block
-# instead of two.
-def trim_old_tool_results!(messages)
-  keep = @config.tool_result_keep
-  max_chars = @config.tool_result_max_chars
-  return if max_chars.zero?
-
-  indexes = messages.each_index.select { |i| messages[i]["role"] == "tool" }
-  return if keep.positive? && indexes.size <= keep
-
-  older = if keep.positive?
-    # How many results are past the keep window, rounded down to a block.
-    surplus = indexes.size - keep
-    truncate_count = (surplus / keep) * keep
-    return if truncate_count.zero?
-
-    indexes[0, truncate_count].to_a
-  else
-    indexes
-  end
-
-  older.each do |i|
-    redact_old_tool_call_args!(messages, messages[i]["tool_call_id"], max_chars)
-    content = messages[i]["content"].to_s
-    next if content.length <= max_chars
-
-    messages[i] = messages[i].merge(
-      "content" => content[0...max_chars] + TRUNCATED_TOOL_RESULT_NOTICE
-    )
-  end
-end
 
 # Replace oversized top-level string values in an old tool call's
 # arguments with a notice, on the request copy only (the session transcript
@@ -2239,7 +2191,7 @@ end
 
     # Name of the most recent tool the session ran, for the fallback above.
     def last_tool_name
-      history = @session.safe_history(limit: @config.history_limit)
+      history = @session.safe_history()
       history.reverse_each do |msg|
         next unless msg["role"] == "assistant" && msg["tool_calls"]
         call = msg["tool_calls"].last
@@ -2423,9 +2375,7 @@ end
       messages << { "role" => "system", "content" => build_system_prompt }
       return messages if fresh
 
-      history_limit = @config.history_limit
       all_history = @session.safe_history(
-        limit: history_limit,
         reasoning_tail: 0
       )
 
@@ -2433,7 +2383,6 @@ end
       # exclude it so cron processing has clean context
       history = all_history.dup
       history.pop if history.last && history.last["role"] == "user"
-      trim_old_tool_results!(history)
 
       recent = history
       recent.each do |msg|

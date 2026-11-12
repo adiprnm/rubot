@@ -689,51 +689,15 @@ module Rubot
     #   agents:
     #     defaults:
     #       history:
-    #         limit: 0         # messages sent (0 = no count cap; the window
-    #                          # and compaction are the bound)
-    #         tool_result_keep: 10        # newest tool outputs kept in full
-    #         tool_result_max_chars: 6000 # older ones are cut to this
     #
-    # Flat aliases (`history_limit`, ...) are accepted.
+    # Flat aliases are accepted.
     def history
       raw = agent_defaults["history"]
       raw.is_a?(Hash) ? raw : {}
     end
 
-    def history_limit
-      raw = if history.key?("limit")
-        history["limit"]
-      else
-        agent_defaults["history_limit"]
-      end
-      # Unset (or 0) means "no message-count cap": the context window and
-      # compaction are the only bounds. Capping by count alone silently drops
-      # the beginning of a long task while the window still has room.
-      return 0 if raw.nil?
-
-      value = raw.to_i
-      value.positive? ? value : 0
-    end
-
     # Approximate token budget for the history block. 0 disables the cap, so
     # the message-count limit is the only bound (the old behaviour).
-    # How many of the newest tool results are sent verbatim. Older results are
-    # shortened to `tool_result_max_chars`; 0 means "shorten every tool result".
-    def tool_result_keep
-      raw = history["tool_result_keep"] || agent_defaults["tool_result_keep"]
-      return DEFAULT_TOOL_RESULT_KEEP if raw.nil?
-
-      value = raw.to_i
-      value.negative? ? 0 : value
-    end
-
-    def tool_result_max_chars
-      raw = history["tool_result_max_chars"] || agent_defaults["tool_result_max_chars"]
-      return DEFAULT_TOOL_RESULT_MAX_CHARS if raw.nil?
-
-      value = raw.to_i
-      value.negative? ? 0 : value
-    end
 
     # --- Context compaction ----------------------------------------------
     #

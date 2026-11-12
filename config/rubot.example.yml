@@ -50,8 +50,6 @@ agents:
       # set this, keep it above `compaction.threshold_tokens` so compaction
       # summarizes before the request starts losing messages.
       max_tokens: 0
-      tool_result_keep: 10    # newest tool outputs sent in full
-      tool_result_max_chars: 6000  # older tool outputs are cut to this
     # Safety guard — restrict agent access to the workspace directory.
     # When true, file operations and command execution are confined to `workspace`.
     # Set to false to disable sandboxing (not recommended).
