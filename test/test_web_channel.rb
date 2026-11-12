@@ -1827,9 +1827,10 @@ module Rubot
 
       # Stopping is a request, not a fact: the turn keeps running until the
       # server has acted. The button has to say so and stop taking presses for
-      # that round trip, or it looks untouched and a second press just repeats
-      # the same request.
-      def test_the_stop_button_says_it_is_stopping_and_locks_itself
+      # as long as it is true — which is longer than the round trip that asked
+      # for the stop, because the server answers "queued" long before the work
+      # actually stops.
+      def test_the_stop_button_says_it_is_stopping_for_as_long_as_the_turn_lives
         html = View.render("_composer", session_id: "web_rubot", token_query: "")
         button = html[/<button\b[^>]*class="btn composer-stop".*?<\/button>/m]
 
@@ -1840,9 +1841,19 @@ module Rubot
         js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
 
         assert_includes js, "Membatalkan…", "the button has to say what it is doing"
-        assert_includes js, "this.stopping = true"
-        assert_includes js, "if (!active || this.stopping) return;",
+
+        stop = js[/async stop\(\) \{.*?\n    \},/m]
+        refute_nil stop
+        assert_includes stop, "store.stopping = true"
+        assert_includes stop, "if (!active || store.stopping) return;",
                         "a second press while the first is in flight is a no-op"
+        refute_includes stop, "finally",
+                        "the round trip is not the end of the turn, so it cannot be where the word is cleared"
+
+        retire = js[/function retireTurn\(turn\) \{.*?\n\}/m]
+        refute_nil retire
+        assert_includes retire, "store.stopping = false",
+                        "the next turn starts with the button back to its plain word"
       end
 
       # A prompt the server refuses keeps its text in the field and puts
