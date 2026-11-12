@@ -1856,6 +1856,25 @@ module Rubot
                         "the next turn starts with the button back to its plain word"
       end
 
+      # A draft belongs to the conversation it was typed into and to the tab it
+      # was typed in. Opening another conversation is a page load, so the field
+      # would come back empty and the sentence be lost — the one loss the
+      # reader cannot undo.
+      def test_a_half_written_prompt_comes_back_with_its_session
+        html = View.render("_composer", session_id: "web_rubot~2026", token_query: "")
+        assert_includes html, %(data-draft="web_rubot~2026"),
+                        "the field has to know which session it is writing for"
+
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+        init = js[/init\(\) \{.*?\n    \},/m]
+
+        refute_nil init
+        assert_includes init, "readDraft(this.draftId)", "the draft has to be put back"
+        assert_includes init, 'this.$watch("text"', "and kept up to date as it is typed"
+        assert_includes js, "sessionStorage",
+                        "a draft belongs to this tab, not to every window on the machine"
+      end
+
       # A prompt the server refuses keeps its text in the field and puts
       # nothing in the thread, so the reason has to be said next to the field.
       # Left unsaid, the reader presses a button that appears broken: the text

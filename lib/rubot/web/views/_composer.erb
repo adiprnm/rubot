@@ -7,6 +7,7 @@
     handler throws on `undefined.requestSubmit()` and Enter stops sending. -%>
 <form class="composer"
       x-ref="form"
+      data-draft="<%= h(session_id) %>"
       hx-post="/s/<%= h(session_id) %>/turn<%= h(token_query) %>"
       hx-target="#thread"
       hx-swap="beforeend"
