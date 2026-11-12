@@ -923,18 +923,6 @@ module Rubot
             %(stroke-linejoin="round" aria-hidden="true" focusable="false">#{body}</svg>)
         end
 
-        # Which round of the turn a row was drawn for. The compact view keeps or
-        # drops rows by this number rather than by what happens to sit next to
-        # them (see Rubot::Web::ToolRows), and a row that carries it says so in
-        # the page: a reader with the transcript open can tell which pass of the
-        # model a call came from without counting the rows above it. Left out
-        # when the timeline has no rounds, so an old transcript draws exactly
-        # the same markup it always did.
-        def round_attr(item)
-          round = item[:round]
-          round.nil? ? "" : %( data-round="#{round.to_i}")
-        end
-
         def dur(seconds)
           Format.duration(seconds)
         end

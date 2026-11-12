@@ -1021,9 +1021,9 @@ module Rubot
         clock.advance(2.0)
         turn.append_chunk("jawaban")
 
-        # No clock to show, but the round boundary stays: compact mode reads it
-        # to tell one batch of calls from the next.
-        assert_equal [ :step, :text ], kinds(turn)
+        # No clock to show, no row: the reader only ever sees the pauses that
+        # took long enough to be worth a line.
+        assert_equal [ :text ], kinds(turn)
         assert_equal "jawaban", turn.items.last[:text]
       end
 
@@ -4940,20 +4940,19 @@ module Rubot
         assert_equal %w[b.rb], items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
       end
 
-      # The transcript carries the round each row came from, so the view can cut
-      # the log where the live turn cut it instead of guessing from neighbours.
-      def test_a_replayed_transcript_stamps_which_round_each_row_came_from
+      # The transcript carries the rows in the order they happened and nothing
+      # else: with no pass numbers to read, the compact view cuts the log on the
+      # last call instead of guessing where a round began.
+      def test_a_replayed_transcript_stamps_nothing
         channel = channel_with_sessions(personas: { "rubot" => { "name" => "Rubot" } },
                                         sessions: { "web_rubot" => "Cek dua file" })
         write_two_rounds(channel)
 
         items = channel.send(:history, "web_rubot").last[:items]
 
-        tools = items.select { |item| item[:kind] == :tool }
-        assert_equal [ 1, 2 ], tools.map { |item| item[:round] }, "each call its own round"
-        assert_equal 3, items.select { |item| item[:kind] == :text }.map { |item| item[:round] }.max,
-                     "the answer is a round after the call it answers"
-        assert_equal 2, items.find { |item| item[:kind] == :step }[:round]
+        assert(items.none? { |item| item[:kind] == :step }, "no marker rows")
+        assert(items.none? { |item| item.key?(:round) }, "no pass numbers")
+        assert_equal %w[b.rb], items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
       end
 
       def test_a_verbose_persona_s_transcript_keeps_every_call

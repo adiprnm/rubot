@@ -1849,12 +1849,6 @@ module Rubot
 
         turns = []
         current = nil
-        # Which pass of the model a row came from, counted per turn. Every row
-        # of one assistant message belongs to the same round, which is what the
-        # compact view reads to find the round the turn is on (see
-        # Rubot::Web::ToolRows) — the same number the live turn stamps, so the
-        # page a reader refreshes shows the rows the live one showed.
-        round = 0
 
         messages.each_with_index do |msg, position|
           idx = start + position
@@ -1866,9 +1860,7 @@ module Rubot
 
             turns << { kind: :prompt, text: text, idx: idx, last: idx }
             current = nil
-            round = 0
           when "assistant"
-            round += 1
             items = []
             text = Session.text_content(msg["content"]).to_s.strip
             items << { kind: :text, text: text, live: false } unless text.empty?
@@ -1877,21 +1869,15 @@ module Rubot
             end
             next if items.empty?
 
-            items.each { |item| item[:round] = round }
-
             # The assistant messages of one prompt belong to one turn: the
             # model answering, calling out, and answering again is a single
-            # exchange. A second message from the model that reaches for more
-            # work means it came back after the tool results, which is the
-            # boundary the live turn draws as the thought it took — the
-            # transcript has no clock to draw, so it leaves the marker that
-            # compact mode reads and no view shows. An answer after the calls
-            # is not that boundary: the live turn keeps the round that answer
-            # belongs to, and a page rebuilt from the log has to agree.
-            if current && items.any? { |item| item[:kind] == :tool }
-              current[:items] << { kind: :step, round: round }
-            end
-
+            # exchange, and the compact view reads it top to bottom from the
+            # only row it knows how to pick — the last call (see
+            # Rubot::Web::ToolRows). The log has no clock, so the pause the live
+            # turn would draw between two of them is simply not there; what
+            # stands between two calls here is whatever the model wrote, which
+            # is what the live turn draws when the thought was too quick to
+            # mention.
             if current
               current[:items].concat(items)
               current[:last] = idx

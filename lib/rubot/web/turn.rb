@@ -78,14 +78,6 @@ module Rubot
         # into the keyframes with it (see note_entering_locked).
         @entered = {}
         @row_seq = 0
-        # Which round of the turn a row belongs to. A round is one pass of the
-        # model: the thought it took, what it said, and the batch of calls it
-        # reached for. The number is stamped on every row as it arrives (see
-        # Rubot::Web::ToolRows), so the compact view knows what the turn is on
-        # from the row itself instead of guessing it from adjacency — a pause
-        # that left no row, or a call that came without one, no longer shifts
-        # the line the reader sees.
-        @round = 0
         @confirm = nil
         @response = nil
         @confirm_mutex = Mutex.new
@@ -135,7 +127,7 @@ module Rubot
           block = tail_locked
           if block && block[:kind] == :text
             # A sealed block is still where the answer was written: sealing only
-            # means a *later* round may open a block below it. A provider that
+            # means a later passage may open a block below it. A provider that
             # interleaves reasoning with the answer closes and re-opens the
             # thought between two chunks, and when that thought was too quick to
             # record the answer came back as a second block — a line break in
@@ -143,7 +135,7 @@ module Rubot
             block[:text] << text
             block[:live] = true
           else
-            @items << { kind: :text, text: +text, live: true, round: (@round += 1) }
+            @items << { kind: :text, text: +text, live: true }
           end
           publish_locked
         end
@@ -163,16 +155,16 @@ module Rubot
           # seal the answer and split it — "S" above the row, "aya" below it,
           # which the reader sees as a newline in the middle of a word. The TUI
           # reached the same rule for the same reason: only a pause *between*
-          # rounds deserves a row, and a real one always starts with the answer
-          # closed, since a tool call and the end of a round both close it.
+          # calls deserves a row, and a real one always starts with the answer
+          # closed, since a tool call and the end of the turn both close it.
           return if last && last[:kind] == :text && last[:live]
 
-          # A thought that arrives after a finished answer belongs to a new
-          # round: the block above is done, so the answer continues below this
-          # one instead of being split in half by it.
+          # A thought that arrives after a finished answer belongs to the work
+          # below it: the block above is done, so the answer continues below
+          # this one instead of being split in half by it.
           seal_text_locked
           @items << { kind: :thinking, started_at: @clock.call, epoch: epoch_now,
-                      closed_at: nil, elapsed: nil, round: (@round += 1) }
+                      closed_at: nil, elapsed: nil }
           publish_locked
         end
       end
@@ -184,13 +176,13 @@ module Rubot
           # What it said before the call stays above the row, as its own
           # block; the answer that follows the result opens a new one.
           seal_text_locked
-          # A call joins the round that is open instead of opening one of its
-          # own. Calls asked for in the same breath are one batch, and a batch
-          # reads as one act; only a thought or a sentence opens a round, which
-          # is exactly when the model decided the previous batch was done.
+          # Nothing is stamped on the row: the compact view keeps the last call
+          # and drops the ones before it (see Rubot::Web::ToolRows), and what
+          # stands between two calls on screen is whatever the model left
+          # there — a thought, a sentence — not a number this turn keeps.
           row = { kind: :tool, name: name.to_s, detail: detail.to_s, state: :running,
                   started_at: @clock.call, epoch: epoch_now, elapsed: nil,
-                  row_id: @row_seq += 1, round: @round }
+                  row_id: @row_seq += 1 }
           # The operation a file tool was asked for. The compact view keeps a
           # row that changed a file even when it has no diff to show (see
           # Rubot::Web::ToolRows), and the name alone cannot tell a read from a
@@ -223,13 +215,13 @@ module Rubot
         file[:id] = id.to_s unless id.to_s.empty?
         file[:label] = label.to_s unless label.to_s.empty?
         @mutex.synchronize do
-          # The marker a quick thought leaves draws nothing, so a strip below it
-          # is still the strip the reader is looking at.
-          last = @items[@items.rindex { |item| item[:kind] != :step } || @items.length]
+          # The reader can have spoken while the model was thinking, so the
+          # strip is the last row that is not their message.
+          last = @items[@items.rindex { |item| item[:kind] != :steer } || @items.length]
           if last && last[:kind] == :attachments
             last[:list] = last[:list] + [ file ]
           else
-            @items << { kind: :attachments, list: [ file ], epoch: epoch_now, round: @round }
+            @items << { kind: :attachments, list: [ file ], epoch: epoch_now }
           end
           publish_locked
         end
@@ -244,7 +236,7 @@ module Rubot
         return if body.empty?
 
         @mutex.synchronize do
-          @items << { kind: :diff, html: body, epoch: epoch_now, round: @round }
+          @items << { kind: :diff, html: body, epoch: epoch_now }
           publish_locked
         end
       end
@@ -466,29 +458,28 @@ module Rubot
         block[:live] = false if block && block[:kind] == :text
       end
 
-      # The last row that belongs to a round. A steering message is the reader
-      # talking, not the turn moving on: it is drawn where it was typed, and it
-      # must not stand between a block and its own continuation. The same goes
-      # for the marker left by a thought too quick to show (see
-      # close_thinking_locked): it separates two rounds for the compact view,
-      # but it draws no row of its own, so the line the model was writing has to
-      # read straight through it. Read from the end rather than trusted to be
-      # `@items.last`, because the reader can speak at any moment — including in
-      # the middle of a thought.
+      # The last row the turn drew. A steering message is the reader talking,
+      # not the turn moving on: it is drawn where it was typed, and it must not
+      # stand between a block and its own continuation. Read from the end rather
+      # than trusted to be `@items.last`, because the reader can speak at any
+      # moment — including in the middle of a thought.
       def tail_locked
-        index = @items.rindex { |item| item[:kind] != :steer && item[:kind] != :step }
+        index = @items.rindex { |item| item[:kind] != :steer }
         index && @items[index]
       end
 
       # Where the last visible row sits, for the writes that have to look at it
       # (an open thought, a strip of files). Same skipping rule as tail_locked.
       def tail_index_locked
-        @items.rindex { |item| item[:kind] != :steer && item[:kind] != :step }
+        @items.rindex { |item| item[:kind] != :steer }
       end
 
-      # Finish the thinking block. A wait worth noticing collapses to one row,
-      # "Thought for 12s"; a quick one is dropped outright, so the timeline
-      # only records pauses the reader could feel.
+      # Finish the thinking block. A wait worth noticing becomes the row
+      # "Thought for 12s"; a quick one is dropped outright, so the timeline only
+      # records pauses the reader could feel. Nothing depends on the dropped
+      # row: the compact view keeps the last call whatever stands between it and
+      # the one before (see Rubot::Web::ToolRows), so a pause nobody could feel
+      # needs no marker to remember it by.
       def close_thinking_locked
         index = tail_index_locked
         return unless index
@@ -500,16 +491,10 @@ module Rubot
         block[:closed_at] = Time.now.to_f
         return if block[:elapsed] > THINKING_SECONDS
 
-        # Too short to earn a row — but not nothing. The pause is where one
-        # round ended and the next began, and the compact view needs that line
-        # even when there is no clock to show for it: without it two rounds of
-        # calls sit side by side and read as one batch, so nothing is ever
-        # collapsed and the takeover the reader asked for never happens.
-        #
-        # Replaced by index, not popped: the reader can have spoken while the
+        # Deleted by index, not popped: the reader can have spoken while the
         # model was thinking, and a `pop` would take their message instead of
         # the pause that is too short to mention.
-        @items[index] = { kind: :step, round: block[:round] }
+        @items.delete_at(index)
       end
 
       def find_running_tool_locked(name)
