@@ -19,22 +19,6 @@
 <% if msg[:kind] == :prompt -%>
 <%= View.render("_message", role: "user", text: msg[:text], anchor: "m-#{msg[:idx]}",
                             landed: landed_here) %>
-<% elsif msg[:kind] == :note -%>
-<%# Compaction does not delete anything: it moves the start of the request
-    forward and keeps a summary of what it moved past. The rows above this
-    marker are still the conversation, so they are drawn; the marker says where
-    the model's window begins, and offers the summary it was handed instead. -%>
-<div class="history-note" id="m-<%= msg[:idx] %>">
-  <span class="history-note-label"><%= msg[:cut] %> pesan sebelumnya diringkas</span>
-  <% if msg[:summary].to_s.strip.empty? -%>
-  <span class="history-note-nosumm">tanpa ringkasan tersimpan</span>
-  <% else -%>
-  <details>
-    <summary>Ringkasan</summary>
-    <p><%= h(msg[:summary].to_s) %></p>
-  </details>
-  <% end -%>
-</div>
 <% else -%>
 <div class="turn is-done<%= " is-landed" if landed_here %>"<% if msg[:idx] %> id="m-<%= msg[:idx] %>"<% end %>>
   <div class="turn-body"><%= View.render("_timeline", items: msg[:items]) %></div>

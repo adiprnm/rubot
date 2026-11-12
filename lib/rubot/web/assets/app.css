@@ -1488,54 +1488,6 @@ body {
   color: var(--fg-faint);
 }
 
-/* Where the model stopped being sent the conversation. The messages above it
-   are drawn like any other — they were written, they are readable — so the
-   marker is a seam in the transcript, not the top of it: a hairline across the
-   thread rather than a card, because it is a note about the window, not a turn
-   in the conversation. */
-.thread > .history-note {
-  width: 100%;
-  max-width: 52rem;
-  margin: 0.15rem auto 1.05rem;
-  padding-top: 0.55rem;
-  border-top: 1px dashed var(--line);
-  font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: -0.03em;
-  color: var(--fg-faint);
-  text-align: center;
-}
-
-.thread > .history-note details {
-  margin-top: 0.35rem;
-  text-align: left;
-}
-
-.thread > .history-note summary {
-  display: inline-block;
-  cursor: pointer;
-  color: var(--fg-dim);
-  list-style: none;
-  border-bottom: 1px dotted var(--line);
-}
-
-.thread > .history-note summary::-webkit-details-marker { display: none; }
-
-.thread > .history-note summary:hover { color: var(--green); }
-
-.thread > .history-note p {
-  margin: 0.45rem 0 0;
-  padding: 0.55rem 0.7rem;
-  border-radius: 7px;
-  background: var(--bg2);
-  color: var(--fg-dim);
-  font-family: var(--sans);
-  font-size: 12px;
-  line-height: 1.6;
-  letter-spacing: normal;
-  white-space: pre-wrap;
-}
-
 .thread > .turn > .turn-body,
 .thread > .turn > .confirm,
 .thread > .turn > .notice { max-width: 100%; }
