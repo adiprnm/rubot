@@ -1739,6 +1739,13 @@ module Rubot
         messages << formatted
       end
 
+      # Append system additions without rewriting the cached prefix.
+      if @session.respond_to?(:system_additions)
+        @session.system_additions.each do |addition|
+          messages << { "role" => "system", "content" => addition }
+        end
+      end
+
       messages
     end
 
