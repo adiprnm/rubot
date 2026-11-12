@@ -61,7 +61,7 @@ module Rubot
     DEFAULT_MAX_MESSAGES = 400
 
     attr_reader :id, :messages, :workspace, :usage, :last_usage, :cost
-    attr_reader :task, :cwd, :cache_history, :cache_records
+    attr_reader :task, :cwd, :cache_history, :cache_records, :system_additions
     attr_accessor :summary, :forced_skill, :model_override, :model_preset, :thinking_level, :title
 
     # How many recent requests keep their cache share. Enough to see a pattern
@@ -151,6 +151,7 @@ module Rubot
       # of, and what the provider said the cache did with it.
       @cache_records = []
       @memory_backlog = []
+      @system_additions = []
       load!
     end
 
@@ -633,6 +634,14 @@ module Rubot
       end
     end
 
+    def add_system_addition(text)
+      return false if text.to_s.strip.empty?
+      @system_additions << text.to_s
+      @system_additions.shift while @system_additions.size > 20
+      save!
+      true
+    end
+
     def clear!
       # A clear opens a new window instead of emptying the archive: the next
       # message lands after what came before it, so no index is ever reused and
@@ -1047,6 +1056,7 @@ module Rubot
       data["system_prompt"] = @system_prompt if @system_prompt
       data["system_prompt_epoch"] = @system_prompt_epoch if @system_prompt_epoch
       data["memory_backlog"] = @memory_backlog if @memory_backlog && !@memory_backlog.empty?
+      data["system_additions"] = @system_additions if @system_additions && !@system_additions.empty?
 
       # Generate before opening the file: JSON.pretty_generate can raise (e.g.
       # invalid UTF-8), and truncating first would leave an empty session file.
@@ -1109,7 +1119,8 @@ module Rubot
         # rebuilt prompt at the front of the request is a cold cache.
         "system_prompt" => @system_prompt,
         "system_prompt_epoch" => @system_prompt_epoch,
-        "memory_backlog" => @memory_backlog
+        "memory_backlog" => @memory_backlog,
+        "system_additions" => @system_additions
       }.compact
     end
 
@@ -1350,6 +1361,7 @@ module Rubot
       @system_prompt = data["system_prompt"].to_s.empty? ? nil : data["system_prompt"].to_s
       @system_prompt_epoch = data["system_prompt_epoch"].is_a?(Hash) ? data["system_prompt_epoch"] : nil
       @memory_backlog = Array(data["memory_backlog"]).map(&:to_s)
+      @system_additions = Array(data["system_additions"]).map(&:to_s)
     end
 
     # The session state as the archive holds it: the messages it returned (which
