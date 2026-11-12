@@ -39,8 +39,16 @@ module Rubot
       # others leave — except the ones the reader has to be able to come back
       # for (a file changed, a failure, a diff, work still running).
       #
-      # Everything that is not a call stays exactly where it happened: the
-      # sentences, the thoughts, the steering messages, the diffs, the files a
+      # A pause goes wherever the call it was taken for goes. A "Thought for"
+      # row is read as belonging to the row above it — the model paused, then
+      # reached for that call — so a call that leaves takes its pause with it.
+      # Left behind, the pauses piled up: three "Thought for" lines in a row,
+      # nothing between them, telling the reader nothing about what happened in
+      # between. The first pause of a turn is the exception: nothing above it
+      # was called yet, so there is nothing to leave with.
+      #
+      # Everything that is not a call or a pause stays exactly where it
+      # happened: the sentences, the steering messages, the diffs, the files a
       # tool handed back. That is the whole rule — there is no round to find,
       # no line to draw above the batch, and therefore nothing to guess from the
       # neighbouring rows when the transcript carries no marker.
@@ -49,13 +57,28 @@ module Rubot
         latest = list.rindex { |item| item[:kind] == :tool }
         return list if latest.nil?
 
-        list.each_with_index.filter_map do |item, index|
-          next item unless item[:kind] == :tool
-          next item if index == latest
-          next item if keeps_call?(item)
-          next item if draws_a_diff?(list, index)
+        kept = []
+        list.each_with_index do |item, index|
+          next kept << index unless item[:kind] == :tool
+          next kept << index if index == latest
+          next kept << index if keeps_call?(item)
+          next kept << index if draws_a_diff?(list, index)
+        end
+        kept = kept.to_h { |index| [ index, true ] }
 
-          nil
+        # What the pause above is drawn under: nil until a call has been seen,
+        # then whether that call survived.
+        under = nil
+        list.each_with_index.filter_map do |item, index|
+          case item[:kind]
+          when :tool
+            under = kept.key?(index)
+            item if under
+          when :thinking
+            item if under.nil? || under
+          else
+            item
+          end
         end
       end
 

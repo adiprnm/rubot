@@ -53,17 +53,17 @@ class TestToolRows < Minitest::Test
 
   # A turn runs text → call → thought → call → thought: the thought between two
   # calls means the model decided to look again, so what it did before that
-  # thought is the log. The thought that led into the call it is on stays above
-  # it, because that is the order the turn took.
-  def test_compact_keeps_the_call_it_is_on_and_the_thought_that_led_into_it
+  # thought is the log — and the pause is read under the call it was taken for,
+  # so it goes with it. Left behind it was a "Thought for" with nothing above
+  # it, next to the pause of the round before.
+  def test_a_pause_leaves_with_the_call_it_was_taken_for
     items = [ text("Aku cek dulu, bentar."), tool("read"),
               thought(4), tool("grep") ]
 
     kept = Rubot::Web::ToolRows.collapse(items)
 
     assert_equal %w[grep], names(kept)
-    assert_equal %i[text thinking tool], kinds(kept)
-    assert_equal [ 4 ], kept.select { |item| item[:kind] == :thinking }.map { |item| item[:elapsed] }
+    assert_equal %i[text tool], kinds(kept)
   end
 
   # A pause does not take the call above it away: it is drawn under it, as one
@@ -222,32 +222,44 @@ class TestToolRows < Minitest::Test
     assert_equal %w[read], names(kept)
   end
 
-  # A thought is not consumed by the call it led into: the timeline is the
-  # pause the model took, the call it took it for, the pause after that, the
-  # call it is on now. Compact mode is about the calls (one row, the latest),
-  # not about the pauses — so every "Thought for" the turn earned stays where
-  # it happened, in order, for as long as the turn lasts.
-  def test_thoughts_pile_up_around_the_call_it_is_on
+  # A thought is read as belonging to the row above it, so two of them in a row
+  # would mean the model paused twice with nothing in between. It did not: the
+  # pause in the middle was taken for a call that left, so it leaves too, and
+  # the turn reads as pause → call → pause.
+  def test_a_thought_never_stacks_on_another
     items = [ thought(4), tool("read"),
               thought(5), tool("grep"),
               thought(6) ]
 
     kept = Rubot::Web::ToolRows.collapse(items)
 
-    assert_equal %i[thinking thinking tool thinking], kinds(kept)
-    assert_equal [ 4, 5, 6 ],
+    assert_equal %i[thinking tool thinking], kinds(kept)
+    assert_equal [ 4, 6 ],
                  kept.select { |item| item[:kind] == :thinking }.map { |item| item[:elapsed] }
     assert_equal %w[grep], names(kept)
   end
 
-  # …and its call is drawn under the pause that led into it, while the pause
-  # before that call stays above it.
-  def test_the_call_it_is_on_keeps_the_pauses_above_it
+  # …and a pause taken for a call the reader has to come back for stays under
+  # it, because that call keeps its row.
+  def test_a_pause_stays_under_a_call_that_keeps_its_row
+    items = [ tool("shell_exec", state: :failed), thought(5), tool("read") ]
+
+    kept = Rubot::Web::ToolRows.collapse(items)
+
+    assert_equal %i[tool thinking tool], kinds(kept)
+    assert_equal %w[shell_exec read], names(kept)
+  end
+
+  # The pause that led into the call it is on leaves with the call it was taken
+  # for; the turn opens with the pause nobody called before, and ends on the
+  # call it is on.
+  def test_the_call_it_is_on_keeps_only_the_pause_nothing_was_called_for
     items = [ thought(4), tool("read"), thought(5), tool("grep") ]
 
     kept = Rubot::Web::ToolRows.collapse(items)
 
-    assert_equal %i[thinking thinking tool], kinds(kept)
+    assert_equal %i[thinking tool], kinds(kept)
+    assert_equal 4, kept.first[:elapsed]
     assert_equal %w[grep], names(kept)
   end
 
@@ -331,8 +343,8 @@ class TestToolRows < Minitest::Test
 
   # The shape the rule is about: what the model said, the call it made, the
   # thought it took, the next call, the thought it is taking now. The reader
-  # watches one call at a time — a call replaces the call before it — while the
-  # pauses the model earned stay exactly where they happened.
+  # watches one call at a time — a call replaces the call before it, and takes
+  # the pause taken for it along.
   def test_a_compact_turn_reads_one_call_at_a_time
     turn, advance = build_turn("compact")
 
@@ -349,13 +361,14 @@ class TestToolRows < Minitest::Test
     advance.(4)
     turn.tool_started("grep", "wanderer")
     turn.tool_finished("grep", true)
-    assert_equal %i[text thinking tool], kinds(turn.items), "the thought stays above the call it led into"
+    assert_equal %i[text tool], kinds(turn.items),
+                 "the call it left and the pause it took for it both leave"
     assert_equal %w[grep], names(turn.items)
 
     advance.(6)
     turn.thinking
-    assert_equal %i[text thinking tool thinking], kinds(turn.items),
-                 "the call stays, the pause it earned sits after it"
+    assert_equal %i[text tool thinking], kinds(turn.items),
+                 "the call it is on keeps its row, and the pause sits under it"
     assert_equal %w[grep], names(turn.items)
   end
 
