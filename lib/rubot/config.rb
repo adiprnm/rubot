@@ -34,6 +34,7 @@ module Rubot
     # still leaves the summary doing its job (the prompt is a fraction of the
     # transcript it replaces).
     DEFAULT_COMPACT_KEEP_RECENT = 40
+    DEFAULT_COMPACT_KEEP_RECENT_TOKENS = 20_000
     DEFAULT_TOOL_RESULT_KEEP = 3
     DEFAULT_TOOL_RESULT_MAX_CHARS = 2_000
     # Messages kept in the session file before the oldest are dropped.
@@ -690,11 +691,10 @@ module Rubot
     #       history:
     #         limit: 0         # messages sent (0 = no count cap; the window
     #                          # and compaction are the bound)
-    #         max_tokens: 0    # optional token budget for that history
     #         tool_result_keep: 10        # newest tool outputs kept in full
     #         tool_result_max_chars: 6000 # older ones are cut to this
     #
-    # Flat aliases (`history_limit`, `history_max_tokens`, ...) are accepted.
+    # Flat aliases (`history_limit`, ...) are accepted.
     def history
       raw = agent_defaults["history"]
       raw.is_a?(Hash) ? raw : {}
@@ -717,12 +717,6 @@ module Rubot
 
     # Approximate token budget for the history block. 0 disables the cap, so
     # the message-count limit is the only bound (the old behaviour).
-    def history_max_tokens
-      raw = history["max_tokens"] || agent_defaults["history_max_tokens"]
-      value = raw.to_i
-      value.positive? ? value : 0
-    end
-
     # How many of the newest tool results are sent verbatim. Older results are
     # shortened to `tool_result_max_chars`; 0 means "shorten every tool result".
     def tool_result_keep
@@ -795,14 +789,21 @@ module Rubot
       value.positive? ? value : DEFAULT_COMPACT_KEEP_RECENT
     end
 
+    # Token-based equivalent of `compact_keep_recent_messages`: keep this many
+    # tokens of the newest transcript verbatim and summarize the rest.
+    def compact_keep_recent_tokens
+      raw = compaction["keep_recent_tokens"] || compaction["keep_recent"]
+      value = raw.to_i
+      value.positive? ? value : DEFAULT_COMPACT_KEEP_RECENT_TOKENS
+    end
+
+    def token_based_compaction?
+      compaction.key?("keep_recent_tokens") || compaction.key?("keep_recent")
+    end
+
     # How many messages live in the session file before the oldest are dropped.
     # Purely a file-size guard: the task statement is stored separately, so
     # trimming cannot delete the user's goal.
-    def session_max_messages
-      raw = compaction["max_messages"] || agent_defaults["session_max_messages"]
-      value = raw.to_i
-      value.positive? ? value : DEFAULT_SESSION_MAX_MESSAGES
-    end
 
     # Absolute token ceiling for compaction, independent of the model's
     # window. A 1M-token model at `threshold_percent: 50` otherwise never

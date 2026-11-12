@@ -571,7 +571,6 @@ class TestConfigHistory < Minitest::Test
 
     assert_equal 0, config.history_limit,
                  "unset history.limit must not cap the request by message count"
-    assert_equal 0, config.history_max_tokens
     assert_equal 3, config.tool_result_keep
     assert_equal 2_000, config.tool_result_max_chars
   end
@@ -580,14 +579,12 @@ class TestConfigHistory < Minitest::Test
     config = write_config(
       "history" => {
         "limit" => 30,
-        "max_tokens" => 24_000,
         "tool_result_keep" => 5,
         "tool_result_max_chars" => 4_000
       }
     )
 
     assert_equal 30, config.history_limit
-    assert_equal 24_000, config.history_max_tokens
     assert_equal 5, config.tool_result_keep
     assert_equal 4_000, config.tool_result_max_chars
   end
@@ -595,25 +592,22 @@ class TestConfigHistory < Minitest::Test
   def test_flat_aliases
     config = write_config(
       "history_limit" => 12,
-      "history_max_tokens" => 8_000,
       "tool_result_keep" => 1,
       "tool_result_max_chars" => 500
     )
 
     assert_equal 12, config.history_limit
-    assert_equal 8_000, config.history_max_tokens
     assert_equal 1, config.tool_result_keep
     assert_equal 500, config.tool_result_max_chars
   end
 
   def test_zero_or_negative_values_fall_back_or_disable
     config = write_config(
-      "history" => { "limit" => 0, "max_tokens" => -5,
+      "history" => { "limit" => 0,
                      "tool_result_keep" => -1, "tool_result_max_chars" => 0 }
     )
 
     assert_equal 0, config.history_limit
-    assert_equal 0, config.history_max_tokens
     assert_equal 0, config.tool_result_keep
     assert_equal 0, config.tool_result_max_chars
   end

@@ -32,17 +32,13 @@ agents:
       auto: true
       threshold_percent: 60   # 0.6 is also accepted
       keep_recent_messages: 40
+      # Token-based alternative: keep this many tokens of the newest transcript.
+      # keep_recent_tokens: 20000
       # Optional absolute ceiling, in estimated tokens. Useful with a large
       # context window (e.g. 1M tokens), where a percentage alone is
       # unreachable in practice. 0 disables it; the lower of this and
-      # threshold_percent wins. Keep this above `history.max_tokens`, or the
-      # request gets trimmed before anything is ever summarized.
+      # threshold_percent wins.
       threshold_tokens: 120_000
-      # Messages kept in the session file before the oldest are dropped. This
-      # is only a file-size guard: the user's original request is stored
-      # separately and re-stated in the system prompt once the transcript no
-      # longer carries it, so it is never lost.
-      max_messages: 400
     # What is sent to the provider from the transcript. Reasoning from past
     # turns is never re-sent; only the turn being executed keeps it.
     history:

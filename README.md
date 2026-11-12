@@ -610,7 +610,6 @@ agents:
       auto: true               # default: true
       threshold_percent: 60    # default: 60 (0.6 is also accepted)
       keep_recent_messages: 40 # default: 40
-      max_messages: 400        # messages kept in the session file
 ```
 
 A value of `100` disables auto-compaction by making the threshold unreachable
@@ -643,12 +642,9 @@ agents:
       threshold_tokens: 120000  # 0 = disabled (default)
 ```
 
-Keep `threshold_tokens` **above** `history.max_tokens` (and do not set a small
-`history.limit`). If the request is trimmed by count or by token budget before
+Keep `history.limit` at `0` (no count cap). If the request is trimmed by count before
 the compaction threshold is reached, the model loses the beginning of the task
-without a summary replacing it — the worst of both worlds. `history.limit` and
-`history.max_tokens` default to `0` (no cap) precisely so compaction is the
-only bound.
+without a summary replacing it — the worst of both worlds. `history.limit` defaults to `0` (no cap) precisely so compaction is the only bound.
 
 The user's original request is stored on the session separately from the
 transcript and re-stated in the system prompt as `# Task` once the transcript
@@ -670,15 +666,11 @@ does not re-send its entire transcript on each round:
 - **Old tool output is shortened.** The newest `tool_result_keep` results are
   sent verbatim; older ones are cut to `tool_result_max_chars`. The session
   file keeps the full output, so `/compact` and later turns still have it.
-- **Optional history budget.** `history.max_tokens` drops the oldest messages
-  until the block fits the budget.
-
 ```yaml
 agents:
   defaults:
     history:
       limit: 0                     # 0 = no message-count cap (default)
-      max_tokens: 0                # 0 = no token cap (default)
       tool_result_keep: 10         # newest tool outputs kept in full
       tool_result_max_chars: 6000  # older ones are cut to this
 ```

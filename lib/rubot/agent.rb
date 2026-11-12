@@ -136,7 +136,6 @@ module Rubot
       @session = Session.new(session_id, workspace: config.workspace,
                                          sessions_dir: session_dir_for(config),
                                          cwd: session_cwd_for(config),
-                                         max_messages: config.session_max_messages,
                                          archive: @archive)
       apply_initial_preset!
       @provider = provider || build_provider(preset: @active_preset, effort: thinking_level)
@@ -857,7 +856,6 @@ module Rubot
       @session = Session.new(session_id, workspace: @config.workspace,
                                          sessions_dir: session_dir_for(@config),
                                          cwd: session_cwd_for(@config),
-                                         max_messages: @config.session_max_messages,
                                          archive: @archive)
       apply_initial_preset!
       @session
@@ -911,12 +909,21 @@ module Rubot
     # suddenly re-explores the repo looks like from the outside. /compact at
     # rest keeps the plain rule: there is no turn to protect.
     def compact_session(protect_current_turn: false)
-      keep = protect_current_turn ? compaction_keep_recent : @config.compact_keep_recent_messages
-      result = @session.compact!(
-        provider: @provider,
-        keep_recent: keep,
-        system_prompt: build_system_prompt
-      )
+      if @config.token_based_compaction?
+        result = @session.compact!(
+          provider: @provider,
+          keep_recent_tokens: @config.compact_keep_recent_tokens,
+          min_keep: protect_current_turn ? current_turn_message_count : nil,
+          system_prompt: build_system_prompt
+        )
+      else
+        keep = protect_current_turn ? compaction_keep_recent : @config.compact_keep_recent_messages
+        result = @session.compact!(
+          provider: @provider,
+          keep_recent: keep,
+          system_prompt: build_system_prompt
+        )
+      end
       return nil unless result
 
       # Compaction drops messages from the front, so the mark that says where
@@ -1717,7 +1724,6 @@ module Rubot
       # `reasoning_tail` keeps reasoning only for the turn being executed.
       recent_messages = @session.safe_history(
         limit: @config.history_limit,
-        max_tokens: @config.history_max_tokens,
         reasoning_tail: current_turn_message_count
       )
       trim_old_tool_results!(recent_messages)
@@ -2420,7 +2426,6 @@ end
       history_limit = @config.history_limit
       all_history = @session.safe_history(
         limit: history_limit,
-        max_tokens: @config.history_max_tokens,
         reasoning_tail: 0
       )
 
@@ -2572,7 +2577,8 @@ end
     # to compact_session as something it may not summarize.
     def run_auto_compaction
       return unless @config.auto_compact?
-      return if @session.message_count <= @config.compact_keep_recent_messages
+      min_keep = @config.token_based_compaction? ? 2 : @config.compact_keep_recent_messages
+      return if @session.message_count <= min_keep
 
       # The hard trim in Session#trim! drops messages from the front, which moves
       # the first block of the transcript -- so everything after the system

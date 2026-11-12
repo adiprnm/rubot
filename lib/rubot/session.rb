@@ -671,12 +671,30 @@ module Rubot
     # (safe to cross a Ractor boundary):
     #   { summary:, summarized_messages:, kept_messages:,
     #     context_before:, context_after: }
-    def compact!(provider:, keep_recent: DEFAULT_KEEP_RECENT_MESSAGES, system_prompt: nil)
+    def compact!(provider:, keep_recent: DEFAULT_KEEP_RECENT_MESSAGES, keep_recent_tokens: nil, min_keep: nil, system_prompt: nil)
       return nil unless @workspace
       return nil if @messages.empty?
 
-      keep = keep_recent.to_i
-      keep = 1 if keep < 1
+      if keep_recent_tokens && keep_recent_tokens.to_i.positive?
+        budget = keep_recent_tokens.to_i
+        keep = 0
+        used = 0
+        i = @messages.size - 1
+        while i >= 0
+          msg_tokens = self.class.message_tokens(@messages[i], reasoning: false)
+          break if keep.positive? && used + msg_tokens > budget
+
+          used += msg_tokens
+          keep += 1
+          i -= 1
+        end
+        keep = 1 if keep < 1
+      else
+        keep = keep_recent.to_i
+        keep = 1 if keep < 1
+      end
+
+      keep = [ keep, min_keep.to_i ].max if min_keep
       return nil if @messages.size <= keep
 
       cutoff = @messages.size - keep
