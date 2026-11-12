@@ -1266,7 +1266,11 @@ module Rubot
       return repin_system_prompt unless @provider.respond_to?(:supports_mid_conversation_system?) && @provider.supports_mid_conversation_system?
 
       return false if text.to_s.strip.empty?
-      @session.add("system", text.to_s) if @session.respond_to?(:add)
+      if @session.respond_to?(:add_system_addition)
+        @session.add_system_addition(text.to_s)
+      else
+        @session.add("system", text.to_s) if @session.respond_to?(:add)
+      end
       true
     end
 
