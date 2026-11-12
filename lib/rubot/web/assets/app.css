@@ -471,6 +471,44 @@ body {
 .rail-panel textarea:focus,
 .rail-panel select:focus { border-color: var(--green); }
 
+/* Icon picker for a persona's face: a grid of radio buttons that look like
+   a palette instead of a dropdown, so the choice is visible at a glance. */
+.emoji-picker {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.45rem 0.5rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(2.1rem, 1fr));
+  gap: 0.3rem;
+}
+.emoji-picker legend {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--fg-faint);
+  padding: 0 0.25rem;
+}
+.emoji-choice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.emoji-choice input { position: absolute; opacity: 0; pointer-events: none; }
+.emoji-choice span {
+  font-size: 15px;
+  line-height: 1;
+  padding: 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg0);
+  transition: border-color 0.12s, background 0.12s;
+}
+.emoji-choice:has(input:checked) span {
+  border-color: var(--green);
+  background: color-mix(in srgb, var(--green) 14%, var(--bg0));
+}
+.emoji-choice:hover span { border-color: var(--fg-faint); }
+
 /* The slug cannot be edited, so it is shown rather than asked for: a field
    that refuses every keystroke reads as a bug, a line of text does not. */
 .panel-hint {
@@ -1448,6 +1486,54 @@ body {
   font-size: 10.5px;
   letter-spacing: -0.03em;
   color: var(--fg-faint);
+}
+
+/* Where the model stopped being sent the conversation. The messages above it
+   are drawn like any other — they were written, they are readable — so the
+   marker is a seam in the transcript, not the top of it: a hairline across the
+   thread rather than a card, because it is a note about the window, not a turn
+   in the conversation. */
+.thread > .history-note {
+  width: 100%;
+  max-width: 52rem;
+  margin: 0.15rem auto 1.05rem;
+  padding-top: 0.55rem;
+  border-top: 1px dashed var(--line);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: -0.03em;
+  color: var(--fg-faint);
+  text-align: center;
+}
+
+.thread > .history-note details {
+  margin-top: 0.35rem;
+  text-align: left;
+}
+
+.thread > .history-note summary {
+  display: inline-block;
+  cursor: pointer;
+  color: var(--fg-dim);
+  list-style: none;
+  border-bottom: 1px dotted var(--line);
+}
+
+.thread > .history-note summary::-webkit-details-marker { display: none; }
+
+.thread > .history-note summary:hover { color: var(--green); }
+
+.thread > .history-note p {
+  margin: 0.45rem 0 0;
+  padding: 0.55rem 0.7rem;
+  border-radius: 7px;
+  background: var(--bg2);
+  color: var(--fg-dim);
+  font-family: var(--sans);
+  font-size: 12px;
+  line-height: 1.6;
+  letter-spacing: normal;
+  white-space: pre-wrap;
 }
 
 .thread > .turn > .turn-body,

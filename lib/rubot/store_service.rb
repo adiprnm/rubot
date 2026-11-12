@@ -107,7 +107,7 @@ module Rubot
       when :sidebar
         @store.sidebar(limit: arguments.fetch(:limit, 40))
       when :load_session
-        @store.load_session(arguments.fetch(:id))
+        @store.load_session(arguments.fetch(:id), all: arguments.fetch(:all, false))
       when :append_messages
         @store.append_messages(
           arguments.fetch(:session_id),

@@ -486,12 +486,20 @@ module Rubot
     # its own column. Nothing is stored twice: `text` is the searchable
     # projection and content is read back out of the payload rather than kept as
     # a third copy (which cost 4 MB on 7k messages).
-    def load_session(session_id)
+    #
+    # `all:` starts at the first message ever written instead of at the index
+    # the model's window starts at. Compaction moves `messages_start` forward
+    # without deleting a row, so "the transcript" and "what the model is sent"
+    # are two different things; the page wants the first, every other caller
+    # the second. `cut` comes back either way, so a caller that read from zero
+    # still knows where the seam is.
+    def load_session(session_id, all: false)
       id = text_id(session_id)
       row = @db.execute(
         "SELECT meta, messages_start FROM sessions WHERE id = ?", [id]
       ).first
-      start = row ? row[1].to_i : 0
+      cut = row ? row[1].to_i : 0
+      start = all ? 0 : cut
 
       rows = @db.execute(<<~SQL, [id, start])
         SELECT payload, diff, text, role, created_at FROM messages
@@ -509,7 +517,8 @@ module Rubot
         message["timestamp"] ||= created_at if created_at
         message
       end
-      { id: id, messages: messages, meta: decode_meta(row && row[0]), start: start }
+      { id: id, messages: messages, meta: decode_meta(row && row[0]),
+        start: start, cut: cut }
     end
 
     # The meta block of one session without loading its transcript. The page

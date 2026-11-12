@@ -29,13 +29,15 @@
         <label>Nama
           <input name="name" placeholder="Kanyaah">
         </label>
-        <label>Emoji
-          <select name="emoji">
-            <% %w[🤖 🧭 ✍️ 📚 🧪 🎨 🛠️ 🔍 🧠 💼].each do |choice| %>
-              <option value="<%= h(choice) %>"><%= h(choice) %></option>
-            <% end %>
-          </select>
-        </label>
+<fieldset class="emoji-picker">
+  <legend>Emoji</legend>
+  <% %w[🤖 🧭 ✍️ 📚 🧪 🎨 🛠️ 🔍 🧠 💼].each_with_index do |choice, i| %>
+    <label class="emoji-choice">
+      <input type="radio" name="emoji" value="<%= h(choice) %>"<%= " checked" if i.zero? %>>
+      <span><%= h(choice) %></span>
+    </label>
+  <% end %>
+</fieldset>
         <label>Model default
           <select name="model">
             <option value="">Ikut default</option>
@@ -80,13 +82,15 @@
           <label>Nama
             <input name="name" value="<%= h(persona_label) %>" placeholder="<%= h(slug) %>">
           </label>
-          <label>Emoji
-            <select name="emoji">
-              <% (%w[🤖 🧭 ✍️ 📚 🧪 🎨 🛠️ 🔍 🧠 💼] | [ persona_emoji ]).each do |choice| %>
-                <option value="<%= h(choice) %>"<%= " selected" if choice == persona_emoji %>><%= h(choice) %></option>
-              <% end %>
-            </select>
-          </label>
+<fieldset class="emoji-picker">
+  <legend>Emoji</legend>
+  <% (%w[🤖 🧭 ✍️ 📚 🧪 🎨 🛠️ 🔍 🧠 💼] | [ persona_emoji ]).each do |choice| %>
+    <label class="emoji-choice">
+      <input type="radio" name="emoji" value="<%= h(choice) %>"<%= " checked" if choice == persona_emoji %>>
+      <span><%= h(choice) %></span>
+    </label>
+  <% end %>
+</fieldset>
           <label>Model default
             <select name="model">
               <option value=""<%= " selected" if persona_model_value.empty? %>>Ikut default</option>

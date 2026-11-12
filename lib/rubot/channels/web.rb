@@ -1833,25 +1833,36 @@ module Rubot
       def history(sid)
         return [] unless @app_config
 
-        # The transcript's position in the file is not the same number as its
-        # position in the archive: a trimmed session starts at `start`, so the
-        # absolute index of a message is `start + position`. Search hits are
-        # addressed by that index, and it is attached here — on the entry that
-        # will be drawn — because it is the only thing that can send a reader
-        # back to the message a hit came from.
-        messages, start = Session.transcript_with_start(
+        # The thread is drawn from the first message ever written, not from the
+        # point compaction stopped sending it to the model. Those are two
+        # different things — the rows are still there, only the request starts
+        # later — and drawing the second made a long conversation look like it
+        # had been cut in half. The seam is a marker entry instead, so nothing
+        # written is invisible here and the reader still sees where the model's
+        # window was rewritten.
+        archived = Session.archive_transcript(
           @app_config.workspace,
           sid,
           dir: @app_config.sessions_dir
         )
+        messages = archived[:messages]
+        cut = archived[:cut].to_i
+        summary = archived[:summary].to_s
         results = tool_results(messages)
         diffs = tool_diffs(messages)
 
         turns = []
         current = nil
+        seam_drawn = false
 
-        messages.each_with_index do |msg, position|
-          idx = start + position
+        # Reading from the top makes the position the absolute index, which is
+        # what search hits are addressed by: a hit names a message, and the
+        # entry it lands on is what the browser scrolls to.
+        messages.each_with_index do |msg, idx|
+          if !seam_drawn && cut.positive? && idx >= cut
+            turns << { kind: :note, idx: idx, last: idx, cut: cut, summary: summary }
+            seam_drawn = true
+          end
 
           case msg["role"]
           when "user"

@@ -4941,8 +4941,8 @@ module Rubot
       end
 
       # The transcript carries the rows in the order they happened and nothing
-      # else: with no pass numbers to read, the compact view cuts the log on the
-      # last call instead of guessing where a round began.
+      # else: no step markers, no pass numbers. A verbose persona keeps both
+      # rounds, because that is what its live turn showed.
       def test_a_replayed_transcript_stamps_nothing
         channel = channel_with_sessions(personas: { "rubot" => { "name" => "Rubot" } },
                                         sessions: { "web_rubot" => "Cek dua file" })
@@ -4952,7 +4952,7 @@ module Rubot
 
         assert(items.none? { |item| item[:kind] == :step }, "no marker rows")
         assert(items.none? { |item| item.key?(:round) }, "no pass numbers")
-        assert_equal %w[b.rb], items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
+        assert_equal %w[a.rb b.rb], items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
       end
 
       def test_a_verbose_persona_s_transcript_keeps_every_call

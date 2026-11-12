@@ -17,15 +17,18 @@ module Rubot
       @port = port
     end
 
-    # @return [Hash, nil] { messages:, meta:, start: } or nil when unknown
-    def load(id)
-      result = request(:load_session, id: id)
+    # @return [Hash, nil] { messages:, meta:, start: } or nil when unknown.
+    #   `all: true` reads from the first message ever written rather than from
+    #   the index the model's window starts at (see Store#load_session).
+    def load(id, all: false)
+      result = request(:load_session, id: id, all: all)
       return nil unless result
 
       {
         messages: result[:messages] || [],
         meta: result[:meta] || {},
-        start: result[:start].to_i
+        start: result[:start].to_i,
+        cut: result[:cut].to_i
       }
     end
 

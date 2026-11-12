@@ -805,6 +805,46 @@ module Rubot
       [ [], 0 ]
     end
 
+    # The conversation as the archive kept it, read from the first message ever
+    # written, plus where the model stopped being sent it.
+    #
+    # Compaction does not delete: it moves `messages_start` forward and keeps a
+    # summary of what it moved past. A reader who starts at `messages_start`
+    # therefore opens in the middle of a conversation that is still on disk, so
+    # this reads the table from the top and hands back the seam as a number the
+    # page can mark. `summary` is what replaced those messages, which is the
+    # only thing standing in for them in the request.
+    #
+    # @return [Hash] { messages: [Hash], cut: Integer, summary: String }
+    def self.archive_transcript(workspace, id, dir: nil)
+      dir ||= sessions_dir(workspace)
+      if (archive = store)
+        loaded = archive.load_session(id, all: true)
+        return { messages: [], cut: 0, summary: "" } if loaded.nil?
+
+        meta = loaded[:meta] || {}
+        return {
+          messages: normalize_utf8(loaded[:messages]),
+          cut: loaded[:cut].to_i,
+          summary: meta["summary"].to_s
+        }
+      end
+      return { messages: [], cut: 0, summary: "" } unless dir
+
+      path = File.join(dir, "#{id}.json")
+      return { messages: [], cut: 0, summary: "" } unless File.file?(path)
+
+      data = JSON.parse(File.read(path))
+      messages = data["messages"]
+      {
+        messages: messages.is_a?(Array) ? normalize_utf8(messages) : [],
+        cut: 0,
+        summary: data["summary"].to_s
+      }
+    rescue JSON::ParserError, SystemCallError, EncodingError
+      { messages: [], cut: 0, summary: "" }
+    end
+
     # The list shape the channels already expect from #describe. `updated_at` is
     # what a list prints as the age of a conversation; leaving it out made every
     # entry read as "unknown" once the archive answered instead of the files.
