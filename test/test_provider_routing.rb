@@ -80,8 +80,8 @@ class TestProviderRouting < Minitest::Test
   def test_a_rebuilt_provider_keeps_the_session_route
     base = "https://opencode.ai/zen/go/v1"
 
-    first = Rubot::Providers::OpenAI.new(settings(base, session_key: "web_rubot~20261113-025157"))
-    second = Rubot::Providers::OpenAI.new(settings(base, session_key: "web_rubot~20261113-025157"))
+    first = Rubot::Providers::OpenCode.new(settings(base, session_key: "web_rubot~20261113-025157"))
+    second = Rubot::Providers::OpenCode.new(settings(base, session_key: "web_rubot~20261113-025157"))
 
     refute_nil route_of(first)
     assert_equal route_of(first), route_of(second)
@@ -90,15 +90,15 @@ class TestProviderRouting < Minitest::Test
   def test_two_sessions_never_share_a_route
     base = "https://opencode.ai/zen/go/v1"
 
-    one = Rubot::Providers::OpenAI.new(settings(base, session_key: "session-one"))
-    two = Rubot::Providers::OpenAI.new(settings(base, session_key: "session-two"))
+    one = Rubot::Providers::OpenCode.new(settings(base, session_key: "session-one"))
+    two = Rubot::Providers::OpenCode.new(settings(base, session_key: "session-two"))
 
     refute_equal route_of(one), route_of(two)
   end
 
   def test_the_route_is_a_digest_of_the_session
     base = "https://opencode.ai/zen/go/v1"
-    provider = Rubot::Providers::OpenAI.new(settings(base, session_key: "web_rubot~20261113-081444"))
+    provider = Rubot::Providers::OpenCode.new(settings(base, session_key: "web_rubot~20261113-081444"))
 
     assert_equal Digest::SHA256.hexdigest("web_rubot~20261113-081444")[0, 32], route_of(provider)
   end
@@ -106,8 +106,8 @@ class TestProviderRouting < Minitest::Test
   def test_without_a_session_the_route_is_still_opaque_and_per_instance
     base = "https://opencode.ai/zen/go/v1"
 
-    one = Rubot::Providers::OpenAI.new(settings(base))
-    two = Rubot::Providers::OpenAI.new(settings(base))
+    one = Rubot::Providers::OpenCode.new(settings(base))
+    two = Rubot::Providers::OpenCode.new(settings(base))
 
     refute_nil route_of(one)
     refute_equal route_of(one), route_of(two), "an unstamped provider must not settle on a shared route"
@@ -115,7 +115,7 @@ class TestProviderRouting < Minitest::Test
 
   def test_a_configured_header_wins
     base = "https://opencode.ai/zen/go/v1"
-    provider = Rubot::Providers::OpenAI.new(
+    provider = Rubot::Providers::OpenCode.new(
       settings(base, session_key: "s", extra_headers: { ROUTE_HEADER => "pinned-route" })
     )
 
@@ -132,7 +132,7 @@ class TestProviderRouting < Minitest::Test
 
   def test_the_route_reaches_the_wire
     with_recording_server do |base, seen|
-      provider = Rubot::Providers::OpenAI.new(settings(base, session_key: "wire-session"))
+      provider = Rubot::Providers::OpenCode.new(settings(base, session_key: "wire-session"))
       provider.chat([ { "role" => "user", "content" => "halo" } ])
 
       assert_equal 1, seen.size
@@ -144,7 +144,7 @@ class TestProviderRouting < Minitest::Test
     with_recording_server do |base, seen|
       # Two providers, as a rebuild would produce, from the same session.
       2.times do
-        Rubot::Providers::OpenAI.new(settings(base, session_key: "same-session"))
+        Rubot::Providers::OpenCode.new(settings(base, session_key: "same-session"))
                         .chat([ { "role" => "user", "content" => "halo" } ])
       end
 

@@ -111,7 +111,7 @@ class TestProviders < Minitest::Test
 
   def test_opencode_go_adds_session_header
     config = make_config("api_base" => "https://opencode.ai/zen/go/v1")
-    provider = Rubot::Providers::OpenAI.new(config.provider_settings)
+    provider = Rubot::Providers::OpenCode.new(config.provider_settings)
     headers = provider.instance_variable_get(:@extra_headers)
     assert_match(/\A[0-9a-f]{32}\z/, headers["x-opencode-session"])
   end
