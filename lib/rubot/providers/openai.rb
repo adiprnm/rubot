@@ -21,18 +21,18 @@ module Rubot
       end
 
 
-      def chat(messages, tools: nil)
+      def chat(messages, tools: nil, on_retry: nil)
         reset_last_usage!
         payload = build_payload(messages, tools)
-        response = make_request(payload)
+        response = make_request(payload, on_retry: on_retry)
         track_usage(response["usage"])
         extract_content(response)
       end
 
-      def chat_stream(messages, tools: nil, &on_chunk)
+      def chat_stream(messages, tools: nil, on_retry: nil, &on_chunk)
         reset_last_usage!
         payload = build_payload(messages, tools, stream: true)
-        make_stream_request(payload, &on_chunk)
+        make_stream_request(payload, on_retry: on_retry, &on_chunk)
       end
 
       # GET /models — OpenAI-compatible providers
@@ -158,7 +158,7 @@ module Rubot
         @extra_headers.each { |name, value| request[name] = value.to_s }
       end
 
-      def make_request(payload)
+      def make_request(payload, on_retry: nil)
         Rubot::Cancellation.check!
         uri = URI("#{api_base}/chat/completions")
 
@@ -166,7 +166,7 @@ module Rubot
         # Nothing streams here, so the whole wait is one number: there is no
         # first byte to separate it from.
         started = Rubot::Timing.clock
-        response = with_retry do
+        response = with_retry(on_retry: on_retry) do
           http = Net::HTTP.new(uri.host, uri.port)
           http.use_ssl = uri.scheme == "https"
           http.open_timeout = 30
@@ -181,9 +181,11 @@ module Rubot
             http.request(request, JSON.generate(payload))
           end
         end
-        log_debug("Response: #{response.code} - #{response.body[0..500]}")
 
         unless response.code.to_i == 200
+          if quota_exhausted_response?(response)
+            raise QuotaExhaustedError.new(nil, message: "API error #{response.code}: #{response.body}")
+          end
           if response.code.to_i == 429
             raise RateLimitError.new(parse_retry_after(response))
           end
@@ -201,7 +203,7 @@ module Rubot
         body
       end
 
-      def make_stream_request(payload, &on_chunk)
+      def make_stream_request(payload, on_retry: nil, &on_chunk)
         Rubot::Cancellation.check!
         uri = URI("#{api_base}/chat/completions")
         log_debug("Stream request: #{JSON.generate(payload)}")
@@ -218,7 +220,7 @@ module Rubot
         started = Rubot::Timing.clock
         first_byte = nil
 
-        with_retry(retryable: -> { accumulated.empty? }) do
+        with_retry(retryable: -> { accumulated.empty? }, on_retry: on_retry) do
           http = Net::HTTP.new(uri.host, uri.port)
           http.use_ssl = uri.scheme == "https"
           http.open_timeout = 30
@@ -234,6 +236,9 @@ module Rubot
               unless response.code.to_i == 200
                 body = +""
                 response.read_body { |b| body << b }
+                if Rubot::Provider.quota_exhausted_text?(body)
+                  raise QuotaExhaustedError.new(nil, message: "API error #{response.code}: #{body}")
+                end
                 if response.code.to_i == 429
                   raise RateLimitError.new(parse_retry_after(response))
                 end
@@ -241,8 +246,6 @@ module Rubot
               end
 
               response.read_body do |chunk|
-                # The user may have stopped the turn: unwinding here closes the
-                # response and aborts the request instead of streaming the rest
                 # of the answer first.
                 Rubot::Cancellation.check!
                 buffer += chunk

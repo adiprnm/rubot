@@ -15,7 +15,14 @@ module Rubot
       # an unexpected failure instead of matching on a message string.
       PASSTHROUGH_ERRORS = {
         "Rubot::RateLimitError" => Rubot::RateLimitError,
-        "Rubot::Cancelled" => Rubot::Cancelled
+        "Rubot::Cancelled" => Rubot::Cancelled,
+        "Rubot::QuotaExhaustedError" => Rubot::QuotaExhaustedError,
+        "Rubot::QuotaError" => Rubot::QuotaExhaustedError,
+        "Rubot::UsageQuotaError" => Rubot::QuotaExhaustedError,
+        "Rubot::InsufficientQuotaError" => Rubot::QuotaExhaustedError,
+        "Rubot::QuotaExceededError" => Rubot::QuotaExhaustedError,
+        "Rubot::UsageQuotaExhaustedError" => Rubot::QuotaExhaustedError,
+        "Rubot::UsageLimitError" => Rubot::QuotaExhaustedError
       }.freeze
 
       attr_reader :session_id
@@ -134,6 +141,9 @@ module Rubot
         text = message.to_s
         if klass == Rubot::RateLimitError
           return Rubot::RateLimitError.new(nil, message: text)
+        end
+        if klass == Rubot::QuotaExhaustedError
+          return Rubot::QuotaExhaustedError.new(nil, message: text)
         end
         return klass.new(text) if klass
 

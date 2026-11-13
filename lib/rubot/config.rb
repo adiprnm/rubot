@@ -195,8 +195,8 @@ module Rubot
       ProviderSettings.new(
         provider: provider_name,
         model: model_id,
-        api_key: global_api_key || base_entry["api_key"] || ENV["RUBOT_API_KEY"] || ENV["OPENAI_API_KEY"],
-        api_base: base_entry["api_base"] || ENV["RUBOT_API_BASE"] || ENV["OPENAI_API_BASE"],
+        api_key: global_api_key || base_entry["api_key"] || api_key,
+        api_base: base_entry["api_base"] || api_base,
         max_tokens: max_tokens,
         temperature: temperature,
         debug: debug?,

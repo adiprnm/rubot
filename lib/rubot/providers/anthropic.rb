@@ -10,7 +10,7 @@ module Rubot
     class Anthropic < Provider
       API_VERSION = "2023-06-01"
 
-      def chat(messages, tools: nil)
+      def chat(messages, tools: nil, on_retry: nil)
         reset_last_usage!
         # Extract system prompt from messages
         system_msg = messages.find { |m| m["role"] == "system" }
@@ -18,19 +18,19 @@ module Rubot
         non_system = messages.reject { |m| m["role"] == "system" }
 
         payload = build_payload(non_system, tools, system_prompt)
-        response = make_request(payload)
+        response = make_request(payload, on_retry: on_retry)
         track_usage(response["usage"])
         extract_content(response)
       end
 
-      def chat_stream(messages, tools: nil, &on_chunk)
+      def chat_stream(messages, tools: nil, on_retry: nil, &on_chunk)
         reset_last_usage!
         system_msg = messages.find { |m| m["role"] == "system" }
         system_prompt = system_msg ? system_msg["content"] : nil
         non_system = messages.reject { |m| m["role"] == "system" }
 
         payload = build_payload(non_system, tools, system_prompt, stream: true)
-        make_stream_request(payload, &on_chunk)
+        make_stream_request(payload, on_retry: on_retry, &on_chunk)
       end
 
       def supports_mid_conversation_system?
@@ -202,12 +202,12 @@ module Rubot
         @config.api_key
       end
 
-      def make_request(payload)
+      def make_request(payload, on_retry: nil)
         Rubot::Cancellation.check!
         uri = URI("#{api_base}/v1/messages")
         log_debug("Request: #{JSON.generate(payload)}")
 
-        response = with_retry do
+        response = with_retry(on_retry: on_retry) do
           http = Net::HTTP.new(uri.host, uri.port)
           http.use_ssl = uri.scheme == "https"
           http.open_timeout = 30
@@ -222,9 +222,11 @@ module Rubot
             http.request(request, JSON.generate(payload))
           end
         end
-        log_debug("Response: #{response.code}")
 
         unless response.code.to_i == 200
+          if quota_exhausted_response?(response)
+            raise QuotaExhaustedError.new(nil, message: "Anthropic API error #{response.code}: #{response.body}")
+          end
           if response.code.to_i == 429
             raise RateLimitError.new(parse_retry_after(response))
           end
@@ -234,7 +236,7 @@ module Rubot
         JSON.parse(response.body)
       end
 
-      def make_stream_request(payload, &on_chunk)
+      def make_stream_request(payload, on_retry: nil, &on_chunk)
         Rubot::Cancellation.check!
         uri = URI("#{api_base}/v1/messages")
 
@@ -248,7 +250,7 @@ module Rubot
         stop_reason = nil
         saw_stop = false
 
-        with_retry(retryable: -> { accumulated.empty? }) do
+        with_retry(retryable: -> { accumulated.empty? }, on_retry: on_retry) do
           http = Net::HTTP.new(uri.host, uri.port)
           http.use_ssl = uri.scheme == "https"
           http.open_timeout = 30
@@ -264,6 +266,9 @@ module Rubot
               unless response.code.to_i == 200
                 body = +""
                 response.read_body { |b| body << b }
+                if Rubot::Provider.quota_exhausted_text?(body)
+                  raise QuotaExhaustedError.new(nil, message: "API error #{response.code}: #{body}")
+                end
                 if response.code.to_i == 429
                   raise RateLimitError.new(parse_retry_after(response))
                 end
@@ -271,8 +276,6 @@ module Rubot
               end
 
               response.read_body do |chunk|
-                # Stop at the next chunk when the turn was cancelled: raising
-                # here aborts the request instead of draining the stream.
                 Rubot::Cancellation.check!
                 buffer += chunk
                 while (newline_idx = buffer.index("\n"))

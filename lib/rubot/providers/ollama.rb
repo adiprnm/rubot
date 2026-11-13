@@ -8,18 +8,18 @@ require_relative "../provider"
 module Rubot
   module Providers
     class Ollama < Provider
-      def chat(messages, tools: nil)
+      def chat(messages, tools: nil, on_retry: nil)
         reset_last_usage!
         payload = build_payload(messages, tools)
-        response = make_request(payload)
+        response = make_request(payload, on_retry: on_retry)
         track_usage(ollama_usage(response))
         extract_content(response)
       end
 
-      def chat_stream(messages, tools: nil, &on_chunk)
+      def chat_stream(messages, tools: nil, on_retry: nil, &on_chunk)
         reset_last_usage!
         payload = build_payload(messages, tools, stream: true)
-        make_stream_request(payload, &on_chunk)
+        make_stream_request(payload, on_retry: on_retry, &on_chunk)
       end
 
       def format_tools(tools)
@@ -85,12 +85,12 @@ module Rubot
         @config.api_base || "http://localhost:11434"
       end
 
-      def make_request(payload)
+      def make_request(payload, on_retry: nil)
         Rubot::Cancellation.check!
         uri = URI("#{api_base}/api/chat")
         log_debug("Request: #{JSON.generate(payload)}")
 
-        response = with_retry do
+        response = with_retry(on_retry: on_retry) do
           http = Net::HTTP.new(uri.host, uri.port)
           http.use_ssl = uri.scheme == "https"
           http.open_timeout = 30
@@ -106,6 +106,9 @@ module Rubot
         log_debug("Response: #{response.code}")
 
         unless response.code.to_i == 200
+          if quota_exhausted_response?(response)
+            raise QuotaExhaustedError.new(nil, message: "Ollama API error #{response.code}: #{response.body}")
+          end
           if response.code.to_i == 429
             raise RateLimitError.new(parse_retry_after(response))
           end
@@ -115,7 +118,7 @@ module Rubot
         JSON.parse(response.body)
       end
 
-      def make_stream_request(payload, &on_chunk)
+      def make_stream_request(payload, on_retry: nil, &on_chunk)
         Rubot::Cancellation.check!
         uri = URI("#{api_base}/api/chat")
 
@@ -126,7 +129,7 @@ module Rubot
         done_reason = nil
         saw_done = false
 
-        with_retry(retryable: -> { accumulated.empty? }) do
+        with_retry(retryable: -> { accumulated.empty? }, on_retry: on_retry) do
           http = Net::HTTP.new(uri.host, uri.port)
           http.use_ssl = uri.scheme == "https"
           http.open_timeout = 30
@@ -140,6 +143,9 @@ module Rubot
               unless response.code.to_i == 200
                 body = +""
                 response.read_body { |b| body << b }
+                if Rubot::Provider.quota_exhausted_text?(body)
+                  raise QuotaExhaustedError.new(nil, message: "API error #{response.code}: #{body}")
+                end
                 if response.code.to_i == 429
                   raise RateLimitError.new(parse_retry_after(response))
                 end

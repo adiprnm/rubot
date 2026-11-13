@@ -300,7 +300,9 @@ module Rubot
     # @param message [String] The original message that caused the error
     # @return [String] A user-friendly error message
     def handle_error(error, message = nil)
-      msg = if rate_limit_error?(error)
+      msg = if quota_exhausted_error?(error)
+        "🚫 Usage quota exhausted. Check your plan/billing or switch to another model."
+      elsif rate_limit_error?(error)
         "⏳ Rate limited by the provider. Already retried automatically, please try again in a moment."
       elsif timeout_error?(error)
         "⏱️ The model provider did not respond in time. Please try again."
@@ -316,9 +318,18 @@ module Rubot
     # A 429 from the provider surfaces as RateLimitError in-process and, in
     # actor mode, as that same class once SessionHandle translates the event.
     def rate_limit_error?(error)
+      return false if quota_exhausted_error?(error)
       return true if error.is_a?(Rubot::RateLimitError)
 
       error.message.to_s.match?(/\b429\b|Rate limited/i)
+    end
+
+    # A quota-exhausted error surfaces as QuotaExhaustedError in-process and,
+    # in actor mode, as that same class once SessionHandle translates it.
+    def quota_exhausted_error?(error)
+      return true if error.is_a?(Rubot::QuotaExhaustedError)
+
+      Rubot::Provider.quota_exhausted_text?(error.message)
     end
 
     # Timeouts surface as Net::*Timeout in-process, but as an ActorError

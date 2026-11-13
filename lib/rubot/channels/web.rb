@@ -1345,7 +1345,7 @@ module Rubot
 
       # The provider that is not in the offered list, if any, is added by
       # `settings_provider_choices`; this is only what a fresh install sees.
-      PROVIDER_CHOICES = %w[openai anthropic ollama gemini deepseek groq mistral].freeze
+      PROVIDER_CHOICES = %w[opencode openai anthropic ollama gemini deepseek groq mistral].freeze
 
       # The three keys that are not scoped to a persona or a conversation: one
       # provider, one key, one default model for the whole install.

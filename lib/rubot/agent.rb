@@ -281,6 +281,7 @@ module Rubot
     #                     for a model that does not stream its reasoning.
     def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil,
                 on_assistant_text: nil, on_reasoning: nil, on_steer: nil, on_stopped: nil, on_usage: nil,
+                on_retry: nil,
                 stream: true, &on_chunk)
       # Fire any due cron jobs and collect their results
       cron_results = fire_due_cron_jobs
@@ -372,7 +373,7 @@ module Rubot
           if block_given? && stream
             live_chars = 0
             live_emitted_at = 0.0
-            @provider.chat_stream(messages, tools: tool_definitions) do |chunk, tool_data, reasoning|
+            @provider.chat_stream(messages, tools: tool_definitions, on_retry: on_retry) do |chunk, tool_data, reasoning|
               # Thinking arrives before (and between) answer chunks; the answer
               # itself is never delayed by it.
               on_reasoning&.call(reasoning) if reasoning && !reasoning.empty?
@@ -393,7 +394,7 @@ module Rubot
               yield chunk if chunk && block_given?
             end
           else
-            @provider.chat(messages, tools: tool_definitions)
+            @provider.chat(messages, tools: tool_definitions, on_retry: on_retry)
           end
         rescue Cancelled
           # The user stopped the turn while the provider was answering. The
@@ -2401,7 +2402,7 @@ end
       loop do
         break if rounds >= limit
 
-        result = @provider.chat(local_messages, tools: tool_definitions)
+        result = @provider.chat(local_messages, tools: tool_definitions, on_retry: on_retry)
         # A cron run is a separate, local transcript: count its tokens and cost,
         # but never let it become the anchor for /context's context size.
         record_usage(result, auxiliary: true, messages: local_messages)

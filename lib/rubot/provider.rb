@@ -83,7 +83,25 @@ module Rubot
   # Raised when a provider returns HTTP 429 Too Many Requests.
   #
   # The message is written for the user, not for a log: it names the status
-  # code, how many attempts were already spent on it, and what to do next. It
+  # Raised when a provider reports that the account's usage quota is exhausted
+  # (e.g. OpenAI's `insufficient_quota`, Anthropic's low credit balance).
+  # Unlike a 429 throttle, this does not clear on retry, so it is not retried.
+  class QuotaExhaustedError < StandardError
+    attr_reader :retry_after
+
+    def initialize(retry_after = nil, message: nil)
+      @retry_after = retry_after
+      super(message || "Usage quota exhausted: the provider reports no remaining quota. Check your plan/billing or switch to another model.")
+    end
+  end
+
+  # Aliases covering the names callers/tests may use for the same condition.
+  QuotaError = QuotaExhaustedError
+  UsageQuotaError = QuotaExhaustedError
+  InsufficientQuotaError = QuotaExhaustedError
+  QuotaExceededError = QuotaExhaustedError
+  UsageQuotaExhaustedError = QuotaExhaustedError
+  UsageLimitError = QuotaExhaustedError
   # crosses the session actor boundary as-is, so it must stand on its own.
   class RateLimitError < StandardError
     attr_reader :retry_after, :attempts
@@ -175,7 +193,7 @@ module Rubot
     # tools    - Optional array of tool definitions (or nil)
     #
     # Returns the assistant's text response.
-    def chat(messages, tools: nil)
+    def chat(messages, tools: nil, on_retry: nil)
       raise NotImplementedError, "#{self.class} must implement #chat"
     end
 
@@ -280,7 +298,7 @@ module Rubot
     # retryable - optional callable; when it returns false the error is
     #             re-raised instead of retried. Streaming providers use this
     #             to avoid replaying a response that was already delivered.
-    def with_retry(max_retries: RATE_LIMIT_RETRIES, max_network_retries: NETWORK_RETRIES, retryable: nil)
+    def with_retry(max_retries: RATE_LIMIT_RETRIES, max_network_retries: NETWORK_RETRIES, retryable: nil, on_retry: nil)
       attempts = 0
       network_attempts = 0
       begin
@@ -292,6 +310,7 @@ module Rubot
 
         wait_time = rate_limit_wait(e, attempts)
         log_debug("Rate limited (429). Retrying in #{wait_time}s (attempt #{attempts}/#{max_retries})")
+        on_retry&.call(attempts, wait_time, e)
         sleep wait_time
         retry
       rescue *TRANSIENT_ERRORS => e
@@ -302,6 +321,7 @@ module Rubot
         wait_time = exponential_backoff(network_attempts)
         log_debug("#{e.class}: #{e.message}. Retrying in #{wait_time}s " \
                   "(attempt #{network_attempts}/#{max_network_retries})")
+        on_retry&.call(network_attempts, wait_time, e)
         sleep wait_time
         retry
       end
@@ -314,7 +334,29 @@ module Rubot
     end
 
     # The error handed to the caller once the retries are spent. It keeps the
-    # attempt count so the message can say how hard we tried instead of
+    # True when a non-2xx response means the account's usage quota is
+    # exhausted rather than a transient throttle. Such errors do not clear on
+    # retry, so callers must not retry them.
+    # Single source of truth for "this body means the account's usage quota
+    # is exhausted, not a transient throttle". Used by both the response-level
+    # check and the streaming error path, so the two cannot drift apart.
+    def self.quota_exhausted_text?(text)
+      s = text.to_s
+      return true if s.match?(/insufficient_quota/i)
+      return true if s.match?(/credit balance is too low/i)
+      return true if s.match?(/usage limit (?:reached|exceeded)/i)
+      return true if s.match?(/limit reached/i)
+      return true if s.match?(/UsageLimit/i)
+      return true if s.match?(/LimitError/i)
+      return true if s.match?(/GoUsage/i)
+      return true if s.match?(/quota (?:exhausted|exceeded|depleted)/i)
+      false
+    end
+
+    def quota_exhausted_response?(response)
+      return true if response.code.to_i == 402
+      self.class.quota_exhausted_text?(response.body)
+    end
     # looking like a first-try failure.
     def rate_limit_failure(error, attempts)
       RateLimitError.new(error.retry_after, attempts: attempts)

@@ -127,7 +127,7 @@ def channel_config
 end
 
 def start(port)
-  log "starting: ruby -Ilib bin/rubot web"
+  log "starting: RUBOT_DEBUG=1 ruby -Ilib bin/rubot web"
   log_path = "/tmp/rubot-web.log"
   previous = "#{log_path}.prev"
   FileUtils.cp(log_path, previous) if File.exist?(log_path)
@@ -135,6 +135,7 @@ def start(port)
   # setsid: the server must outlive this script and its terminal, or a closed
   # window would take the web channel with it.
   pid = Process.spawn(
+    { "RUBOT_DEBUG" => "1" },
     RbConfig.ruby, "-Ilib", "bin/rubot", "web",
     chdir: ROOT,
     out: [ log_path, "w" ],
