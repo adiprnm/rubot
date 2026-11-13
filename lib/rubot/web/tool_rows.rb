@@ -25,11 +25,16 @@ module Rubot
         mode.to_s == "compact"
       end
 
-      # An edit the reader may have to answer for later. Nothing about the
-      # compact view is worth losing the row that says "this file was written":
-      # the diff under it is the receipt, and a row without a diff (a no-op
-      # write, a file too large to draw) still has to be there to be found.
-      MUTATING_OPS = %w[write append edit delete].freeze
+      # A write/append/delete the reader may have to answer for later. Nothing
+      # about the compact view is worth losing the row that says "this file was
+      # written": the diff under it is the receipt, and a row without a diff (a
+      # no-op write, a file too large to draw) still has to be there to be
+      # found.
+      #
+      # An edit is different: it only earns its row when it actually changed
+      # something, i.e. when a diff is drawn under it. An edit whose diff is
+      # empty (a no-op edit) is dropped in compact mode, the same as a read.
+      MUTATING_OPS = %w[write append delete].freeze
 
       # `items` with the log of old calls taken out.
       #
@@ -60,7 +65,9 @@ module Rubot
         kept = []
         list.each_with_index do |item, index|
           next kept << index unless item[:kind] == :tool
-          next kept << index if index == latest
+          # The latest call is the row on screen — unless it is an edit that
+          # changed nothing, which has no diff to show and is dropped like a read.
+          next kept << index if index == latest && !empty_edit?(item, list, index)
           next kept << index if keeps_call?(item)
           next kept << index if draws_a_diff?(list, index)
         end
@@ -107,6 +114,14 @@ module Rubot
           end
         end
         false
+      end
+
+      # An edit that changed nothing: no diff is drawn under it. Such a row is
+      # dropped in compact mode, the same as a read.
+      def self.empty_edit?(item, list, index)
+        return false unless item[:kind] == :tool
+        return false unless item[:op].to_s == "edit"
+        !draws_a_diff?(list, index)
       end
     end
   end

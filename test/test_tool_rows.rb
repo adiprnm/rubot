@@ -88,7 +88,8 @@ class TestToolRows < Minitest::Test
   # …but a call the reader has to come back for keeps its own row: the batch is
   # not a licence to hide a file the turn changed.
   def test_a_batch_still_shows_the_call_that_changed_a_file
-    items = [ tool("file_ops", op: "edit"), tool("read"), tool("grep") ]
+    items = [ tool("file_ops", op: "edit"), diff_item("<pre>a</pre>"),
+              tool("read"), tool("grep") ]
 
     assert_equal %w[file_ops grep], names(Rubot::Web::ToolRows.collapse(items))
   end
