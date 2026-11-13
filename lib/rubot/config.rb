@@ -73,7 +73,7 @@ module Rubot
     # provider, the one key for it, and the default model. A page that could
     # reach the rest of the file would be a config editor wearing a form's
     # labels, with none of the review.
-    SETTINGS = { "provider" => "provider", "api_key" => "api_key", "default_model" => "model" }.freeze
+    SETTINGS = { "provider" => "provider", "api_key" => "api_key", "default_model" => "model", "auxiliary_model" => "auxiliary_model" }.freeze
 
     # Lay saved settings over what config.yml says.
     #
@@ -227,8 +227,7 @@ module Rubot
     # a fifth as much and answers in a fraction of the time. Unset means "the
     # same model as the conversation", which is what every build did before.
     def auxiliary_model
-      raw = agent_defaults["auxiliary_model"] || agent_defaults["auxiliaryModel"] ||
-            data["auxiliary_model"]
+      raw = data["auxiliary_model"] || agent_defaults["auxiliary_model"] || agent_defaults["auxiliaryModel"]
       text = raw.to_s.strip
       text.empty? ? nil : text
     end
