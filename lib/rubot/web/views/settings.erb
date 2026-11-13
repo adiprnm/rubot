@@ -90,8 +90,19 @@
     </select>
   </label>
 
+  <label>Model auxiliary
+    <select name="auxiliary_model">
+      <% model_choices.each do |choice| %>
+        <option value="<%= h(choice[:value]) %>"<%= " selected" if choice[:value] == auxiliary_model %>><%= h(choice[:label]) %></option>
+      <% end %>
+      <% unless auxiliary_model.empty? || model_choices.any? { |choice| choice[:value] == auxiliary_model } %>
+        <option value="<%= h(auxiliary_model) %>" selected><%= h(auxiliary_model) %></option>
+      <% end %>
+    </select>
+  </label>
+
   <div class="settings-row">
-    <a class="btn" href="/<%= h(token_query) %>">Kembali</a>
+    <a class="btn" href="<%= h(back_url) %>">Kembali</a>
     <button class="btn primary" type="submit">Simpan</button>
   </div>
 </form>

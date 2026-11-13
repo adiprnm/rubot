@@ -793,7 +793,7 @@ module Rubot
         # WEBrick answers a missing header field with nil, and a redirect reads
         # the token cookie through it.
         def [](_key)
-          nil
+          @header[_key] || @header[_key.to_s]
         end
       end
 

@@ -1353,12 +1353,19 @@ module Rubot
         saved = req.query["saved"].to_s == "1"
         store = Session.store
 
+        # The back button returns the reader to wherever they came from, not to
+        # a fixed page: the settings page is reachable from any conversation,
+        # so a hard-coded destination would drop them somewhere unexpected.
+        referer = settings_referer(req)
+        back_url = referer.empty? ? "/#{token_query}" : referer
+
         res["Content-Type"] = "text/html; charset=utf-8"
         res["Cache-Control"] = "no-store"
         res.body = View.render(
           "settings",
           provider: @app_config&.provider.to_s,
           default_model: @app_config&.model.to_s,
+          auxiliary_model: @app_config&.auxiliary_model.to_s,
           key_set: !@app_config&.api_key.to_s.empty?,
           key_from_archive: !store&.setting("api_key").to_s.strip.empty?,
           provider_choices: settings_provider_choices,
@@ -1366,8 +1373,25 @@ module Rubot
           saved: saved,
           archived: !store.nil?,
           token_query: token_query,
+          back_url: back_url,
           asset_version: asset_version
         )
+      end
+
+      def settings_referer(req)
+        return "" unless req
+        value = nil
+        if req.respond_to?(:[])
+          value = req["Referer"]
+          value = req["HTTP_REFERER"] if value.nil? || value.to_s.strip.empty?
+        end
+        if (value.nil? || value.to_s.strip.empty?) && req.respond_to?(:header) && req.header.is_a?(Hash)
+          value = req.header["Referer"] || req.header["referer"] || req.header["HTTP_REFERER"]
+        end
+        if (value.nil? || value.to_s.strip.empty?) && req.respond_to?(:referer)
+          value = req.referer
+        end
+        value.to_s.strip
       end
 
       # The current provider is in the list even when it is not one of the ones
@@ -1387,7 +1411,8 @@ module Rubot
 
         values = {
           "provider" => form(req, "provider"),
-          "default_model" => form(req, "default_model")
+          "default_model" => form(req, "default_model"),
+          "auxiliary_model" => form(req, "auxiliary_model")
         }
         # An empty key field means "leave the key alone": it is a password box,
         # it never carries the current value back, and a form that blanked the
