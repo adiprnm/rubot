@@ -281,6 +281,7 @@ body {
 }
 
 .rail-brand {
+  flex-shrink: 0;
   display: grid;
   place-items: center;
   width: 2.2rem;
@@ -308,6 +309,8 @@ body {
   padding: 0.65rem 0 0;
   border-top: 1px solid var(--line-soft);
   list-style: none;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   scrollbar-width: none;
 }
@@ -364,6 +367,7 @@ body {
 /* ---------- new persona ------------------------------------------ */
 
 .rail-new {
+  flex-shrink: 0;
   position: relative;
   margin-top: auto;
   padding-top: 0.7rem;
@@ -1444,6 +1448,16 @@ body {
    you move between sessions. Cut with an ellipsis rather than wrapped: the
    strip is a header, not a title block. */
 .chat-head .sep { color: var(--fg-faint); }
+
+.chat-head .chat-settings-link {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  color: var(--fg-dim);
+  text-decoration: none;
+}
+.chat-head .chat-settings-link:hover { color: var(--fg); }
 
 .chat-head .session-name {
   min-width: 0;

@@ -10,8 +10,6 @@
       persona, named on hover, the way a chat app lists the places you can be.
       It stays narrow because a persona is a face, not a row of text. -%>
   <nav class="rail" aria-label="Persona">
-    <a class="rail-brand" href="/<%= h(token_query) %>" title="rubot" aria-label="rubot">r</a>
-
     <%= View.render("_rail", personas: personas, token_query: token_query) %>
 
     <%# The form opens as a dialog in the middle of the screen rather than
@@ -169,12 +167,8 @@
       </div>
 
       <%# Provider, key and the default model — the one screen that is about the
-          install rather than about a conversation or this device. A link, not a
-          panel: it is a page of its own, and the drawer is already long. -%>
-      <div class="settings-picker">
-        <span class="theme-label">install</span>
-        <a class="theme-swatch settings-link" href="/settings<%= h(token_query) %>">pengaturan</a>
-      </div>
+          install rather than about a conversation or this device. Lives in the
+          header on the right now, so the drawer stays short. -%>
     </div>
   </aside>
 </div>
