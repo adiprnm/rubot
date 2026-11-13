@@ -34,7 +34,7 @@ module Rubot
       # one stood. The stylesheet owns the keyframes (tool-row-swap); the number
       # is here because the turn has to know when the fade is over and stop
       # asking for it.
-      SWAP_SECONDS = 0.18
+      SWAP_SECONDS = 0.30
 
       attr_reader :id, :session_id, :response, :epoch, :prompt
 

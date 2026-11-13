@@ -2368,8 +2368,17 @@ body {
    change the eye reads without being told. A crossfade was the other option and
    was not taken — two layers of 10px mono text over each other is a blur for
    150ms, and a line of text is not a picture worth dissolving. */
-.tool-row.is-swapped { animation: tool-row-swap 180ms ease-out both; }
+.tool-row.is-swapped { animation: tool-row-swap 300ms ease-out both; }
 
+/* View Transitions (compact tool call): tune the root crossfade to match the
+   row swap's 180ms so a new call fades in and the previous one fades out
+   instead of popping. Only fires when the tool row changes identity (see
+   app.js); other swaps are left alone. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 300ms;
+  animation-timing-function: ease-out;
+}
 @keyframes tool-row-swap {
   from {
     opacity: 0;
