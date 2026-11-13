@@ -139,6 +139,8 @@ module Rubot
       case settings.provider.to_s.downcase
       when "openai", "openai_compatible", "azure", "deepseek", "groq", "gemini", "mistral", "perplexity"
         Providers::OpenAI.new(settings)
+      when "opencode", "opencode-go", "opencode_go"
+        Providers::OpenCode.new(settings)
       when "anthropic", "claude"
         Providers::Anthropic.new(settings)
       when "ollama"
