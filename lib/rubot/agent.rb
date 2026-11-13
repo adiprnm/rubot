@@ -52,6 +52,17 @@ module Rubot
 
     REDACTED_TOOL_CALL_ARGS_NOTICE = "\n... [%d chars of this old tool call's argument redacted; re-run the tool if you still need them]"
 
+    # What separates one prompt section from the next, and therefore what a
+    # patch can be split on when only some sections moved.
+    SECTION_SEPARATOR = "\n\n---\n\n"
+
+    # Heads a mid-conversation system message that carries newer text for
+    # sections the model was already given. Says what it is and which copy
+    # wins, because the request now holds both.
+    PROMPT_PATCH_HEADER = "# Prompt Update\n\n" \
+                          "Newer text for sections you were given earlier. Where one of them covers the " \
+                          "same ground as an earlier section, follow this one."
+
     # Sent after a truncated answer. It has to be explicit about *not*
     # restarting: a model asked to "continue" will otherwise begin again at
     # the first sentence.
@@ -754,7 +765,7 @@ module Rubot
       @session.model_preset = nil
       @active_preset_name = "default"
       @session.save!
-      @provider = Provider.build(settings.with_effort(thinking_level))
+      @provider = routed(settings.with_effort(thinking_level))
       @session_model
     end
 
@@ -767,9 +778,15 @@ module Rubot
       text = nil if text.empty?
       return nil if text && !Persona::THINKING_LEVELS.include?(text)
 
+      before = thinking_level
       @session.thinking_level = text
       @session.save!
-      @provider = build_provider(preset: @active_preset, effort: thinking_level)
+      # Only rebuild when the effort actually moves. A rebuild builds a new
+      # provider, and with it a new routing identity for the gateway's prompt
+      # cache: paying that on a setting that did not change is a full cache
+      # miss for a no-op, which is how a form that re-submits the current
+      # level wiped the prefix on every turn.
+      @provider = build_provider(preset: @active_preset, effort: thinking_level) unless thinking_level == before
       text
     end
 
@@ -1287,7 +1304,7 @@ module Rubot
     # Skeleton: only supported providers/models opt in; otherwise fall back to
     # repin. The delta computation is intentionally left to a follow-up.
     def append_system_addition(text)
-      return repin_system_prompt unless @provider.respond_to?(:supports_mid_conversation_system?) && @provider.supports_mid_conversation_system?
+      return repin_system_prompt unless mid_conversation_system?
 
       return false if text.to_s.strip.empty?
       if @session.respond_to?(:add_system_addition)
@@ -1298,10 +1315,51 @@ module Rubot
       true
     end
 
+    # True when this provider takes a `role: "system"` message in the middle of
+    # a conversation without losing the cached prefix in front of it. Measured
+    # on the OpenCode Go gateway: a system message inserted before the last
+    # user turn answered 200, and the request after it still reported the
+    # cached tokens.
+    def mid_conversation_system?
+      @provider.respond_to?(:supports_mid_conversation_system?) && @provider.supports_mid_conversation_system?
+    end
+
+    # Pick up whatever changed since the prompt was pinned.
+    #
+    # Dropping the pin is the honest way to make the model see new memory, and
+    # it costs the whole prefix: the system prompt is at the front, so a
+    # rebuilt one re-reads every token behind it — 25k to 29k in the sessions
+    # measured. Where the provider takes a mid-conversation system message,
+    # the same news arrives as a patch at the back: the sections that changed,
+    # and nothing in front of them re-read.
     def repin_system_prompt
       return false unless @session
 
+      pinned = @session.system_prompt_for(system_prompt_epoch)
+      if pinned && mid_conversation_system?
+        patch = system_prompt_patch(pinned)
+        # Nothing new is worth a request: a refresh that finds no change is a
+        # no-op, not a reason to burn the cache.
+        return patch.nil? ? false : @session.set_system_patch(patch)
+      end
+
       @session.clear_system_prompt!
+    end
+
+    # The sections of the newly composed prompt that the model has not been
+    # given yet, as one patch — or nil when every section is already known.
+    #
+    # Whole sections rather than a line diff: a section is the unit the prompt
+    # is built from, and half a section ("only the new memory line") reads as a
+    # fragment without the heading that says what it belongs to. A section that
+    # changed arrives in full and supersedes the earlier copy.
+    def system_prompt_patch(pinned)
+      known = [ pinned.to_s, Array(@session.system_additions).join(SECTION_SEPARATOR), @session.system_patch.to_s ]
+      fresh = compose_system_prompt.split(SECTION_SEPARATOR)
+      changed = fresh.reject { |section| section.strip.empty? || known.any? { |text| text.include?(section) } }
+      return nil if changed.empty?
+
+      "#{PROMPT_PATCH_HEADER}\n\n#{changed.join(SECTION_SEPARATOR)}"
     end
 
     # Fingerprint of the inputs that must reach the model the moment they
@@ -1505,7 +1563,7 @@ module Rubot
       # 4 on the same task. Costs ~30 tokens and buys back seconds per turn.
       parts << BATCH_REMINDER
 
-      parts.join("\n\n---\n\n")
+      parts.join(SECTION_SEPARATOR)
     end
 
     # Learn from the turn that just finished. Channels call this *after* they
@@ -1656,7 +1714,7 @@ module Rubot
       @session.model_preset = session_name || preset_name
       @session.model_override = nil
       @session.save!
-      @provider = Provider.build(settings.with_effort(thinking_level))
+      @provider = routed(settings.with_effort(thinking_level))
       active_model_preset
     end
 
@@ -1771,6 +1829,13 @@ module Rubot
         end
       end
 
+      # Newer text for sections the model was pinned with. Last on purpose: it
+      # has to read closer to the question than what it supersedes, and it sits
+      # behind the transcript, so a change here costs the block and nothing in
+      # front of it.
+      patch = @session.respond_to?(:system_patch) ? @session.system_patch : nil
+      messages << { "role" => "system", "content" => patch } if patch
+
       messages
     end
 
@@ -1840,6 +1905,19 @@ end
         @config.provider_settings(model_name)
       end
       settings = settings.with_effort(effort) unless effort.nil?
+      routed(settings)
+    end
+
+    # Build a provider that belongs to this session.
+    #
+    # The gateway keys its prompt cache on the routing header the provider
+    # sends, and a provider built from config alone had no conversation to
+    # stamp it with, so it invented one. Every rebuild therefore looked like a
+    # brand-new conversation to the cache, even though the model was answering
+    # the same one — the measured cost was a prompt that fell back to the
+    # pinned prefix alone (4,480 tokens) in the middle of a session.
+    def routed(settings)
+      settings = settings.with_session_key(@session.id) if settings.respond_to?(:with_session_key) && @session
       Provider.build(settings)
     end
 
@@ -2116,6 +2194,10 @@ end
       settings = @config.auxiliary_settings
       return @provider if settings.nil?
 
+      # Deliberately unstamped: these requests carry a different prompt
+      # (a summary, an extraction), and sending them under the conversation's
+      # routing header would let the gateway's cache store them as that
+      # conversation's prefix — the one route this agent needs left alone.
       @auxiliary_provider ||= Provider.build(settings)
     end
 

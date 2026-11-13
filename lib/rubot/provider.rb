@@ -11,10 +11,10 @@ module Rubot
   # mutating (and without sharing) the live Config object.
   class ProviderSettings
     attr_reader :provider, :model, :api_key, :api_base, :max_tokens, :temperature,
-                :extra_headers, :reasoning_effort
+                :extra_headers, :reasoning_effort, :session_key
 
     def initialize(provider:, model:, api_key:, api_base:, max_tokens:, temperature:,
-                   debug: false, extra_headers: {}, reasoning_effort: nil)
+                   debug: false, extra_headers: {}, reasoning_effort: nil, session_key: nil)
       @provider = provider
       @model = model
       @api_key = api_key
@@ -24,7 +24,28 @@ module Rubot
       @debug = debug
       @extra_headers = (extra_headers || {}).dup.freeze
       @reasoning_effort = normalize_effort(reasoning_effort)
+      @session_key = session_key.to_s.empty? ? nil : session_key.to_s.freeze
       freeze
+    end
+
+    # The same settings stamped with the session they belong to.
+    #
+    # A gateway that routes by conversation (OpenCode Go asks for
+    # `x-opencode-session`) keys its prompt cache on that route, so the value
+    # has to survive a provider rebuild: a model switch, a thinking-level
+    # change, a resumed session. Settings built from the config alone carry no
+    # conversation, and a provider given none has to invent one — inventing a
+    # new one per rebuild is what threw the cached prefix away.
+    def with_session_key(key)
+      text = key.to_s
+      return self if text.empty? || text == @session_key
+
+      ProviderSettings.new(
+        provider: @provider, model: @model, api_key: @api_key, api_base: @api_base,
+        max_tokens: @max_tokens, temperature: @temperature, debug: @debug,
+        extra_headers: @extra_headers, reasoning_effort: @reasoning_effort,
+        session_key: text
+      )
     end
 
     # The same settings with a different reasoning effort. A session-level
@@ -38,7 +59,8 @@ module Rubot
       ProviderSettings.new(
         provider: @provider, model: @model, api_key: @api_key, api_base: @api_base,
         max_tokens: @max_tokens, temperature: @temperature, debug: @debug,
-        extra_headers: @extra_headers, reasoning_effort: normalized
+        extra_headers: @extra_headers, reasoning_effort: normalized,
+        session_key: @session_key
       )
     end
 

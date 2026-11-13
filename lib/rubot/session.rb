@@ -61,7 +61,7 @@ module Rubot
     DEFAULT_MAX_MESSAGES = 400
 
     attr_reader :id, :messages, :workspace, :usage, :last_usage, :cost
-    attr_reader :task, :cwd, :cache_history, :cache_records, :system_additions
+    attr_reader :task, :cwd, :cache_history, :cache_records, :system_additions, :system_patch
     attr_accessor :summary, :forced_skill, :model_override, :model_preset, :thinking_level, :title
 
     # How many recent requests keep their cache share. Enough to see a pattern
@@ -152,6 +152,12 @@ module Rubot
       @cache_records = []
       @memory_backlog = []
       @system_additions = []
+      # Newer text for prompt sections the model already has. Kept apart from
+      # the pinned prompt and from #system_additions: it is replaced, not
+      # appended, because only the newest version of a section is worth
+      # sending and the block sits after the transcript, where it is re-read
+      # uncached on every request either way.
+      @system_patch = nil
       load!
     end
 
@@ -642,6 +648,20 @@ module Rubot
       true
     end
 
+    # Replace the text that supersedes parts of the pinned prompt. One patch,
+    # not a growing list: the newest reading of a section is the only one the
+    # request needs, and replacing it costs nothing extra because the block
+    # sits behind the transcript, where no prefix can be reused anyway.
+    def set_system_patch(text)
+      value = text.to_s
+      value = nil if value.strip.empty?
+      return false if value == @system_patch
+
+      @system_patch = value
+      save!
+      true
+    end
+
     def clear!
       # A clear opens a new window instead of emptying the archive: the next
       # message lands after what came before it, so no index is ever reused and
@@ -1075,6 +1095,7 @@ module Rubot
       data["system_prompt_epoch"] = @system_prompt_epoch if @system_prompt_epoch
       data["memory_backlog"] = @memory_backlog if @memory_backlog && !@memory_backlog.empty?
       data["system_additions"] = @system_additions if @system_additions && !@system_additions.empty?
+      data["system_patch"] = @system_patch if @system_patch
 
       # Generate before opening the file: JSON.pretty_generate can raise (e.g.
       # invalid UTF-8), and truncating first would leave an empty session file.
@@ -1138,7 +1159,8 @@ module Rubot
         "system_prompt" => @system_prompt,
         "system_prompt_epoch" => @system_prompt_epoch,
         "memory_backlog" => @memory_backlog,
-        "system_additions" => @system_additions
+        "system_additions" => @system_additions,
+        "system_patch" => @system_patch
       }.compact
     end
 
@@ -1380,6 +1402,7 @@ module Rubot
       @system_prompt_epoch = data["system_prompt_epoch"].is_a?(Hash) ? data["system_prompt_epoch"] : nil
       @memory_backlog = Array(data["memory_backlog"]).map(&:to_s)
       @system_additions = Array(data["system_additions"]).map(&:to_s)
+      @system_patch = data["system_patch"].to_s.empty? ? nil : data["system_patch"].to_s
     end
 
     # The session state as the archive holds it: the messages it returned (which
