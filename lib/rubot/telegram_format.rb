@@ -97,8 +97,12 @@ module Rubot
         lines = text.split("\n", -1)
         out = []
         i = 0
+        prev_numbered = false
+        tg_counter = nil
 
         while i < lines.length
+          was_prev_numbered = prev_numbered
+          prev_numbered = false
           line = lines[i]
 
           if (m = FENCE.match(line))
@@ -130,7 +134,20 @@ module Rubot
             out << "——————————"
             i += 1
           elsif (m = LIST_ITEM.match(line))
-            out << list_line(m)
+            if m[:marker].match?(/\A\d/)
+              n = m[:marker].to_i
+              if was_prev_numbered
+                tg_counter += 1
+              else
+                tg_counter = n
+              end
+              prev_numbered = true
+              suffix = m[:marker][-1]
+              out << list_line(m, "#{tg_counter}#{suffix}")
+            else
+              tg_counter = nil
+              out << list_line(m)
+            end
             i += 1
           else
             out << inline(line)
@@ -160,11 +177,12 @@ module Rubot
         %(<pre><code class="language-#{lang}">#{escaped}</code></pre>)
       end
 
-      def list_line(match)
+      def list_line(match, number_override = nil)
         indent = match[:indent]
         body   = match[:body]
+        marker = number_override || match[:marker]
 
-        return "#{indent}#{match[:marker]}#{match[:gap]}#{inline(body)}" unless match[:marker].match?(/\A[-*+]\z/)
+        return "#{indent}#{marker}#{match[:gap]}#{inline(body)}" unless marker.match?(/\A[-*+]\z/)
 
         if (task = TASK.match(body))
           box = task[:state].strip.empty? ? "☐" : "☑"

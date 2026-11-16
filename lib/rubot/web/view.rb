@@ -139,7 +139,18 @@ module Rubot
 
           if stripped.empty?
             flush_paragraph.call
-            flush_list.call
+            next_is_item = false
+            j = i + 1
+            while j < lines.length
+              candidate = lines[j].strip
+              if candidate.empty?
+                j += 1
+                next
+              end
+              next_is_item = !list_item(candidate).nil?
+              break
+            end
+            flush_list.call unless next_is_item
           elsif (block = stripped[/\A#{PLACEHOLDER}(\d+)#{PLACEHOLDER}\z/, 1])
             flush_paragraph.call
             flush_list.call

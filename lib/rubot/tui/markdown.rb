@@ -73,6 +73,8 @@ module Rubot
           segments   = []
           lines      = text.to_s.gsub(/\r\n?/, "\n").split("\n", -1)
           @in_code   = false
+          @prev_numbered = false
+          @numbered_counter = nil
 
           i = 0
           while i < lines.length
@@ -95,6 +97,8 @@ module Rubot
         private
 
         def block_line(line, segments)
+          was_prev_numbered = @prev_numbered
+          @prev_numbered = false
           fence = line.match(/\A\s*(`{3,}|~{3,})\s*(\S*)\s*\z/)
           if !@in_code && fence
             @in_code = true
@@ -147,8 +151,15 @@ module Rubot
 
           numbered = line.match(/\A\s*(\d+)[.)]\s+(.*\S)?\s*\z/m)
           if numbered
+            n = numbered[1].to_i
+            if was_prev_numbered
+              @numbered_counter += 1
+            else
+              @numbered_counter = n
+            end
+            @prev_numbered = true
             new_row(segments)
-            segments << list_marker("#{numbered[1]}.", :muted)
+            segments << list_marker("#{@numbered_counter}.", :muted)
             segments.concat(inline(numbered[2].to_s))
             return
           end
