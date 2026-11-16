@@ -1,9 +1,4 @@
-.working-band {
-  width: calc(100% - 3.2rem);
-  max-width: 52rem;
-  min-height: 0.8rem;
-  margin: 0.1rem auto 0.7rem;
-}
+  /* rubot web — chat surface for a terminal tool.
    Palette is Everforest dark, lifted from the TUI so both faces of rubot read
    as one product. Type: Source Serif for message text, Martian Mono only for
    values that really are machine strings (slug, session, tool, duration). */
