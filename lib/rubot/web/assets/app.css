@@ -3883,3 +3883,19 @@ a:active,
 .settings-picker .theme-label { grid-column: 1 / -1; }
 
 .settings-link { text-decoration: none; color: inherit; }
+
+/* ---------- compact layout for PWA / mobile ----------------------- */
+@media (max-width: 860px), (pointer: coarse) {
+  .working-band { min-height: 0.6rem; margin: 0.1rem auto 0.4rem; }
+  .thread { padding-bottom: 0.3rem; }
+  .composer { gap: 0.25rem; margin: 0 auto 0.15rem; padding: 0.25rem 0.4rem 0.25rem 0.8rem; }
+  .composer textarea { min-height: 1.4rem; font-size: 16px; line-height: 1.45; }
+  .status-line { gap: 0.5rem; padding: 0 0 0.2rem; }
+  .status-line .metrics { gap: 0.5rem; }
+  .status-line .metric { gap: 0.2rem; }
+  .status-line .usage-sheet { margin-left: 0.25rem; }
+  .session-settings { gap: 0.4rem; margin: -0.2rem auto 0.1rem; }
+  .session-setting-label { font-size: 8.5px; }
+  .session-select { font-size: 10px; padding: 0.12rem 0.8rem 0.12rem 0.2rem; }
+  .usage-panel { box-shadow: none; max-height: 45vh; background: var(--bg0); }
+}
