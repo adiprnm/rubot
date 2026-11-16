@@ -204,6 +204,9 @@ body {
 
 :focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 
+select:focus,
+select:focus-visible { outline: none; }
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -1622,6 +1625,7 @@ body {
    a prompt is emphasis rather than a document outline; and the code background
    has to sit on the bubble's own shade. */
 .msg.user .bubble.text { margin: 0; }
+.msg.user .bubble.text > *:last-child { margin-bottom: 0; }
 .msg.user .bubble :is(h1, h2, h3, h4, h5, h6) {
   margin: 0.45em 0 0.3em;
   font-size: 1rem;
@@ -3603,7 +3607,8 @@ body.lightbox-open { overflow: hidden; }
 }
 
 .session-select:hover { color: var(--fg); }
-.session-select:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+.session-select:focus,
+.session-select:focus-visible { outline: none; }
 /* An option list is drawn by the platform, so it keeps the page's own colours
    where the browser lets them through. The list itself is read at arm's
    length — a menu of 11px mono is a menu you have to lean into — so the
