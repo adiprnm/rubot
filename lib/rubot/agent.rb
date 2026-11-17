@@ -2402,7 +2402,10 @@ end
       loop do
         break if rounds >= limit
 
-        result = @provider.chat(local_messages, tools: tool_definitions, on_retry: on_retry)
+        # A cron turn has no channel callback to report retries to, so pass a
+        # no-op rather than the `on_retry` local from #process — that variable
+        # is not in scope here and used to raise NameError on every fired job.
+        result = @provider.chat(local_messages, tools: tool_definitions, on_retry: nil)
         # A cron run is a separate, local transcript: count its tokens and cost,
         # but never let it become the anchor for /context's context size.
         record_usage(result, auxiliary: true, messages: local_messages)

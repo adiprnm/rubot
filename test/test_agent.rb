@@ -128,7 +128,7 @@ class TestAgentRoundLimit < Minitest::Test
       @calls = 0
     end
 
-    def chat(_messages, tools: nil)
+    def chat(_messages, tools: nil, on_retry: nil)
       @calls += 1
       {
         "content" => "",
@@ -145,8 +145,8 @@ class TestAgentRoundLimit < Minitest::Test
       }
     end
 
-    def chat_stream(messages, tools: nil)
-      chat(messages, tools: tools)
+    def chat_stream(messages, tools: nil, on_retry: nil)
+      chat(messages, tools: tools, on_retry: on_retry)
     end
   end
 
@@ -173,6 +173,54 @@ class TestAgentRoundLimit < Minitest::Test
 
   def teardown
     FileUtils.remove_entry(@tmpdir) if @tmpdir && File.directory?(@tmpdir)
+  end
+
+  # A fired cron job runs through #process_cron, which calls the provider
+  # directly. It used to pass `on_retry`, a local of #process that is not in
+  # scope here, so every scheduled turn died with NameError before the model
+  # was ever asked. The provider below accepts the keyword to prove the call
+  # shape is right and records what it received.
+  class CronProvider
+    attr_reader :calls, :retry_values
+
+    def initialize
+      @calls = 0
+      @retry_values = []
+    end
+
+    def name
+      "openai"
+    end
+
+    def chat(_messages, tools: nil, on_retry: :missing)
+      @calls += 1
+      @retry_values << on_retry
+      { "content" => "cron answer", "finish_reason" => "stop" }
+    end
+  end
+
+  def test_process_cron_does_not_raise_name_error_on_retry
+    @tmpdir = Dir.mktmpdir
+    workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(workspace)
+    config_path = File.join(@tmpdir, "cron-config.yml")
+    File.write(config_path, {
+      "agents" => { "defaults" => { "workspace" => workspace } },
+      "models" => [ { "name" => "test", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ]
+    }.to_yaml)
+
+    provider = CronProvider.new
+    agent = Rubot::Agent.new(
+      config: Rubot::Config.new(config_path),
+      provider: provider,
+      session_id: "cron-retry"
+    )
+
+    response = agent.process_cron("Rangkuman berita", fresh: true)
+
+    assert_equal "cron answer", response
+    assert_equal 1, provider.calls
+    assert_equal [ nil ], provider.retry_values
   end
 
   def test_uses_configured_limit_instead_of_hardcoded_ten

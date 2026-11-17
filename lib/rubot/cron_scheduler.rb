@@ -352,6 +352,16 @@ module Rubot
       end
 
       due.map do |job|
+        # A job whose next_run is in the past was missed while the process was
+        # down. It still fires now (that is the catch-up), but say so: without
+        # this line a delayed run is indistinguishable from an on-time one in
+        # the log, which is how a silent delivery failure went unnoticed.
+        scheduled = Time.parse(job["next_run"]) rescue nil
+        if scheduled && (Time.now.utc - scheduled) > 300
+          warn "[cron] Catching up late job #{job['id']} (#{job['description']}), " \
+               "was due #{job['next_run']}"
+        end
+
         result = execute_job(job)
         update_after_run(job["id"], result)
         fire_result = {
