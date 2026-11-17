@@ -61,6 +61,7 @@ module Rubot
         register SendFile.new(safety_guard: @safety_guard)
         register SendFiles.new(safety_guard: @safety_guard)
         register Notify.new
+        register Instagram.new
       end
     end
   end

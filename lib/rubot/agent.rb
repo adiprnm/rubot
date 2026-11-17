@@ -161,6 +161,7 @@ module Rubot
       @tools = tools || Tools::Registry.new
       # Always inject safety guard into tools, even when passed from outside
       inject_safety_guard
+      inject_tool_context
 
       # Warn if safety guard is disabled
       unless @safety_guard.restrict_to_workspace
@@ -291,6 +292,10 @@ module Rubot
       @cancellation.start!
       Thread.current[:rubot_cancellation] = @cancellation
       stopped = false
+      # The tool registry is shared across sessions, so the persona that owns
+      # this turn has to be stamped on it now — not at boot, where a second
+      # persona's actor would silently overwrite the first one's scope.
+      inject_tool_persona
 
       # Reasoning from earlier turns is dropped from the request; only what is
       # produced inside this turn is kept, because a tool loop needs it.
@@ -322,6 +327,7 @@ module Rubot
       # holds the newest fragment; this holds all of them.
       answer = +""
       tool_rounds = 0
+      silent_answer = false
       continuations = 0
       reasked = false
       truncated = false
@@ -456,9 +462,16 @@ module Rubot
           # Forward the model's narration before it runs the tools. This is the
           # assistant text that accompanies the tool calls ("Let me check the
           # structure first."); without this callback it would be swallowed by
-          # the `response = ""` reset at the end of the round.
+          # the `response = ""` reset at the end of the round. A tool whose
+          # result is UI (the Instagram connect card) is the exception: its
+          # card is the answer, so a sentence in front of it is noise.
           narration = response.to_s.strip
-          on_assistant_text&.call(narration) unless narration.empty?
+          silent_batch = tool_calls.any? do |tc|
+            tool_name, args, ok = parse_tool_call(tc)
+            ok && (tool = @tools.get(tool_name)) && tool.respond_to?(:silent_operation?) &&
+              tool.silent_operation?(args)
+          end
+          on_assistant_text&.call(narration) unless narration.empty? || silent_batch
 
           # Deciding what may run comes first, in the order the model asked for
           # it: the guard may ask the reader a question, and a cancelled turn
@@ -534,6 +547,7 @@ module Rubot
           # none of them needs another's output: run them together and report
           # in request order, which keeps the transcript and the UI identical
           # to a sequential run.
+          silent_answer = false
           execute_tool_calls(pending).each do |call|
             tool_result = call[:result]
             ui_diff = file_ui_diff(call[:snapshot], tool_result)
@@ -544,6 +558,12 @@ module Rubot
             # A successful write carries its before/after text so the TUI can
             # rebuild the diff on /resume.
             @session.add("tool", tool_result, tool_call_id: call[:id], ui_diff: ui_diff)
+
+            # A tool that answered with UI has nothing for the model to say.
+            # End the turn here instead of asking for a reply that would only
+            # restate the button the reader is already looking at.
+            tool = @tools.get(call[:name])
+            silent_answer ||= tool && tool.respond_to?(:silent_result?) && tool.silent_result?(tool_result)
           end
 
           # Continue the loop to get the next response
@@ -560,7 +580,7 @@ module Rubot
           # request, so the context figure moves before the provider does.
           emit_usage(on_usage)
 
-          break if stopped
+          break if stopped || silent_answer
         elsif response.to_s.strip.empty? && !reasked
           # Nothing the user can read came back. With tools in play that means
           # the model stopped without reporting; with none it means the output
@@ -598,7 +618,9 @@ module Rubot
         end
       end
 
-      # Add final assistant response to session (only if not already added via tool-call branch)
+      # Add final assistant response to session (only if not already added via tool-call branch).
+      # A silent tool's answer is the UI it produced, so no assistant text is
+      # stored — and no fallback summary is invented for it either.
       @session.add("assistant", response, reasoning_content: reasoning_content) if !stopped && !response.to_s.empty?
 
       # Ran out of continuations: say so rather than ending mid-sentence with
@@ -647,7 +669,7 @@ module Rubot
       # Guard: if the LLM produced only tool calls with no text content
       # (e.g. read_file → grep → etc.), return the cron/tool summary or
       # a fallback so the user never gets a silent drop.
-      if combined.empty?
+      if combined.empty? && !silent_answer
         fallback = build_fallback_response(rounds, tool_rounds: tool_rounds)
         combined = fallback if fallback && !fallback.empty?
       end
@@ -843,11 +865,13 @@ module Rubot
         # persona field remembering to join the fingerprint.
         @session.clear_system_prompt!
         @session.save!
+        inject_tool_persona
         return nil
       end
 
       @persona = persona
       @session.model_override = nil
+      inject_tool_persona
 
       if persona.preset
         source = @config.model_preset(persona.preset)
@@ -1141,6 +1165,19 @@ module Rubot
       `build.sh` wrappers) is the exception: run it as-is, do not port it.
     PROMPT
 
+    # A tool whose answer is a card has nothing for the model to say. Without
+    # this the model narrates the click and then writes a closing sentence on
+    # top of a button the reader can already see.
+    SILENT_TOOL_RULE = <<~PROMPT.strip.freeze
+      # Tools That Answer Themselves
+
+      The `instagram` tool's `connect` operation draws a Connect card in the
+      conversation. When the user asks to connect Instagram, call that tool
+      immediately: no sentence before the call, no sentence after it. The card
+      is the entire answer. Do not claim the account is connected — the user
+      still has to press the button.
+    PROMPT
+
     NARRATION_RULE = <<~PROMPT.strip.freeze
       # Progress Narration
 
@@ -1408,7 +1445,7 @@ module Rubot
     # the epoch, or a session that is already running keeps answering under the
     # rules it was pinned with.
     def shipped_rules
-      [ FILE_DELIVERY_RULE, FILE_DELIVERY_SINGLE_RULE, NOTIFY_RULE, BATCH_REMINDER ].join("\u0000")
+      [ FILE_DELIVERY_RULE, FILE_DELIVERY_SINGLE_RULE, NOTIFY_RULE, SILENT_TOOL_RULE, BATCH_REMINDER ].join("\u0000")
     end
 
     # The persona parts that reach the prompt: its own instructions and the
@@ -1464,6 +1501,9 @@ module Rubot
 
       # 1d. File edits go through the file tool (diff view + confirmation)
       parts << FILE_EDIT_RULE
+
+      # 1d-bis. A card is the whole answer; no narration around it.
+      parts << SILENT_TOOL_RULE if tool_names.include?("instagram")
 
       # 1e. When a finished turn may announce itself. Only when the tool is
       # there to be called: a prompt that names a tool this agent does not
@@ -1775,6 +1815,33 @@ module Rubot
       @tools.all.each do |tool|
         next unless tool.respond_to?(:safety_guard=)
         tool.safety_guard = @safety_guard
+      end
+    end
+
+    # Give tools the context they need to reach the archive and to scope what
+    # they find there. A session actor runs on a non-main Ractor, where SQLite
+    # cannot be opened; the Instagram tool uses the port to reach StoreService
+    # on the main Ractor, and the persona slug to see only its own accounts.
+    #
+    # The registry is shared by every session actor, so the persona cannot be
+    # stamped once at boot: two personas answering at the same time would keep
+    # overwriting each other's slug. It is set at the start of every turn from
+    # this agent's own persona instead (see #inject_tool_persona).
+    def inject_tool_context
+      return unless @tools.respond_to?(:all)
+      port = @archive&.instance_variable_get(:@port)
+      @tools.all.each do |tool|
+        tool.store_port = port if port && tool.respond_to?(:store_port=)
+      end
+      inject_tool_persona
+    end
+
+    def inject_tool_persona
+      return unless @tools.respond_to?(:all)
+
+      slug = @persona&.slug.to_s
+      @tools.all.each do |tool|
+        tool.persona = slug if tool.respond_to?(:persona=)
       end
     end
 
@@ -2418,7 +2485,11 @@ end
       loop do
         break if rounds >= limit
 
-        # A cron turn has no channel callback to report retries to, so pass a
+        # A fired job runs on this agent's own persona, but the tool registry is
+      # shared — stamp the scope before the turn reaches any tool.
+      inject_tool_persona
+
+      # A cron turn has no channel callback to report retries to, so pass a
         # no-op rather than the `on_retry` local from #process — that variable
         # is not in scope here and used to raise NameError on every fired job.
         result = @provider.chat(local_messages, tools: tool_definitions, on_retry: nil)

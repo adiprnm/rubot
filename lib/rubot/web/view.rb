@@ -960,13 +960,37 @@ module Rubot
         # partial call in ERB, so the template only ever says "draw the
         # timeline up to here".
         def timeline(turn)
-          View.turn_body(turn)
+          token = respond_to?(:token_query) ? token_query.to_s : ""
+          accounts = respond_to?(:ig_accounts) ? ig_accounts : []
+          linkable = respond_to?(:ig_linkable_accounts) ? ig_linkable_accounts : []
+          persona = respond_to?(:ig_persona) ? ig_persona.to_s : ""
+          View.turn_body(turn, token_query: token, ig_accounts: accounts,
+                              ig_linkable_accounts: linkable, ig_persona: persona)
         end
 
         # A partial rendered by a test has no files unless the caller passes
         # them, and `_attachments` should not have to spell that out.
         def attachments
           []
+        end
+
+        # The connect card defaults to no linked accounts when a caller (a
+        # test, or a page outside the channel) has no Instagram status to pass.
+        # The channel's own locals override this.
+        def ig_accounts
+          []
+        end
+
+        def ig_linkable_accounts
+          []
+        end
+
+        def ig_persona
+          ""
+        end
+
+        def token_query
+          ""
         end
 
         def context
@@ -987,8 +1011,10 @@ module Rubot
         # The row that says the turn is still running is not part of it — it
         # lives in the band above the composer, so the timeline stays a record
         # of the work rather than a place the last row keeps sliding down.
-        def turn_body(turn)
-          render("_timeline", items: turn.items)
+        def turn_body(turn, token_query: "", ig_accounts: [], ig_linkable_accounts: [], ig_persona: "")
+          render("_timeline", items: turn.items, token_query: token_query,
+                              ig_accounts: ig_accounts, ig_linkable_accounts: ig_linkable_accounts,
+                              ig_persona: ig_persona)
         end
 
         private

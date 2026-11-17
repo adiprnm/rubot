@@ -101,6 +101,80 @@
     </select>
   </label>
 
+  <fieldset class="settings-section">
+    <legend>Instagram</legend>
+
+    <label>App ID
+      <input type="text" name="instagram_app_id" value="<%= h(ig_app_id) %>"
+             autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+             placeholder="dari Meta App">
+    </label>
+
+    <label>App Secret
+      <input type="password" name="instagram_app_secret" value=""
+             autocomplete="new-password" autocapitalize="off" autocorrect="off"
+             spellcheck="false"
+             placeholder="<%= ig_secret_set ? "sudah tersimpan — kosongkan untuk tidak mengubah" : "belum ada" %>">
+    </label>
+    <% if ig_secret_set %>
+      <label class="settings-check">
+        <input type="checkbox" name="clear_ig_secret" value="1">
+        Hapus App Secret dari database
+      </label>
+    <% end %>
+
+    <label>Redirect URI
+      <input type="url" name="instagram_redirect_uri" value="<%= h(ig_redirect_uri) %>"
+             autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+             placeholder="https://nama.ts.net/instagram/callback">
+    </label>
+    <p class="settings-hint">
+      Daftarkan URI ini di Meta App → Facebook Login → Valid OAuth Redirect URIs.
+      Harus HTTPS (localhost boleh HTTP).
+    </p>
+
+    <label>Page ID (opsional)
+      <input type="text" name="instagram_page_id" value="<%= h(ig_page_id) %>"
+             autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+             placeholder="ID Facebook Page, mis. 123456789012345">
+    </label>
+    <p class="settings-hint">
+      Isi kalau <code>/me/accounts</code> Meta balik kosong. Ambil dari Page →
+      Tentang → ID Halaman, lalu rubot akan query Page itu langsung.
+    </p>
+
+    <p class="settings-hint">
+      Akun yang terhubung di persona <strong><%= h(ig_persona) %></strong>:
+    </p>
+    <% if ig_accounts.empty? %>
+      <p class="settings-hint">Belum ada. Ketik "connect ke instagram" di chat untuk mulai.</p>
+    <% else %>
+      <ul class="ig-account-list">
+        <% ig_accounts.each do |acc| -%>
+          <li class="ig-account-row">
+            <span class="ig-account-name">
+              <span class="ig-check" aria-hidden="true">✓</span>
+              @<%= h(acc["username"]) %><% if acc["is_default"] %> <span class="ig-default-label">(default)</span><% end %>
+            </span>
+          </li>
+        <% end -%>
+      </ul>
+      <label class="settings-check">
+        <input type="checkbox" name="ig_disconnect" value="1">
+        Putuskan semua akun Instagram persona ini
+      </label>
+    <% end %>
+    <% unless ig_linkable_accounts.empty? -%>
+      <p class="settings-hint">Akun yang sudah terhubung di persona lain — centang untuk link ke persona ini tanpa OAuth:</p>
+      <% ig_linkable_accounts.each do |acc| -%>
+        <label class="settings-check">
+          <input type="checkbox" name="ig_link" value="<%= h(acc["username"]) %>">
+          @<%= h(acc["username"]) %>
+        </label>
+      <% end -%>
+    <% end -%>
+  </fieldset>
+
   <p class="settings-hint">
     <a href="/settings?refresh=1<%= h(token_query.empty? ? "" : "&" + token_query.sub(/^\?/, "")) %>">Refresh daftar model</a>
   </p>

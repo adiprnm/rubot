@@ -3913,3 +3913,131 @@ a:active,
   .session-select { font-size: 10px; padding: 0.12rem 0.8rem 0.12rem 0.2rem; }
   .usage-panel { box-shadow: none; max-height: 45vh; background: var(--bg0); }
 }
+
+/* ---------- instagram -------------------------------------------- */
+.settings-section {
+  margin: 1rem 0 0.9rem;
+  padding: 0.8rem 0 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.settings-section legend {
+  padding: 0 0.4rem 0 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--fg);
+}
+
+/* The connect card sits in the timeline like a message, so a refresh in the
+   middle of a turn still draws the button. The logo is drawn rather than
+   fetched: an external image would be a request Meta can track. */
+.ig-connect-card {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 0.5rem 0;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg1);
+}
+
+/* Linked accounts stack below the Connect button so adding a second one never
+   hides the first. Each row is one account with its own Putuskan button. */
+.ig-account-list {
+  flex: 1 1 100%;
+  list-style: none;
+  margin: 0.2rem 0 0;
+  padding: 0.45rem 0 0;
+  border-top: 1px solid var(--line);
+}
+
+.ig-account-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.25rem 0;
+}
+
+.ig-account-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--fg);
+}
+
+.ig-default-label {
+  color: var(--fg-faint);
+  font-size: 11.5px;
+}
+
+.ig-logo {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  color: #e1306c;
+}
+
+.ig-logo svg { width: 100%; height: 100%; }
+
+.ig-connect-text {
+  flex: 1 1 12rem;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--fg-dim);
+}
+
+.ig-connect-btn { flex: 0 0 auto; white-space: nowrap; text-decoration: none; }
+
+/* The button is a form submit, so pressing it starts the OAuth redirect. It
+   goes disabled the moment it is pressed and says so, rather than sitting
+   there looking untouched while Meta's round trip is in flight. */
+.ig-connect-form { display: inline-flex; flex: 0 0 auto; margin: 0; }
+
+.ig-connect-btn:disabled { cursor: progress; }
+
+.ig-spinner {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 0.35rem;
+  vertical-align: -1px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: ig-spin 0.6s linear infinite;
+}
+
+@keyframes ig-spin { to { transform: rotate(360deg); } }
+
+/* The state after the callback: a plain label, not a button — there is nothing
+   left to press, and it must not look like a link that can be clicked again. */
+.ig-connected {
+  border-color: var(--green);
+  color: var(--green);
+  cursor: default;
+}
+
+.ig-check { margin-right: 0.3rem; }
+
+/* The way out, beside the connected label. Quiet by default so it does not
+   compete with the state it is about to undo; the confirm dialog is the guard
+   against a stray press dropping the token. */
+.ig-disconnect-form { display: inline-flex; flex: 0 0 auto; margin: 0; }
+
+.ig-disconnect-btn { color: var(--fg-faint); }
+
+.ig-disconnect-btn:disabled { cursor: progress; }
+
+/* An account connected under another persona: one click links it here without
+   another OAuth round trip. Quiet like the disconnect button, since it is an
+   optional convenience rather than the main action on the card. */
+.ig-link-form { display: inline-flex; flex: 0 0 auto; margin: 0; }
+
+.ig-link-btn { color: var(--fg-dim); }
+
+.ig-link-btn:disabled { cursor: progress; }

@@ -1,0 +1,79 @@
+<%# The connect card the instagram tool asked for. It is a timeline item like
+    any other so a refresh mid-answer still draws the button. The button opens
+    the OAuth route in a new tab (the conversation stays put); pressing it
+    disables the button and shows a spinner while the tab opens, and the
+    callback's broadcast swaps this whole card in the original tab without a
+    reload. The button stays available even when accounts are already linked —
+    that is how a second account is added. Linked accounts are listed below it,
+    each with its own Putuskan button. -%>
+<div class="ig-connect-card" id="ig-status">
+  <span class="ig-logo" aria-hidden="true">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+      <rect x="2.5" y="2.5" width="19" height="19" rx="5.5"></rect>
+      <circle cx="12" cy="12" r="4.2"></circle>
+      <circle cx="17.6" cy="6.5" r="1.1" fill="currentColor" stroke="none"></circle>
+    </svg>
+  </span>
+  <span class="ig-connect-text">Hubungkan akun Instagram Business/Creator kamu</span>
+  <form class="ig-connect-form" method="get" action="/instagram/connect<%= h(token_query) %>"
+        target="_blank" rel="noopener noreferrer"
+        x-data="{ busy: false }"
+        @submit="busy = true">
+    <input type="hidden" name="persona" value="<%= h(ig_persona) %>">
+    <button class="btn primary ig-connect-btn" type="submit" :disabled="busy"
+            :aria-busy="busy ? 'true' : 'false'">
+      <span class="ig-spinner" aria-hidden="true" x-show="busy"></span>
+      <span x-text="busy ? 'Menghubungkan…' : 'Connect dengan Instagram'">Connect dengan Instagram</span>
+    </button>
+  </form>
+<% unless ig_accounts.empty? -%>
+  <ul class="ig-account-list">
+    <% ig_accounts.each do |acc| -%>
+      <li class="ig-account-row">
+        <span class="ig-account-name">
+          <span class="ig-check" aria-hidden="true">✓</span>
+          @<%= h(acc["username"]) %><% if acc["is_default"] %> <span class="ig-default-label">(default)</span><% end %>
+        </span>
+        <form class="ig-disconnect-form" method="post"
+              action="/instagram/disconnect<%= h(token_query) %>"
+              hx-post="/instagram/disconnect<%= h(token_query) %>"
+              hx-target="#ig-status" hx-swap="outerHTML"
+              hx-confirm="Putuskan akun Instagram @<%= h(acc["username"]) %>?"
+              x-data="{ busy: false }"
+              @submit="busy = true">
+          <input type="hidden" name="account" value="<%= h(acc["username"]) %>">
+          <input type="hidden" name="persona" value="<%= h(ig_persona) %>">
+          <button class="btn ig-disconnect-btn" type="submit" :disabled="busy"
+                  :aria-busy="busy ? 'true' : 'false'">
+            <span class="ig-spinner" aria-hidden="true" x-show="busy"></span>
+            <span x-text="busy ? 'Memutus…' : 'Putuskan'">Putuskan</span>
+          </button>
+        </form>
+      </li>
+    <% end -%>
+  </ul>
+<% end -%>
+<% unless ig_linkable_accounts.empty? -%>
+  <ul class="ig-account-list ig-linkable-list">
+    <% ig_linkable_accounts.each do |acc| -%>
+      <li class="ig-account-row">
+        <span class="ig-account-name">@<%= h(acc["username"]) %> <span class="ig-default-label">(akun existing)</span></span>
+        <form class="ig-link-form" method="post"
+              action="/instagram/link<%= h(token_query) %>"
+              hx-post="/instagram/link<%= h(token_query) %>"
+              hx-target="#ig-status" hx-swap="outerHTML"
+              x-data="{ busy: false }"
+              @submit="busy = true">
+          <input type="hidden" name="account" value="<%= h(acc["username"]) %>">
+          <input type="hidden" name="persona" value="<%= h(ig_persona) %>">
+          <button class="btn ig-link-btn" type="submit" :disabled="busy"
+                  :aria-busy="busy ? 'true' : 'false'">
+            <span class="ig-spinner" aria-hidden="true" x-show="busy"></span>
+            <span x-text="busy ? 'Menghubungkan…' : 'Link akun ini'">Link akun ini</span>
+          </button>
+        </form>
+      </li>
+    <% end -%>
+  </ul>
+<% end -%>
+</div>

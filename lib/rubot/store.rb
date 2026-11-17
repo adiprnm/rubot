@@ -70,7 +70,7 @@ module Rubot
     SNIPPET_OPEN = "\u0002"
     SNIPPET_CLOSE = "\u0003"
 
-    attr_reader :path, :migrations_dir
+    attr_reader :path, :migrations_dir, :db
 
     # Where the archive lives for a given sessions directory: next to the JSON
     # files it replaces, so config.yml's own directory stays the single place

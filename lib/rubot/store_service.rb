@@ -137,8 +137,33 @@ module Rubot
         @store.cache_records(arguments.fetch(:session_id), limit: arguments.fetch(:limit, 50))
       when :counts
         @store.counts
+      when :ig_settings
+        @store.settings
+      when :ig_execute
+        @store.db.execute(arguments.fetch(:sql), arguments.fetch(:params, []))
+      when :ig_first_row
+        @store.db.get_first_row(arguments.fetch(:sql), arguments.fetch(:params, []))
+      when :ig_first_value
+        @store.db.get_first_value(arguments.fetch(:sql), arguments.fetch(:params, []))
+      when :ig_last_insert_row_id
+        @store.db.last_insert_row_id
+      when :ig_changes
+        @store.db.changes
+      when :ig_transaction
+        @store.db.transaction { InstagramService.run_statements(@store, arguments.fetch(:statements, [])) }
+        true
       else
         raise ArgumentError, "unknown store operation: #{operation.inspect}"
+      end
+    end
+
+    # Run a batch of plain SQL statements inside one transaction. Only used by
+    # the Instagram operations that must be atomic (re-pointing the default
+    # account); the statements and their params are plain arrays that crossed
+    # the Ractor boundary, so nothing unshareable is touched here.
+    module InstagramService
+      def self.run_statements(store, statements)
+        statements.each { |spec| store.db.execute(spec.fetch("sql"), spec.fetch("params", [])) }
       end
     end
 

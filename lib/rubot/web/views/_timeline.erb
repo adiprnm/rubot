@@ -24,6 +24,9 @@
 <%= View.render("_message", role: "user", text: item[:text]) %>
 <% when :attachments -%>
 <%= View.render("_attachments", attachments: item[:list]) %>
+<% when :instagram_connect -%>
+<%= View.render("_instagram_connect", token_query: token_query, ig_accounts: ig_accounts,
+                                      ig_linkable_accounts: ig_linkable_accounts, ig_persona: ig_persona) %>
 <% when :text -%>
 <div class="text<%= item[:live] ? " is-live" : "" %>"><%= fmt(item[:text]) %></div>
 <% when :diff -%>

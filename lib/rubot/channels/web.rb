@@ -134,6 +134,13 @@ module Rubot
       # Where the token form posts. Not under /s/ or /p/ because it belongs to
       # the way in rather than to any conversation behind it.
       UNLOCK_PATH = "/unlock"
+      # Instagram's OAuth endpoints. The callback is where Meta sends the
+      # browser back; it is not behind a session id because the account belongs
+      # to the install, not to a conversation.
+      IG_CONNECT_PATH = "/instagram/connect"
+      IG_CALLBACK_PATH = "/instagram/callback"
+      IG_DISCONNECT_PATH = "/instagram/disconnect"
+      IG_LINK_PATH = "/instagram/link"
 
       ASSETS = File.expand_path("../web/assets", __dir__)
       VENDOR = File.expand_path("../../../vendor/web", __dir__)
@@ -209,6 +216,7 @@ module Rubot
       def start
         @running = true
         start_cron_listener { |result| handle_cron_fire(result) } if actor_mode?
+        start_instagram_ticker
         ensure_default_persona
 
         @server = WEBrick::HTTPServer.new(
@@ -233,6 +241,7 @@ module Rubot
 
       def stop
         @running = false
+        @instagram_thread&.join(2)
         @server&.shutdown
       end
 
@@ -530,8 +539,16 @@ module Rubot
         # rendered page does. It has to run before the check below, obviously —
         # the token is what it is asking for.
         return unlock(req, res) if method == "POST" && path == UNLOCK_PATH
+        # Meta cannot carry the install's token, so the callback is reached
+        # with the one-time `state` instead. The connect link itself is behind
+        # the token like every other page.
+        return instagram_callback(req, res) if method == "GET" && path == IG_CALLBACK_PATH
 
         return refuse(res, req) unless authorized?(req)
+
+        return instagram_connect(req, res) if method == "GET" && path == IG_CONNECT_PATH
+        return instagram_disconnect(req, res) if method == "POST" && path == IG_DISCONNECT_PATH
+        return instagram_link(req, res) if method == "POST" && path == IG_LINK_PATH
 
         if method == "GET" && path == "/"
           redirect(res, "/p/#{default_slug}")
@@ -1302,8 +1319,12 @@ module Rubot
 
         res["Content-Type"] = "text/html; charset=utf-8"
         res["Cache-Control"] = "no-store"
+        persona = owner_slug(sid) || default_slug
         res.body = View.render("_history", **page,
-                                            older_url: older_url(sid, page[:before]))
+                                            older_url: older_url(sid, page[:before]),
+                                            token_query: token_query,
+                                            ig_persona: persona,
+                                            **ig_account_locals(persona))
       end
 
       # The next block of the recent list, in place of the button that asked for
@@ -1387,6 +1408,12 @@ module Rubot
           auxiliary_model: @app_config&.auxiliary_model.to_s,
           key_set: !@app_config&.api_key.to_s.empty?,
           key_from_archive: !store&.setting("api_key").to_s.strip.empty?,
+          ig_app_id: store&.setting("instagram_app_id").to_s,
+          ig_page_id: store&.setting("instagram_page_id").to_s,
+          ig_redirect_uri: store&.setting("instagram_redirect_uri").to_s,
+          ig_secret_set: !store&.setting("instagram_app_secret").to_s.strip.empty?,
+          ig_persona: ig_persona_for(req),
+          **ig_account_locals(ig_persona_for(req)),
           provider_choices: settings_provider_choices,
           model_choices: model_choices,
           saved: saved,
@@ -1444,7 +1471,37 @@ module Rubot
           values["api_key"] = typed unless typed.empty?
         end
 
+        # Instagram credentials are typed here, but the token is not: it is
+        # minted by the callback and lives in its own table. Only the three
+        # credential keys go through the form, so saving cannot erase a token.
+        %w[instagram_app_id instagram_redirect_uri instagram_page_id].each do |key|
+          values[key] = form(req, key).strip
+        end
+        if form(req, "clear_ig_secret") == "1"
+          values["instagram_app_secret"] = nil
+        else
+          typed_secret = form(req, "instagram_app_secret").strip
+          values["instagram_app_secret"] = typed_secret unless typed_secret.empty?
+        end
+
         store.update_settings(values)
+        if form(req, "ig_disconnect") == "1"
+          persona = ig_persona_for(req)
+          ig = instagram_client(persona: persona)
+          ig.accounts.each { |acc| ig.disconnect(username: acc["username"]) }
+          instagram_broadcast(persona: persona)
+        end
+        raw_link = req.query["ig_link"]
+        links = raw_link.is_a?(Array) ? raw_link : (raw_link.to_s.empty? ? [] : [ raw_link ])
+        links.flat_map { |v| v.to_s.split(",") }.map(&:strip).reject(&:empty?).each do |username|
+          persona = ig_persona_for(req)
+          begin
+            instagram_client(persona: persona).link_account(username: username)
+            instagram_broadcast(persona: persona)
+          rescue Rubot::Instagram::Error => e
+            warn "[web] instagram link: #{e.message}"
+          end
+        end
         apply_saved_settings
         redirect_to(res, settings_url(saved: true))
       end
@@ -1494,6 +1551,206 @@ module Rubot
         end
       rescue StandardError => e
         warn "[web] settings applied to this process only: #{e.class}: #{e.message}"
+      end
+
+      # --- instagram -----------------------------------------------------
+
+      def instagram_client(persona: "")
+        Rubot::Instagram.new(store: Session.store, persona: persona)
+      end
+
+      # Which persona's account set a request is about. The card posts the
+      # persona it was drawn for; a session id in the query is the fallback for
+      # a request that came from a page without that field. A hand-edited form
+      # cannot name a persona this install does not have.
+      def ig_persona_for(req)
+        named = form(req, "persona")
+        return named if known_slug?(named)
+
+        sid = req&.query && utf8(req.query["sid"].to_s)
+        owner = sid.empty? ? nil : owner_slug(sid)
+        owner || default_slug
+      end
+
+      # The connect button on the card opens this. A fresh state is minted on
+      # every click and kept in its own row, so two handshakes can be in flight
+      # at once — one per account.
+      def instagram_connect(req, res)
+        persona = ig_persona_for(req)
+        ig = instagram_client(persona: persona)
+        unless Session.store
+          return redirect_to(res, "/settings#{token_query}")
+        end
+        begin
+          redirect_to(res, ig.authorize_url(persona: persona))
+        rescue Rubot::Instagram::Error => e
+          warn "[web] instagram connect: #{e.message}"
+          redirect_to(res, "/settings#{token_query}")
+        end
+      end
+
+      # The "Putuskan" button on the connected card posts here. The account is
+      # named so a second connected account can be dropped without touching the
+      # default one. The token is deleted from the archive, never echoed back.
+      def instagram_disconnect(req, res)
+        persona = ig_persona_for(req)
+        ig = instagram_client(persona: persona)
+        ref = form(req, "account").to_s
+        begin
+          # The account name comes from the card, but the lookup stays inside
+          # this persona's set — a forged name cannot reach another persona's
+          # account even if it happens to match one there.
+          raise Rubot::Instagram::Error, "Akun Instagram tidak ditemukan" if ref.empty?
+          ig.disconnect(username: ref)
+          instagram_broadcast(persona: persona)
+        rescue Rubot::Instagram::Error => e
+          warn "[web] instagram disconnect: #{e.message}"
+        end
+
+        # The button is an htmx request targeting #ig-status, so answer with the
+        # card itself: htmx swaps it straight back to the connect state. A
+        # redirect would reload the whole page and lose the turn's live stream.
+        res["Content-Type"] = "text/html; charset=utf-8"
+        res["Cache-Control"] = "no-store"
+        res.body = instagram_card_markup(persona: persona)
+      end
+
+      # Meta sends the browser here with `code` and the state we wrote before
+      # leaving. The token never travels through the page: it is written to the
+      # archive and the reader is told only the username.
+      # Link an account another persona already connected. No OAuth: the token
+      # is install-wide, this only grants the current persona access to it.
+      def instagram_link(req, res)
+        persona = ig_persona_for(req)
+        ig = instagram_client(persona: persona)
+        ref = form(req, "account").to_s
+        begin
+          raise Rubot::Instagram::Error, "Akun Instagram tidak ditemukan" if ref.empty?
+          ig.link_account(username: ref)
+          instagram_broadcast(persona: persona)
+        rescue Rubot::Instagram::Error => e
+          warn "[web] instagram link: #{e.message}"
+        end
+
+        res["Content-Type"] = "text/html; charset=utf-8"
+        res["Cache-Control"] = "no-store"
+        res.body = instagram_card_markup(persona: persona)
+      end
+
+      def instagram_callback(req, res)
+        res["Content-Type"] = "text/html; charset=utf-8"
+        res["Cache-Control"] = "no-store"
+        state = form(req, "state")
+        persona = instagram_client.state_persona(state)
+        ig = instagram_client(persona: persona)
+        unless Session.store
+          res.status = 500
+          return res.body = instagram_result_page("Gagal", "Arsip sesi belum terbuka.")
+        end
+        # An empty persona is a legacy state minted before scoping; it belongs
+        # to the install's default. Anything else must be a real persona.
+        persona = default_slug if persona.empty?
+        unless known_slug?(persona)
+          return res.body = instagram_result_page("Gagal", "State OAuth tidak dikenal — coba lagi.")
+        end
+        # A state that was already used (or never minted) must not reach Meta's
+        # token endpoint. complete_authorization checks this too; checking here
+        # keeps the failure on the callback page instead of an API call.
+        unless ig.valid_state?(state)
+          return res.body = instagram_result_page("Gagal", "State OAuth tidak cocok atau sudah kedaluwarsa — coba lagi.")
+        end
+
+        begin
+          acc = ig.complete_authorization(form(req, "code"), state)
+          instagram_broadcast(persona: persona)
+          res.body = instagram_result_page("Terhubung", "Instagram terhubung sebagai @#{acc["username"]}.", close: true)
+        rescue Rubot::Instagram::Error => e
+          res.body = instagram_result_page("Gagal", e.message)
+        end
+      end
+
+      # The callback runs in the tab the connect button opened. On success the
+      # card in the original tab is already being swapped by the broadcast, so
+      # this tab has nothing left to say — close it. A failure keeps the page so
+      # the reader can see what went wrong; `window.close()` is a no-op when the
+      # tab was not opened by script, so the link stays as a way out either way.
+      def instagram_result_page(title, message, close: false)
+        close_script = close ? "<script>window.close();</script>" : ""
+        <<~HTML
+          <!DOCTYPE html><html lang="id"><head><meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>rubot · instagram</title>
+          <link rel="stylesheet" href="/assets/app.css">
+          </head><body><form class="settings-card">
+          <h1>#{CGI.escapeHTML(title)}</h1><p>#{CGI.escapeHTML(message)}</p>
+          <a class="btn primary" href="/">Kembali ke rubot</a>
+          </form>#{close_script}</body></html>
+        HTML
+      end
+
+      # Every open page is told the connection changed, so a card that said
+      # "Connect" can turn into "Terhubung" without a reload. The whole card is
+      # sent with hx-swap-oob, which replaces #ig-status wherever it is drawn —
+      # in a live turn or in the archived history. A bare text swap could not do
+      # that: it would land in the notice slot instead of on the button.
+      def instagram_broadcast(persona: "")
+        markup = instagram_card_markup(persona: persona, oob: true)
+        @event_mutex.synchronize { @event_subs.dup }.each do |sid, queue|
+          # Only pages showing this persona get the swap. A card in another
+          # persona's conversation must keep showing that persona's account.
+          next unless (owner_slug(sid) || default_slug) == persona
+
+          queue << [ :notice, markup ]
+        end
+      end
+
+      # The connect card as it should look now. Two callers need it: the SSE
+      # broadcast (which needs hx-swap-oob so htmx replaces #ig-status instead
+      # of dropping the markup into the notice slot) and the disconnect button's
+      # own response (which already has hx-target + outerHTML, so the extra
+      # attribute would make htmx swap the same element twice).
+      # The locals every render of the connect card needs: the accounts linked
+      # to this persona. The card always offers Connect (that is how a second
+      # account is added) and lists whatever is already linked below it.
+      def ig_account_locals(persona)
+        ig = instagram_client(persona: persona)
+        { ig_accounts: ig.accounts.map do |a|
+            { "id" => a["id"], "username" => a["username"].to_s, "is_default" => a["is_default"] }
+          end,
+          ig_linkable_accounts: ig.linkable_accounts.map do |a|
+            { "id" => a["id"], "username" => a["username"].to_s }
+          end }
+      end
+
+      def instagram_card_markup(persona: "", oob: false)
+        locals = ig_account_locals(persona)
+        card = View.render("_instagram_connect", token_query: token_query,
+                                                 ig_persona: persona,
+                                                 ig_accounts: locals[:ig_accounts],
+                                                 ig_linkable_accounts: locals[:ig_linkable_accounts])
+        return card unless oob
+
+        card.sub(/<div class="ig-connect-card" id="ig-status">/,
+                 '<div class="ig-connect-card" id="ig-status" hx-swap-oob="true">')
+      end
+
+      # Due posts are published on a minute ticker, not on a user turn: a
+      # schedule is a promise to publish at 07:00 whether or not anyone is
+      # talking to the bot then.
+      def start_instagram_ticker
+        return unless Session.store
+
+        @instagram_thread = Thread.new do
+          loop do
+            sleep 60
+            break unless @running
+            begin
+              instagram_client.publish_due
+            rescue StandardError => e
+              warn "[web] instagram ticker: #{e.class}: #{e.message}"
+            end
+          end
+        end
       end
 
       def settings_url(saved: false)
@@ -1668,7 +1925,9 @@ module Rubot
           live_prompt_shown: live_prompt_shown,
           usage: usage_locals(sid),
           usage_facts: index_usage_facts(sid),
-          token_query: token_query
+          token_query: token_query,
+          ig_persona: slug,
+          **ig_account_locals(slug)
         )
         res["Content-Type"] = "text/html; charset=utf-8"
         res["Cache-Control"] = "no-store"
@@ -2029,7 +2288,10 @@ module Rubot
           elapsed: nil
         }
         op = arguments["operation"].to_s
-        row[:op] = op unless op.empty?
+        # The instagram tool is named after the service, so its `connect`
+        # operation would otherwise read "instagram connect connect" — the
+        # name already says the service, the op only adds the verb.
+        row[:op] = op unless op.empty? || (name == "instagram" && op == "connect")
 
         items = [ row ]
 
@@ -2834,6 +3096,9 @@ module Rubot
         turn.tool_finished(name, tool_ok?(result))
         add_diff(turn, diff)
         sent_attachments(name, result, turn.session_id).each { |file| turn.add_attachment(**file) }
+        if name.to_s == "instagram" && result.to_s.include?(Tools::Instagram::CONNECT_MARKER)
+          turn.add_instagram_card
+        end
       end
 
       # The fragment for a file the call changed, or nothing when it changed
@@ -2909,14 +3174,15 @@ module Rubot
           loop do
             break unless @running
 
-            markup = queue.pop(timeout: EVENT_HEARTBEAT)
-            if markup.nil?
+            item = queue.pop(timeout: EVENT_HEARTBEAT)
+            if item.nil?
               # A comment line costs nothing and keeps the connection from
               # being closed for silence by whatever sits in between.
               out.write(": keepalive\n\n")
               out.flush if out.respond_to?(:flush)
             else
-              sse(out, "sidebar", markup)
+              type, markup = item.is_a?(Array) ? item : [ :sidebar, item ]
+              sse(out, type.to_s, markup)
             end
           end
         rescue IOError, Errno::EPIPE, Errno::ECONNRESET
@@ -3012,7 +3278,9 @@ module Rubot
       end
 
       def render_timeline(turn)
-        View.turn_body(turn)
+        persona = owner_slug(turn.session_id) || default_slug
+        View.turn_body(turn, token_query: token_query, ig_persona: persona,
+                             **ig_account_locals(persona))
       end
 
       def sse(out, event, html)

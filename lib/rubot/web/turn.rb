@@ -187,7 +187,9 @@ module Rubot
           # row that changed a file even when it has no diff to show (see
           # Rubot::Web::ToolRows), and the name alone cannot tell a read from a
           # write.
-          row[:op] = op.to_s unless op.to_s.empty?
+          # The instagram tool is named after the service, so its `connect`
+          # operation would otherwise read "instagram connect connect".
+          row[:op] = op.to_s unless op.to_s.empty? || (name.to_s == "instagram" && op.to_s == "connect")
           @items << row
           publish_locked
         end
@@ -237,6 +239,16 @@ module Rubot
 
         @mutex.synchronize do
           @items << { kind: :diff, html: body, epoch: epoch_now }
+          publish_locked
+        end
+      end
+
+      # The connect card the instagram tool asked for. It is a timeline item
+      # like any other so a refresh mid-answer still draws the button — the
+      # alternative, an out-of-band swap, would vanish on the next redraw.
+      def add_instagram_card
+        @mutex.synchronize do
+          @items << { kind: :instagram_connect, epoch: epoch_now }
           publish_locked
         end
       end

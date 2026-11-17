@@ -132,7 +132,7 @@ class TestStoreMigrations < Minitest::Test
     db = SQLite3::Database.new(File.join(@dir, "sessions.db"))
     versions = db.execute("SELECT version FROM schema_migrations ORDER BY version").flatten
 
-    assert_equal [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 ], versions
+    assert_equal [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 ], versions
     assert_equal %w[id session_id idx role text created_at payload diff user_text assistant_text tool_text],
                  db.execute("PRAGMA table_info(messages)").map { |r| r[1] }
     assert_equal %w[id title created_at updated_at cwd msg_count bytes meta messages_start pinned_at unread_at],
@@ -143,6 +143,15 @@ class TestStoreMigrations < Minitest::Test
     assert_equal %w[endpoint p256dh auth persona created_at last_seen_at],
                  db.execute("PRAGMA table_info(push_subscriptions)").map { |r| r[1] },
                  "the notification subscriptions are part of the schema the store expects"
+    assert_equal %w[id access_token ig_user_id username account_type token_type expires_at connected_at updated_at],
+                 db.execute("PRAGMA table_info(instagram_accounts)").map { |r| r[1] },
+                 "the connected Instagram accounts are part of the schema the store expects"
+    assert_equal %w[persona account_id is_default linked_at],
+                 db.execute("PRAGMA table_info(instagram_persona_accounts)").map { |r| r[1] },
+                 "the per-persona account mapping is part of the schema the store expects"
+    assert_equal %w[id caption image_url scheduled_at status ig_media_id error created_at updated_at account_id],
+                 db.execute("PRAGMA table_info(instagram_posts)").map { |r| r[1] },
+                 "scheduled Instagram posts are part of the schema the store expects"
     assert_equal %w[id session_id created_at provider model prompt_tokens cached_tokens
                     cache_creation_tokens epoch tools blocks turns auxiliary fingerprint diverged_at
                     diverged_kind diverged_role summary effort],

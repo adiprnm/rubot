@@ -21,7 +21,11 @@
                             landed: landed_here) %>
 <% else -%>
 <div class="turn is-done<%= " is-landed" if landed_here %>"<% if msg[:idx] %> id="m-<%= msg[:idx] %>"<% end %>>
-  <div class="turn-body"><%= View.render("_timeline", items: msg[:items]) %></div>
+  <div class="turn-body"><%= View.render("_timeline", items: msg[:items],
+                                          token_query: token_query,
+                                          ig_accounts: ig_accounts,
+                                          ig_linkable_accounts: ig_linkable_accounts,
+                                          ig_persona: ig_persona) %></div>
 </div>
 <% end -%>
 <% end -%>

@@ -27,7 +27,8 @@ class TestTools < Minitest::Test
     assert_includes names, "send_files"
     assert_includes names, "notify"
     assert_includes names, "search"
-    assert_equal 8, @registry.count
+    assert_includes names, "instagram"
+    assert_equal 9, @registry.count
   end
 
   def test_registry_get_tool
@@ -521,13 +522,13 @@ class TestTools < Minitest::Test
     end.new
 
     @registry.register(custom)
-    assert_equal 9, @registry.count
+    assert_equal 10, @registry.count
     assert_equal "done: {}", @registry.execute("custom_tool", {})
   end
 
   def test_registry_provider_definitions
     defs = @registry.to_provider_definitions("openai")
-    assert_equal 8, defs.size
+    assert_equal 9, defs.size
     assert defs.all? { |d| d["type"] == "function" }
     assert defs.all? { |d| d["function"]["name"] }
     assert defs.all? { |d| d["function"]["description"] }

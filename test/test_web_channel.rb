@@ -68,6 +68,216 @@ module Rubot
         assert_nil Rubot::Session.store.setting("api_key"), "the checkbox hands the key back to config.yml"
       end
 
+      # --- instagram -------------------------------------------------------
+
+      def test_settings_form_saves_ig_credentials_without_touching_the_token
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+        store = Rubot::Session.store
+        store.set_setting("instagram_app_secret", "secret-lama")
+        Rubot::Instagram.new(store: store, persona: "rubot").save_account(
+          access_token: "token-rahasia", ig_user_id: "ig-1", username: "adipurnm"
+        )
+
+        channel.send(:save_settings, FakeResponse.new,
+                     form_post({ "provider" => "openai", "instagram_app_id" => "app-baru",
+                                 "instagram_redirect_uri" => "https://rubot.ts.net/instagram/callback" }))
+
+        assert_equal "app-baru", store.setting("instagram_app_id")
+        assert_equal "secret-lama", store.setting("instagram_app_secret"), "a blank secret keeps the stored one"
+        assert_equal "token-rahasia", store.db.get_first_value("SELECT access_token FROM instagram_accounts WHERE id = 1"),
+                     "saving the form must never overwrite the OAuth token"
+      end
+
+      def test_settings_page_never_echoes_the_ig_secret
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+        Rubot::Session.store.set_setting("instagram_app_secret", "secret-rahasia")
+
+        res = FakeResponse.new
+        channel.send(:render_settings, res, FakeRequest.new("/settings"))
+        refute_includes res.body, "secret-rahasia"
+        assert_includes res.body, "sudah tersimpan"
+      end
+
+      def test_connect_route_redirects_to_meta_with_a_fresh_state
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+        store = Rubot::Session.store
+        store.update_settings("instagram_app_id" => "app", "instagram_app_secret" => "secret",
+                              "instagram_redirect_uri" => "https://rubot.ts.net/instagram/callback")
+
+        res = FakeResponse.new
+        channel.send(:dispatch, FakeRequest.new("/instagram/connect"), res)
+        assert_equal 303, res.status
+        location = res.headers["Location"].to_s
+        assert_includes location, "https://www.facebook.com/#{Rubot::Instagram::API_VERSION}/dialog/oauth"
+        query = URI.decode_www_form(URI(location).query).to_h
+        assert_equal "app", query["client_id"]
+        assert_equal 48, query["state"].length
+      end
+
+      def test_callback_exchanges_code_and_shows_only_the_username
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+        store = Rubot::Session.store
+        store.update_settings("instagram_app_id" => "app", "instagram_app_secret" => "secret",
+                              "instagram_redirect_uri" => "https://rubot.ts.net/instagram/callback")
+        ig = Rubot::Instagram.new(store: store)
+        state = URI.decode_www_form(URI(ig.authorize_url).query).to_h["state"]
+        ig.define_singleton_method(:api_get) do |path, params|
+          case path
+          when "/oauth/access_token"
+            params["grant_type"] == "authorization_code" ? { "access_token" => "user" } :
+              { "access_token" => "page-token", "expires_in" => 5_175_360 }
+          when "/me/accounts"
+            { "data" => [ { "instagram_business_account" => { "id" => "ig-1" } } ] }
+          else
+            { "username" => "adipurnm", "account_type" => "BUSINESS" }
+          end
+        end
+        # The channel builds its own client, so stub the class for this request.
+        Rubot::Instagram.stub(:new, ig) do
+          res = FakeResponse.new
+          channel.send(:dispatch, FakeRequest.new("/instagram/callback", query: { "code" => "code", "state" => state }), res)
+          assert_equal 200, res.status
+          assert_includes res.body, "@adipurnm"
+          refute_includes res.body, "page-token"
+          assert_includes res.body, "window.close()", "a successful callback closes its tab"
+        end
+      end
+
+      def test_connect_card_is_drawn_in_the_timeline
+        turn = Rubot::Web::Turn.new(id: "t1", session_id: "web_rubot")
+        turn.add_instagram_card
+        html = Rubot::Web::View.turn_body(turn, token_query: "?token=abc")
+
+        assert_includes html, "ig-connect-card"
+        assert_includes html, "/instagram/connect?token=abc"
+        assert_includes html, "Connect dengan Instagram"
+      end
+
+      def test_connect_button_disables_and_shows_a_spinner_while_connecting
+        turn = Rubot::Web::Turn.new(id: "t1", session_id: "web_rubot")
+        turn.add_instagram_card
+        html = Rubot::Web::View.turn_body(turn, token_query: "?token=abc")
+
+        assert_includes html, "@submit=\"busy = true\"", "pressing the button marks it busy"
+        assert_includes html, ":disabled=\"busy\"", "the button goes disabled while connecting"
+        assert_includes html, "ig-spinner", "a loading indicator is present"
+        assert_includes html, "Menghubungkan…", "the label says it is connecting"
+        assert_includes html, "target=\"_blank\"", "the OAuth dialog opens in a new tab"
+      end
+
+      def test_connect_card_keeps_the_connect_button_and_lists_linked_accounts
+        turn = Rubot::Web::Turn.new(id: "t1", session_id: "web_rubot")
+        turn.add_instagram_card
+        accounts = [
+          { "id" => 1, "username" => "adipurnm", "is_default" => true },
+          { "id" => 2, "username" => "kanyaahweb", "is_default" => false }
+        ]
+        html = Rubot::Web::View.turn_body(turn, token_query: "?token=abc", ig_accounts: accounts,
+                                          ig_linkable_accounts: [])
+
+        # The button stays so a second (or third) account can still be added.
+        assert_includes html, "/instagram/connect", "Connect stays available for another account"
+        assert_includes html, "Connect dengan Instagram"
+        assert_includes html, "@adipurnm"
+        assert_includes html, "@kanyaahweb"
+        assert_includes html, "(default)", "the default account is marked"
+        assert_equal 2, html.scan('name="account"').length, "each account has its own Putuskan"
+        assert_includes html, "name=\"account\" value=\"adipurnm\"", "the right account is named"
+      end
+
+      def test_instagram_disconnect_route_removes_the_account
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+        store = Rubot::Session.store
+        ig = Rubot::Instagram.new(store: store, persona: "rubot")
+        ig.save_account(access_token: "t", ig_user_id: "ig-1", username: "adipurnm")
+        assert ig.connected?
+
+        res = FakeResponse.new
+        channel.send(:dispatch, FakeRequest.new("/instagram/disconnect", method: "POST",
+                                                query: { "account" => "adipurnm", "persona" => "rubot" }), res)
+
+        refute ig.connected?, "the account is gone from this persona"
+        assert_equal 200, res.status
+        assert_includes res.body, "ig-connect-card"
+        assert_includes res.body, "Connect dengan Instagram", "the card is back in the connect state"
+        refute_includes res.body, "ig-account-name\">\n          <span class=\"ig-check\"", "no linked account is listed"
+        assert_includes res.body, "Link akun ini", "the token survives install-wide, so it can be re-linked without OAuth"
+      end
+
+      def test_connect_button_has_no_underline
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        rule = css[/\.ig-connect-btn\s*\{[^}]*\}/]
+        assert rule, "the connect button has a style rule"
+        assert_includes rule, "text-decoration: none"
+      end
+
+      def test_instagram_connect_tool_row_does_not_repeat_connect
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+        call = { "function" => { "name" => "instagram",
+                                 "arguments" => JSON.generate("operation" => "connect") } }
+        items = channel.send(:history_tool_items, call, {}, {}, "web_rubot")
+        row = items.first
+
+        assert_equal "instagram", row[:name]
+        refute row.key?(:op), "the op is folded into the tool name, not repeated"
+      end
+
+      def test_instagram_card_offers_to_link_an_existing_account
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+        store = Rubot::Session.store
+        Rubot::Instagram.new(store: store, persona: "kanyaah").save_account(
+          access_token: "t", ig_user_id: "ig-1", username: "kanyaahweb"
+        )
+
+        markup = channel.send(:instagram_card_markup, persona: "rubot")
+        assert_includes markup, "/instagram/link", "another persona's account can be linked here"
+        assert_includes markup, "@kanyaahweb"
+        assert_includes markup, "Link akun ini"
+      end
+
+      def test_instagram_link_route_grants_access_without_oauth
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+        store = Rubot::Session.store
+        Rubot::Instagram.new(store: store, persona: "kanyaah").save_account(
+          access_token: "t", ig_user_id: "ig-1", username: "kanyaahweb"
+        )
+        rubot = Rubot::Instagram.new(store: store, persona: "rubot")
+        refute rubot.connected?
+
+        res = FakeResponse.new
+        channel.send(:dispatch, FakeRequest.new("/instagram/link", method: "POST",
+                                                query: { "account" => "kanyaahweb", "persona" => "rubot" }), res)
+
+        assert_equal 200, res.status
+        assert rubot.connected?, "the account is now linked into this persona"
+        assert_includes res.body, "@kanyaahweb"
+        assert_equal 1, store.db.get_first_value("SELECT COUNT(*) FROM instagram_accounts"),
+                     "no second token row was created"
+      end
+
+      def test_instagram_broadcast_swaps_the_whole_card
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+        Rubot::Session.store.set_setting("instagram_app_id", "app")
+        Rubot::Session.store.set_setting("instagram_app_secret", "secret")
+        Rubot::Session.store.set_setting("instagram_redirect_uri", "https://rubot.ts.net/instagram/callback")
+        ig = Rubot::Instagram.new(store: Rubot::Session.store)
+        ig.save_account(access_token: "t", ig_user_id: "ig-1", username: "adipurnm")
+
+        markup = channel.send(:instagram_card_markup, oob: true)
+        assert_includes markup, "hx-swap-oob=\"true\""
+        assert_includes markup, "@adipurnm"
+        assert_includes markup, "/instagram/connect", "the card keeps the Connect button"
+      end
+
       # --- install settings (end) ------------------------------------------
 
       # --- Format ---------------------------------------------------------
@@ -716,7 +926,7 @@ module Rubot
           end
         end
 
-        def chat_stream(messages, tools: nil, &_on_chunk)
+        def chat_stream(messages, tools: nil, on_retry: nil, &_on_chunk)
           chat(messages, tools: tools)
         end
 

@@ -42,6 +42,19 @@ module Rubot
       false
     end
 
+    # A tool can answer with UI instead of words. `silent_operation?` says the
+    # call is one of those (known before it runs, so the agent can skip the
+    # progress narration); `silent_result?` confirms it after the run, so a
+    # failed call still gets a normal answer from the model. The agent stops
+    # the turn on a silent result — there is nothing for a model to add.
+    def silent_operation?(_arguments)
+      false
+    end
+
+    def silent_result?(_result)
+      false
+    end
+
     # Why #dangerous_action? said yes, in words the user can act on
     # ("overwrite build.log — 412 of 900 lines would be lost"), or nil when
     # the tool has nothing better to offer than its arguments. Channels put

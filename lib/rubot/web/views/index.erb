@@ -131,6 +131,11 @@
          hx-ext="sse"
          sse-connect="/events?sid=<%= h(session_id) %><%= h(token_query.sub("?", "&")) %>">
       <span sse-swap="sidebar"></span>
+      <%# The Instagram connect card lives in the timeline, which may be a
+          finished turn with no stream of its own. The OAuth callback happens
+          in another tab, so this always-on stream carries the card's OOB swap
+          back to the page that started it. -%>
+      <span sse-swap="notice"></span>
     </div>
 
     <div class="sidebar-foot">
@@ -195,7 +200,11 @@
           session with hundreds of turns should not cost a full render, and the
           bottom of it is all anyone opens it for. -%>
       <%= View.render("_history", entries: page[:entries], more: page[:more],
-                                  older_url: older_url, landed: page[:landed]) %>
+                                  older_url: older_url, landed: page[:landed],
+                                  token_query: token_query,
+                                  ig_accounts: ig_accounts,
+                                  ig_linkable_accounts: ig_linkable_accounts,
+                                  ig_persona: ig_persona) %>
       <% if page[:entries].empty? && live_turn.nil? %>
         <p class="empty">
           <%= h(persona_label) %> punya SOUL, skills, dan memory sendiri.
