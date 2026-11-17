@@ -424,6 +424,13 @@ module Rubot
       # last node had reached, so what the reader sees is one fade of 180ms
       # rather than a dozen flashes of nothing.
       #
+      # The age is measured from when the call was made (`epoch`), not from when
+      # it first appeared in the collapsed timeline. A call the model answered
+      # in words only earns its row when the next call arrives (see
+      # Rubot::Web::ToolRows), and timing it from that moment made an old call
+      # fade in all over again — a row that had been on screen for a minute
+      # blinked on every redraw. The row's own clock is the truth either way.
+      #
       # The age stops being sent once the fade is over, and rows that left the
       # timeline are forgotten, so the bookkeeping is as long as the turn is.
       def note_entering_locked(list)
@@ -433,8 +440,9 @@ module Rubot
           next unless item[:kind] == :tool && item[:row_id]
 
           live[item[:row_id]] = true
-          age = now - (@entered[item[:row_id]] ||= now)
-          item[:swap_ms] = (age * 1000).round if age < SWAP_SECONDS
+          born = item[:epoch] || now
+          age = now - born
+          item[:swap_ms] = (age * 1000).round if age >= 0 && age < SWAP_SECONDS
         end
         @entered.keep_if { |row_id, _| live[row_id] }
       end

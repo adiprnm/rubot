@@ -39,10 +39,13 @@ module Rubot
       # `items` with the log of old calls taken out.
       #
       # Read top to bottom, a turn is text → call → thought → call → thought,
-      # and every call but the last is the log: the model has already got its
-      # answer and moved on from it. So the last call keeps its row and the
-      # others leave — except the ones the reader has to be able to come back
-      # for (a file changed, a failure, a diff, work still running).
+      # and a call the model answered in words — or paused to think about — is
+      # not the log: the sentence or the thought below it is what it was for,
+      # so the call keeps its row in its own place. Only calls reached for in
+      # the same breath — nothing between them — collapse to the last of the
+      # batch. The last call of the turn keeps its row too, as do the ones the
+      # reader has to be able to come back for (a file changed, a failure, a
+      # diff, work still running).
       #
       # A pause goes wherever the call it was taken for goes. A "Thought for"
       # row is read as belonging to the row above it — the model paused, then
@@ -59,6 +62,7 @@ module Rubot
       # neighbouring rows when the transcript carries no marker.
       def self.collapse(items)
         list = Array(items)
+        list = drop_repeated_pairs(list)
         latest = list.rindex { |item| item[:kind] == :tool }
         return list if latest.nil?
 
@@ -70,6 +74,7 @@ module Rubot
           next kept << index if index == latest && !empty_edit?(item, list, index)
           next kept << index if keeps_call?(item)
           next kept << index if draws_a_diff?(list, index)
+          next kept << index if leads_to_round?(list, index) && !empty_edit?(item, list, index)
         end
         kept = kept.to_h { |index| [ index, true ] }
 
@@ -87,6 +92,46 @@ module Rubot
             item
           end
         end
+      end
+
+      # A run of thought → call pairs is one moment retold: the model paused,
+      # reached for a tool, paused again, reached for another. Only the last
+      # pair of the run is drawn; the earlier ones read as verbose. A pair is
+      # dropped only when the call is a plain one — a file changed, a failure,
+      # a diff or work still running keeps its row through keeps_call? below.
+      def self.drop_repeated_pairs(list)
+        result = []
+        i = 0
+        while i < list.length
+          if pair_at?(list, i)
+            # Collect a run of consecutive [closed thinking, plain tool] pairs.
+            run = []
+            while pair_at?(list, i)
+              run << list[i] << list[i + 1]
+              i += 2
+              while i < list.length && %i[steer attachments].include?(list[i][:kind])
+                run << list[i]
+                i += 1
+              end
+            end
+            # Only the last pair of the run is drawn.
+            last_tool = run.rindex { |item| item[:kind] == :tool }
+            result.concat(run[(last_tool - 1)..]) if last_tool
+          else
+            result << list[i]
+            i += 1
+          end
+        end
+        result
+      end
+
+      def self.pair_at?(list, index)
+        return false if index + 1 >= list.length
+
+        first = list[index]
+        second = list[index + 1]
+        first[:kind] == :thinking && !first[:closed_at].nil? &&
+          second[:kind] == :tool && !keeps_call?(second) && !draws_a_diff?(list, index + 1)
       end
 
       # A call whose result the reader has to be able to find again: a file it
@@ -109,6 +154,27 @@ module Rubot
         list[(index + 1)..].to_a.each do |item|
           case item[:kind]
           when :diff then return true
+          when :steer, :attachments then next
+          else return false
+          end
+        end
+        false
+      end
+
+      # Something the model did after this call, before it reached for another:
+      # words it wrote, or a pause it took. Either one means the call was not
+      # the log of a batch — it was the work behind that answer or that thought,
+      # and the reader looks for it right there. A call that leads into either
+      # keeps its row in its own place. A steering message is the reader talking,
+      # not the model answering, so it does not split a batch. An open thought
+      # (still running) is the pause before the *next* call, not an answer to
+      # this one, so it does not split either.
+      def self.leads_to_round?(list, index)
+        list[(index + 1)..].to_a.each do |item|
+          case item[:kind]
+          when :text then return true
+          when :thinking then return true if item[:closed_at]
+          when :tool, :diff then return false
           when :steer, :attachments then next
           else return false
           end

@@ -4970,6 +4970,37 @@ module Rubot
         assert_equal %w[b.rb], items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
       end
 
+      # A call the model answered in words keeps its row in the replayed
+      # transcript too: prompt → tool → text → tool → answer reads the same
+      # after a refresh as it did live. Only calls in the same breath collapse.
+      def test_a_compact_persona_s_transcript_keeps_a_call_between_words
+        channel = channel_with_sessions(
+          personas: { "rubot" => { "name" => "Rubot", "tool_output" => "compact" } },
+          sessions: { "web_rubot" => "Cek dua file" }
+        )
+        sid = "web_rubot"
+        call = lambda do |id, path|
+          { "role" => "assistant", "content" => "",
+            "tool_calls" => [ { "id" => id,
+                                "function" => { "name" => "file_ops",
+                                                "arguments" => JSON.generate({ "path" => path }) } } ] }
+        end
+        write_messages(channel, sid, [
+                         { "role" => "user", "content" => "Cek dua file" },
+                         call.call("c1", "a.rb"),
+                         { "role" => "tool", "tool_call_id" => "c1", "content" => "isi a" },
+                         { "role" => "assistant", "content" => "Isi a.rb sudah kubaca." },
+                         call.call("c2", "b.rb"),
+                         { "role" => "tool", "tool_call_id" => "c2", "content" => "isi b" },
+                         { "role" => "assistant", "content" => "Dua-duanya oke." }
+                       ])
+
+        items = channel.send(:history, sid).last[:items]
+
+        assert_equal %w[a.rb b.rb], items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
+        assert_equal %i[tool text tool text], items.map { |item| item[:kind] }
+      end
+
       # The transcript carries the rows in the order they happened and nothing
       # else: no step markers, no pass numbers. A verbose persona keeps both
       # rounds, because that is what its live turn showed.
@@ -5369,12 +5400,37 @@ module Rubot
                      "the same call turning ok does not start the fade over"
 
         now += 0.2
+        assert_equal 250, turn.items.last[:swap_ms],
+                     "the age is measured from when the call was made, not redrawn"
+
+        now += 0.1
         assert_nil turn.items.last[:swap_ms], "past the fade, the row is left alone"
 
         turn.tool_started("file_ops", "a.rb", op: "edit")
         assert_equal 0, turn.items.last[:swap_ms], "the next call starts its own fade"
         assert_equal 1, turn.items.count { |item| item[:kind] == :tool && item[:swap_ms] },
                      "and only itself: the call that came before stays put"
+      end
+
+      # A call the model answered in words only earns its row when the next
+      # call arrives. Its fade is measured from when it was made, not from when
+      # it appeared, so an old row does not blink back to life on every redraw.
+      def test_a_call_revealed_later_does_not_restart_its_fade
+        now = 100.0
+        turn = Turn.new(id: "t1", session_id: "s1", tool_output: "compact",
+                        clock: -> { now }, epoch_clock: -> { now })
+
+        turn.tool_started("file_ops", "a.rb")
+        turn.tool_finished("file_ops", true)
+        turn.append_chunk("Isi a.rb sudah kubaca.")
+        now += 1.0
+        turn.tool_started("file_ops", "b.rb")
+        turn.tool_finished("file_ops", true)
+
+        rows = turn.items.select { |item| item[:kind] == :tool }
+        assert_equal %w[a.rb b.rb], rows.map { |item| item[:detail] }
+        assert_nil rows.first[:swap_ms], "the old call stays put"
+        assert_equal 0, rows.last[:swap_ms], "only the new call fades in"
       end
 
       # A file tool's row has to say what it was asked to do. The name and the
