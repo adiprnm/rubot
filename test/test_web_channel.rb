@@ -2682,6 +2682,32 @@ module Rubot
         assert_includes html, "reset dalam"
       end
 
+      # The context window is the one allowance the page measures itself. It
+      # leads the panel, in the same shape as the provider's meters, so one
+      # glance reads every limit the same way. A session with no reading yet
+      # contributes nothing rather than a bar at zero.
+      def test_the_quota_leads_with_the_context_window_the_session_measures
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        context = channel.send(:context_meter, "web_rubot") # no session: nil
+
+        assert_nil context, "nothing to draw before the first reading"
+
+        channel.define_singleton_method(:session_report) do |_sid|
+          { context_used: 80_000, context_window: 128_000, context_percent: 62.5 }
+        end
+        context = channel.send(:context_meter, "web_rubot")
+        meters = channel.send(:quota_meters,
+                              { "rolling" => { "percent" => 12.5 } }, context: context)
+        html = View.render("_quota", meters: meters, note: "")
+
+        assert_equal 2, meters.size
+        assert_equal "Konteks", meters.first[:name], "the local allowance comes first"
+        assert_includes html, "62.5% terpakai"
+        assert_includes html, "80,000 / 128,000 token"
+        assert_includes html, %(style="width: 62.5%")
+        assert_includes html, "usage-meter is-warm"
+      end
+
       # The provider reports the share that is spent, and the bar has always
       # been drawn as that share. The figure beside it counted down instead —
       # so a quarter gone read "75% sisa" next to a bar a quarter full. Both

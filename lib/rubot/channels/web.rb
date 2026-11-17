@@ -2183,21 +2183,56 @@ module Rubot
       # the panel opens — it costs a request and an actor round trip, and a
       # reader who never opens the panel should not pay for either.
       def quota_markup(sid)
+        context = context_meter(sid)
         report = session_for(sid).opencode_usage
-        View.render("_quota", meters: quota_meters(report), note: quota_note(report))
+        View.render("_quota", meters: quota_meters(report, context: context), note: quota_note(report))
       rescue StandardError => e
         warn "[web] quota: #{e.class}: #{e.message}"
-        View.render("_quota", meters: [], note: "Kuota tidak bisa diperiksa sekarang.")
+        View.render("_quota", meters: Array(context), note: "Kuota tidak bisa diperiksa sekarang.")
+      end
+
+      # The context window is the one allowance the page can measure itself:
+      # it belongs to the session, not the account, so it needs no provider
+      # request. It leads the panel because it is the limit a long turn actually
+      # runs into, and it is drawn exactly like the provider's meters — same
+      # bar, same bands — so one glance reads all of them the same way.
+      def context_meter(sid)
+        report = session_report(sid)
+        return nil unless report.is_a?(Hash)
+
+        pct = report[:context_percent]
+        return nil unless pct
+
+        used = pct.to_f.clamp(0.0, 100.0)
+        {
+          name: "Konteks",
+          used: format("%.1f", used),
+          used_label: "#{format('%.1f', used)}% terpakai",
+          band: quota_band(used),
+          reset: context_reset(report),
+          limited: false
+        }
+      rescue StandardError
+        nil
+      end
+
+      # The raw tokens under the percentage, so the figure is not the only
+      # thing a reader has to trust. A window the catalog does not know shows
+      # a question mark instead of a made-up total.
+      def context_reset(report)
+        used = Rubot::UsageReport.tokens(report[:context_used])
+        window = report[:context_window] ? Rubot::UsageReport.tokens(report[:context_window]) : "?"
+        "#{used} / #{window} token"
       end
 
       # One row per meter the provider reports: how much is spent, and when it
       # comes back. The provider's `percent` is already the spent share, so the
       # panel states it as it is — an allowance reads in the direction of the
       # thing a reader is asking about, which is how much of it is gone.
-      def quota_meters(report)
-        return [] unless report.is_a?(Hash)
+      def quota_meters(report, context: nil)
+        meters = Rubot::OpencodeUsage::METERS.filter_map do |name|
+          next unless report.is_a?(Hash)
 
-        Rubot::OpencodeUsage::METERS.filter_map do |name|
           meter = report[name]
           next unless meter.is_a?(Hash)
 
@@ -2211,6 +2246,7 @@ module Rubot
             limited: meter["limited"] ? true : false
           }
         end
+        [ context, *meters ].compact
       end
 
       # How close to the limit the meter is, in the three words the stylesheet

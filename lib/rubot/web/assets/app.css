@@ -3146,9 +3146,10 @@ body.lightbox-open { overflow: hidden; }
 .usage-facts .value { color: var(--fg); }
 .usage-facts .usage-breakdown { display: block; color: var(--fg-faint); font-size: 11.5px; }
 
-/* The allowance: a name, a bar, and how much is spent. The bar and the figure
+/* The allowances: a name, a bar, and how much is spent. The bar and the figure
    are the same reading, so a limit three quarters spent says so twice — the
-   bar fills towards the limit, and the number counts towards it too. */
+   bar fills towards the limit, and the number counts towards it too. The
+   context window leads the list; the provider's meters follow it. */
 .usage-meters {
   display: grid;
   gap: 0.5rem;

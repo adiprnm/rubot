@@ -1250,6 +1250,21 @@ class TestAgentCompaction < Minitest::Test
     refute_includes @agent.session.summary_text, "Old summary"
   end
 
+  def test_usage_report_estimates_the_window_for_an_aliased_model
+    agent = Rubot::Agent.new(
+      config: Rubot::Config.new(@config_path),
+      provider: SummaryProvider.new,
+      session_id: "alias-window",
+      tools: Rubot::Tools::Registry.new
+    )
+    agent.instance_variable_set(:@active_preset, { "model" => "hy4-flash-free" })
+
+    report = agent.usage_report
+
+    assert_equal 1_048_576, report[:context_window]
+    assert_in_delta report[:context_used].to_f / 1_048_576 * 100, report[:context_percent], 0.01
+  end
+
   def test_usage_report_context_falls_back_to_an_estimate_after_compaction
     @agent.instance_variable_set(:@pricing_catalog, OfflineCatalog.new)
     fill_session(10)

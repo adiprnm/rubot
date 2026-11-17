@@ -6,6 +6,7 @@ require "net/http"
 require "time"
 require "uri"
 require_relative "usage"
+require_relative "model_info"
 
 module Rubot
   # Fetches model pricing and context windows from models.dev and caches a
@@ -89,6 +90,14 @@ module Rubot
       entry = entry_for(model, provider: provider, network: network)
       window = entry && entry["context_window"].to_i
       window&.positive? ? window : nil
+    end
+
+    # Every distinct model id the catalog knows, so a caller can fall back to
+    # the longest known prefix when an exact lookup misses (gateway suffixes
+    # like "hy4-flash-free" for "hy4").
+    def context_window_ids
+      ensure_loaded(network: false)
+      @by_id.keys.map { |id| ModelInfo.normalize(id) }.uniq
     end
 
     # The shared cache file lives next to config.yml (see

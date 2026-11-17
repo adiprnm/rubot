@@ -2237,7 +2237,23 @@ end
       return value if value.positive?
 
       pricing_catalog.context_window(model_id, provider: provider_name) ||
-        ModelInfo.context_window(model_id)
+        ModelInfo.context_window(model_id) ||
+        estimated_context_window(model_id)
+    end
+
+    # A model id the catalog does not know exactly (a gateway suffix like
+    # "hy4-flash-free" for "hy4") still has a window: match the longest known
+    # id that starts the name. Without this the context meter silently
+    # disappears for every aliased model, which reads as a broken panel rather
+    # than a missing catalog entry.
+    def estimated_context_window(model_id)
+      id = ModelInfo.normalize(model_id)
+      return nil if id.empty?
+
+      known = pricing_catalog.context_window_ids
+      match = known.select { |candidate| id.start_with?(candidate) }
+                   .max_by(&:length)
+      match && pricing_catalog.context_window(match)
     end
 
     def resolve_rates(model_id, provider_name, preset, network: true)
