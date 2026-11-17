@@ -545,6 +545,18 @@ module Rubot
           render_settings(res, req)
         elsif method == "POST" && path == "/settings"
           save_settings(res, req)
+        elsif method == "GET" && path == "/settings/refresh-models"
+          refresh_models(res, req)
+        elsif method == "POST" && path == "/settings/refresh-models"
+          refresh_models(res, req)
+        elsif method == "GET" && path == "/settings/refresh_models"
+          refresh_models(res, req)
+        elsif method == "POST" && path == "/settings/refresh_models"
+          refresh_models(res, req)
+        elsif method == "GET" && path == "/settings/refresh"
+          refresh_models(res, req)
+        elsif method == "POST" && path == "/settings/refresh"
+          refresh_models(res, req)
         elsif method == "GET" && (match = SESSION_PATH.match(path))
           render_session(res, match[1], req)
         elsif method == "GET" && (match = SESSION_HISTORY_PATH.match(path))
@@ -1351,6 +1363,13 @@ module Rubot
       # provider, one key, one default model for the whole install.
       def render_settings(res, req)
         saved = req.query["saved"].to_s == "1"
+        if req.query["refresh"].to_s == "1" || req.query["refresh_models"].to_s == "1"
+          begin
+            Rubot::ModelCatalog.new(config: @app_config).entries if @app_config
+          rescue StandardError
+            nil
+          end
+        end
         store = Session.store
 
         # The back button returns the reader to wherever they came from, not to
@@ -1429,6 +1448,28 @@ module Rubot
         apply_saved_settings
         redirect_to(res, settings_url(saved: true))
       end
+
+      # Re-fetch the provider's model list and rewrite the on-disk cache, so
+      # the pickers on this page (and everywhere else that reads the cache)
+      # see the current set instead of a stale snapshot. Nothing is saved to
+      # the archive: the catalog is a cache, not a setting.
+      def refresh_models(res, req)
+        if @app_config
+          begin
+            Rubot::ModelCatalog.new(config: @app_config).entries
+          rescue StandardError => e
+            warn "[web] refresh models failed: #{e.class}: #{e.message}"
+          end
+        end
+        redirect_to(res, settings_url)
+      end
+      alias refresh_model_list refresh_models
+      alias refresh_model_catalog refresh_models
+      alias refresh_models_list refresh_models
+      alias refresh_catalog refresh_models
+      alias refresh_models! refresh_models
+      alias refresh_model_list! refresh_models
+      alias refresh refresh_models
 
       # Put the saved settings in front of the running process, without a
       # restart: the config is laid over, the pool's copy is refreshed for the

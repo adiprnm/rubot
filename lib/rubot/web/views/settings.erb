@@ -101,6 +101,9 @@
     </select>
   </label>
 
+  <p class="settings-hint">
+    <a href="/settings?refresh=1<%= h(token_query.empty? ? "" : "&" + token_query.sub(/^\?/, "")) %>">Refresh daftar model</a>
+  </p>
   <div class="settings-row">
     <a class="btn" href="<%= h(back_url) %>">Kembali</a>
     <button class="btn primary" type="submit">Simpan</button>

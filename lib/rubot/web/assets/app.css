@@ -2273,8 +2273,19 @@ select:focus-visible { outline: none; }
 
 /* A thought is a pause in the work, not a line of it: "Thinking…" and
    "Thought for 12s" need room on both sides, or they read as a label glued to
-   whatever happens to sit above and below them. */
+   whatever happens to sit above and below them. The margins are claimed once,
+   like the tool row's: `.turn-body` is a flex column, so two siblings' margins
+   add up, and a thinking block between two blocks used to get both its own
+   0.5/0.7rem and the neighbour's, which is the extra space. */
 .row.thinking { margin: 0.5rem 0 0.7rem; }
+.text + .row.thinking { margin-top: 0; }
+.tool-row + .row.thinking { margin-top: calc(1.05rem - 0.4rem); }
+.turn-body > .attachments + .row.thinking { margin-top: calc(1.05rem - 0.2rem); }
+.diff + .row.thinking { margin-top: calc(1.05rem - 0.55rem); }
+.row.thinking + .text { margin-top: calc(1.05rem - 0.7rem); }
+.row.thinking + .tool-row { margin-top: calc(1.05rem - 0.7rem); }
+.row.thinking + .diff { margin-top: calc(1.05rem - 0.7rem); }
+.turn-body > .row.thinking + .attachments { margin-top: calc(1.05rem - 0.7rem); }
 
 /* The live thought lights one letter at a time, from the first to the last.
    Each letter carries its own index (`--i`, written by the template) and the
@@ -3805,6 +3816,8 @@ a:active,
 /* The hint belongs to the field above it, so it is read before the next label
    rather than as a paragraph of its own. */
 .settings-hint { margin: -0.35rem 0 1rem; font-size: 12px; }
+.settings-hint a { color: var(--fg-dim); text-decoration: underline; text-underline-offset: 2px; }
+.settings-hint a:hover { color: var(--fg); }
 
 .settings-card label {
   display: block;
