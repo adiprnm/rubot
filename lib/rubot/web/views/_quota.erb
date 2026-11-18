@@ -1,12 +1,9 @@
-<%# The allowances in one place: the context window the session can measure
-    itself, then the provider's own allowance when it has one. The latter
-    belongs to the account, not the session, and only the provider knows it —
-    so it is fetched when the panel is opened, and this fragment is what comes
-    back.
+<%# The provider's allowances in one place. They belong to the account, not
+    the session, and only the provider knows them — so they are fetched when
+    the panel is opened, and this fragment is what comes back.
 
-    `meters` is empty for a provider that sells tokens by the drink and a
-    session with no context reading yet; `note` then says so instead of drawing
-    an empty box. -%>
+    `meters` is empty for a provider that sells tokens by the drink; `note`
+    then says so instead of drawing an empty box. -%>
 <% if meters.empty? -%>
   <p class="usage-note"><%= h(note) %></p>
 <% else -%>

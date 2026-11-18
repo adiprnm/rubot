@@ -9,8 +9,7 @@
 
     The provider's meters are not drawn with the page: they belong to the
     account, and only the provider knows them, so they cost a request that
-    waits until the reader actually opens this. The context meter is drawn from
-    the session and needs no request, but rides along for one consistent panel. -%>
+    waits until the reader actually opens this. -%>
 <details class="usage-sheet usage-sheet-quota"
          hx-get="/s/<%= h(session_id) %>/quota<%= h(token_query) %>"
          hx-target="#usage-quota"
