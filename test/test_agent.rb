@@ -1357,8 +1357,8 @@ class TestAgentCompaction < Minitest::Test
 
   # The silent trim in Session#trim! moves the front of the transcript, and the
   # provider can reuse nothing after that: measured at ~110k tokens per event
-  # for five to forty messages dropped (bin/cache_loss.rb, item 22). Compaction
-  # arrives one block early instead and keeps the information as a summary.
+  # for five to forty messages dropped. Compaction arrives one block early
+  # instead and keeps the information as a summary.
   def test_auto_compaction_does_nothing_below_the_threshold
     write_config(context_window: 10_000_000)
     agent = Rubot::Agent.new(
