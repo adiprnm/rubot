@@ -933,6 +933,19 @@ module Rubot
             %(focusable="false"><circle cx="5.2" cy="5.2" r="3.3"/><path d="M7.7 7.7 10.5 10.5"/></svg>)
         end
 
+        # The mark on a PDF card. A filled badge with the three letters, drawn
+        # rather than left to an emoji font: the red is the one every reader
+        # already knows as "PDF", and the letters take the theme's contrasting
+        # colour so both light and dark stay legible. Decorative — the link's
+        # own aria-label says what the file is.
+        def pdf_icon
+          %(<svg class="pdf-icon" viewBox="0 0 24 24" width="18" height="18" ) +
+            %(aria-hidden="true" focusable="false">) +
+            %(<rect class="pdf-icon-bg" x="2" y="4" width="20" height="16" rx="3"/>) +
+            %(<text class="pdf-icon-text" x="12" y="15.6" text-anchor="middle" ) +
+            %(font-family="Arial, Helvetica, sans-serif" font-size="7.5" font-weight="700">PDF</text></svg>)
+        end
+
         # A 10px stroked mark. Decorative: the row's title carries the meaning,
         # so the drawing is hidden from a screen reader.
         def usage_icon(name)          body = SVG_ICONS.fetch(name, "")

@@ -5089,11 +5089,24 @@ module Rubot
         assert_includes html, %(href="#{document[:url]}")
         assert_includes html, %(target="_blank")
         assert_includes html, %(rel="noopener")
-        assert_includes html, %(<span class="attachment-label" aria-hidden="true">PDF</span>)
+        assert_includes html, %(class="pdf-icon"), "a PDF wears its own mark"
+        assert_includes html, %(>PDF</text>)
         assert_includes html, %(<span class="attachment-name">laporan.pdf</span>)
         assert_includes html, %(download="laporan.pdf")
         refute_includes html, "data-lightbox", "a PDF is not opened into the sheet"
         assert_includes html, %(id="file-#{"c" * 32}"), "a card is kept across a redraw too"
+      end
+
+      # Only a PDF gets the badge. Any other document keeps the plain format
+      # label, so a note still says what it is without borrowing the PDF mark.
+      def test_a_non_pdf_document_keeps_its_text_label
+        document = { url: "/s/web_kanyaah/media/catatan.md?token=t0k", name: "catatan.md",
+                     kind: :document, label: "MD" }
+
+        html = View.render("_timeline", items: [ { kind: :attachments, list: [ document ] } ])
+
+        assert_includes html, %(<span class="attachment-label" aria-hidden="true">MD</span>)
+        refute_includes html, "pdf-icon", "a markdown note is not a PDF"
       end
 
       # A running turn redraws the whole timeline on every event. A picture

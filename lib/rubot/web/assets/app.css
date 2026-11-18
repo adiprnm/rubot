@@ -2746,6 +2746,7 @@ select:focus-visible { outline: none; }
    settling half-drawn at the edge. */
 .attachments {
   display: flex;
+  align-items: center;
   gap: 0.4rem;
   overflow-x: auto;
   padding: 0.1rem 0.1rem 0.2rem;
@@ -2822,25 +2823,24 @@ select:focus-visible { outline: none; }
 }
 
 /* A file the agent sent that is not a picture — a PDF or a markdown note.
-   The strip is a row of pictures, so the card is built to the same height and
-   reads as one more thing in it: the format as a badge, the reader's own file
-   name under it, and nothing else. The name truncates instead of wrapping,
-   because a card that grew taller for a long name would set the height of the
-   whole strip. The card is a link rather than a button: a PDF opens in the
-   browser's own viewer, and that is a navigation out of the page. */
+   One compact row: the format mark, the reader's own file name, and the
+   download beside it. It used to be a thumbnail-sized card with the format
+   written above the name, which took as much room as a picture while saying
+   far less. The name truncates instead of wrapping, so a long one cannot
+   grow the strip. The card is a link rather than a button: a PDF opens in
+   the browser's own viewer, and that is a navigation out of the page. */
 .attachment-document {
   box-sizing: border-box;
   display: flex;
-  flex-direction: column;
-  justify-content: center;
+  align-items: center;
   gap: 0.4rem;
-  width: 11rem;
-  height: 6.5rem;
-  padding: 0.5rem 1.8rem 0.5rem 0.6rem;
+  max-width: 12rem;
+  height: 2.4rem;
+  padding: 0.3rem 1.9rem 0.3rem 0.45rem;
   border: 1px solid var(--line);
   border-radius: 4px;
   color: var(--fg);
-  line-height: 1.25;
+  line-height: 1.2;
   text-decoration: none;
 }
 
@@ -2865,6 +2865,18 @@ select:focus-visible { outline: none; }
   white-space: nowrap;
   font-family: var(--mono);
   font-size: 0.68rem;
+}
+
+/* The PDF badge. The red is the theme's own, so it stays legible in both
+   palettes; the letters take the colour accents reserve for their text. */
+.pdf-icon { flex: 0 0 auto; }
+.pdf-icon-bg { fill: var(--red); }
+.pdf-icon-text { fill: var(--on-accent); }
+
+/* On a compact card the download sits on the row's centre, not its top. */
+.attachment--document .attachment-download {
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 /* A file the agent sent sits under the row that produced it, one step in

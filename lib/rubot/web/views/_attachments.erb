@@ -19,7 +19,7 @@
 <div class="attachments" role="group" aria-label="Lampiran dari Rubot">
   <% attachments.each do |file| -%>
   <% if file[:kind] == :document -%>
-  <figure class="attachment"
+  <figure class="attachment attachment--document"
           <% if file[:id] %>id="file-<%= h(file[:id]) %>" hx-preserve="true"<% end %>>
     <a class="attachment-document"
        href="<%= h(file[:url]) %>"
@@ -27,7 +27,11 @@
        rel="noopener"
        title="Buka <%= h(file[:name]) %>"
        aria-label="Buka <%= h(file[:name]) %>">
+      <% if File.extname(file[:name].to_s).casecmp?(".pdf") -%>
+      <%= pdf_icon %>
+      <% else -%>
       <span class="attachment-label" aria-hidden="true"><%= h(file[:label] || "FILE") %></span>
+      <% end -%>
       <span class="attachment-name"><%= h(file[:name]) %></span>
     </a>
     <a class="attachment-download"
