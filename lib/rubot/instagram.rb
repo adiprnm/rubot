@@ -23,7 +23,7 @@ module Rubot
     GRAPH = "https://graph.facebook.com/#{API_VERSION}".freeze
     OAUTH = "https://www.facebook.com/#{API_VERSION}/dialog/oauth".freeze
     SCOPE = "instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement,business_management".freeze
-    CREDENTIAL_KEYS = %w[instagram_app_id instagram_app_secret instagram_redirect_uri instagram_page_id].freeze
+    CREDENTIAL_KEYS = %w[instagram_app_id instagram_app_secret instagram_redirect_uri].freeze
 
     class Error < StandardError; end
 
@@ -196,19 +196,6 @@ module Rubot
       })
       page = Array(pages["data"]).find { |p| p["instagram_business_account"].is_a?(Hash) }
 
-      # Some Pages live inside a Business Portfolio and never show up in
-      # /me/accounts even for an admin. When the install knows the Page ID,
-      # query it directly — that endpoint still returns the linked IG account.
-      unless page
-        page_id = credentials["instagram_page_id"].to_s
-        unless page_id.empty?
-          direct = api_get("/#{page_id}", {
-            "fields" => "id,name,instagram_business_account",
-            "access_token" => user_token
-          })
-          page = direct if direct["instagram_business_account"].is_a?(Hash)
-        end
-      end
       raise Error, "Tidak ada Facebook Page yang terhubung ke akun Instagram Business/Creator" unless page
 
       ig_id = page.dig("instagram_business_account", "id").to_s

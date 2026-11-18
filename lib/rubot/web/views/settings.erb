@@ -1,15 +1,18 @@
-<%# The install's own three settings, as a page rather than a YAML file.
+<%# The install's own settings, as a page in its own right.
 
-    A whole document, like the gate: what is behind it is not a conversation, so
-    the shell (thread, composer, SSE stream) has nothing to hold. The link back
-    goes to the default persona, which is where a reader arrives from anyway.
+    Not a card over the chat: there is no conversation behind this document, so
+    there is nothing to float over. The document scrolls, the save button stays
+    in a strip at the top, and the fields are laid out as a ledger — a label in
+    the left gutter, its control and explanation on the right. That is the same
+    vernacular as the rest of rubot: mono for machine strings, hairlines for
+    structure, no decorative boxes.
 
     The key is never sent back into the page — it is a password box with a
     sentence about what is already stored, because a form that echoes a
     credential is a credential in the page source, the browser's form history
     and every screenshot of it. -%>
 <!DOCTYPE html>
-<html lang="id">
+<html lang="id" class="settings-doc">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -31,157 +34,180 @@
   <link rel="stylesheet" href="/assets/app.css?v=<%= h(asset_version) %>">
 </head>
 <body>
-<form class="settings-card" method="post" action="/settings<%= h(token_query) %>">
-  <h1>pengaturan</h1>
-
+<div class="settings-topbar">
+  <a class="settings-back" href="<%= h(back_url) %>"><span aria-hidden="true">←</span> kembali</a>
+  <span class="settings-topbar-title">pengaturan</span>
   <% if saved %>
-    <p class="settings-saved" role="status">
-      Tersimpan. Sesi baru langsung memakainya; sesi yang sedang menjawab
-      memakainya setelah turn itu selesai.
-    </p>
+    <span class="settings-flash settings-saved" role="status">Tersimpan</span>
   <% end %>
+  <button class="btn primary" type="submit" form="settings-form">Simpan</button>
+</div>
 
-  <% unless archived %>
-    <p class="settings-error">
-      Arsip sesi belum terbuka, jadi belum ada tempat untuk menyimpan.
-    </p>
-  <% end %>
+<main class="settings-page">
+  <form id="settings-form" class="settings-form" method="post" action="/settings<%= h(token_query) %>">
+    <header class="settings-intro">
+      <h1>Pengaturan pemasangan</h1>
+      <p class="settings-lead">Nilai di sini dipakai semua persona, bukan satu sesi. Kunci dan rahasia tidak pernah dikirim balik ke halaman ini setelah disimpan.</p>
 
-  <label>Provider
-    <select name="provider">
-      <% provider_choices.each do |choice| %>
-        <option value="<%= h(choice) %>"<%= " selected" if choice == provider %>><%= h(choice) %></option>
+      <% unless archived %>
+        <p class="settings-error">
+          Arsip sesi belum terbuka, jadi belum ada tempat untuk menyimpan.
+        </p>
       <% end %>
-    </select>
-  </label>
+    </header>
 
-  <label>API key
-    <input type="password" name="api_key" value=""
-           autocomplete="new-password" autocapitalize="off" autocorrect="off"
-           spellcheck="false"
-           placeholder="<%= key_set ? "sudah tersimpan — kosongkan untuk tidak mengubah" : "belum ada" %>">
-  </label>
-  <% if key_from_archive %>
-    <p class="settings-hint">
-      Disimpan di database install. Kosongkan kolom di atas kalau tidak ingin
-      mengubahnya, atau centang hapus untuk kembali ke config.yml.
-    </p>
-  <% elsif !key_set %>
-    <p class="settings-hint">
-      Belum ada kunci. Tanpa kunci, hanya provider lokal seperti ollama yang
-      bisa menjawab.
-    </p>
-  <% end %>
-  <% if key_from_archive %>
-    <label class="settings-check">
-      <input type="checkbox" name="clear_api_key" value="1">
-      Hapus kunci dari database (kembali ke config.yml)
-    </label>
-  <% end %>
+    <section class="settings-group" aria-labelledby="settings-group-connection">
+      <h2 class="settings-group-title" id="settings-group-connection">Koneksi</h2>
 
-  <label>Model default
-    <select name="default_model">
-      <% model_choices.each do |choice| %>
-        <option value="<%= h(choice[:value]) %>"<%= " selected" if choice[:value] == default_model %>><%= h(choice[:label]) %></option>
-      <% end %>
-      <% unless default_model.empty? || model_choices.any? { |choice| choice[:value] == default_model } %>
-        <option value="<%= h(default_model) %>" selected><%= h(default_model) %></option>
-      <% end %>
-    </select>
-  </label>
+      <div class="settings-field">
+        <label for="setting-provider">Provider</label>
+        <div class="settings-control">
+          <select id="setting-provider" name="provider">
+            <% provider_choices.each do |choice| %>
+              <option value="<%= h(choice) %>"<%= " selected" if choice == provider %>><%= h(choice) %></option>
+            <% end %>
+          </select>
+        </div>
+      </div>
 
-  <label>Model auxiliary
-    <select name="auxiliary_model">
-      <% model_choices.each do |choice| %>
-        <option value="<%= h(choice[:value]) %>"<%= " selected" if choice[:value] == auxiliary_model %>><%= h(choice[:label]) %></option>
-      <% end %>
-      <% unless auxiliary_model.empty? || model_choices.any? { |choice| choice[:value] == auxiliary_model } %>
-        <option value="<%= h(auxiliary_model) %>" selected><%= h(auxiliary_model) %></option>
-      <% end %>
-    </select>
-  </label>
+      <div class="settings-field">
+        <label for="setting-api-key">API key</label>
+        <div class="settings-control">
+          <input id="setting-api-key" type="password" name="api_key" value=""
+                 autocomplete="new-password" autocapitalize="off" autocorrect="off"
+                 spellcheck="false"
+                 placeholder="<%= key_set ? "sudah tersimpan — kosongkan untuk tidak mengubah" : "belum ada" %>">
+          <% if key_from_archive %>
+            <p class="settings-note">
+              Disimpan di database pemasangan. Kosongkan kolom di atas kalau tidak ingin
+              mengubahnya, atau centang hapus untuk kembali ke config.yml.
+            </p>
+            <label class="settings-check">
+              <input type="checkbox" name="clear_api_key" value="1">
+              Hapus kunci dari database (kembali ke config.yml)
+            </label>
+          <% elsif !key_set %>
+            <p class="settings-note">
+              Belum ada kunci. Tanpa kunci, hanya provider lokal seperti ollama yang
+              bisa menjawab.
+            </p>
+          <% end %>
+        </div>
+      </div>
 
-  <fieldset class="settings-section">
-    <legend>Instagram</legend>
+      <div class="settings-field">
+        <label for="setting-default-model">Model default</label>
+        <div class="settings-control">
+          <select id="setting-default-model" name="default_model">
+            <% model_choices.each do |choice| %>
+              <option value="<%= h(choice[:value]) %>"<%= " selected" if choice[:value] == default_model %>><%= h(choice[:label]) %></option>
+            <% end %>
+            <% unless default_model.empty? || model_choices.any? { |choice| choice[:value] == default_model } %>
+              <option value="<%= h(default_model) %>" selected><%= h(default_model) %></option>
+            <% end %>
+          </select>
+        </div>
+      </div>
 
-    <label>App ID
-      <input type="text" name="instagram_app_id" value="<%= h(ig_app_id) %>"
-             autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
-             placeholder="dari Meta App">
-    </label>
+      <div class="settings-field">
+        <label for="setting-auxiliary-model">Model auxiliary</label>
+        <div class="settings-control">
+          <select id="setting-auxiliary-model" name="auxiliary_model">
+            <% model_choices.each do |choice| %>
+              <option value="<%= h(choice[:value]) %>"<%= " selected" if choice[:value] == auxiliary_model %>><%= h(choice[:label]) %></option>
+            <% end %>
+            <% unless auxiliary_model.empty? || model_choices.any? { |choice| choice[:value] == auxiliary_model } %>
+              <option value="<%= h(auxiliary_model) %>" selected><%= h(auxiliary_model) %></option>
+            <% end %>
+          </select>
+          <p class="settings-note">Model untuk pekerjaan di belakang layar, seperti merangkum dan menamai sesi.</p>
+        </div>
+      </div>
+    </section>
 
-    <label>App Secret
-      <input type="password" name="instagram_app_secret" value=""
-             autocomplete="new-password" autocapitalize="off" autocorrect="off"
-             spellcheck="false"
-             placeholder="<%= ig_secret_set ? "sudah tersimpan — kosongkan untuk tidak mengubah" : "belum ada" %>">
-    </label>
-    <% if ig_secret_set %>
-      <label class="settings-check">
-        <input type="checkbox" name="clear_ig_secret" value="1">
-        Hapus App Secret dari database
-      </label>
-    <% end %>
+    <section class="settings-group" aria-labelledby="settings-group-instagram">
+      <h2 class="settings-group-title" id="settings-group-instagram">Instagram</h2>
 
-    <label>Redirect URI
-      <input type="url" name="instagram_redirect_uri" value="<%= h(ig_redirect_uri) %>"
-             autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
-             placeholder="https://nama.ts.net/instagram/callback">
-    </label>
-    <p class="settings-hint">
-      Daftarkan URI ini di Meta App → Facebook Login → Valid OAuth Redirect URIs.
-      Harus HTTPS (localhost boleh HTTP).
-    </p>
+      <div class="settings-field">
+        <label for="setting-ig-app-id">App ID</label>
+        <div class="settings-control">
+          <input id="setting-ig-app-id" type="text" name="instagram_app_id" value="<%= h(ig_app_id) %>"
+                 autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+                 placeholder="dari Meta App">
+        </div>
+      </div>
 
-    <label>Page ID (opsional)
-      <input type="text" name="instagram_page_id" value="<%= h(ig_page_id) %>"
-             autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
-             placeholder="ID Facebook Page, mis. 123456789012345">
-    </label>
-    <p class="settings-hint">
-      Isi kalau <code>/me/accounts</code> Meta balik kosong. Ambil dari Page →
-      Tentang → ID Halaman, lalu rubot akan query Page itu langsung.
-    </p>
+      <div class="settings-field">
+        <label for="setting-ig-secret">App Secret</label>
+        <div class="settings-control">
+          <input id="setting-ig-secret" type="password" name="instagram_app_secret" value=""
+                 autocomplete="new-password" autocapitalize="off" autocorrect="off"
+                 spellcheck="false"
+                 placeholder="<%= ig_secret_set ? "sudah tersimpan — kosongkan untuk tidak mengubah" : "belum ada" %>">
+          <% if ig_secret_set %>
+            <label class="settings-check">
+              <input type="checkbox" name="clear_ig_secret" value="1">
+              Hapus App Secret dari database
+            </label>
+          <% end %>
+        </div>
+      </div>
 
-    <p class="settings-hint">
-      Akun yang terhubung di persona <strong><%= h(ig_persona) %></strong>:
-    </p>
-    <% if ig_accounts.empty? %>
-      <p class="settings-hint">Belum ada. Ketik "connect ke instagram" di chat untuk mulai.</p>
-    <% else %>
-      <ul class="ig-account-list">
-        <% ig_accounts.each do |acc| -%>
-          <li class="ig-account-row">
-            <span class="ig-account-name">
-              <span class="ig-check" aria-hidden="true">✓</span>
-              @<%= h(acc["username"]) %><% if acc["is_default"] %> <span class="ig-default-label">(default)</span><% end %>
-            </span>
-          </li>
-        <% end -%>
-      </ul>
-      <label class="settings-check">
-        <input type="checkbox" name="ig_disconnect" value="1">
-        Putuskan semua akun Instagram persona ini
-      </label>
-    <% end %>
-    <% unless ig_linkable_accounts.empty? -%>
-      <p class="settings-hint">Akun yang sudah terhubung di persona lain — centang untuk link ke persona ini tanpa OAuth:</p>
-      <% ig_linkable_accounts.each do |acc| -%>
-        <label class="settings-check">
-          <input type="checkbox" name="ig_link" value="<%= h(acc["username"]) %>">
-          @<%= h(acc["username"]) %>
-        </label>
-      <% end -%>
-    <% end -%>
-  </fieldset>
+      <div class="settings-field">
+        <label for="setting-ig-redirect">Redirect URI</label>
+        <div class="settings-control">
+          <input id="setting-ig-redirect" type="url" name="instagram_redirect_uri" value="<%= h(ig_redirect_uri) %>"
+                 autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+                 placeholder="https://nama.ts.net/instagram/callback">
+          <p class="settings-note">
+            Daftarkan URI ini di Meta App → Facebook Login → Valid OAuth Redirect URIs.
+            Harus HTTPS (localhost boleh HTTP).
+          </p>
+        </div>
+      </div>
 
-  <p class="settings-hint">
-    <a href="/settings?refresh=1<%= h(token_query.empty? ? "" : "&" + token_query.sub(/^\?/, "")) %>">Refresh daftar model</a>
-  </p>
-  <div class="settings-row">
-    <a class="btn" href="<%= h(back_url) %>">Kembali</a>
-    <button class="btn primary" type="submit">Simpan</button>
-  </div>
-</form>
+      <div class="settings-field">
+        <span class="settings-field-label">Akun terhubung</span>
+        <div class="settings-control">
+          <p class="settings-note">
+            Persona <strong><%= h(ig_persona) %></strong> punya:
+          </p>
+          <% if ig_accounts.empty? %>
+            <p class="settings-note">Belum ada. Ketik "connect ke instagram" di chat untuk mulai.</p>
+          <% else %>
+            <ul class="ig-account-list">
+              <% ig_accounts.each do |acc| -%>
+                <li class="ig-account-row">
+                  <span class="ig-account-name">
+                    <span class="ig-check" aria-hidden="true">✓</span>
+                    @<%= h(acc["username"]) %><% if acc["is_default"] %> <span class="ig-default-label">(default)</span><% end %>
+                  </span>
+                </li>
+              <% end -%>
+            </ul>
+            <label class="settings-check">
+              <input type="checkbox" name="ig_disconnect" value="1">
+              Putuskan semua akun Instagram persona ini
+            </label>
+          <% end %>
+          <% unless ig_linkable_accounts.empty? -%>
+            <p class="settings-note">Akun yang sudah terhubung di persona lain — centang untuk link ke persona ini tanpa OAuth:</p>
+            <% ig_linkable_accounts.each do |acc| -%>
+              <label class="settings-check">
+                <input type="checkbox" name="ig_link" value="<%= h(acc["username"]) %>">
+                @<%= h(acc["username"]) %>
+              </label>
+            <% end -%>
+          <% end -%>
+        </div>
+      </div>
+    </section>
+
+    <footer class="settings-foot">
+      <a href="/settings?refresh=1<%= h(token_query.empty? ? "" : "&" + token_query.sub(/^\?/, "")) %>">Refresh daftar model</a>
+      <a href="<%= h(back_url) %>">Kembali ke percakapan</a>
+    </footer>
+  </form>
+</main>
 </body>
 </html>

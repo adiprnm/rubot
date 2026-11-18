@@ -1409,7 +1409,6 @@ module Rubot
           key_set: !@app_config&.api_key.to_s.empty?,
           key_from_archive: !store&.setting("api_key").to_s.strip.empty?,
           ig_app_id: store&.setting("instagram_app_id").to_s,
-          ig_page_id: store&.setting("instagram_page_id").to_s,
           ig_redirect_uri: store&.setting("instagram_redirect_uri").to_s,
           ig_secret_set: !store&.setting("instagram_app_secret").to_s.strip.empty?,
           ig_persona: ig_persona_for(req),
@@ -1474,7 +1473,7 @@ module Rubot
         # Instagram credentials are typed here, but the token is not: it is
         # minted by the callback and lives in its own table. Only the three
         # credential keys go through the form, so saving cannot erase a token.
-        %w[instagram_app_id instagram_redirect_uri instagram_page_id].each do |key|
+        %w[instagram_app_id instagram_redirect_uri].each do |key|
           values[key] = form(req, key).strip
         end
         if form(req, "clear_ig_secret") == "1"
