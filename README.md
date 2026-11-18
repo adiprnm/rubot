@@ -1,54 +1,29 @@
-# 🤖 Rubot - AI Assistant in Ruby
+# 🤖 Rubot — AI Assistant in Ruby
 
-> Personal AI assistant written in pure Ruby — powered by Ractors.
+> A lightweight, terminal-based AI assistant written in pure Ruby.
 
-Rubot is a lightweight, terminal-based AI assistant inspired by [NanoBot](https://github.com/HKUDS/nanobot) and [PicoClaw](https://github.com/sipeed/picoclaw). It connects to LLM providers (OpenAI, Anthropic, Ollama, or any OpenAI-compatible API) and executes tool calls — all using only Ruby's standard library.
+Rubot connects to LLM providers (OpenAI, Anthropic, Ollama, or any OpenAI-compatible API) and executes tool calls using only Ruby's standard library. It runs as a terminal REPL, a Telegram bot, or a browser UI.
 
 ## Features
 
 - 🪶 **Almost zero dependencies** — Ruby 4 standard library; WEBrick only for Telegram webhook mode
 - ⚡ **Ractor-powered sessions** — one actor per conversation, no shared mutable agent state
 - 🔌 **Multiple providers** — OpenAI, Anthropic, Ollama, or any OpenAI-compatible API
-- 🛠️ **Built-in tools** — shell execution, file operations, web fetching, persistent memory, cron scheduling
-- 💬 **Interactive REPL** — with streaming, command history, tab completion, and a slash-command palette
-- ⌨️ **Multiline prompt** — Shift+Enter inserts a newline and the input box grows with the text, word-wrapping long lines
-- 📝 **External editor** — Ctrl+G opens the half-typed prompt in `$EDITOR` and takes the edited text straight back into the input box
-- 🧾 **File diffs** — every file the agent writes, edits or deletes shows a compact diff under the tool row in the TUI
-- ❌ **Failure markers** — a tool row settles on ✓ or, when the call fails (an `ERROR:` result or a non-zero exit code), on ✗
-- ⏱️ **Slow-tool clock** — a tool call running past 3 seconds shows how long it has been going, pinned to the right end of its row
-- 📝 **Session management** — persistent conversation history in one central directory, a new session per TUI launch, and `/resume` to browse and reopen the saved sessions started from the directory you are in
-- 🧬 **SOUL.md** — personality and identity file for persistent character
-- 🎛️ **Model presets** — named model configurations with a primary default, switchable per session and manageable from Telegram
-- 🎚️ **Model picker** — `/models` lists every model the provider supports and switches the active session to the one you pick
-- 🎭 **Per-topic personas** — each Telegram forum topic can have its own model preset and system prompt, set up with an inline-button wizard
-- 📋 **AGENTS.md** — YAML frontmatter config + markdown behavior rules
-- 🧠 **MEMORY.md** — persistent memory the bot can read and update across sessions
-- ⏰ **Cron scheduling** — schedule reminders, recurring tasks, and timed alerts
-- 🔒 **Safety guard** — dangerous command filtering (PicoClaw-style sandboxing), without blocking the documented `ruby -e` workflow
-- ✏️ **Precise edits** — `file_ops edit` replaces one exact block instead of rewriting the whole file, and `read` takes `offset`/`limit` so a long file can be read in pieces
-- 🔎 **Search tool** — `search` finds files (`**/*.rb`) or matching lines (`path:line: text`) inside a repo, skipping `.git`, `node_modules` and build output
-- 🎯 **Task anchor** — the user's original request is stored on the session and re-stated in the system prompt as soon as trimming or compaction takes it out of the transcript, so a long task cannot forget its goal while a short one is not handed a competing instruction
-- 🎯 **Skills system** — pluggable skill definitions via SKILL.md files in the workspace; loading one shows up in the TUI transcript as its own `✦ skill <name>` row, and flips to `✓` once read
-- 📡 **Multi-channel** — REPL, Telegram and a browser UI, with a pluggable channel architecture
-- 🌐 **Browser channel** — an HTMX page streamed over Server-Sent Events: token streaming, live tool rows and a confirmation card, with no frontend build step
-- 🖼️ **Pictures in the browser chat** — a picture the agent sends with `send_files` is drawn in the thread under the tool row that produced it, opens into a lightbox, and can be downloaded from either the thumbnail or the sheet; one call sends a batch and draws it as one strip
-- 📄 **Documents in the browser chat** — a PDF or a markdown note sent the same way becomes a card in that strip: the browser's own viewer opens the PDF in a tab, the note opens as text, and both download under the reader's own file name
-- 📎 **Inbound attachments** — screenshots and files sent to Telegram are saved to the workspace, with dimensions and size added to the prompt
-- 🔈 **Progress narration** — the model explains what it is doing between tool calls ("Let me check the structure first."), sent as normal chat messages
-- 🧭 **Steering** — type while a turn is running (TUI, or a plain message in Telegram) and it reaches the model between rounds, without stopping the turn
-- ⏹️ **`/stop`** — stops the running turn instantly, mid-answer or mid-command: an open provider stream is closed, not drained, and the shell command it started is killed
-- 🗜️ **Context compaction** — `/compact` summarizes older turns, and auto-compaction kicks in at a configurable share of the context window
-- 🪶 **Lean requests** — past reasoning is never re-sent, old tool output is shortened, and an optional token budget bounds the history block
-- 🎨 **Telegram HTML rendering** — model Markdown becomes Telegram HTML: nested bold/italic, `<blockquote expandable>`, spoilers, syntax-highlighted code, aligned monospace tables, and long replies split without breaking entities
-- 📄 **`.env` support** — automatic environment variable loading from `.env` files
-- 🎛️ **CLI options** — single-message mode or interactive chat
+- 🛠️ **Built-in tools** — shell, file operations, search, web fetch, memory, cron, file delivery, notifications, Instagram
+- 💬 **Interactive TUI** — streaming, history, tab completion, multiline input, slash commands
+- 📡 **Multi-channel** — terminal, Telegram, and a browser UI (HTMX + SSE, no build step)
+- 🗃️ **SQLite session archive** — full-text search across past conversations, with backup/export tooling
+- 🧬 **Personas** — per-topic or per-browser persona with its own model, prompt, soul, and memory
+- 🗜️ **Context compaction** — automatic or `/compact`, with a lean request history
+- 🧠 **Persistent memory** — global and per-project/persona, with batched extraction and post-answer learning
+- ⏰ **Cron scheduling** — reminders, recurring tasks, and timed alerts
+- 🔒 **Safety guard** — blocks dangerous commands before execution
+- 🎭 **Skills** — pluggable `SKILL.md` instructions in the workspace
 
 ## Requirements
 
-- Ruby 4.0+
-- `bundle install` (only for `webrick` in webhook mode, plus test gems)
-
-The repository pins Ruby with `.ruby-version` and `mise.toml`. With [mise](https://mise.jdx.dev/):
+- Ruby 4.0+ (pinned via `.ruby-version` and `mise.toml`)
+- `bundle install` only for WEBrick (webhook mode) and test gems
 
 ```bash
 mise install
@@ -57,317 +32,33 @@ mise exec -- ruby -v   # 4.0.9
 
 ## Installation
 
-Clone the repository and add `bin/` to your PATH:
-
 ```bash
 git clone https://github.com/adipurnm/rubot.git
 cd rubot
-export PATH="$PWD/bin:$PATH"  # or add to ~/.bashrc
+export PATH="$PWD/bin:$PATH"   # or add to ~/.bashrc
 ```
 
-Or just run directly:
-
-```bash
-ruby bin/rubot --help
-```
+Or run directly: `ruby bin/rubot --help`
 
 ## Quick Start
 
-### 1. Initialize
-
 ```bash
-rubot init
+rubot init                 # create ~/.rubot/ with config, workspace, and default files
+vim ~/.rubot/config.yml    # or: export RUBOT_API_KEY="sk-..."
+rubot check                # validate config and channel connections
+rubot                      # interactive mode
 ```
 
-This creates `~/.rubot/` with a default config, workspace, SOUL.md, MEMORY.md, AGENTS.md, and the skill-creator skill.
-
-### 2. Configure
-
-Edit the generated config:
+Common run modes:
 
 ```bash
-vim ~/.rubot/config.yml
-```
-
-Or use environment variables:
-
-```bash
-export RUBOT_API_KEY="sk-your-key-here"
-```
-
-### 3. Validate
-
-```bash
-rubot check
-```
-
-Checks your config, API key, workspace, and channel connections before you start.
-
-### 4. Run
-
-```bash
-# Interactive mode
-rubot
-
-# Terminal UI only, even when other channels (e.g. Telegram) are enabled
-rubot tui
-
-# Single message
-rubot -m "What is Ruby?"
-
-# Use Ollama (no API key needed)
-rubot -p ollama -M llama3 -m "Hello!"
-
-# With Anthropic/Claude
-export ANTHROPIC_API_KEY="sk-ant-..."
+rubot tui                                          # terminal UI only
+rubot -m "What is Ruby?"                           # single message
+rubot -p ollama -M llama3 -m "Hello!"              # local model, no API key
 rubot -p anthropic -M claude-sonnet-4-20250514 -m "Hello!"
-
-# Debug mode
-rubot -d -m "Test"
-
-# Disable tools
-rubot -n -m "Just chat"
-
-# Telegram channel
-export TELEGRAM_BOT_TOKEN="123456:ABC-DEF..."
-rubot -C telegram
-```
-
-## Usage
-
-### Interactive Mode
-
-```
-$ rubot
-╔══════════════════════════════════════════════╗
-║         🤖  Rubot AI Assistant  🤖          ║
-╠══════════════════════════════════════════════╣
-║  Provider: openai                            ║
-║  Model:    gpt-4o-mini                       ║
-║  Tools:    3 loaded                          ║
-╠══════════════════════════════════════════════╣
-║  Type /help for commands, /quit to exit     ║
-╚══════════════════════════════════════════════╝
-
-🤖 You: List files in the current directory
-🤖 Assistant: [streamed response...]
-```
-
-The TUI uses the directory `rubot` was launched from as its working directory.
-`shell_exec` starts there, relative paths in `file_ops` resolve against it, and
-sessions, cron jobs and the safety guard follow the project you are standing in
-— the TUI ignores `agents.defaults.workspace` from `config.yml` for those.
-
-Identity and knowledge are different: `SOUL.md`, `AGENTS.md` and `skills/`
-are read from the shared directory next to `config.yml` (`~/.rubot` by
-default), so launching the TUI inside a project does not throw away the
-assistant you set up. Point `agents.defaults.assets_workspace` at another
-directory to keep them somewhere else. Memory works the other way round:
-`~/.rubot/MEMORY.md` is shared by everything, and each project gets its own
-file under `~/.rubot/memory/`. Other channels (Telegram) and one-shot `-m`
-runs use the configured workspace for everything.
-
-### REPL Commands
-
-Every command's output is set apart in the transcript: one blank line above
-and below it, and two cells of left padding. A command that prints nothing
-still leaves one blank line below it, so whatever comes next is set apart from
-it — and so does a list that is cancelled (`/models`, `/resume`): the rows go
-back out, and the blank line stays.
-
-| Command | Description |
-|---------|-------------|
-| `/help` | Show available commands |
-| `/clear` | Clear conversation history |
-| `/new` | Clear chat and start a new session |
-| `/stop` | Stop the task that is running (Ctrl+C during a turn does the same) |
-| `/compact` | Summarize older messages to free context |
-| `/session [name]` | Show or switch session |
-| `/resume` | Show saved sessions under the command; `↑`/`↓` + `Enter` resumes one (plain REPL: numbered list) |
-| `/resume all` | List saved sessions from every directory, not just the current one |
-| `/resume <n\|id>` | Reopen a saved session by number or id |
-| `/info` | Show agent info (includes soul/memory status) |
-| `/models` | List the models the provider supports; type to search, `↑`/`↓` + `Enter` switches the active session to one (plain REPL: printed list) |
-| `/models <text>` | Show only the models whose id or name contains `<text>` |
-| `/use-model <name\|id>` | Switch the active session to a configured model or a provider model id |
-| `/context` | Show context usage, cache hit rate, and estimated cost |
-| `/usage` | Show OpenCode Go subscription usage |
-| `/tools` | List available tools |
-| `/soul` | Show the bot's soul (SOUL.md) |
-| `/memory` | Show persistent memory (global + this workspace) |
-| `/agents` | Show agent rules (AGENTS.md) |
-| `/cron` | List scheduled cron jobs |
-| `/cron delete <id>` | Delete a cron job |
-| `/web-restart` | Restart the web channel (`bin/rubot web`) — stop, start, and check it came up |
-| `/stream on\|off` | Toggle streaming |
-| `/quit` | Exit |
-
-Sessions live as JSON files in one central directory next to `config.yml` —
-`~/.rubot/sessions/` by default, never inside the workspace and never in the
-project you happen to launch from. Each file records the directory
-its session was started in (`cwd`), and `/resume` shows only the conversations
-that were started from the current directory (exact match, not a prefix, so
-`app` and `app/lib` are different projects). A hint at the end of the list
-counts the ones from elsewhere, and `/resume all` lists every tagged session;
-`/resume <id>` still opens any of them by id. Sessions with no directory of
-their own — Telegram chats, and files written before the field existed — are
-never listed. Every TUI launch
-starts a new conversation under a timestamped id — the previous one keeps its
-own id and stays resumable, so nothing is lost. A session file is only written
-once it has at least one message: closing a launch before saying anything
-leaves nothing behind and adds nothing to `/resume`. The list of saved sessions
-is written into the transcript, right under the echoed command (not a floating
-window), newest first, each row showing the last prompt with the message count
-and age pinned to the right edge. `Up`/`Down` (or `PageUp`/`PageDown`) move the
-highlight, `Enter` resumes the selected session and restores its whole
-transcript — every user prompt, tool call, and assistant answer, rendered
-exactly as it looked while the session was live — and `Esc` takes the list back
-out without switching. `/resume 2` and `/resume <id>` reopen a session without
-the list (a piped, non-tty REPL replays the transcript as plain text), and
-`/resume` alone prints the numbered list there. `/session <name>` still switches
-directly.
-
-`/models` asks the provider which models it serves (`GET /models` for
-OpenAI-compatible APIs, `GET /v1/models` for Anthropic, `GET /api/tags` for
-Ollama) and writes the list into the transcript, right under the echoed
-command. Models configured in `config.yml` that the provider does not
-advertise are listed as well, so a configured model stays selectable. The
-model the session is running is marked with `✓`. Typing searches the list:
-every keystroke narrows it to the models whose id or name contains what has
-been typed, `Backspace` undoes a character, and the header counts the matches
-(`(2/30)`). `Up`/`Down` (or
-`PageUp`/`PageDown`) move the highlight, `Enter` switches the active session
-to the highlighted model — it stays switched until `/new` — and `Esc` clears
-the search, and closes the list once the search is empty. `/models <text>`
-narrows the list to the models whose id or name contains that text. The
-catalog is cached
-in `model_catalog.json` next to `config.yml`, so a provider that is temporarily
-unreachable still shows the last known list. One copy is shared by every
-workspace and every persona.
-
-### TUI Keys
-
-| Key | Action |
-|-----|--------|
-| `Enter` | Send the prompt, take the highlighted `/command`, or steer the turn that is running |
-| `Shift+Enter`, `Alt+Enter` | Insert a newline |
-| `Up` / `Down` | Move between lines once the input has more than one, otherwise recall history; while the command list is open, pick an entry |
-| `Ctrl+Left` / `Ctrl+Right` | Move the caret one word left or right |
-| `Tab` | Complete a `/command` |
-| `Ctrl+G` | Edit the prompt in `$EDITOR`, then take it back into the input |
-| `Esc` | Cancel the running turn, clear a selection |
-| `Ctrl+C` | Quit |
-| `PageUp` / `PageDown`, mouse wheel | Scroll the transcript |
-| Drag with the mouse | Select text; released selection is copied via OSC 52 |
-
-Typing `/` at the start of the prompt opens the command list above the input
-box, with each command's description on the right. Keep typing to filter it,
-use `Up`/`Down` to move the highlight, and press `Enter` to put the highlighted
-command in the prompt (a fully typed command runs on `Enter` instead). `Esc`
-dismisses the list, and a space closes it once you start typing an argument.
-
-While a turn is running, `Enter` steers it instead of queueing behind it: the
-line is echoed on its own row, set apart by a blank row above and below, and
-handed to the model after the tool calls of the round in flight, before its
-next request. That is how a direction is corrected
-mid-turn — "use the other directory", "skip the tests" — without cancelling
-the work already done. Each steer becomes its own user turn, so it stays in
-the session and is replayed on `/resume`. Commands typed while a turn is
-running do not wait for it either: they run on a lane of their own and the
-actor answers them while the turn is in flight — reads (`/help`, `/info`,
-`/context`, `/tools`, `/model`, `/soul`, `/memory`, `/agents`, `/session`,
-`/stream`) as well as writes and network calls (`/clear`, `/new`, `/compact`,
-`/usage`, `/models`, `/auto`, `/cron`). The one thing the agent still
-serialises is the turn itself: a second *message* waits for the first answer,
-while `Esc` (or `/stop`) stops the turn as before.
-
-The prompt grows with its content: hard newlines and long lines that wrap both
-add rows, up to six. `Shift+Enter` needs a terminal that reports the key
-separately, which means the kitty keyboard protocol (kitty, Ghostty, WezTerm,
-foot, iTerm2) or xterm's modifyOtherKeys — rubot turns both on for the duration
-of the session. Terminals that cannot distinguish it (Alacritty) send a plain
-`Enter`.
-
-Under the prompt, one dim row shows the directory rubot was launched from,
-followed by the current git branch when that directory (or one of its
-parents) is a work tree (for example `~/Projects/rubot @ main`); `~`
-abbreviates the home directory. Below it, the status row tracks the running
-turn's estimated cost, cache hit rate, and how much of the model's context
-window is in use (for example `$0.004 · cache 87.3% · ctx 11.6%`), with the
-model on the right. The row is populated at launch, before the first turn: a
-fresh session reads `$0.000 · cache — · ctx 4.3%`, since the system prompt
-already occupies part of the window. Figures refresh after every turn and
-after `/clear`, `/new`, `/session` and `/use-model`; `/context` has the full
-report. The session name is not shown in the footer — use `/session` to print
-it.
-
-When the agent creates, edits, appends to or deletes a file, the TUI renders
-the diff right under the `✓ file_ops write …` row in the same look as the
-[`pi-claude-code-ui`](https://www.npmjs.com/package/pi-claude-code-ui)
-extension (pi-diff's unified view): a summary line (`+2 -1 • 1 hunk at line
-20`), a dim rule, then one row per line with a coloured `▌` stripe, a tinted
-gutter and line number, a bold `+`/`-`, a `│` divider, and the content on a
-full-width tint. Changed words inside a paired `-`/`+` line get a brighter
-tint, three lines of context surround each change, and distant regions
-collapse into a `── N unmodified lines ──` rule. Long lines are truncated
-with `…` rather than wrapped, and the body is capped at 32 rows with a
-`… (N more diff lines)` row, so a rewrite cannot flood the transcript. The
-built-in `Editing Files` rule in the system prompt (outside
-the configurable prompt, like the `Scripting Language` rule) asks the agent to
-create, edit and delete files through `file_ops` instead of in-place shell
-edits, and not to recite the file's contents in its reply once an edit
-succeeds — what changed is already visible in the interface; destructive shell
-edits (`sed -i`, `rm`, …) still go through the confirmation above. A failed
-call shows the same way at a glance: the row's `⚒` settles on `✗` instead of
-`✓` when the tool returned an `ERROR:` result or a shell command exited
-non-zero, and a resumed session rebuilds that marker from the saved tool
-result. A call that takes longer than three seconds grows a dim `· 4s` tail
-while it is still running, so a hung tool reads as busy instead of frozen; a
-finished call keeps the total, and a call that came back sooner stays one
-quiet line. The tail is pinned to the right end of the row instead of being
-trailed after the summary: the row itself never wraps — a long command is cut
-to `…` — so the clock stays on the same line, one cell clear of the scrollbar
-column, which is why the bar never covers it. That duration is a view, not a
-record: it is not stored on the tool message, so `/resume` redraws the row
-without it. A delete
-replays every line it removed: the file has no after-content, so the whole
-block is red. The tool still returns its plain `Written/Appended/Edited/Deleted …`
-result to the model; the diff is a TUI view only. Its before/after text is kept as UI
-metadata on the tool message (never sent to the model), so `/resume` redraws
-the same diff at the new width.
-
-When the agent's next action could destroy data (a rewrite that throws most of
-a file away, deleting a file, a dangerous shell command), the worker asks
-first: the question names the damage (`overwrite build.log — 412 of 900 lines
-would be lost`, `deletes files`) rather than announcing that something is
-dangerous, and it is
-written into the transcript right above the input — no floating modal — as `⚠
-<description>` rows above two choice chips, `› ✓ Allow   ✗ Reject`.`←/→` move
-the highlight (it starts on `Reject`, so a blind `Enter` never allows),
-`Enter` commits the highlighted choice and `Esc` rejects; anything else is
-swallowed. The mouse stays with the log, so the path or command can be
-drag-selected and copied while the question is up. The turn is blocked until
-it is answered, and once it is, the exchange is taken back out of the
-transcript — only one blank row keeps the spacing — because the tool rows and
-the answer that follow are the record.
-
-**Auto mode** (`/auto on` in the TUI or Telegram, remembered in `config.yml`)
-skips those questions: anything the safety guard allows runs straight away. The
-guard itself is not affected — the destructive patterns below are checked
-inside the tools and are refused with or without auto mode, which is why auto
-mode removes a prompt and not a limit. The status row says `AUTO` while it is
-on.
-
-`Ctrl+G` hands the prompt to an external editor for a long or multi-paragraph
-message, then reads it back into the input box. The editor is `external_editor`
-from `config.yml` when set, otherwise `$VISUAL`, `$EDITOR`, or `vi`. The TUI
-steps aside while the editor runs (alternate screen, raw mode, mouse tracking
-and the keyboard protocol are restored afterwards), so a normal full-screen
-editor works in place. The command has to block until the file is saved — use
-`code --wait`, not `code`:
-
-```yaml
-external_editor: nvim
+rubot -d -m "Test"                                 # debug mode
+rubot -n -m "Just chat"                            # disable tools
+rubot -C telegram                                  # Telegram channel
 ```
 
 ### CLI Options
@@ -383,8 +74,8 @@ external_editor: nvim
 | `-n, --no-tools` | Disable tools |
 | `--no-stream` | Disable streaming output |
 | `-e, --env-file PATH` | Load environment variables from a file |
+| `-C, --channel CHANNEL` | Channel: tui, telegram (default: configured channels) |
 | `-v, --version` | Show version |
-| `-C, --channel CHANNEL` | Channel to use: tui, telegram (default: configured channels) |
 | `-h, --help` | Show help |
 
 ### Subcommands
@@ -393,18 +84,31 @@ external_editor: nvim
 |------------|-------------|
 | `rubot init` | Initialize config, workspace, and default files |
 | `rubot check` | Validate config and test channel connections |
-| `rubot tui` | Run the terminal UI only and skip every configured channel |
+| `rubot tui` (`repl`, `chat`) | Run the terminal UI only, skipping configured channels |
+| `rubot web` | Run the browser UI on `http://127.0.0.1:4567` |
+| `rubot store <op>` | Maintain the SQLite session archive (see below) |
+
+Sessions are archived in a SQLite database (`sessions.db` next to `config.yml`) with a full-text index over past conversations. The `rubot store` subcommand maintains it:
+
+```bash
+rubot store backup [path]     # back up the database (WAL-aware)
+rubot store export [dir]      # export sessions as JSON
+rubot store optimize          # run housekeeping (FTS merge, etc.)
+rubot store counts            # show row counts
+rubot store search <query>    # full-text search across messages
+rubot store reindex           # rebuild the full-text index
+```
 
 ## Configuration
 
-Config file location: `~/.rubot/config.yml` (or set `RUBOT_CONFIG`)
+Config lives at `~/.rubot/config.yml` (override with `RUBOT_CONFIG`).
 
 ```yaml
 agents:
   defaults:
     workspace: ~/.rubot/workspace
     name: gpt-4o-mini
-    model_preset: primary        # preset used by new sessions
+    model_preset: primary
     max_tokens: 4096
     temperature: 0.3
     system_prompt: "You are Rubot, a helpful AI assistant."
@@ -415,12 +119,12 @@ agents:
       threshold_tokens: 120000
       keep_recent_messages: 40
     memory:
-      extract_every: 3       # batch memory extraction (0 disables it)
-      consolidate: true      # dedupe and cap MEMORY.md sections
+      extract_every: 3
+      consolidate: true
 
 model_presets:
   primary:
-    model: opencode-go          # config model entry, or a provider model id
+    model: opencode-go
     max_tokens: 4096
     temperature: 0.3
   fast:
@@ -437,258 +141,19 @@ models:
     api_base: http://localhost:11434
 
 tools:
-  shell_exec:
-    enabled: true
-  file_ops:
-    enabled: true
-  search:
-    enabled: true
-  web_fetch:
-    enabled: true
+  shell_exec: { enabled: true }
+  file_ops:   { enabled: true }
+  search:     { enabled: true }
+  web_fetch:  { enabled: true }
 ```
 
-### Agent rounds
+Key points:
 
-`agents.defaults.max_rounds` caps how many loop rounds one user message may
-use (default 120). A round is one trip through the agent loop: running the tools
-the model asked for, re-asking after an empty reply, or asking for the rest of a
-cut-off answer. One round can run several tools, so this is not a tool-call
-limit. When the limit is reached the turn stops with a notice and the user can
-reply "continue".
-
-`max_tool_iterations` is the old name for this setting and is still accepted;
-new configs should use `max_rounds`.
-
-### Model List
-
-Each entry in `model_list` defines a model with its provider and credentials:
-
-| Field | Description |
-|-------|-------------|
-| `name` | Friendly name for the model |
-| `model` | `<provider>/<model-id>` (e.g. `openai/gpt-4o-mini`, `ollama/llama3`) |
-| `api_key` | API key (optional for Ollama) |
-| `api_base` | API base URL |
-
-When the provider exposes a `GET /models` endpoint (OpenAI-compatible APIs,
-including OpenCode Go), `/preset models` lists the provider's own catalog
-instead of only the entries in `config.yml`. The catalog is cached at
-`model_catalog.json` next to `config.yml`; a preset that references a catalog model id
-reuses the active config entry's `api_base` and `api_key`.
-
-The TUI's `/models` reads the same catalog — Anthropic (`GET /v1/models`) and
-Ollama (`GET /api/tags`) included — and switches the active session to the
-model you pick.
-
-### Model Presets
-
-A model preset names a complete model configuration. Sessions start with the
-primary preset and switch per session with `/model <preset>`.
-
-```yaml
-agents:
-  defaults:
-    model_preset: primary
-    # reasoning_effort: low   # global default; a preset overrides it
-
-model_presets:
-  primary:
-    model: opencode-go            # a `models` entry name...
-    max_tokens: 4096
-    temperature: 0.3
-  deep:
-    model: deepseek-v4-pro        # ...or a provider catalog model id
-    max_tokens: 8192
-    temperature: 0.1
-    reasoning_effort: high
-  local:
-    model: llama3
-    provider: ollama
-    api_base: http://localhost:11434
-    temperature: 0.2
-```
-
-| Field | Description |
-|-------|-------------|
-| `model` | Config `models` entry name or provider model id |
-| `provider`, `api_base`, `api_key` | Optional overrides; inherited from the model entry / active entry |
-| `max_tokens`, `temperature` | Generation settings for this preset |
-| `reasoning_effort` | Sent as OpenAI `reasoning_effort` (`minimal`/`low`/`medium`/`high`). Models without support ignore it |
-| `context_window_tokens` | Context window size for `/context` (falls back to a built-in table) |
-| `pricing` | Token prices for the cost estimate (see below) |
-
-- `default` is always available as the implicit preset built from the direct
-  `models` / `agents.defaults` fields. `/model default` follows it.
-- The primary preset is `agents.defaults.model_preset`; if it is unset or
-  invalid, the implicit `default` becomes primary. A preset named `primary` may
-  be defined explicitly and selected as the default.
-- New sessions use the primary preset. `/new` clears the conversation and any
-  per-session switch, returning to the primary preset.
-- `/model <preset>` switches the current session only and persists across
-  restarts. It does not change `config.yml`.
-
-#### Usage and cost estimates
-
-`/context` reports, for the current session:
-
-- context used vs. the model's context window,
-- cumulative input/output tokens, plus the cache hit rate of the most recent
-  request,
-- an estimated cost in USD.
-
-The three figures follow the same rules as Pi:
-
-- **Context** is anchored on the last provider request (its prompt plus the
-  reply it produced) and adds an estimate for anything appended since, so
-  tool output and a new user message are counted before they are sent. When
-  there is no usable request yet — a fresh session, or right after
-  `/compact` — it falls back to an estimate of the whole transcript plus the
-  system prompt. The same number drives the footer and the automatic
-  compaction threshold.
-- **Cache hit rate** describes the latest request only
-  (`cached / (uncached + cached + cache write)`), not the session average.
-  That is what shows whether the prompt cache is working now; a long session
-  with one early miss would otherwise hide it.
-- **Cost** is priced per request, with the rates of the model that served it,
-  and accumulated. Switching model with `/model` therefore does not re-price
-  earlier turns. Long-context tiers (`cost.tiers` on models.dev), cache reads,
-  and Anthropic 1-hour cache writes (charged at 2x the input rate) are taken
-  into account.
-
-#### OpenCode Go usage
-
-`/usage` shows the OpenCode Go subscription allowance for the active model:
-the rolling, weekly, and monthly limits, how much of each is used, and when
-they reset. It is fetched from `<api_base origin>/zen/go/v1/usage` with the
-configured API key, so it only works while the active provider points at
-OpenCode (`https://opencode.ai/zen/go/v1`). Accounts without a Go allowance
-show that no usage is available.
-
-Pricing and context windows are fetched automatically from
-[models.dev](https://models.dev/api.json) and cached in
-`model_pricing.json` next to `config.yml` for 24 hours. It is one file for the
-whole install — a persona does not refresh its own copy. The file is a plain
-JSON cache: delete it to force a refresh. Lookup precedence is:
-
-1. `pricing` / `context_window_tokens` in `config.yml`,
-2. the models.dev cache (or a fresh API response),
-3. the bundled defaults in `lib/rubot/model_info.rb`.
-
-You normally don't need to set prices manually. To override a specific model
-(USD per 1M tokens):
-
-```yaml
-model_presets:
-  primary:
-    model: gpt-4o-mini
-    context_window_tokens: 128000
-    pricing:
-      input_per_mtok: 0.15
-      cached_input_per_mtok: 0.075
-      output_per_mtok: 0.60
-```
-
-`pricing` may also be set on a `models` entry. Ollama models are treated as
-free. Usage is stored in the session file, so it survives restarts and resets
-with `/new` or `/clear`.
-
-#### Context compaction
-
-Long sessions eventually fill the model's context window. Rubot summarizes the
-older turns into the running summary (included in the system prompt as
-"Previous Conversation Summary") and keeps the most recent messages verbatim.
-
-- `/compact` — compact now, at any time. Reports how many messages were
-  summarized, how many were kept, and the estimated context before/after.
-- Automatic compaction — when the estimated context reaches
-  `threshold_percent` of the model's context window:
-
-```yaml
-agents:
-  defaults:
-    compaction:
-      auto: true               # default: true
-      threshold_percent: 60    # default: 60 (0.6 is also accepted)
-      keep_recent_messages: 40 # default: 40
-```
-
-A value of `100` disables auto-compaction by making the threshold unreachable
-(there is no room left to summarize); set `auto: false` to disable it
-outright. The context size is estimated from the transcript with a
-bytes-per-token heuristic (reasoning excluded, since it is never sent or
-summarized), and very long transcripts are summarized in chunks so the
-summarizer request itself stays within the window.
-
-Each compaction **merges** the previous running summary into the new one
-instead of appending a paragraph, and only the newest 12,000 characters of the
-summary are injected into the system prompt. Without that, every compaction
-added another paragraph to a block that was paid for on every request.
-
-The summary is written to the size of the material it replaces (about one word
-per 40 characters, never under 200 or over 1,200 words), and a compaction that
-runs in the middle of a turn never summarizes the messages of that turn: they
-are what the turn is still working from. A turn with more messages than
-`keep_recent_messages` keeps all of its own, and only the turns before it are
-summarized.
-
-On a model with a very large window the percentage threshold can be
-unreachable in practice (50% of 1M tokens is 500k). `threshold_tokens` adds an
-absolute ceiling; the lower of the two triggers compaction:
-
-```yaml
-agents:
-  defaults:
-    compaction:
-      threshold_tokens: 120000  # 0 = disabled (default)
-```
-
-
-The user's original request is stored on the session separately from the
-transcript and re-stated in the system prompt as `# Task` once the transcript
-no longer carries it. The hard message trim and compaction can drop old turns,
-but never the goal of the task. While the message that stated the goal is
-still in the window, nothing is re-stated: the conversation already says it,
-and an older request sitting in front of everything is an instruction to
-answer instead of the one the user just gave.
-
-#### Request size
-
-Besides compaction, every provider request is trimmed so a tool-heavy turn
-does not re-send its entire transcript on each round:
-
-- **Past reasoning is dropped.** Only the reasoning produced inside the turn
-  currently running is sent (a tool loop continues from it). Reasoning from
-  earlier turns is never needed again and can be the largest part of a
-  tool-heavy prompt.
-```yaml
-agents:
-  defaults:
-    history:
-```
-
-Telegram commands:
-
-| Command | Description |
-|---------|-------------|
-| `/model` | Show the current preset and available presets |
-| `/model <preset>` | Switch the current session preset |
-| `/models` | List presets |
-| `/preset` | List presets |
-| `/preset show <name>` | Show one preset |
-| `/preset set <name> <model> [temperature=0.2] [max_tokens=4096]` | Create or update a preset in `config.yml` |
-| `/preset default <name>` | Choose the preset for new sessions (`default` clears it) |
-| `/preset delete <name>` | Remove a preset |
-| `/preset models [filter]` | List the provider's supported models |
-| `/context` | Show context usage, cache hit rate, and estimated cost |
-| `/usage` | Show OpenCode Go subscription usage |
-| `/stop` | Stop the running task instantly, mid-answer or mid-command, and any command it started |
-| `/compact` | Summarize older messages to free context |
-
-While a turn is still running, a plain message steers it instead of waiting in
-the queue: the bot acknowledges with `↳ Diteruskan ke tugas yang sedang
-berjalan.` and the text reaches the model after the current round's tool calls,
-before its next request. Commands still work mid-turn (`/stop` stops it), and a
-message carrying an attachment starts its own turn instead of steering.
+- **Model presets** name a complete model configuration. New sessions use the primary preset; `/model <preset>` switches the current session only.
+- **`max_rounds`** caps the agent loop rounds per user message (default 120). `max_tool_iterations` is the old name, still accepted.
+- **Compaction** summarizes older turns when the estimated context reaches `threshold_percent` (or `threshold_tokens`, whichever is lower). `auto: false` disables it; `/compact` runs it manually.
+- **Memory** extraction is batched after the answer (`extract_every`, `0` disables) and consolidated to keep the file bounded. Overflow goes to `MEMORY_ARCHIVE.md`, which is never sent to the model.
+- Pricing and context windows come from [models.dev](https://models.dev/api.json), cached in `model_pricing.json` for 24 hours. `/context` shows usage, cache hit rate, and estimated cost; `/usage` shows the OpenCode Go allowance.
 
 ### Providers
 
@@ -696,7 +161,7 @@ message carrying an attachment starts its own turn instead of steering.
 |----------|-------------|-----------------|-------|
 | OpenAI | `openai/` | `RUBOT_API_KEY`, `OPENAI_API_KEY` | Default |
 | Anthropic | `anthropic/` | `ANTHROPIC_API_KEY` | |
-| Ollama | `ollama/` | (none) | Local, no key needed |
+| Ollama | `ollama/` | — | Local, no key needed |
 | Any OpenAI-compatible | `openai/` | Set `api_base` | Groq, DeepSeek, LM Studio, etc. |
 
 ### Environment Variables
@@ -707,249 +172,48 @@ message carrying an attachment starts its own turn instead of steering.
 | `RUBOT_API_BASE` | API base URL (overrides config) |
 | `RUBOT_CONFIG` | Path to config file |
 | `RUBOT_DEBUG` | Set to `1` for debug mode |
-| `OPENAI_API_KEY` | Fallback for OpenAI key |
-| `OPENAI_API_BASE` | Fallback for OpenAI base URL |
+| `OPENAI_API_KEY` / `OPENAI_API_BASE` | Fallback for OpenAI key/base URL |
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `OLLAMA_HOST` | Ollama host (default: http://localhost:11434) |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token |
 
-### `.env` File Loading
-
-Rubot automatically loads environment variables from `.env` files on startup. It searches:
-
-1. `.env` in the current working directory
-2. `.env` files in `~/.rubot/` (e.g., `.env`, `.env.local`, `.env.production`)
-
-Or specify a file explicitly:
-
-```bash
-rubot -e /path/to/.env -m "Hello!"
-```
-
-Variables are loaded in order — later files override earlier ones. Use `KEY=VALUE` syntax with support for double-quoted, single-quoted, and unquoted values.
+Rubot also loads `.env` files from the current directory and `~/.rubot/` on startup, or an explicit file with `-e`. Later files override earlier ones.
 
 ## Channels
 
-Rubot supports multiple communication channels — the terminal REPL is just the default.
-Channels are configured in `~/.rubot/config.yml` under the `channels:` key, and multiple
-can run simultaneously.
-
-### Available Channels
+Configure channels under `channels:` in `config.yml`; several can run at once.
 
 | Channel | Description |
 |---------|-------------|
-| `repl` | Terminal REPL (default if no channels configured) |
-| `telegram` | Telegram Bot via long polling or webhook |
+| `repl` | Terminal REPL (default when no channels are configured) |
+| `telegram` | Telegram bot via long polling or webhook |
 | `web` | Browser UI served over HTTP, streamed with Server-Sent Events |
 
-### Telegram Setup
+### Telegram
 
-1. **Create a bot** via [@BotFather](https://t.me/BotFather) on Telegram and get your bot token.
-2. **Configure** your `~/.rubot/config.yml`:
-
-```yaml
-channels:
-  telegram:
-    token: "123456:ABC-DEF..."  # or set TELEGRAM_BOT_TOKEN env var
-    # Optional security: restrict who can talk to your bot
-    allowed_user_ids: [123456789]   # your Telegram user ID
-    typing_indicator: true          # show "typing..." while processing
-    narration: true                 # send progress narration as chat messages
-    tool_notifications: true        # show/edit a status line while tools run
-    max_message_length: 4096        # Telegram's max message length
-    attachments: true               # download inbound photos and files
-```
-
-While it works, the bot sends the model's own narration as normal chat messages
-("Let me check the structure first.", "Now I'll generate the image.") and keeps
-the technical detail in a separate status card that is edited in place and
-deleted once the final answer arrives. Set `narration: false` to silence the
-narration or `tool_notifications: false` to hide the status card.
-
-The card states only what is true — no "still working" filler:
-
-```
-✓ 💻 `shell_exec` · step 3 · 1m 05s
-$ bundle exec rspec test/agent_test.rb
-
-/stop untuk menghentikan
-```
-
-- The `✓` appears once the round has finished, i.e. while the model is being
-  asked again; without it, that tool call is the one currently running.
-- Edits are throttled to one per second per chat (Telegram's own limit) and an
-  identical card is never re-sent, so a batch of tools cannot flood the chat or
-  trip a 429. A 429 is retried once using the `retry_after` Telegram sends.
-- The `/stop` line appears once per request, and only after the third round or
-  after a minute — whichever comes first.
-
-#### Sending images and files to the bot
-
-A photo sent to the bot arrives as `message.photo` plus an optional
-`message.caption` — Telegram never fills `message.text` for it. The channel
-handles that case: the image (or `document`) is downloaded via `getFile` into
-`<workspace>/attachments/<session>/`, and its local path, pixel dimensions, and
-size are appended to the caption before the agent sees it:
-
-```
-crop ini buat slide 2
-
-📎 User attached an image: /home/rubot/.rubot/workspace/attachments/tg_42/20261104-1006-a1b2c3.jpg (1864×1200, 412 KB)
-```
-
-The agent can then use its normal tools (`file_ops`, `shell_exec`) on that path.
-Dimensions are read from the file header, so no ImageMagick is required. Files
-are kept inside the workspace so the safety guard allows the agent to read them.
-Media the channel cannot read (stickers, voice notes, video) now gets an explicit
-reply instead of being dropped silently. Set `attachments: false` to disable the
-download path entirely.
-
-#### Replying to a message
-
-Telegram puts a quoted message in `message.reply_to_message` and the exact
-excerpt the user highlighted in `message.quote` — never in `message.text`. The
-channel now carries both into the prompt, so the model knows what the user is
-pointing at even when the quoted message is not in the session transcript
-(a reply that crosses forum topics, one that follows `/new`, or one aimed at
-someone else's message):
-
-```
-ini artinya apa?
-
-↩️ The user replied to this earlier message from @alice:
-> harga naik 12% bulan ini
-```
-
-When the user quotes a passage, only that excerpt is included. Replies to the
-bot's own messages are labelled as such (“your earlier message”), which keeps
-follow-ups like “lanjutkan” or “yang tadi maksudnya apa” unambiguous. If the
-quoted message is a photo or file, it is downloaded and described exactly like
-an attachment in the current message; a quoted message with nothing readable
-(service messages, stickers) adds nothing. Quotes longer than Telegram's 4096
-character message limit are truncated with a visible `(truncated)` marker.
-
-#### Per-topic personas (forum topics)
-
-Every Telegram forum topic gets its own session, and it can also get its own
-**persona**: a model plus a system prompt that applies only to that topic.
-The bot must be an admin in the group (or have privacy mode disabled) to see
-the `forum_topic_created` service message that starts the wizard.
-
-The wizard opens with a question that matters more than the model: does this
-topic borrow a persona that already exists, or build one of its own? A borrowed
-persona brings its model, prompt, skills and — because those live in the
-persona's directory — its `MEMORY.md`. The topic still keeps its own session,
-so the conversation is not shared with the web UI or with another topic.
-
-```
-🧬 Persona untuk topic ini
-
-Pakai persona yang sudah ada (memory-nya ikut, sesi tidak),
-atau buat persona baru khusus topic ini:
-[ 🧪 Personal Trainer ] [ 🧠 Kanyaah ]
-[ ➕ Buat persona baru ]
-[ ❌ Batal ]
-```
-
-Choosing **Buat persona baru** continues to the three-step model + prompt
-wizard:
-
-```
-🧬 Setup persona untuk topic ini
-
-Langkah 1/3 — Pilih model preset:
-  • primary ★ (default) — deepseek-v4.1-flash
-  • fast — deepseek-v4-pro
-[ primary ★ ] [ fast ]
-[ Pakai default ]
-
-Langkah 2/3 — Kirim system prompt (balas dengan teks):
-[ Lewati / pakai default ]
-
-Langkah 3/3 — Preview:
-  Model : primary (`deepseek-v4.1-flash`)
-  Prompt: Kamu adalah asisten trading. Jawab singkat, fokus data.
-[ ✅ Simpan ] [ ✏️ Ulangi ] [ ❌ Batal ]
-```
-
-The system prompt is typed as a normal chat message while the wizard is on
-step 2. It is intercepted and never reaches the agent. The wizard expires after
-15 minutes, and the topic falls back to the default persona if you leave it.
-
-Commands:
-
-| Command | Description |
-|---------|-------------|
-| `/persona` | Open the setup wizard (or replace the current persona) |
-| `/persona show` | Show the active persona for this topic |
-| `/persona reset` | Remove the persona and return to the default model/prompt |
-| `/cancel` | Leave the wizard without saving |
-
-Personas are stored in `personas.json` next to `config.yml`, keyed by
-`"<chat_id>:<thread_id>"`, so they survive restarts and can be edited by hand.
-A topic that borrows an existing persona stores a reference instead of a copy:
-
-```json
-{
-  "-1001234567890:42": { "ref": "personal-trainer" },
-  "-1001234567890:43": {
-    "name": "trading",
-    "preset": "primary",
-    "system_prompt": "Kamu adalah asisten trading. Jawab singkat, fokus data.",
-    "skills": ["writing"],
-    "created_at": "2026-02-11T10:00:00Z"
-  }
-}
-```
-
-Notes:
-
-- The persona picker lists the configured model presets and always includes the
-  primary preset. It no longer asks for a raw model id.
-- The General topic (`thread_id == nil`) always uses the global/default persona.
-- A persona preset that no longer exists falls back to the primary preset with
-  a warning instead of breaking the topic.
-- Two topics may point at the same persona: they share that persona's memory
-  and its `SOUL.md`, and each keeps its own session and history.
-- Skills are shared by every persona (they live in the configured workspace).
-  A persona says which of them it needs with `skills`, which is injected into
-  the system prompt as a required-skill block.
-- `/new` clears the conversation and any per-session preset switch, but keeps the
-  topic persona.
-
-3. **Run** with the Telegram channel:
-
-```bash
-# Check configuration before starting
-rubot check
-
-# Via CLI flag
-rubot -C telegram
-
-# Or via config (add to config.yml and just run `rubot`)
-rubot
-```
-
-Telegram uses long polling by default. For production use with webhooks:
+Create a bot with [@BotFather](https://t.me/BotFather), then:
 
 ```yaml
 channels:
   telegram:
-    token: "123456:ABC-DEF..."
-    webhook: true
-    webhook_url: "https://your-domain.com/webhook"
-    webhook_port: 8443
+    token: "123456:ABC-DEF..."   # or TELEGRAM_BOT_TOKEN
+    allowed_user_ids: [123456789] # optional: restrict who can talk to the bot
+    typing_indicator: true
+    narration: true
+    attachments: true
 ```
+
+Run with `rubot -C telegram`. For production, set `webhook: true` with `webhook_url` and `webhook_port`.
+
+Telegram commands: `/model`, `/models`, `/preset`, `/context`, `/usage`, `/stop`, `/compact`, `/persona`, `/cancel`. A plain message sent while a turn is running steers it instead of queueing.
+
+Forum topics can each have their own persona (model + system prompt) via `/persona`. Personas are stored in `personas.json` next to `config.yml`, keyed by `"<chat_id>:<thread_id>"`.
 
 ### Web UI
-
-Run it on its own:
 
 ```bash
 rubot web            # http://127.0.0.1:4567
 ```
-
-Or configure it to run alongside the other channels:
 
 ```yaml
 channels:
@@ -960,748 +224,110 @@ channels:
     persona: rubot
 ```
 
-How it works: the browser sends a message with a plain form POST; Ruby starts a
-turn and answers with an HTML fragment that opens the SSE stream on its own. The
-stream then pushes `turn` (the timeline: the thought, what the model said, the
-tool rows, the answer), `confirm` (the approval card), `notice` (an error or a
-steering acknowledgement), `working` (the row above the composer, which restarts
-its clock on every tool call), `usage` (the cost/cache/context row, as an
-out-of-band swap) and finally `done`. Every event is an idempotent render of the
-turn's current state, so a dropped connection just repaints.
+The browser posts a message; Ruby streams the turn over SSE. No frontend build step — `htmx`, `htmx-ext-sse`, and `alpinejs` are vendored under `vendor/web/`, templates are ERB, and a small amount of JavaScript wires the composer. Files sent with `send_files` appear in the thread as a strip of pictures or document cards.
 
-A conversation is drawn from its end: the page renders the last 20 entries and
-fetches earlier ones as the reader scrolls up, so a long session costs one page
-rather than all of it. Refreshing mid-answer rejoins the running turn instead of
-showing a conversation whose last prompt appears never to have been sent.
+The web channel runs shell commands through the same agent as every other channel, so it binds to loopback by default. Reach it from another device over a private network (Tailscale, SSH tunnel) rather than exposing the port. Set `token` to require a shared secret on every request.
 
-Files go one way here: the agent hands them back through `send_files`, and the
-page draws them in the thread under the tool row that produced it — a strip that
-scrolls sideways, each picture opening into a sheet with a download beside it.
-One path sends a single file; up to ten paths deliver a batch in one call and
-land in one strip rather than one row per file. A picture is drawn as
-a picture; a PDF or a markdown note is a card in the same strip that opens in a
-tab — the browser's own viewer for the PDF, plain text for the note, which is
-served as `text/plain` rather than `text/markdown` because a browser downloads a
-type it has no viewer for. The channel aims the tool at
-`<workspace>/attachments/<session>/`, so the tool calls that already work in
-Telegram need no second path; the page serves nothing but the formats a browser
-draws or opens on its own (`png`, `jpg`, `gif`, `webp`, `pdf`, `md`).
+Scheduled jobs and explicitly requested announcements can wake the device through Web Push. It needs HTTPS and, on iOS, a PWA added to the home screen. The VAPID key pair is generated on first use in `vapid.json` next to `config.yml`; deleting it invalidates every subscription.
 
-No build step: `htmx`, `htmx-ext-sse` and `alpinejs` are vendored under
-`vendor/web/`, templates are ERB from the standard library, and the only
-hand-written JavaScript wires the composer.
+## Workspace Files
 
-A code block in an answer carries a quiet copy mark in its corner: two small
-sheets that turn into a check when the text has been taken, and a cross when it
-could not be. The text is read back out of the block's own markup, so what lands
-on the clipboard is the snippet as the model wrote it — indentation, quotes and
-all — with no highlighting spans in the way. The button is server-rendered
-rather than injected, so a block that streamed in mid-answer is already
-copyable, and it stays hidden while the fence is still open because the text is
-not finished yet.
+`rubot init` creates these under `~/.rubot/`:
 
-A paragraph in an answer can be handed back as context. A quiet quote mark sits
-in the page's right gutter and comes forward under the pointer; on a phone, where
-the gutter is too narrow to hold it, it floats into the paragraph's top-right
-corner and the prose wraps around it. Pressing it
-puts that paragraph on a shelf above the composer as a chip, without touching
-what has already been typed. The chip shows the paragraph as it was read, but
-the quote it carries is the paragraph's own Markdown, so `code` and
-**emphasis** survive the trip, and sending stitches the quotes in front of the
-message as blockquotes — the form the agent already reads as a quotation. A
-list is quotable the same way: the whole list, so its numbering and nesting
-survive as the Markdown they were written in, and its chip says how much it is
-carrying ("Daftar · 6 butir"). On a phone, a long press on a single item quotes
-just that item ("Butir 3") — the way to pull one step out of a long list
-without a second row of marks over the text. A
-chip can be dropped before sending, a paragraph quoted twice is still one piece
-of context, and a refused turn leaves the quotes where they are for the retry.
-
-Personas are the left column: one round avatar per specialist, chosen there and
-created with the `+` beneath them. Each one owns a directory of its own, so its
-`SOUL.md` and its `MEMORY.md` are not shared with the next. Skills are the
-exception — they are tooling, not identity, so there is one copy in the
-configured workspace and a persona names the ones it needs. A persona is edited
-where its name is shown: the pencil in the sidebar opens the same dialog with
-the name, the face and the system prompt already filled in, and saving keeps the
-slug, creation time and model choice untouched — the slug is the key in
-`personas.json` and the directory's name, so it is shown rather than asked for.
-An edit reaches the conversation's next turn: idle actors are rebuilt from the
-store, and a turn already in flight is left to finish in the voice it started
-with.
-
-| Setting | Default | Meaning |
-|---------|---------|---------|
-| `host` | `127.0.0.1` | Bind address. `0.0.0.0` requires a `token`. |
-| `port` | `4567` | Listening port |
-| `persona` | `rubot` | Prefix for the session id (`web_<persona>`) |
-| `token` | unset | Shared secret, checked on every request |
-| `access_log` | `false` | Print one line per request |
-| `vapid_subject` | `mailto:rubot@localhost` | Contact the push service may complain to |
-| `turn_notify_after` | `0` | Seconds a turn must run before its ending is worth a notification (`0` = off, the default) |
-
-This channel runs shell commands through the same agent as every other channel,
-so it binds to loopback by default. Reaching it from another device is better
-done over a private network (Tailscale, an SSH tunnel) than by exposing the port.
-
-#### Notifications (Web Push)
-
-A scheduled job fires whether or not a page is open. The drawer's **notifikasi**
-button asks this device to be woken for it: press it once, allow the prompt, and
-a reminder that runs while the app is closed arrives on the lock screen. The
-button reports its own state — `aktif`, `diblokir`, `butuh https`, `tidak
-didukung` — and `kirim tes` sends one notification immediately, which is the
-quickest way to find out whether the permission, the keys and the push service
-all agree.
-
-There is no account, SDK or third-party dashboard involved. The server signs its
-request with a VAPID key pair it generates itself, and seals the payload with
-`aes128gcm` to a key only the browser holds, so the browser vendor's push
-service carries a message it cannot read. Both halves are implemented in
-`lib/rubot/web/push.rb` on top of OpenSSL — no gem.
-
-Three things are worth knowing before relying on it:
-
-- **It needs HTTPS.** Push is refused on a plain-HTTP origin, and the button says
-  `butuh https` rather than failing silently. A Tailscale certificate or a local
-  CA both satisfy it.
-- **iOS needs the app installed.** Safari offers Web Push only to a PWA added to
-  the home screen (16.4+), and only when the permission is asked for from a tap.
-- **`vapid.json` is the identity.** It is generated on first use beside
-  `config.yml` with mode `0600`. Replacing or deleting it invalidates every
-  subscription — the device has to be subscribed again.
-
-Two things arrive this way: a **scheduled job** firing, and a **turn the agent
-was asked to announce** — the user said "kabari kalau sudah kelar", the agent
-called `notify`, and the push says what it was told to say. A turn nobody asked
-about stays quiet: finishing work is not news on its own, and the reply is
-already on the screen it was typed into. The single override is a standing
-request: a user who asks to be notified at the end of *every* turn gets one at
-the end of every turn, because that is a preference about their devices rather
-than something one turn can decide. An install that wants the old
-time-based rule back can set `turn_notify_after` (seconds, `0` = off, the
-default): a reply that runs longer than that announces itself even when no one
-asked. The notification carries the gist of the answer and opens the
-conversation it belongs to.
-
-A job that opens a conversation of its own (`new_session`) has already been
-spoken into by the time it announces itself, so it quotes what the persona
-said: the opening line is the bold line, the question under it is the body. The
-job's description says what the job is ("Daily English speaking practice"),
-the opening says why to pick up the phone ("What's one small win you had this
-week?"). A reminder has no opening worth quoting and keeps its description.
-
-The tap goes to that conversation even on a phone that has nobody signed in: the
-push payload's URL carries the token, exactly as the links the pages write do.
-The payload is sealed to the device's own key, so the push service relaying it
-cannot read the token, and the reader is not asked to type it after tapping a
-notification about work that is already finished.
-
-A subscription the browser has dropped answers `410 Gone`; that row is deleted
-on the next send rather than retried forever. A page that is already visible is
-skipped by the service worker, so a notification never announces something the
-reader is looking at — except the test button, whose whole job is to be seen
-while the app is open. The test answers with the push service's status code
-(`kirim tes` → `terkirim 201`), and turns into `ditampilkan` once the worker
-confirms it actually reached the screen: "accepted by Google" and "shown on the
-phone" are different events, and only the second one is the proof.
-
-### Running Multiple Channels
-
-You can run the REPL, Telegram and the browser UI simultaneously:
-
-```yaml
-channels:
-  repl:
-    stream: true
-  telegram:
-    token: "123456:ABC-DEF..."
-```
-
-### Adding New Channels
-
-Channels are pluggable. To add a new channel (e.g., Discord, Slack, WhatsApp):
-
-1. Create `lib/rubot/channels/your_channel.rb`
-2. Subclass `Rubot::Channel`:
-
-```ruby
-module Rubot
-  module Channels
-    class Discord < Channel
-      def start
-        @running = true
-        register_signal_handlers
-        # Connect to Discord API, listen for messages
-        # On message: response = process_message(text)
-        # Then: send_response(channel_id, response)
-      end
-
-      def stop
-        @running = false
-        # Disconnect from Discord API
-      end
-    end
-  end
-end
-```
-
-3. Register it in `lib/rubot/channels/registry.rb`:
-
-```ruby
-CHANNEL_MAP = {
-  "telegram" => Telegram,
-  "repl" => REPLChannel,
-  "discord" => Discord,    # add your channel
-}.freeze
-```
-
-4. Configure in `config.yml`:
-
-```yaml
-channels:
-  discord:
-    bot_token: "your-discord-bot-token"
-```
-
-## Workspace: Soul, Agents & Memory
-
-Run `rubot init` to create `~/.rubot/workspace/` with default files.
-
-### SOUL.md — Personality & Identity
-
-A freeform Markdown file describing the bot's personality, values, and
-communication style. Loaded into the system prompt on every session.
-
-```markdown
-# Soul
-
-You are Rubot, a concise and pragmatic terminal assistant.
-You are written in Ruby and value simplicity.
-You prefer small, composable solutions over complex architectures.
-```
-
-### AGENTS.md — Agent Configuration & Rules
-
-A Markdown file with **YAML frontmatter** for machine-readable settings
-and a body of behavior rules. Frontmatter can override:
-`name`, `model`, `max_tokens`, `temperature`, `max_rounds`, and
-individual tool enable/disable settings.
-
-```yaml
----
-name: Rubot
-model: gpt-4o-mini
-max_tokens: 4096
-temperature: 0.3
-max_rounds: 50
-tools:
-  exec: true
-  file_ops: true
-  web_fetch: true
----
-```
-
-```markdown
-# Agent Rules
-
-- Be concise and direct in responses.
-- Explain before executing commands.
-- Use tools when they can help.
-- Remember important details using the memory tool.
-```
-
-### MEMORY.md — Persistent Memory
-
-Memory has two layers, and both are injected into the prompt as one merged
-document:
-
-| Layer | File | What belongs there |
-| --- | --- | --- |
-| Global | `~/.rubot/MEMORY.md` (next to `config.yml`) | who you are, how you want the bot to behave — true everywhere |
-| Local | `~/.rubot/memory/<slug>.md`, or `<persona>/MEMORY.md` | what this project is about (keyed by the workspace path), or what this persona is about |
-
-A project's file deliberately does **not** live inside the project: memory is
-the bot's, and dropping a `MEMORY.md` into every repository you open would
-pollute your `git status`. A persona's file is the opposite case — a persona is
-not a directory you might `git add`, so its memory sits inside its own folder
-next to `SOUL.md`, and the whole specialist is one directory.
-
-The `memory` tool takes `scope: "global"` or the local one, which is named after
-where it points: `scope: "persona"` for a specialist, `scope: "workspace"` for a
-project directory. Writes default to the local layer.
-
-Automatic extraction labels each item it stores, instead of deciding by section:
-a fact that holds everywhere ("lives in Jakarta", "183 cm tall") goes global, and
-anything true only of the job at hand ("this client prefers carousels") stays in
-the persona's file. When the extractor is unsure the item stays local, so a wrong
-guess costs one persona's context rather than following the user into every
-conversation. Learned corrections are global.
-
-Both files are organized into sections:
-
-- **Facts** — Things the bot should remember about you
-- **Preferences** — Your communication style and preferences
-- **Context** — Current project/task context
-
-The bot uses the memory tool to `read`, `append`, and `update_section`. This
-lets it remember information across sessions. (A full `write` replaces the
-whole file and is deliberately not exposed, so the bot can never erase its
-memory.)
-
-```markdown
-# Memory
-
-## Facts
-- User prefers Ruby over JavaScript
-- Works on a personal AI assistant project
-
-## Preferences
-- Concise responses, no fluff
-
-## Context
-- Currently working on tool registry
-```
-
-Every line of `MEMORY.md` is sent with every request, so Rubot keeps it
-bounded instead of letting it grow forever:
-
-- **Batched extraction** — the bot extracts facts from user messages in
-  batches (`memory.extract_every`, default 3) instead of spending one extra
-  provider request per message, and it does so after the answer has been sent.
-- **Consolidation** — after each extraction the file is deduplicated
-  ("User communicates in casual Indonesian" and its paraphrases collapse into
-  one line) and each section is capped: Facts 25, Preferences 15, Context 10,
-  Learned Corrections 10 entries.
-- **Archive** — entries that fall past a cap are appended to
-  `MEMORY_ARCHIVE.md` next to the memory file. That file is never injected into
-  a prompt, so nothing is lost but nothing is paid for either.
-
-```yaml
-agents:
-  defaults:
-    memory:
-      extract_every: 3    # user messages per extraction request; 0 disables it
-      consolidate: true   # merge duplicates and enforce the section caps
-```
-
-### `personas.json` — Personas
-
-Specialists live in `personas.json` next to `config.yml`, and each slug that owns
-a directory has one under `<config dir>/personas/<slug>/` holding its `SOUL.md`
-and `MEMORY.md`. The file is managed by the `/persona` wizard and the web UI but
-is plain JSON, so it can also be edited by hand. Keys are either a slug (a web
-persona) or `"<chat_id>:<thread_id>"` (a Telegram forum topic, which may point at
-a slug with `"ref"`). See the Telegram section above for the format and the
-fallback rules.
-
-### `model_catalog.json` — Provider Model Cache
-
-The provider's `/models` response (for example every model available through
-OpenCode Go) is cached next to `config.yml` (`~/.rubot/model_catalog.json`), not
-in a workspace: what a provider offers does not change per persona, so there is
-one copy for the whole install. It is safe to delete; the next `/models` or
-`/persona` command refreshes it.
-
-### `model_pricing.json` — Pricing & Context Cache
-
-models.dev prices and context windows, cached next to `config.yml` for 24 hours
-for the same reason. Safe to delete; the next `/context` or `/usage` refresh
-rebuilds it.
+- **SOUL.md** — freeform Markdown describing the bot's personality and style; loaded into the system prompt every session.
+- **AGENTS.md** — Markdown with YAML frontmatter (`name`, `model`, `max_tokens`, `temperature`, `max_rounds`, tool toggles) plus behavior rules.
+- **MEMORY.md** — persistent memory, split into global (`~/.rubot/MEMORY.md`) and local (`~/.rubot/memory/<slug>.md` or `<persona>/MEMORY.md`) layers. Sections: Facts, Preferences, Context, Learned Corrections. The `memory` tool reads, appends, and updates sections; a full write is deliberately not exposed.
+- **personas.json** — specialists with their own model, prompt, soul, and memory.
+- **model_catalog.json** / **model_pricing.json** — caches for the provider model list and models.dev pricing. Safe to delete; they rebuild on next use.
 
 ## Tools
 
-Rubot comes with 6 built-in tools:
+Rubot ships with nine built-in tools:
 
-### `shell_exec`
-Execute shell commands. The LLM can run commands and see their output.
-Dangerous commands like `rm -rf /` are blocked. Commands run in the directory
-`rubot` was launched from (the TUI uses that directory as its workspace and
-shows it above the usage footer).
+| Tool | Purpose |
+|------|---------|
+| `shell_exec` | Run shell commands in the launch directory; dangerous commands are blocked |
+| `file_ops` | Read, edit, write, append, delete, list, and inspect files |
+| `search` | Find files by glob or matching lines by regex, skipping `.git`, `node_modules`, and build output |
+| `web_fetch` | Fetch a URL and convert HTML to plain text (5,000 char cap) |
+| `memory` | Read and update persistent memory (enabled when memory is on) |
+| `cron` | Schedule one-time or recurring reminders and commands |
+| `send_files` | Deliver local files (pictures, PDFs, notes) into the chat thread |
+| `notify` | Ask for the end of the current turn to be announced on the user's devices |
+| `instagram` | Connect an Instagram Business/Creator account and schedule feed posts |
 
-New scripts and one-off snippets are written in Ruby (`ruby -e '...'` or a
-`.rb` file). A built-in `Scripting Language` rule in the system prompt says so,
-and it sits outside the configurable prompt so a per-topic persona cannot drop
-it. Python that already exists in a repo or skill (`tools/*.py`) is still run
-as-is; only *new* code has to be Ruby.
-
-### `file_ops`
-File operations: read, edit, write, append, delete, list directories, get file info.
-
-| Operation | Description |
-|-----------|-------------|
-| `read` | Read a file. `offset` (1-based line) and `limit` (lines) read part of a long file; the reply says which lines came back. A truncated read points at `offset`. |
-| `edit` | Replace an exact `old_string` with `new_string`. It must match exactly once, or the edit is refused with the match count; `replace_all: true` changes every occurrence. This is the preferred way to change an existing file — it does not rewrite the parts you did not touch. |
-| `write` | Write a whole file. Asks for confirmation only when the new content throws most of the existing file away (a one-line fix or a longer file passes) |
-| `append` | Add to the end of a file |
-| `delete` | Delete one file (asks for confirmation; directories are refused) |
-| `list` | List a directory |
-| `info` | Size, permissions and timestamps |
-
-`edit` is what makes a multi-file change practical: the model reads the few
-lines it needs and replaces just those, instead of re-reading a long file and
-paying for a full rewrite in output tokens (with a truncated read making the
-rewrite unsafe).
-
-### `search`
-Find files and matching lines under a directory, without shelling out.
-
-| Operation | Description |
-|-----------|-------------|
-| `content` (default) | Grep a regular expression; returns `path:line: text` |
-| `files` | Match paths against a glob such as `**/*.rb` |
-
-`path`, `glob`, `ignore_case` and `max_results` (default 50, max 100) narrow a
-search. `.git`, `node_modules`, `tmp`, `vendor/bundle`, build output and binary
-files are skipped, so a search in a real repository does not drown in noise.
-
-### `web_fetch`
-Fetch content from URLs via HTTP GET.
-
-HTML pages are converted to plain text before they enter the conversation:
-scripts, styles, comments, and tags are stripped, the document title is kept,
-and entities are decoded. JSON and other non-HTML bodies are passed through
-unmodified. Everything is truncated to 5,000 characters after stripping, so the
-budget is spent on content instead of markup.
-
-### `memory`
-Read and update the bot's persistent MEMORY.md file.
-
-| Operation | Description |
-|-----------|-------------|
-| `read` | Read the entire memory file |
-| `write` | Replace all memory with new content |
-| `append` | Add a fact to a section (Facts, Preferences, or Context) |
-| `update_section` | Replace all items in a section |
-
-### `cron`
-Schedule reminders, recurring tasks, and timed alerts. The LLM can:
-
-- Set one-time reminders (e.g., "remind me in 5 minutes")
-- Create recurring tasks (e.g., "every hour", "daily at 9am")
-- Schedule shell commands to run on a schedule
-- Deliver messages through the active channel
-
-Jobs are stored in the workspace and checked each time the agent processes a message.
-
-A job remembers which directory wrote it. A reminder created in a persona's
-conversation is filed in that persona's own `cron/jobs.json` and runs with that
-persona's agent, so it answers in the voice — and with the memory — it was
-written with. The install's own store holds everything written outside a
-persona. All the stores share one scheduler and one firing thread.
-
-When a Telegram topic loses its persona with `/persona reset`, the reminders
-aimed at that topic go with it: they were written with a memory the topic no
-longer has. Deleting a persona's directory by hand has the same effect — its
-store is simply no longer opened, and `SessionPool#unregister_cron_workspace`
-drops the jobs if you want them gone while the process is still running.
-
-### Adding Custom Tools
-
-Create a new file in `lib/rubot/tools/` and subclass `Rubot::Tool`:
-
-```ruby
-require_relative "../tool"
-
-module Rubot
-  module Tools
-    class MyTool < Tool
-      def name
-        "my_tool"
-      end
-
-      def description
-        "Description for the LLM"
-      end
-
-      def parameters
-        {
-          "type" => "object",
-          "properties" => {
-            "input" => { "type" => "string", "description" => "The input" }
-          },
-          "required" => ["input"]
-        }
-      end
-
-      def execute(arguments)
-        input = arguments["input"]
-        # Do something
-        "Result: #{input}"
-      end
-    end
-  end
-end
-```
-
-Then register it in `lib/rubot/tools/registry.rb`.
+New scripts and snippets are written in Ruby (`ruby -e '...'` or a `.rb` file). Existing Python in a repo or skill is run as-is. To add a tool, subclass `Rubot::Tool` in `lib/rubot/tools/` and register it in `registry.rb`.
 
 ## Skills
 
-Skills are pluggable domain-specific instructions stored as `SKILL.md` files in the workspace. They let you teach Rubot specialized procedures without changing the core code.
-
-### Skill Structure
-
-Each skill lives in its own directory:
-
-```
-~/.rubot/workspace/skills/{skill-name}/SKILL.md
-```
-
-The `SKILL.md` file contains:
-
-1. **YAML frontmatter**:
-   ```yaml
-   ---
-   name: my-skill
-   description: A brief description of what this skill does and when to use it.
-   ---
-   ```
-
-2. **Markdown body** — instructions for when and how to use the skill.
-
-### Creating Skills
-
-Use the built-in `skill-creator` skill (installed by `rubot init`) or manually create a directory and `SKILL.md`. Skills are automatically loaded from the workspace `skills/` directory on startup.
+Skills are domain-specific instructions in `~/.rubot/workspace/skills/<name>/SKILL.md`: YAML frontmatter (`name`, `description`) plus a Markdown body. They load on startup. Use the built-in `skill-creator` skill or create the directory by hand.
 
 ## Safety Guard
 
-Rubot includes a PicoClaw-style safety guard that blocks dangerous commands before execution. It operates in two modes:
+A PicoClaw-style guard blocks dangerous commands before execution:
 
-- **strict** — blocks commands matching known dangerous patterns (e.g., `rm -rf /`, `mkfs`, `dd if=`, `fsck -y /dev/`)
+- **strict** — blocks known dangerous patterns (`rm -rf /`, `mkfs`, `dd if=`, …)
 - **permissive** — allows all commands
 
-The mode is configured in `AGENTS.md` frontmatter or the workspace settings.
+Set the mode in `AGENTS.md` frontmatter or workspace settings.
 
-## Architecture: Ractor Sessions
+## Architecture
 
-Rubot separates I/O from agent execution:
+I/O is separated from agent execution:
 
-- **Channels** (REPL, Telegram) live in the main Ractor and own all I/O,
-  signal handling, and channel-local state.
-- **Session actors** (`lib/rubot/actors/session_actor.rb`) each own one
-  `Agent`, one `Session`, and its tools. A session id maps to exactly one
-  actor, so requests to the same conversation are serialized by the
-  actor's mailbox instead of by mutexes.
-- **Cron actor** (`lib/rubot/actors/cron_actor.rb`) owns the scheduler and
-  the persisted job stores, and delivers fired jobs as messages. One actor
-  serves every workspace: its scheduler keeps a store per directory, so a
-  persona's reminders live in the persona's own folder without a firing
-  thread per persona.
-- **Message passing** replaces callbacks across Ractor boundaries: tool
-  events, streaming chunks, progress, and confirmation requests are
-  sent as messages on `Ractor::Port` objects. Procs and mutexes never
-  cross a boundary.
-- **File-backed state** (`MEMORY.md`, session JSON) is written with
-  `flock` so concurrent session actors cannot corrupt it.
+- **Channels** (REPL, Telegram, web) live in the main Ractor and own all I/O and signal handling.
+- **Session actors** each own one `Agent`, one `Session`, and its tools. A session id maps to exactly one actor, so requests to the same conversation are serialized by its mailbox.
+- **Cron actor** owns the scheduler and job stores, with one store per workspace.
+- **Message passing** over `Ractor::Port` carries streaming chunks, tool events, progress, and confirmation requests across Ractor boundaries.
+- **File-backed state** (`MEMORY.md`, session JSON) uses `flock` to prevent corruption.
 
 ```
-Channel (main Ractor)
-   │  { type: :message, text:, events:, control: }
-   ▼
-SessionActor(session id) ── tools ──► CronActor
-   │  [:chunk] [:tool_started] [:progress] [:confirm] [:done]
-   ▼
-Channel
+Channel (main Ractor) ──► SessionActor(session id) ──► CronActor
+        ▲                        │
+        └──── chunks, tool events, confirmations ────┘
 ```
-
-Legacy in-process agents are still supported by passing `agent:` to a
-channel, which is what the unit tests use.
 
 ## Project Structure
 
 ```
 rubot/
-├── bin/
-│   └── rubot              # Main executable
-├── lib/
-│   ├── rubot.rb           # Entry point
-│   └── rubot/
-│       ├── agent.rb       # Agent loop (process messages, call tools)
-│       ├── session_handle.rb # Main-Ractor proxy for a session actor
-│       ├── actors/
-│       │   ├── session_actor.rb # One Agent/Session per Ractor
-│       │   ├── session_pool.rb  # Lazy per-session actor registry
-│       │   └── cron_actor.rb    # Ractor-owned cron scheduler
-│       ├── cron_commands.rb # Shared cron operation implementation
-│       ├── config.rb      # Configuration management
-│       ├── session.rb     # Session/history management
-│       ├── soul.rb        # SOUL.md personality loader
-│       ├── persona.rb     # Per-topic persona value object
-│       ├── persona_store.rb # personas.json load/save/lookup
-│       ├── model_catalog.rb # Provider /models catalog + cache
-│       ├── memory.rb      # MEMORY.md persistent memory
-│       ├── agents_file.rb # AGENTS.md config & rules parser
-│       ├── image_info.rb  # Image dimensions from file headers (no deps)
-│       ├── provider.rb    # Base provider interface
-│       ├── providers/
-│       │   ├── openai.rb  # OpenAI-compatible provider
-│       │   ├── anthropic.rb # Anthropic provider
-│       │   └── ollama.rb  # Ollama provider
-│       ├── tool.rb        # Base tool class
-│       ├── tools/
-│       │   ├── shell.rb   # Shell execution tool
-│       │   ├── file_tool.rb # File operations tool
-│       │   ├── web.rb     # Web fetch tool
-│       │   ├── memory_tool.rb # Memory management tool
-│       │   ├── cron.rb    # Cron scheduling tool
-│       │   └── registry.rb # Tool registry
-│       ├── channel.rb     # Base channel class
-│       ├── channels/
-│       │   ├── repl_channel.rb # Terminal REPL
-│       │   ├── telegram.rb  # Telegram bot channel
-│       │   └── registry.rb  # Channel registry
-│       ├── safety_guard.rb # Dangerous command filter
-│       ├── skill.rb       # Skill loader
-│       ├── skill_registry.rb # Skill registry
-│       ├── cron_scheduler.rb # Cron job scheduler
-│       └── env_loader.rb  # .env file loader
-├── config/
-│   └── rubot.example.yml # Example config
-├── test/                  # Minitest tests
-├── Gemfile                # webrick + test gems
-├── Dockerfile             # Ruby 4.0.9 runtime image
-├── docker-compose.yml     # base compose service
-├── docker-compose.override.yml.example # local laptop template
-├── mise.toml              # Ruby version pin (4.0.9)
-├── .ruby-version          # Ruby version pin
-├── Rakefile               # Test runner
+├── bin/rubot                  # Main executable
+├── lib/rubot.rb               # Entry point
+├── lib/rubot/
+│   ├── agent.rb               # Agent loop
+│   ├── session.rb             # Session/history management
+│   ├── config.rb              # Configuration management
+│   ├── actors/                # Session, session pool, and cron actors
+│   ├── providers/             # OpenAI, Anthropic, Ollama
+│   ├── tools/                 # Built-in tools and registry
+│   ├── channels/              # REPL, Telegram, web, and registry
+│   ├── memory.rb, soul.rb, persona.rb, skill.rb, ...
+│   └── safety_guard.rb        # Dangerous command filter
+├── config/rubot.example.yml   # Example config
+├── test/                      # Minitest tests
+├── Dockerfile, docker-compose*.yml
+├── Gemfile, Rakefile, mise.toml, .ruby-version
 └── README.md
 ```
 
 ## Docker
 
-Build the image and initialize `~/.rubot` once:
-
 ```bash
-mkdir -p ~/.rubot/workspace/kanyaah ~/.rubot/workspace/by.adipurnm
-mkdir -p ~/.rubot/workspace/kanyaah.com ~/.rubot/workspace/by.adipurnm.com
-mkdir -p ~/.rubot/workspace/skills/{adipurnm-brand,kanyaah-brand,marketing-strategist,writing}
+mkdir -p ~/.rubot/workspace/skills
 docker compose build
 docker compose run --rm rubot init
-vim ~/.rubot/config.yml   # set your API key / Telegram token
+vim ~/.rubot/config.yml
 ```
 
-With the local override, host data lives in `~/.rubot` and is mounted onto
-`/home/rubot/.rubot` in the container. The brand content directories and the
-website repos are mounted inside the agent workspace so the safety guard
-allows read/write access:
-
-| Host | Container |
-|---|---|
-| `~/.rubot` | `/home/rubot/.rubot` |
-| `~/Documents/work/freelance/brand/kanyaah` | `/home/rubot/.rubot/workspace/kanyaah` |
-| `~/Documents/work/freelance/brand/by.adipurnm` | `/home/rubot/.rubot/workspace/by.adipurnm` |
-| `~/Documents/work/freelance/website/kanyaah.com` | `/home/rubot/.rubot/workspace/kanyaah.com` |
-| `~/Documents/work/freelance/website/by.adipurnm.com` | `/home/rubot/.rubot/workspace/by.adipurnm.com` |
-| `~/Projects/squadron/skills/adipurnm-brand` | `/home/rubot/.rubot/workspace/skills/adipurnm-brand` |
-| `~/Projects/squadron/skills/kanyaah-brand` | `/home/rubot/.rubot/workspace/skills/kanyaah-brand` |
-| `~/Projects/squadron/skills/marketing-strategist` | `/home/rubot/.rubot/workspace/skills/marketing-strategist` |
-| `~/Projects/squadron/skills/writing` | `/home/rubot/.rubot/workspace/skills/writing` |
-
-Because the brand directories live under the workspace, the agent can use
-its normal `file_ops` / `shell_exec` tools on them without disabling the
-safety guard. Squadron skills are mounted one directory at a time, so any
-other skills already in `~/.rubot/workspace/skills` remain visible.
-
-Run modes:
+`docker-compose.override.yml` is git-ignored and bind-mounts `~/.rubot` plus any brand/content directories you need into the agent workspace. Copy `docker-compose.override.yml.example` as a starting point; mount-point directories must exist and be owned by you before the first `up`.
 
 ```bash
-# Interactive REPL
-docker compose run --rm rubot -C repl
-
-# One-shot message
-docker compose run --rm rubot -m "hello"
-
-# Telegram bot (background)
-docker compose up -d
-docker compose logs -f
-docker compose down
+docker compose run --rm rubot -C repl     # interactive REPL
+docker compose run --rm rubot -m "hello"  # one-shot message
+docker compose up -d                      # Telegram bot (background)
 ```
 
-`docker-compose.override.yml` is git-ignored and is the local laptop
-configuration. It bind-mounts `~/.rubot`, the two brand directories, the two
-website repos (so the bot reads facts like templates and prices locally
-instead of guessing), and the four Squadron skills, and runs as your UID/GID
-so sessions, `MEMORY.md`, cron jobs, and edited files stay owned by you. It defaults to
-`-C telegram`; remove its
-`command:` block (or run `docker compose run --rm rubot -C repl`) for the
-REPL.
-
-A tracked template is available as `docker-compose.override.yml.example`:
-
-```bash
-mkdir -p ~/.rubot/workspace/kanyaah ~/.rubot/workspace/by.adipurnm
-mkdir -p ~/.rubot/workspace/kanyaah.com ~/.rubot/workspace/by.adipurnm.com
-mkdir -p ~/.rubot/workspace/skills/{adipurnm-brand,kanyaah-brand,marketing-strategist,writing}
-cp docker-compose.override.yml.example docker-compose.override.yml
-HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose up -d
-```
-
-The mount-point directories must exist and be owned by you before the
-first `docker compose up`. Otherwise Docker creates them as root.
-
-Notes:
-
-- From the laptop, edit `~/.rubot/config.yml`. Inside the container the
-  data directory is `/home/rubot/.rubot`, so workspace paths resolve to
-  `~/.rubot/workspace` (the generated default) or `/home/rubot/...`.
-- To add another brand or skill, append another bind mount under
-  `/home/rubot/.rubot/workspace/<name>` (or `/home/rubot/.rubot/workspace/skills/<name>`)
-  and create the matching host mount point first.
-- Skills are regular files on the host: edit them in
-  `~/Projects/squadron/skills` and the container sees the changes immediately.
-- For Ollama running on the host, set
-  `api_base: http://host.docker.internal:11434` (already allowed by the
-  Compose `extra_hosts` entry).
-- Telegram webhook mode additionally needs a port mapping in the override,
-  e.g. `ports: ["8443:8443"]`.
-- The image ships `node`, `chromium` (headless shell), `magick` (ImageMagick 7)
-  and a static `ffmpeg` on top of Ruby. The brand/carousel skills need them:
-  Chromium screenshots the HTML at 2×, `magick -resize` downsamples to the
-  final size (e.g. `magick cover@2x.png -resize 1080x1920 -strip cover.png`),
-  and `ffmpeg` encodes reels. They are installed at build time because the
-  agent cannot install packages on the fly and the safety guard blocks `PATH`
-  exports.
-- Four size decisions worth knowing before you change the image:
-  - `chromium-headless-shell` (not `chromium`) provides a `chromium` and
-    `chromium-browser` symlink. Every render path here is headless — carousel
-    `render.sh` drives the binary CLI and the `instagram-feed`/`featured`
-    scripts drive it through `puppeteer-core` with `headless: "new"`. That
-    drops the GTK/Adwaita/X11 toolkit, ~290 MB off the image.
-  - `ffmpeg` is the static build (pinned by version and sha256 in the
-    Dockerfile). It replaces the Debian `ffmpeg` package and its ~450 MiB of
-    libav*/x265/aom dependencies while behaving the same (`libx264`, `aac`,
-    `ffprobe`).
-  - `curl`, `jq` and `ripgrep` are installed (~19 MiB total): repo tooling
-    shells out to `curl` (Kanyaah's `featured-image/generate.sh` polls a local
-    preview server with it) and the agent reaches for `jq`/`rg` constantly.
-    Not included: `python3`, `rsvg-convert` and `git` — see the workspace notes
-    below if a pipeline needs them.
-  - The GPU stack is purged after `apt-get install`: `mesa-libgallium` (41 MiB),
-    `libllvm19` (124 MiB) and `libz3-4` (27 MiB), plus the Vulkan validation
-    layer (23 MiB). Every render passes `--disable-gpu`, so none of it is ever
-    loaded; renders were compared byte for byte before and after (`sha256sum`
-    identical, CLI and puppeteer). Side effect: `libgbm1` has an unmet
-    dependency, so **do not run `apt-get -f install` or `apt-get autoremove`**
-    in this image — it would remove `libgbm1` and then chromium. Add packages by
-    rebuilding.
-  - Anything deleted must be deleted **in the same `RUN`** as the install that
-    created it. A `dpkg --purge` in its own `RUN` only hides the files from the
-    final filesystem view; the bytes stay in the earlier layer and the image
-    does not shrink.
-- No `npm`/`npx` in the image. `node_modules` comes from the mounted repos
-  (`kanyaah.com/tools/featured-image/node_modules`), installed on the host. The
-  packages there are pure JS, so a host-installed tree works with the
-  container's Node. If a dependency changes, run `npm install` on the host.
-  The Kanyaah `instagram-feed` scripts borrow `puppeteer-core` from that folder
-  and hardcode four `..` levels, which only holds in the host layout — inside
-  the container set `KANYAAH_SITE=/home/rubot/.rubot/workspace/kanyaah.com`.
-  The official Node tarball was measured as an alternative to the Debian
-  `nodejs` package and is *not* smaller (single 100 MB binary vs 53 MiB
-  `libnode` + 36 MiB `libicu`), so the distro package stays.
-- Gems in the image are `webrick` plus the standard library. Test gems
-  are excluded via `BUNDLE_WITHOUT=development:test`.
+The image includes Node, headless Chromium, ImageMagick, and a static ffmpeg for the brand/carousel skills. For Ollama on the host, use `api_base: http://host.docker.internal:11434`.
 
 ## Testing
 
@@ -1710,10 +336,7 @@ bundle install
 bundle exec rake test
 ```
 
-The suite runs with `HOME` pointed at a throwaway directory (see
-`test/test_helper.rb`) and every test workspace is a temp dir, so running tests
-never reads or writes your real `~/.rubot` — use `isolated_config(dir)` instead
-of plain `Config.new` in new tests.
+Tests use a throwaway `HOME` and temp workspaces, so they never touch your real `~/.rubot`.
 
 ## License
 
