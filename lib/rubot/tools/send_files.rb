@@ -7,12 +7,12 @@ require_relative "file_delivery"
 
 module Rubot
   module Tools
-    # Send several local files in one call.
+    # Send local files to the chat that asked for them, one call for any number
+    # of paths.
     #
     # "Kirim 5 gambar di folder Pictures" is one instruction, and it used to cost
     # five rounds of the model: one call per picture, each waiting for the last.
-    # This is the same delivery `send_file` does, once per path, reported as one
-    # result — a batch the reader asked for arrives as a batch.
+    # One call now delivers the whole batch, and a single file is a batch of one.
     #
     # A batch is not all-or-nothing: a missing or oversized file is reported and
     # the rest still go, because half of what was asked for beats none of it.
@@ -37,11 +37,11 @@ module Rubot
 
       def description
         <<~DESC.strip
-          Send several local files to the user in one call.
-          Use this whenever the user asks for more than one file at once — e.g.
-          "send the five pictures in Pictures" — rather than calling send_file
-          once per file: one call sends the whole batch and the pictures arrive
-          together instead of one after another. Images (.png, .jpg, .jpeg,
+          Send local files to the user in one call.
+          Use this for any number of files: pass one path for a single file, or
+          every path at once for a batch — e.g. "send the five pictures in
+          Pictures" — so the pictures arrive together instead of one after
+          another. Images (.png, .jpg, .jpeg,
           .webp, .gif) are delivered as pictures so they display inline; a PDF
           or a markdown note (.md) arrives as a document the reader can open.
           Paths may be relative to the workspace or absolute. Up to #{MAX_FILES}
@@ -135,7 +135,7 @@ module Rubot
       # predictable ways, and both cost a round trip that the batch was meant to
       # save:
       #
-      # * a single "path", left over from send_file;
+      # * a single "path" key for one file;
       # * an array serialised back into a string — `"[\"/a.png\", \"/b.png\"]"`
       #   — which Array() wraps as one path, and every path is then "not found".
       #     Seen in the wild with ten paths in one call.

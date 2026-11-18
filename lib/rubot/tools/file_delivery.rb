@@ -10,9 +10,8 @@ module Rubot
   module Tools
     # Everything a tool needs to hand one file to the chat that asked for it.
     #
-    # Two tools deliver files — `send_file` for one, `send_files` for several —
-    # and the difference between them is only how many paths arrive. Where the
-    # bytes go, what they are called and what the result says are the same
+    # `send_files` delivers any number of paths, from one file to a batch. Where
+    # the bytes go, what they are called and what the result says are the same
     # questions either way, so they are answered here once.
     #
     # The channel sets `delivery_context` before each request, the same way the

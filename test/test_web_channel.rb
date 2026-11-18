@@ -2295,7 +2295,7 @@ module Rubot
       def test_a_picture_follows_the_hunks_of_the_call_that_sent_it
         channel = Rubot::Channels::Web.new(channel_config: {})
         call = { "id" => "c1",
-                 "function" => { "name" => "send_file", "arguments" => %({"path":"shot.png"}) } }
+                 "function" => { "name" => "send_files", "arguments" => %({"path":"shot.png"}) } }
         diffs = { "c1" => { "path" => "shot.png", "before" => nil, "after" => "a\n" } }
 
         items = channel.send(:history_tool_items, call, { "c1" => "Sent" }, diffs, "web_rubot")
@@ -4676,17 +4676,17 @@ module Rubot
 
       # --- pictures -------------------------------------------------------
 
-      # The agent hands a picture back through send_file. The web channel has
+      # The agent hands a picture back through send_files. The web channel has
       # no upload endpoint, so the tool copies the file into the conversation's
       # own folder and says which name it wrote — that name is what the page
       # draws, and what a refreshed page can draw again.
-      def test_send_file_hands_a_picture_into_the_conversation
+      def test_send_files_hands_a_picture_into_the_conversation
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
         dir = channel.send(:attachments_dir, "web_kanyaah")
         source = File.join(Dir.mktmpdir, "Desain Final (v2).png")
         File.binwrite(source, png_bytes)
 
-        tool = Tools::SendFile.new
+        tool = Tools::SendFiles.new
         tool.delivery_context = { channel: "web", dir: dir }
         result = tool.execute("path" => source)
 
@@ -4699,12 +4699,12 @@ module Rubot
       # Only what the page can draw or hand back: a picture, a PDF, a markdown
       # note. A file stored where nothing would ever show it is worse than a
       # refusal.
-      def test_send_file_refuses_what_the_page_cannot_draw
+      def test_send_files_refuses_what_the_page_cannot_draw
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
         source = File.join(Dir.mktmpdir, "arsip.zip")
         File.binwrite(source, "PK\x03\x04")
 
-        tool = Tools::SendFile.new
+        tool = Tools::SendFiles.new
         tool.delivery_context = { channel: "web", dir: channel.send(:attachments_dir, "web_kanyaah") }
         result = tool.execute("path" => source)
 
@@ -4713,39 +4713,41 @@ module Rubot
       end
 
       # A PDF is not a picture, but the browser opens one on its own: it is
-      # stored like a picture and named "as a document", which is the word the
-      # page reads to decide between a picture and a card.
-      def test_send_file_hands_a_pdf_into_the_conversation
+      # stored like a picture, and the page reads the marker's extension to
+      # decide between a picture and a card.
+      def test_send_files_hands_a_pdf_into_the_conversation
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
         dir = channel.send(:attachments_dir, "web_kanyaah")
         source = File.join(Dir.mktmpdir, "Laporan Triwulan.pdf")
         File.binwrite(source, "%PDF-1.4\n")
 
-        tool = Tools::SendFile.new
+        tool = Tools::SendFiles.new
         tool.delivery_context = { channel: "web", dir: dir }
         result = tool.execute("path" => source)
 
         stored = result[/\[web-attachment ([^\]]+)\]/, 1]
         assert_match(/\A[0-9a-f]{32}-laporan-triwulan\.pdf\z/, stored.to_s)
-        assert_includes result, "as a document"
+        assert_equal :document,
+                     channel.send(:sent_attachments, "send_files", result, "web_kanyaah").first[:kind]
         assert_equal "%PDF-1.4\n", File.binread(File.join(dir, stored))
       end
 
       # `.markdown` is stored as `.md`, the same way `.jpeg` becomes `.jpg`:
       # one extension per format keeps the route that serves it to one shape.
-      def test_send_file_stores_a_markdown_note_as_md
+      def test_send_files_stores_a_markdown_note_as_md
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
         dir = channel.send(:attachments_dir, "web_kanyaah")
         source = File.join(Dir.mktmpdir, "Catatan Rapat.markdown")
         File.write(source, "# Rapat\n\n- satu\n")
 
-        tool = Tools::SendFile.new
+        tool = Tools::SendFiles.new
         tool.delivery_context = { channel: "web", dir: dir }
         result = tool.execute("path" => source)
 
         stored = result[/\[web-attachment ([^\]]+)\]/, 1]
         assert_match(/\A[0-9a-f]{32}-catatan-rapat\.md\z/, stored.to_s)
-        assert_includes result, "as a document"
+        assert_equal :document,
+                     channel.send(:sent_attachments, "send_files", result, "web_kanyaah").first[:kind]
         assert_includes File.read(File.join(dir, stored)), "# Rapat"
       end
 
@@ -4841,7 +4843,7 @@ module Rubot
         assert_includes result, Tools::SendFiles::MAX_FILES.to_s
       end
 
-      # A model that has just used send_file answers with "path"; a model
+      # A model that has just used send_files answers with "path"; a model
       # wrapping a long list sometimes serialises the array back into a string.
       # The second one used to make every path "not found" at once, because
       # Array() wraps the whole string as a single path.
@@ -4916,7 +4918,7 @@ module Rubot
         stored = "e" * 32 + "-desain.png"
         result = "Sent desain.png (12 bytes) as a picture. [web-attachment #{stored}]"
 
-        picture = channel.send(:sent_attachments, "send_file", result, "web_kanyaah").first
+        picture = channel.send(:sent_attachments, "send_files", result, "web_kanyaah").first
 
         assert_equal "desain.png", picture[:name]
         assert_includes picture[:url], "/s/web_kanyaah/media/#{stored}"
@@ -4926,8 +4928,21 @@ module Rubot
 
         assert_empty channel.send(:sent_attachments, "shell", result, "web_kanyaah"),
                      "only a file-sending result names a picture"
-        assert_empty channel.send(:sent_attachments, "send_file",
+        assert_empty channel.send(:sent_attachments, "send_files",
                                   "Sent x. [web-attachment ../../etc/passwd]", "web_kanyaah")
+      end
+
+      # Old transcripts still name the tool `send_file`. The tool is gone, but
+      # the picture in that stored result is not: it has to keep rendering.
+      def test_an_old_single_file_call_still_renders_its_picture
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        stored = "f" * 32 + "-desain.png"
+        result = "Sent desain.png (12 bytes). [web-attachment #{stored}]"
+
+        picture = channel.send(:sent_attachments, "send_file", result, "web_kanyaah").first
+
+        assert_equal :picture, picture[:kind]
+        assert_includes picture[:url], "/s/web_kanyaah/media/#{stored}"
       end
 
       # A PDF and a markdown note are read out of the same marker as a picture,
@@ -4938,7 +4953,7 @@ module Rubot
         stored = "d" * 32 + "-laporan.pdf"
         result = "Sent laporan.pdf (12 bytes) as a document. [web-attachment #{stored}]"
 
-        document = channel.send(:sent_attachments, "send_file", result, "web_kanyaah").first
+        document = channel.send(:sent_attachments, "send_files", result, "web_kanyaah").first
 
         assert_equal :document, document[:kind]
         assert_equal "PDF", document[:label]
@@ -5122,7 +5137,7 @@ module Rubot
           { "role" => "user", "content" => "Buatkan gambar" },
           { "role" => "assistant", "content" => "Ini gambarnya.",
             "tool_calls" => [ { "id" => "call_1",
-                                "function" => { "name" => "send_file",
+                                "function" => { "name" => "send_files",
                                                 "arguments" => JSON.generate({ "path" => "desain.png" }) } } ] },
           { "role" => "tool", "tool_call_id" => "call_1",
             "content" => "Sent desain.png (12 bytes) as a picture. [web-attachment #{stored}]" }
@@ -5148,7 +5163,7 @@ module Rubot
           { "role" => "user", "content" => "Buat laporan" },
           { "role" => "assistant", "content" => "Ini laporannya.",
             "tool_calls" => [ { "id" => "call_1",
-                                "function" => { "name" => "send_file",
+                                "function" => { "name" => "send_files",
                                                 "arguments" => JSON.generate({ "path" => "laporan.pdf" }) } } ] },
           { "role" => "tool", "tool_call_id" => "call_1",
             "content" => "Sent laporan.pdf (12 bytes) as a document. [web-attachment #{stored}]" }

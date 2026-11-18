@@ -1159,10 +1159,8 @@ module Rubot
 
         # Let the agent send files back to this chat (e.g. generated images),
         # one at a time or as a batch in a single call.
-        %w[send_file send_files].each do |name|
-          tool = session_for(session_id).tools.get(name)
-          tool.delivery_context = context if tool
-        end
+        tool = session_for(session_id).tools.get("send_files")
+        tool.delivery_context = context if tool
       end
 
       def session_for(session_id)

@@ -15,7 +15,7 @@ Sudah per-topic:
 
 - Session/riwayat: `session_id = "tg_#{chat_id}_#{thread_id}"` — `lib/rubot/channels/telegram.rb:605`
 - Model override per session: `Session#model_override` → `Agent#use_model` — `lib/rubot/agent.rb:285-297`
-- Delivery context cron & send_file per topic — `telegram.rb:613-619`
+- Delivery context cron & send_files per topic — `telegram.rb:613-619`
 
 Masih global (satu untuk semua topic):
 

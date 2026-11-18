@@ -10,7 +10,7 @@ require_relative "../channel"
 require_relative "../opencode_usage"
 require_relative "../persona_store"
 require_relative "../session"
-require_relative "../tools/send_file"
+require_relative "../tools/send_files"
 require_relative "../web/diff"
 require_relative "../web/highlight"
 require_relative "../web/notifier"
@@ -83,7 +83,7 @@ module Rubot
       UNTITLED_SESSION = "Sesi baru"
 
       # What the page hands back: the pictures the agent sends through
-      # send_file, and the two documents a browser already opens on its own —
+      # send_files, and the two documents a browser already opens on its own —
       # a PDF and a markdown note. The name the server writes is a hex id this
       # channel generated, an optional slug of the file's own name, and a known
       # extension — the slug is what makes a download read like a file, the id
@@ -2268,7 +2268,7 @@ module Rubot
         end
       end
 
-      # The row for a call, plus the files below it when send_file handed one
+      # The row for a call, plus the files below it when send_files handed one
       # back. Two items rather than one, because a picture is drawn as a
       # picture, a document as a card, and the row as a row. An edit adds a
       # third, the hunks of the file it changed, right under the row that
@@ -2672,7 +2672,7 @@ module Rubot
 
       # --- pictures -------------------------------------------------------
 
-      # Where this conversation's pictures live: the folder that send_file
+      # Where this conversation's pictures live: the folder that send_files
       # copies into, inside the persona's own workspace. It is the same
       # per-session folder the Telegram channel writes to, so a tool call that
       # worked in one channel has somewhere to land in the other.
@@ -2701,9 +2701,12 @@ module Rubot
       # and the type the route serves it under is what decides which: the two
       # questions have one answer.
       def sent_attachments(name, result, sid)
-        return [] unless %w[send_file send_files].include?(name.to_s)
+        # Old transcripts still carry calls named `send_file` from before the
+        # two tools were merged. They are read here, never produced: the only
+        # tool now is `send_files`.
+        return [] unless %w[send_files send_file].include?(name.to_s)
 
-        result.to_s.scan(Rubot::Tools::SendFile::WEB_MARKER_RE).flatten.filter_map do |stored|
+        result.to_s.scan(Rubot::Tools::SendFiles::WEB_MARKER_RE).flatten.filter_map do |stored|
           next unless MEDIA_NAME.match?(stored)
 
           extension = File.extname(stored)
@@ -2739,10 +2742,8 @@ module Rubot
         dir = attachments_dir(sid)
         return unless dir
 
-        %w[send_file send_files].each do |name|
-          tool = session_for(sid).tools.get(name)
-          tool.delivery_context = { channel: "web", dir: dir } if tool
-        end
+        tool = session_for(sid).tools.get("send_files")
+        tool.delivery_context = { channel: "web", dir: dir } if tool
       end
 
       def bind_cron_delivery(sid)
@@ -2884,7 +2885,7 @@ module Rubot
       end
 
       # The turn the browser is following, in one place: the agent reads the
-      # prompt, and everything it hands back lands in the timeline. `send_file`
+      # prompt, and everything it hands back lands in the timeline. `send_files`
       # is aimed at this conversation first — a picture the agent sends is the
       # whole point of this channel's attachment folder.
       def run_turn(turn, text)

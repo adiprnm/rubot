@@ -79,15 +79,14 @@ module Rubot
     # Sent when the model finished a tool round without saying anything at all,
     # which leaves the user with silence and no images or files.
     #
-    # It names both file tools on purpose. It used to name send_file alone, and
-    # a batch of five pictures then arrived as five separate calls: the model
-    # followed the one tool this sentence mentioned rather than the one meant
-    # for a batch.
+    # It names the one file tool on purpose. It used to name only the
+    # single-file tool, and a batch of five pictures then arrived as five
+    # separate calls: the model followed the name this sentence mentioned.
     ANSWER_NOW_PROMPT = <<~PROMPT.strip.freeze
       You ran the tools above but produced no answer. Using their results,
       reply to the user now, in the user's language. If they asked for files or
-      images, send them before you finish: send_files for several in one call,
-      send_file for one on its own.
+      images, send them before you finish with one `send_files` call — one path
+      for a single file, every path for a batch.
     PROMPT
 
     # Sent when a reply came back with no visible text at all — on a reasoning
@@ -1218,28 +1217,15 @@ module Rubot
     FILE_DELIVERY_RULE = <<~PROMPT.strip.freeze
       # Sending Files
 
-      Two tools hand files to the user. When the user asks for more than one
-      file at once — "kirim 5 gambar di folder Pictures", "send the three
-      reports" — use `send_files` in a single call with every path. Do not call
-      `send_file` once per file: the batch is one instruction, it arrives as
-      one strip, and five separate calls cost five rounds.
+      `send_files` hands local files to the user in one call. Pass `paths` with
+      every file the user asked for — one entry for a single file, several for
+      a batch. One call sends them together instead of one round trip per file.
+      Images (.png, .jpg, .jpeg, .webp, .gif) are delivered as pictures so they
+      display inline; other files arrive as documents, and in the browser a PDF
+      or a markdown note gets a card that opens in a tab.
 
-      `send_file` is for one file on its own. Up to ten paths fit in one
-      `send_files` call; past that, send a second batch rather than falling back
-      to one call per file.
-    PROMPT
-
-    # When config.yml enables `send_file` but not `send_files`. The rule above
-    # would name a tool the model cannot call, which is how a batch of twelve
-    # pictures used to arrive as twelve calls: the instruction pointed at the
-    # batch tool while the tool list offered only the single-file one.
-    FILE_DELIVERY_SINGLE_RULE = <<~PROMPT.strip.freeze
-      # Sending Files
-
-      `send_file` hands one local file to the user. Images (.png, .jpg, .jpeg,
-      .webp, .gif) are delivered as pictures so they display inline; other
-      files arrive as documents, and in the browser a PDF or a markdown note
-      gets a card that opens in a tab.
+      Up to ten paths fit in one call; past that, send a second batch rather
+      than falling back to one call per file.
     PROMPT
 
     # Editing files through the file tool, not shell. Kept here (not in the
@@ -1302,13 +1288,10 @@ module Rubot
     PROMPT
 
     # Build the full system prompt from all sources
-    # Which delivery rule to send: the batch version only when `send_files` is
-    # actually available, the single-file version when it is not, and nothing
-    # at all when neither tool is enabled.
+    # Only name the tool when it is actually enabled: an instruction pointing
+    # at a tool the model cannot call is how files stopped being sent at all.
     def file_delivery_rule
-      names = tool_names
-      return FILE_DELIVERY_RULE if names.include?("send_files")
-      return FILE_DELIVERY_SINGLE_RULE if names.include?("send_file")
+      return FILE_DELIVERY_RULE if tool_names.include?("send_files")
 
       nil
     end
@@ -1445,7 +1428,7 @@ module Rubot
     # the epoch, or a session that is already running keeps answering under the
     # rules it was pinned with.
     def shipped_rules
-      [ FILE_DELIVERY_RULE, FILE_DELIVERY_SINGLE_RULE, NOTIFY_RULE, SILENT_TOOL_RULE, BATCH_REMINDER ].join("\u0000")
+      [ FILE_DELIVERY_RULE, NOTIFY_RULE, SILENT_TOOL_RULE, BATCH_REMINDER ].join("\u0000")
     end
 
     # The persona parts that reach the prompt: its own instructions and the

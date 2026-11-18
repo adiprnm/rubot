@@ -23,12 +23,11 @@ class TestTools < Minitest::Test
     assert_includes names, "file_ops"
     assert_includes names, "web_fetch"
     assert_includes names, "cron"
-    assert_includes names, "send_file"
     assert_includes names, "send_files"
     assert_includes names, "notify"
     assert_includes names, "search"
     assert_includes names, "instagram"
-    assert_equal 9, @registry.count
+    assert_equal 8, @registry.count
   end
 
   def test_registry_get_tool
@@ -261,7 +260,7 @@ class TestTools < Minitest::Test
     assert_includes result, "café"
   end
 
-  # --- send_file ---
+  # --- send_files ---
 
   def start_telegram_stub(response_body: '{"ok":true,"result":{}}')
     server = TCPServer.new("127.0.0.1", 0)
@@ -382,42 +381,40 @@ class TestTools < Minitest::Test
   end
 
   # The reminder sent when a tool round produced no answer is the one piece of
-  # the prompt that tells the model how to hand files back. It named send_file
-  # alone, and a request for five pictures then arrived as five separate calls:
-  # the model followed the single tool that sentence mentioned. Both tools have
-  # to be named, and each has to point at the other.
-  def test_the_answer_now_prompt_names_both_file_tools
+  # the prompt that tells the model how to hand files back. It used to name only
+  # the single-file tool, and a request for five pictures then arrived as five
+  # separate calls: the model followed the name that sentence mentioned.
+  def test_the_answer_now_prompt_names_the_one_file_tool
     prompt = Rubot::Agent::ANSWER_NOW_PROMPT
 
-    assert_includes prompt, "send_files"
-    assert_includes prompt, "send_file"
-    assert_includes prompt, "several"
+    assert_includes prompt, "`send_files`"
+    assert_includes prompt, "one path"
+    assert_includes prompt, "batch"
+    refute_includes prompt, "`send_file`"
   end
 
-  def test_the_file_tools_point_at_each_other
-    single = Rubot::Tools::SendFile.new.description
-    batch = Rubot::Tools::SendFiles.new.description
+  def test_the_file_tool_describes_single_and_batch
+    description = Rubot::Tools::SendFiles.new.description
 
-    assert_includes single, "send_files",
-                    "send_file has to say where a batch belongs"
-    assert_includes batch, "send_file",
-                    "and send_files has to say what it replaces"
+    assert_includes description, "one path for a single file"
+    assert_includes description, "every path at once for a batch"
+    refute_includes description, "send_file"
   end
 
-  def test_registry_registers_both_file_tools
+  def test_registry_registers_one_file_tool
     registry = Rubot::Tools::Registry.new
 
-    refute_nil registry.get("send_file")
-    refute_nil registry.get("send_files"), "a batch needs its own tool to be one call"
+    refute_nil registry.get("send_files")
+    assert_nil registry.get("send_file")
   end
 
-  def test_send_file_requires_delivery_context
-    tool = Rubot::Tools::SendFile.new
+  def test_send_files_single_requires_delivery_context
+    tool = Rubot::Tools::SendFiles.new
     assert_includes tool.execute({ "path" => "image.png" }), "no delivery context"
   end
 
-  def test_send_file_requires_bot_token
-    tool = Rubot::Tools::SendFile.new
+  def test_send_files_single_requires_bot_token
+    tool = Rubot::Tools::SendFiles.new
     tool.delivery_context = { chat_id: 42 }
 
     with_env("TELEGRAM_BOT_TOKEN" => nil) do
@@ -425,8 +422,8 @@ class TestTools < Minitest::Test
     end
   end
 
-  def test_send_file_reports_missing_file
-    tool = Rubot::Tools::SendFile.new
+  def test_send_files_single_reports_missing_file
+    tool = Rubot::Tools::SendFiles.new
     tool.delivery_context = { chat_id: 42 }
 
     with_env("TELEGRAM_BOT_TOKEN" => "123:abc") do
@@ -434,7 +431,7 @@ class TestTools < Minitest::Test
     end
   end
 
-  def test_send_file_uploads_png_as_photo
+  def test_send_files_single_uploads_png_as_photo
     png = File.join(@tmpdir, "featured.png")
     File.binwrite(png, "\x89PNG\r\n\x1a\nfake-image-bytes")
 
@@ -445,12 +442,12 @@ class TestTools < Minitest::Test
       "RUBOT_TELEGRAM_API_BASE" => "http://127.0.0.1:#{port}",
       "TELEGRAM_BOT_TOKEN" => "123:abc"
     ) do
-      tool = Rubot::Tools::SendFile.new
+      tool = Rubot::Tools::SendFiles.new
       tool.delivery_context = { chat_id: 42, thread_id: 7 }
       tool.execute({ "path" => png, "caption" => "Judul post" })
     end
 
-    assert_includes result, "as a photo"
+    assert_includes result, "Sent 1 file"
 
     head, body = Timeout.timeout(5) { requests.pop }
     assert_includes head, "POST /bot123:abc/sendPhoto"
@@ -465,7 +462,7 @@ class TestTools < Minitest::Test
     thread&.join(2)
   end
 
-  def test_send_file_uploads_other_files_as_document
+  def test_send_files_single_uploads_other_files_as_document
     pdf = File.join(@tmpdir, "post.pdf")
     File.binwrite(pdf, "%PDF-1.4 fake")
 
@@ -476,12 +473,12 @@ class TestTools < Minitest::Test
       "RUBOT_TELEGRAM_API_BASE" => "http://127.0.0.1:#{port}",
       "TELEGRAM_BOT_TOKEN" => "123:abc"
     ) do
-      tool = Rubot::Tools::SendFile.new
+      tool = Rubot::Tools::SendFiles.new
       tool.delivery_context = { chat_id: 42 }
       tool.execute({ "path" => pdf })
     end
 
-    assert_includes result, "as a document"
+    assert_includes result, "Sent 1 file"
 
     head, body = Timeout.timeout(5) { requests.pop }
     assert_includes head, "POST /bot123:abc/sendDocument"
@@ -491,7 +488,7 @@ class TestTools < Minitest::Test
     thread&.join(2)
   end
 
-  def test_send_file_reports_telegram_rejection
+  def test_send_files_single_reports_telegram_rejection
     png = File.join(@tmpdir, "featured.png")
     File.binwrite(png, "bytes")
 
@@ -502,7 +499,7 @@ class TestTools < Minitest::Test
       "RUBOT_TELEGRAM_API_BASE" => "http://127.0.0.1:#{port}",
       "TELEGRAM_BOT_TOKEN" => "123:abc"
     ) do
-      tool = Rubot::Tools::SendFile.new
+      tool = Rubot::Tools::SendFiles.new
       tool.delivery_context = { chat_id: 42 }
       tool.execute({ "path" => png })
     end
@@ -522,13 +519,13 @@ class TestTools < Minitest::Test
     end.new
 
     @registry.register(custom)
-    assert_equal 10, @registry.count
+    assert_equal 9, @registry.count
     assert_equal "done: {}", @registry.execute("custom_tool", {})
   end
 
   def test_registry_provider_definitions
     defs = @registry.to_provider_definitions("openai")
-    assert_equal 9, defs.size
+    assert_equal 8, defs.size
     assert defs.all? { |d| d["type"] == "function" }
     assert defs.all? { |d| d["function"]["name"] }
     assert defs.all? { |d| d["function"]["description"] }

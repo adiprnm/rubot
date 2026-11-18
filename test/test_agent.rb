@@ -459,37 +459,37 @@ class TestAgentProgressNarration < Minitest::Test
     assert_includes prompt, "Do not write new Python"
   end
 
-  # Which file tool to pick is decided before the model reads a description, so
-  # the rule lives in the prompt with the other one-rule-for-one-job entries.
-  # It was learned the hard way: "kirim 5 gambar" once arrived as five
-  # send_file calls, and a "3 gambar" of my own as one call plus a pair.
+  # How to send files is decided before the model reads a description, so the
+  # rule lives in the prompt with the other one-rule-for-one-job entries. It was
+  # learned the hard way: "kirim 5 gambar" once arrived as five separate calls,
+  # and a "3 gambar" of my own as one call plus a pair.
   def test_system_prompt_sends_a_batch_with_one_call
     prompt = @agent.build_system_prompt
 
     assert_includes prompt, "Sending Files"
-    assert_includes prompt, "use `send_files` in a single call"
-    assert_includes prompt, "once per file"
-    assert_includes prompt, "`send_file` is for one file on its own"
+    assert_includes prompt, "`send_files` hands local files to the user in one call"
+    assert_includes prompt, "one entry for a single file, several for"
+    assert_includes prompt, "one round trip per file"
+    refute_includes prompt, "`send_file`"
   end
 
-  # config.yml can enable one delivery tool and not the other. The rule must
-  # follow the tool list: naming `send_files` when the model cannot call it is
-  # what made a batch of twelve pictures arrive as twelve `send_file` calls.
-  def test_system_prompt_names_only_the_delivery_tools_that_are_enabled
-    single_only = Rubot::Tools::Registry.new
-    single_only.clear
-    single_only.register(Rubot::Tools::SendFile.new)
+  # config.yml can turn the delivery tool off. The rule must follow the tool
+  # list: naming `send_files` when the model cannot call it is what made a batch
+  # of twelve pictures arrive as twelve separate calls.
+  def test_system_prompt_leaves_the_delivery_rule_out_when_the_tool_is_disabled
+    no_delivery = Rubot::Tools::Registry.new
+    no_delivery.clear
+    no_delivery.register(Rubot::Tools::Notify.new)
 
     agent = Rubot::Agent.new(
       config: @config,
       provider: NarratingProvider.new,
-      session_id: "single-delivery",
-      tools: single_only
+      session_id: "no-delivery",
+      tools: no_delivery
     )
 
     prompt = agent.build_system_prompt
-    assert_includes prompt, "Sending Files"
-    assert_includes prompt, "`send_file` hands one local file"
+    refute_includes prompt, "Sending Files"
     refute_includes prompt, "send_files", "prompt names a tool the model cannot call"
   end
 

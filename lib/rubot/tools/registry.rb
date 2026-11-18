@@ -58,7 +58,6 @@ module Rubot
         register Search.new(safety_guard: @safety_guard)
         register Web.new
         register Cron.new
-        register SendFile.new(safety_guard: @safety_guard)
         register SendFiles.new(safety_guard: @safety_guard)
         register Notify.new
         register Instagram.new

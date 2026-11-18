@@ -217,12 +217,12 @@ class TestToolRows < Minitest::Test
   # not a log line — it survives on its own, under a row that may not.
   def test_an_attachment_survives
     attachment = { kind: :attachments, list: [ { url: "/x.png", name: "x.png", kind: :picture } ] }
-    items = [ tool("send_file"), attachment, thought(4), tool("read") ]
+    items = [ tool("send_files"), attachment, thought(4), tool("read") ]
 
     kept = Rubot::Web::ToolRows.collapse(items)
 
     assert_includes kinds(kept), :attachments
-    assert_equal %w[send_file read], names(kept)
+    assert_equal %w[send_files read], names(kept)
   end
 
   # A run of thought → call pairs is one moment retold: only the last pair is
