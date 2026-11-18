@@ -353,6 +353,38 @@ class TestTools < Minitest::Test
     requests&.close
   end
 
+  # A video goes through Telegram's sendVideo, not sendDocument: the reader
+  # gets a playable message instead of a file to download first.
+  def test_send_files_uploads_a_video_with_send_video
+    source = File.join(@tmpdir, "klip.mp4")
+    File.binwrite(source, "\x00\x00\x00\x18ftypmp42fake")
+
+    server, thread, requests = start_telegram_stub
+    port = server.addr[1]
+
+    result = with_env(
+      "RUBOT_TELEGRAM_API_BASE" => "http://127.0.0.1:#{port}",
+      "TELEGRAM_BOT_TOKEN" => "123:abc"
+    ) do
+      tool = Rubot::Tools::SendFiles.new
+      tool.delivery_context = { chat_id: 42 }
+      tool.execute({ "paths" => [ source ] })
+    end
+
+    assert_includes result, "Sent 1 file"
+    refute result.start_with?("ERROR"), result
+
+    head, body = Timeout.timeout(5) { requests.pop }
+    assert_includes head, "sendVideo"
+    assert_includes body, 'name="video"'
+    assert_includes body, 'filename="klip.mp4"'
+    assert_includes body, "video/mp4"
+  ensure
+    server&.close
+    thread&.join(2)
+    requests&.close
+  end
+
   # Half of what was asked for beats none of it, but the file that did not go
   # has to be named.
   def test_send_files_reports_the_file_it_could_not_send

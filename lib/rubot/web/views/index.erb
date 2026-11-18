@@ -277,13 +277,17 @@
     two from ever arguing about width. -%>
 <%= View.render("_search_dialog", token_query: token_query) %>
 
-<%# The sheet a picture opens into. One of them serves every image on the page:
-    the click handler fills in its src from the picture that was pressed, so a
-    thread with a hundred screenshots still costs one sheet. `hidden` keeps it
-    out of the page — and out of the tab order — until something opens it. -%>
-<div id="lightbox" class="lightbox" hidden role="dialog" aria-modal="true" aria-label="Pratinjau gambar">
+<%# The sheet a picture or a video opens into. One of them serves every file on
+    the page: the click handler fills in the source from the card that was
+    pressed, so a thread with a hundred screenshots still costs one sheet. Both
+    media live here; only the one being shown is visible, and the other is
+    emptied so a closed sheet holds no decoded picture or playing video.
+    `hidden` keeps it out of the page — and out of the tab order — until
+    something opens it. -%>
+<div id="lightbox" class="lightbox" hidden role="dialog" aria-modal="true" aria-label="Pratinjau lampiran">
   <figure class="lightbox-figure">
     <img class="lightbox-image" alt="">
+    <video class="lightbox-video" controls playsinline hidden></video>
     <figcaption class="lightbox-actions">
       <a class="btn lightbox-download" href="#" download>Unduh</a>
       <button type="button" class="btn lightbox-close" aria-label="Tutup pratinjau">Tutup</button>

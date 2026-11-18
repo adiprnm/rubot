@@ -42,8 +42,9 @@ module Rubot
           every path at once for a batch — e.g. "send the five pictures in
           Pictures" — so the pictures arrive together instead of one after
           another. Images (.png, .jpg, .jpeg,
-          .webp, .gif) are delivered as pictures so they display inline; a PDF
-          or a markdown note (.md) arrives as a document the reader can open.
+          .webp, .gif) are delivered as pictures so they display inline; videos
+          (.mp4, .webm, .mov) play inline too. A PDF or a markdown note (.md)
+          arrives as a document the reader can open.
           Paths may be relative to the workspace or absolute. Up to #{MAX_FILES}
           files per call; a file that cannot be sent is reported and the rest
           still go.

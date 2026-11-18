@@ -1221,8 +1221,9 @@ module Rubot
       every file the user asked for — one entry for a single file, several for
       a batch. One call sends them together instead of one round trip per file.
       Images (.png, .jpg, .jpeg, .webp, .gif) are delivered as pictures so they
-      display inline; other files arrive as documents, and in the browser a PDF
-      or a markdown note gets a card that opens in a tab.
+      display inline; videos (.mp4, .webm, .mov) play inline too. Other files
+      arrive as documents, and in the browser a PDF or a markdown note gets a
+      card that opens in a tab.
 
       Up to ten paths fit in one call; past that, send a second batch rather
       than falling back to one call per file.

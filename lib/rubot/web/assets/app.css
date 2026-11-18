@@ -2791,6 +2791,53 @@ select:focus-visible { outline: none; }
 .md-image-open:hover,
 .md-image-open:focus-visible { border-color: var(--fg-faint); }
 
+/* A video keeps its own controls: the reader can play it in place instead of
+   opening a sheet or downloading it first. Same height as a picture strip. */
+.attachment-video-open { position: relative; cursor: zoom-in; }
+
+.attachment-video {
+  display: block;
+  height: 10rem;
+  width: auto;
+  max-width: 20rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+}
+
+/* A still frame with a play mark: the card is a preview, the lightbox is
+   where the video actually plays. The mark appears on hover (or keyboard
+   focus) like the download button, so the frame stays clean at rest. Green
+   matches the other action on the page — the lightbox download — and the
+   scrim disc keeps it legible over any frame. */
+.attachment-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  width: 2.4rem;
+  height: 2.4rem;
+  border: 1px solid var(--green);
+  border-radius: 50%;
+  background: var(--scrim);
+  color: var(--green);
+  font-size: 0.85rem;
+  line-height: 1;
+  text-indent: 0.1rem;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .12s;
+}
+
+.attachment-video-open:hover .attachment-play,
+.attachment-video-open:focus-visible .attachment-play { opacity: 1; }
+
+@media (hover: none) {
+  .attachment-play { opacity: 1; }
+}
+
 /* The download sits on the picture, appearing when the pointer is on it (or
    when a keyboard reaches it). On a touch screen there is no hover, so it is
    simply always visible there. */
@@ -2939,7 +2986,8 @@ select:focus-visible { outline: none; }
   max-height: 100%;
 }
 
-.lightbox-image {
+.lightbox-image,
+.lightbox-video {
   display: block;
   max-width: min(92vw, 100rem);
   max-height: calc(100vh - 7rem);
@@ -2948,6 +2996,9 @@ select:focus-visible { outline: none; }
   border: 1px solid var(--line);
   background: var(--bg);
 }
+
+.lightbox-image[hidden],
+.lightbox-video[hidden] { display: none; }
 
 .lightbox-actions {
   display: flex;

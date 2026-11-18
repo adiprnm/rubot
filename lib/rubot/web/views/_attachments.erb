@@ -4,12 +4,14 @@
     sideways, which keeps every file the same height and the thread the same
     width.
 
-    A picture is a button, not a link: opening it is a moment in the page, not
-    a navigation. A document is a link, because there is nothing to show in
-    the page — a PDF opens in the browser's own viewer, a markdown note opens
-    as text — and it is the reader's own tab that should close it again. The
-    download anchor beside both is a link, because that is what a download is:
-    the same URL the lightbox or the tab offers, under the reader's own name.
+    A picture and a video are buttons, not links: opening one is a moment in
+    the page, not a navigation — both fill the same lightbox, which shows a
+    still image or a player depending on the kind. A document is a link,
+    because there is nothing to show in the page — a PDF opens in the
+    browser's own viewer, a markdown note opens as text — and it is the
+    reader's own tab that should close it again. The download anchor beside
+    them is a link, because that is what a download is: the same URL the
+    lightbox or the tab offers, under the reader's own name.
 
     The whole timeline is redrawn on every event of a running turn, and a card
     that is rebuilt with it is fetched again — five of them blink in step with
@@ -18,7 +20,30 @@
     it grows. -%>
 <div class="attachments" role="group" aria-label="Lampiran dari Rubot">
   <% attachments.each do |file| -%>
-  <% if file[:kind] == :document -%>
+  <% if file[:kind] == :video -%>
+  <figure class="attachment attachment--video"
+          <% if file[:id] %>id="file-<%= h(file[:id]) %>" hx-preserve="true"<% end %>>
+    <button type="button"
+            class="attachment-open attachment-video-open"
+            data-lightbox="<%= h(file[:url]) %>"
+            data-lightbox-kind="video"
+            data-name="<%= h(file[:name]) %>"
+            aria-label="Putar <%= h(file[:name]) %>">
+      <video class="attachment-video"
+             src="<%= h(file[:url]) %>"
+             preload="metadata"
+             muted
+             playsinline
+             aria-hidden="true"></video>
+      <span class="attachment-play" aria-hidden="true">▶</span>
+    </button>
+    <a class="attachment-download"
+       href="<%= h(file[:url]) %>"
+       download="<%= h(file[:name]) %>"
+       title="Unduh <%= h(file[:name]) %>"
+       aria-label="Unduh <%= h(file[:name]) %>">↓</a>
+  </figure>
+  <% elsif file[:kind] == :document -%>
   <figure class="attachment attachment--document"
           <% if file[:id] %>id="file-<%= h(file[:id]) %>" hx-preserve="true"<% end %>>
     <a class="attachment-document"

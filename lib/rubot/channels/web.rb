@@ -88,7 +88,7 @@ module Rubot
       # channel generated, an optional slug of the file's own name, and a known
       # extension — the slug is what makes a download read like a file, the id
       # is what makes it impossible to guess.
-      MEDIA_EXTENSIONS = %w[png jpg gif webp pdf md].freeze
+      MEDIA_EXTENSIONS = %w[png jpg gif webp mp4 webm pdf md].freeze
       # A markdown note is served as text, not as text/markdown: a browser
       # downloads a type it has no viewer for, and a note the reader has to
       # save first is a note they cannot read. PDFs are served as PDFs and
@@ -98,6 +98,8 @@ module Rubot
         ".jpg" => "image/jpeg",
         ".gif" => "image/gif",
         ".webp" => "image/webp",
+        ".mp4" => "video/mp4",
+        ".webm" => "video/webm",
         ".pdf" => "application/pdf",
         ".md" => "text/plain; charset=utf-8"
       }.freeze
@@ -2716,9 +2718,17 @@ module Rubot
           # timeline is redrawn on every token, and a file that kept its node
           # is not fetched or decoded again while the answer grows under it.
           { url: url, name: download_name(stored), id: stored[0, 32],
-            kind: picture?(stored) ? :picture : :document,
+            kind: attachment_kind(stored),
             label: extension.delete_prefix(".").upcase }
         end.uniq { |attachment| attachment[:id] }
+      end
+
+      def attachment_kind(name)
+        type = MEDIA_TYPES.fetch(File.extname(name), "")
+        return :video if type.start_with?("video/")
+        return :picture if type.start_with?("image/")
+
+        :document
       end
 
       def picture?(name)

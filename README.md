@@ -224,7 +224,7 @@ channels:
     persona: rubot
 ```
 
-The browser posts a message; Ruby streams the turn over SSE. No frontend build step — `htmx`, `htmx-ext-sse`, and `alpinejs` are vendored under `vendor/web/`, templates are ERB, and a small amount of JavaScript wires the composer. Files sent with `send_files` appear in the thread as a strip of pictures or document cards.
+The browser posts a message; Ruby streams the turn over SSE. No frontend build step — `htmx`, `htmx-ext-sse`, and `alpinejs` are vendored under `vendor/web/`, templates are ERB, and a small amount of JavaScript wires the composer. Files sent with `send_files` appear in the thread as a strip of pictures, videos, or document cards.
 
 The web channel runs shell commands through the same agent as every other channel, so it binds to loopback by default. Reach it from another device over a private network (Tailscale, SSH tunnel) rather than exposing the port. Set `token` to require a shared secret on every request.
 
@@ -252,7 +252,7 @@ Rubot ships with nine built-in tools:
 | `web_fetch` | Fetch a URL and convert HTML to plain text (5,000 char cap) |
 | `memory` | Read and update persistent memory (enabled when memory is on) |
 | `cron` | Schedule one-time or recurring reminders and commands |
-| `send_files` | Deliver local files (pictures, PDFs, notes) into the chat thread |
+| `send_files` | Deliver local files (pictures, videos, PDFs, notes) into the chat thread |
 | `notify` | Ask for the end of the current turn to be announced on the user's devices |
 | `instagram` | Connect an Instagram Business/Creator account and schedule feed posts |
 

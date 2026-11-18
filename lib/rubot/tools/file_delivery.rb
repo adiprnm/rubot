@@ -26,6 +26,9 @@ module Rubot
     module FileDelivery
       MAX_BYTES = 50 * 1024 * 1024 # Telegram bot upload limit
       PHOTO_EXTENSIONS = %w[.png .jpg .jpeg .webp].freeze
+      # Telegram has a separate sendVideo method; a video sent as a document
+      # loses its player and the reader has to download it before watching.
+      VIDEO_EXTENSIONS = %w[.mp4 .webm .mov].freeze
       # The token the web channel reads back out of a tool result. It is how a
       # conversation drawn from disk a week later still knows which stored file
       # this call produced. One result can carry several — a batch sends a
@@ -38,8 +41,9 @@ module Rubot
       # text. Anything else is refused rather than stored where nothing would
       # ever show it.
       WEB_IMAGE_EXTENSIONS = %w[.png .jpg .jpeg .gif .webp].freeze
+      WEB_VIDEO_EXTENSIONS = %w[.mp4 .webm].freeze
       WEB_DOCUMENT_EXTENSIONS = %w[.pdf .md .markdown].freeze
-      WEB_EXTENSIONS = (WEB_IMAGE_EXTENSIONS + WEB_DOCUMENT_EXTENSIONS).freeze
+      WEB_EXTENSIONS = (WEB_IMAGE_EXTENSIONS + WEB_VIDEO_EXTENSIONS + WEB_DOCUMENT_EXTENSIONS).freeze
 
       MIME_TYPES = {
         ".png" => "image/png",
@@ -47,6 +51,9 @@ module Rubot
         ".jpeg" => "image/jpeg",
         ".webp" => "image/webp",
         ".gif" => "image/gif",
+        ".mp4" => "video/mp4",
+        ".webm" => "video/webm",
+        ".mov" => "video/quicktime",
         ".pdf" => "application/pdf",
         ".json" => "application/json",
         ".txt" => "text/plain",
@@ -73,7 +80,7 @@ module Rubot
 
         extension = file.extname.downcase
         unless WEB_EXTENSIONS.include?(extension)
-          return "ERROR: the web page can send pictures and documents " \
+          return "ERROR: the web page can send pictures, videos and documents " \
                  "(#{WEB_EXTENSIONS.map { |ext| ext.delete_prefix(".") }.join(", ")}): #{file.basename}"
         end
 
@@ -117,9 +124,11 @@ module Rubot
       # un-shareable Proc in a different Ractor" when the tool runs inside the
       # session Ractor.
       def upload(file, size, token, context, caption)
-        photo = PHOTO_EXTENSIONS.include?(file.extname.downcase)
-        method = photo ? "sendPhoto" : "sendDocument"
-        field = photo ? "photo" : "document"
+        extension = file.extname.downcase
+        photo = PHOTO_EXTENSIONS.include?(extension)
+        video = VIDEO_EXTENSIONS.include?(extension)
+        method = if photo then "sendPhoto" elsif video then "sendVideo" else "sendDocument" end
+        field = if photo then "photo" elsif video then "video" else "document" end
 
         boundary = "----Rubot#{SecureRandom.hex(16)}"
         body = String.new(encoding: Encoding::BINARY)
@@ -149,7 +158,7 @@ module Rubot
 
         return "ERROR: Telegram rejected the file: #{parsed["description"] || response.code}" unless parsed["ok"]
 
-        kind = photo ? "photo" : "document"
+        kind = if photo then "photo" elsif video then "video" else "document" end
         "Sent #{file.basename} (#{size} bytes) to the chat as a #{kind}."
       end
 

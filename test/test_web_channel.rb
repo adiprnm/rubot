@@ -4709,7 +4709,7 @@ module Rubot
         result = tool.execute("path" => source)
 
         assert result.start_with?("ERROR"), "a file the page cannot draw is refused, not stored"
-        assert_includes result, "pictures and documents"
+        assert_includes result, "pictures, videos and documents"
       end
 
       # A PDF is not a picture, but the browser opens one on its own: it is
@@ -4730,6 +4730,41 @@ module Rubot
         assert_equal :document,
                      channel.send(:sent_attachments, "send_files", result, "web_kanyaah").first[:kind]
         assert_equal "%PDF-1.4\n", File.binread(File.join(dir, stored))
+      end
+
+      # A video is stored like a picture, but the page draws it with its own
+      # controls so the reader can play it in place rather than download it.
+      def test_send_files_hands_a_video_into_the_conversation
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        dir = channel.send(:attachments_dir, "web_kanyaah")
+        source = File.join(Dir.mktmpdir, "klip Liburan.mp4")
+        File.binwrite(source, "\x00\x00\x00\x18ftypmp42fake")
+
+        tool = Tools::SendFiles.new
+        tool.delivery_context = { channel: "web", dir: dir }
+        result = tool.execute("path" => source)
+
+        stored = result[/\[web-attachment ([^\]]+)\]/, 1]
+        assert_match(/\A[0-9a-f]{32}-klip-liburan\.mp4\z/, stored.to_s)
+        assert_equal :video,
+                     channel.send(:sent_attachments, "send_files", result, "web_kanyaah").first[:kind]
+        assert_equal File.binread(source), File.binread(File.join(dir, stored))
+      end
+
+      # The route serves a video under its own MIME type, so the browser can
+      # play it from the same media URL a picture uses.
+      def test_serve_media_sends_a_video_as_video
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        dir = channel.send(:attachments_dir, "web_kanyaah")
+        FileUtils.mkdir_p(dir)
+        name = "#{"a" * 32}.mp4"
+        File.binwrite(File.join(dir, name), "fake video")
+
+        res = FakeResponse.new
+        channel.send(:serve_media, res, "web_kanyaah", name)
+
+        assert_equal "video/mp4", res.headers["Content-Type"]
+        assert_equal "fake video", res.body
       end
 
       # `.markdown` is stored as `.md`, the same way `.jpeg` becomes `.jpg`:
@@ -5076,6 +5111,23 @@ module Rubot
         assert_includes html, %(download="desain.png")
       end
 
+      # A video is a preview card: clicking it opens the same lightbox a
+      # picture uses, which switches to a player for the video. The download
+      # beside it is still a plain link.
+      def test_a_video_the_agent_sent_opens_in_the_lightbox
+        video = { url: "/s/web_kanyaah/media/#{"a" * 32}.mp4?token=t0k", name: "klip.mp4",
+                  id: "a" * 32, kind: :video, label: "MP4" }
+
+        html = View.render("_timeline", items: [ { kind: :attachments, list: [ video ] } ])
+
+        assert_includes html, %(class="attachment attachment--video")
+        assert_includes html, %(data-lightbox="#{video[:url]}")
+        assert_includes html, %(data-lightbox-kind="video")
+        assert_includes html, %(<video class="attachment-video")
+        assert_includes html, %(src="#{video[:url]}")
+        assert_includes html, %(download="klip.mp4")
+      end
+
       # A document is not drawn into a sheet: the card is a link out to the
       # browser's own viewer, with the format written on it and the same
       # download beside it that a picture carries.
@@ -5364,11 +5416,14 @@ module Rubot
         assert_equal 1, html.scan(%(id="lightbox")).size
         assert_match(/id="lightbox"[^>]*hidden/, html)
         assert_includes html, 'class="btn lightbox-download"'
+        assert_includes html, 'class="lightbox-video"', "the sheet holds a player for videos"
 
         js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
         assert_includes js, "function openLightbox", "the sheet has to be able to open"
         assert_includes js, %(event.target.closest("[data-lightbox]")),
                         "the handler is delegated: the thread is rewritten by htmx"
+        assert_includes js, "trigger.dataset.lightboxKind",
+                        "the handler tells a video from a picture"
       end
 
       # An image written in markdown is the same affordance as an attachment.
