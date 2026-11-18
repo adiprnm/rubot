@@ -65,10 +65,63 @@ def work_units(files, per_shard)
   units
 end
 
-def run_unit(file, methods)
+def run_unit(file, methods, timeout: nil)
   args = ["-Ilib", "-Itest", file]
   args += ["-n", "/^(#{methods.map { |m| Regexp.escape(m) }.join('|')})$/"] if methods
-  Open3.capture2e(RbConfig.ruby, *args)
+  return Open3.capture2e(RbConfig.ruby, *args) unless timeout
+
+  # Timeout.timeout around Open3.capture2e closes its pipes from another
+  # thread, which raises IOError inside Open3's reader threads. Spawn with
+  # explicit pipes and kill the child on timeout instead.
+  stdout_r, stdout_w = IO.pipe
+  stderr_r, stderr_w = IO.pipe
+  # Own a process group so a timeout can kill the child *and* anything it
+  # spawned (Ractors leave threads that keep the pipes open and burn CPU).
+  pid = Process.spawn(RbConfig.ruby, *args, out: stdout_w, err: stderr_w, pgroup: true)
+  stdout_w.close
+  stderr_w.close
+  begin
+    # Poll both the pipe and the child. A child that spawns a grandchild can
+    # keep the pipe open after it exits, so neither a blocking read nor a
+    # blocking waitpid is safe on its own.
+    output = +""
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+    drained_at = nil
+    waited = nil
+    loop do
+      open_pipes = [ stdout_r, stderr_r ].reject(&:closed?)
+      unless open_pipes.empty?
+        if IO.select(open_pipes, nil, nil, 0.01)
+          open_pipes.each do |io|
+            begin
+              output << io.read_nonblock(65536)
+            rescue IO::WaitReadable
+              next
+            rescue EOFError
+              io.close
+            end
+          end
+        end
+      end
+      waited ||= Process.waitpid2(pid, Process::WNOHANG)
+      if waited
+        # Once the child is gone, give any grandchild holding the pipe at most
+        # a second to close; otherwise move on instead of burning the timeout.
+        drained_at ||= Process.clock_gettime(Process::CLOCK_MONOTONIC) + 1
+        break if open_pipes.empty? || Process.clock_gettime(Process::CLOCK_MONOTONIC) >= drained_at
+      end
+      break if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+    end
+    timed_out = waited.nil?
+    if timed_out
+      Process.kill("KILL", -pid) rescue nil
+      waited = Process.waitpid2(pid)
+    end
+    [ output, waited[1], timed_out ]
+  ensure
+    stdout_r.close
+    stderr_r.close
+  end
 end
 
 desc "Run the test suite in parallel (one process per shard)"
@@ -85,6 +138,10 @@ task :test do
   units.each { |u| queue << u }
   results = Queue.new
   started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  # A hung shard used to hold every result back until the whole run timed out,
+  # leaving no clue which test was stuck. Cap each shard and stream its status
+  # as it lands so the slow one is visible immediately.
+  shard_timeout = Integer(ENV["SHARD_TIMEOUT"] || 120, exception: false)&.clamp(1, 3600) || 120
 
   Array.new(workers) do
     Thread.new do
@@ -95,10 +152,14 @@ task :test do
           break
         end
 
+        label = methods ? "#{file} (#{methods.size} tests)" : file
         t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-        output, status = run_unit(file, methods)
+        output, status, timed_out = run_unit(file, methods, timeout: shard_timeout)
         elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0
-        results << [file, methods, status.success?, output, elapsed]
+        ok = !timed_out && status.success?
+        results << [label, ok, output, elapsed]
+        printf("%-58s %6.2fs  %s\n", label, elapsed, ok ? "ok" : (timed_out ? "TIMEOUT" : "FAILED"))
+        $stdout.flush
       end
     end
   end.each(&:join)
@@ -107,17 +168,11 @@ task :test do
   runs = 0
   assertions = 0
   results.size.times do
-    file, methods, ok, output, elapsed = results.pop
+    label, ok, output, = results.pop
     summary = output.scan(/(\d+) runs, (\d+) assertions/).last
     runs += summary[0].to_i if summary
     assertions += summary[1].to_i if summary
-    label = methods ? "#{file} (#{methods.size} tests)" : file
-    if ok
-      printf("%-58s %6.2fs  ok\n", label, elapsed)
-    else
-      failures << [label, output]
-      printf("%-58s %6.2fs  FAILED\n", label, elapsed)
-    end
+    failures << [label, output] unless ok
   end
 
   total = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started

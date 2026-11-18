@@ -400,7 +400,7 @@ class TestUsage < Minitest::Test
       "openai"
     end
 
-    def chat(_messages, tools: nil)
+    def chat(_messages, tools: nil, on_retry: nil)
       @calls += 1
       track_usage(
         "prompt_tokens" => 1_000,
@@ -416,7 +416,7 @@ class TestUsage < Minitest::Test
       "openai"
     end
 
-    def chat(_messages, tools: nil)
+    def chat(_messages, tools: nil, on_retry: nil)
       track_usage(
         "prompt_tokens" => 10_000,
         "completion_tokens" => 500,

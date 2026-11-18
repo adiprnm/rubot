@@ -209,7 +209,11 @@ module Rubot
     end
 
     def name
-      self.class.name.split("::").last.downcase
+      # Anonymous subclasses (common in tests) have no class name; fall back
+      # to the nearest named ancestor instead of blowing up in log_debug.
+      klass = self.class
+      klass = klass.superclass while klass && klass.name.nil?
+      (klass&.name || "provider").split("::").last.downcase
     end
 
     # Finish reasons that mean the provider ran out of output budget, so the

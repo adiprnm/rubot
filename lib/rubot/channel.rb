@@ -311,7 +311,7 @@ module Rubot
       end
 
       warn "[#{@name}] Error processing message: #{error.class}: #{error.message}"
-      warn error.backtrace.first(5).join("\n") if Rubot.debug?
+      warn Array(error.backtrace).first(5).join("\n") if Rubot.debug?
       msg
     end
 

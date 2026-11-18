@@ -191,7 +191,7 @@ class TestAgentTruncationHandling < Minitest::Test
       @requests = []
     end
 
-    def chat(messages, tools: nil)
+    def chat(messages, tools: nil, on_retry: nil)
       system = messages.find { |m| m["role"] == "system" }
       system = system ? system["content"].to_s : ""
       return { "content" => "{}", "finish_reason" => "stop" } if AUXILIARY_PROMPTS.any? { |p| system.include?(p) }
@@ -202,7 +202,7 @@ class TestAgentTruncationHandling < Minitest::Test
       result
     end
 
-    def chat_stream(messages, tools: nil, &_on_chunk)
+    def chat_stream(messages, tools: nil, on_retry: nil, &_on_chunk)
       chat(messages, tools: tools)
     end
 
@@ -374,7 +374,7 @@ class TestAgentEmptyAnswerRecovery < Minitest::Test
       @requests = []
     end
 
-    def chat(messages, tools: nil)
+    def chat(messages, tools: nil, on_retry: nil)
       system = messages.find { |m| m["role"] == "system" }
       return { "content" => "{}", "finish_reason" => "stop" } if system && system["content"].to_s.include?("memory extraction")
 
@@ -387,7 +387,7 @@ class TestAgentEmptyAnswerRecovery < Minitest::Test
       end
     end
 
-    def chat_stream(messages, tools: nil, &_on_chunk)
+    def chat_stream(messages, tools: nil, on_retry: nil, &_on_chunk)
       chat(messages, tools: tools)
     end
 
@@ -401,7 +401,7 @@ class TestAgentEmptyAnswerRecovery < Minitest::Test
   end
 
   class AlwaysEmptyProvider < EmptyThenAnswerProvider
-    def chat(messages, tools: nil)
+    def chat(messages, tools: nil, on_retry: nil)
       system = messages.find { |m| m["role"] == "system" }
       return { "content" => "{}", "finish_reason" => "stop" } if system && system["content"].to_s.include?("memory extraction")
 

@@ -309,7 +309,7 @@ class TestAgentProgressNarration < Minitest::Test
       @calls = 0
     end
 
-    def chat(_messages, tools: nil)
+    def chat(_messages, tools: nil, on_retry: nil)
       @calls += 1
       if @calls == 1
         {
@@ -327,7 +327,7 @@ class TestAgentProgressNarration < Minitest::Test
       end
     end
 
-    def chat_stream(messages, tools: nil, &_on_chunk)
+    def chat_stream(messages, tools: nil, on_retry: nil, &_on_chunk)
       chat(messages, tools: tools)
     end
   end
@@ -381,7 +381,7 @@ class TestAgentProgressNarration < Minitest::Test
 
   def test_does_not_forward_empty_narration
     empty_narration_provider = Class.new(NarratingProvider) do
-      def chat(_messages, tools: nil)
+      def chat(_messages, tools: nil, on_retry: nil)
         @calls += 1
         if @calls == 1
           { "content" => "", "tool_calls" => [ { "id" => "call_1", "type" => "function",
@@ -1176,7 +1176,7 @@ class TestAgentCompaction < Minitest::Test
       nil
     end
 
-    def chat(_messages, tools: nil)
+    def chat(_messages, tools: nil, on_retry: nil)
       @calls += 1
       { "content" => "Summarized." }
     end
@@ -1397,7 +1397,7 @@ class TestAgentAdaptiveLearning < Minitest::Test
       { "prompt_tokens" => 10, "completion_tokens" => 5 }
     end
 
-    def chat(messages, tools: nil)
+    def chat(messages, tools: nil, on_retry: nil)
       @calls += 1
       @requests << messages
       prompt = system_prompt(messages)
@@ -1411,7 +1411,7 @@ class TestAgentAdaptiveLearning < Minitest::Test
       end
     end
 
-    def chat_stream(messages, tools: nil)
+    def chat_stream(messages, tools: nil, on_retry: nil)
       chat(messages, tools: tools)
     end
 
@@ -1631,7 +1631,7 @@ class TestAgentAdaptiveLearning < Minitest::Test
 
   def test_a_failing_extraction_does_not_lose_the_answer
     failing = Class.new(CountingProvider) do
-      def chat(messages, tools: nil)
+      def chat(messages, tools: nil, on_retry: nil)
         if messages.first.to_h["content"].to_s.include?("memory extraction assistant")
           raise "extractor exploded"
         end
@@ -1667,7 +1667,7 @@ class TestAgentCancellation < Minitest::Test
       "openai"
     end
 
-    def chat(_messages, tools: nil)
+    def chat(_messages, tools: nil, on_retry: nil)
       @calls += 1
       return { "content" => "done" } if @calls > 1
 
@@ -1706,7 +1706,7 @@ class TestAgentCancellation < Minitest::Test
       "openai"
     end
 
-    def chat(_messages, tools: nil)
+    def chat(_messages, tools: nil, on_retry: nil)
       @calls += 1
       return { "content" => "all done" } if @calls > 1
 
@@ -1740,11 +1740,11 @@ class TestAgentCancellation < Minitest::Test
       "openai"
     end
 
-    def chat(_messages, tools: nil)
+    def chat(_messages, tools: nil, on_retry: nil)
       { "content" => "done" }
     end
 
-    def chat_stream(_messages, tools: nil, &on_chunk)
+    def chat_stream(_messages, tools: nil, on_retry: nil, &on_chunk)
       @calls += 1
       1_000.times do |i|
         Rubot::Cancellation.check!
@@ -1874,7 +1874,7 @@ class TestAgentParallelToolCalls < Minitest::Test
       "openai"
     end
 
-    def chat(_messages, tools: nil)
+    def chat(_messages, tools: nil, on_retry: nil)
       @calls += 1
       return { "content" => "all done" } if @calls > 1
 
@@ -1958,7 +1958,7 @@ class TestAgentSteering < Minitest::Test
       @tool_first = tool_first
     end
 
-    def chat(messages, tools: nil)
+    def chat(messages, tools: nil, on_retry: nil)
       @rounds << messages.map { |m| [ m["role"], m["content"] ] }
       @on_round&.call(@rounds.size)
 
@@ -1978,7 +1978,7 @@ class TestAgentSteering < Minitest::Test
       end
     end
 
-    def chat_stream(messages, tools: nil, &on_chunk)
+    def chat_stream(messages, tools: nil, on_retry: nil, &on_chunk)
       result = chat(messages, tools: tools)
       on_chunk&.call(result["content"])
       result
@@ -2076,7 +2076,7 @@ class TestAgentUiDiff < Minitest::Test
       "openai"
     end
 
-    def chat(_messages, tools: nil)
+    def chat(_messages, tools: nil, on_retry: nil)
       @calls += 1
       return { "content" => "done" } if @calls > 1
 
@@ -2208,11 +2208,11 @@ class TestAgentLiveUsage < Minitest::Test
       @last_usage
     end
 
-    def chat(_messages, tools: nil)
+    def chat(_messages, tools: nil, on_retry: nil)
       raise "streamed only"
     end
 
-    def chat_stream(_messages, tools: nil)
+    def chat_stream(_messages, tools: nil, on_retry: nil)
       text = +""
       @chunks.times do
         sleep @pause
@@ -2242,7 +2242,7 @@ class TestAgentLiveUsage < Minitest::Test
       "test"
     end
 
-    def chat(_messages, tools: nil)
+    def chat(_messages, tools: nil, on_retry: nil)
       @calls += 1
       if @calls == 1
         {
@@ -2275,7 +2275,7 @@ class TestAgentLiveUsage < Minitest::Test
       end
     end
 
-    def chat_stream(messages, tools: nil)
+    def chat_stream(messages, tools: nil, on_retry: nil)
       chat(messages, tools: tools)
     end
   end
@@ -2451,7 +2451,7 @@ class TestAgentAutoMode < Minitest::Test
       @calls = 0
     end
 
-    def chat(_messages, tools: nil)
+    def chat(_messages, tools: nil, on_retry: nil)
       @calls += 1
       if @calls == 1
         {
@@ -2469,7 +2469,7 @@ class TestAgentAutoMode < Minitest::Test
       end
     end
 
-    def chat_stream(messages, tools: nil, &_on_chunk)
+    def chat_stream(messages, tools: nil, on_retry: nil, &_on_chunk)
       chat(messages, tools: tools)
     end
   end
@@ -2533,11 +2533,11 @@ end
 # polluted with it.
 class TestAgentReasoning < Minitest::Test
   class ThinkingProvider
-    def chat(_messages, tools: nil)
+    def chat(_messages, tools: nil, on_retry: nil)
       { "content" => "answer", "reasoning_content" => "let me think" }
     end
 
-    def chat_stream(_messages, tools: nil)
+    def chat_stream(_messages, tools: nil, on_retry: nil)
       yield nil, nil, "let me "
       yield nil, nil, "think"
       yield "answer", nil
@@ -2548,11 +2548,11 @@ class TestAgentReasoning < Minitest::Test
   # A model that thinks but never streams it (or does not think at all) must
   # not make the channel invent fragments.
   class SilentProvider
-    def chat(_messages, tools: nil)
+    def chat(_messages, tools: nil, on_retry: nil)
       { "content" => "answer" }
     end
 
-    def chat_stream(_messages, tools: nil)
+    def chat_stream(_messages, tools: nil, on_retry: nil)
       yield "answer", nil
       { "content" => "answer" }
     end
@@ -2723,12 +2723,12 @@ class TestAgentCacheRecords < Minitest::Test
       }
     end
 
-    def chat(_messages, tools: nil)
+    def chat(_messages, tools: nil, on_retry: nil)
       @requests += 1
       { "content" => "jawaban #{@requests}" }
     end
 
-    def chat_stream(messages, tools: nil)
+    def chat_stream(messages, tools: nil, on_retry: nil)
       chat(messages, tools: tools)
     end
   end
@@ -2805,11 +2805,11 @@ class TestAgentCacheDivergence < Minitest::Test
       }
     end
 
-    def chat(_messages, tools: nil)
+    def chat(_messages, tools: nil, on_retry: nil)
       { "content" => "ok" }
     end
 
-    def chat_stream(messages, tools: nil)
+    def chat_stream(messages, tools: nil, on_retry: nil)
       chat(messages, tools: tools)
     end
   end

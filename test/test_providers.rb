@@ -135,7 +135,7 @@ class TestProviders < Minitest::Test
     registry = Rubot::Tools::Registry.new
 
     defs = provider.format_tools(registry.all)
-    assert_equal 8, defs.size
+    assert_equal 9, defs.size
 
     shell_def = defs.find { |d| d["function"]["name"] == "shell_exec" }
     assert shell_def
@@ -282,7 +282,7 @@ class TestProviders < Minitest::Test
     registry = Rubot::Tools::Registry.new
 
     defs = provider.format_tools(registry.all)
-    assert_equal 8, defs.size
+    assert_equal 9, defs.size
 
     shell_def = defs.find { |d| d["name"] == "shell_exec" }
     assert shell_def
@@ -344,7 +344,7 @@ class TestProviders < Minitest::Test
     registry = Rubot::Tools::Registry.new
 
     defs = provider.format_tools(registry.all)
-    assert_equal 8, defs.size
+    assert_equal 9, defs.size
 
     shell_def = defs.find { |d| d["function"]["name"] == "shell_exec" }
     assert shell_def
@@ -419,7 +419,7 @@ class TestProviders < Minitest::Test
       @call_count = 0
     end
 
-    def chat(_messages, tools: nil)
+    def chat(_messages, tools: nil, on_retry: nil)
       @call_count += 1
       resp = @responses.shift
       raise Rubot::RateLimitError.new if resp == :rate_limit
@@ -490,7 +490,7 @@ class TestProviders < Minitest::Test
         @calls = 0
       end
 
-      def chat(_messages, tools: nil)
+      def chat(_messages, tools: nil, on_retry: nil)
         @calls += 1
         raise Rubot::RateLimitError.new(@retry_after) if @calls == 1
 
@@ -513,7 +513,7 @@ class TestProviders < Minitest::Test
         @calls = 0
       end
 
-      def chat(_messages, tools: nil)
+      def chat(_messages, tools: nil, on_retry: nil)
         @calls += 1
         raise Rubot::RateLimitError.new(3600) if @calls == 1
 
