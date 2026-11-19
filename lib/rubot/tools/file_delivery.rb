@@ -113,7 +113,7 @@ module Rubot
       def resolve(path)
         candidate = Pathname.new(path)
         unless candidate.absolute?
-          base = @safety_guard&.workspace || Pathname.new(Dir.pwd)
+          base = workspace || @safety_guard&.workspace || Pathname.new(Dir.pwd)
           candidate = Pathname.new(base).join(candidate)
         end
         candidate.expand_path

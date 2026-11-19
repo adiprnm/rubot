@@ -686,6 +686,33 @@ class TestTools < Minitest::Test
     assert Rubot::Tools::FileTool.new.send(:verify_appended!, filepath, "second line\n")
   end
 
+  def test_relative_paths_resolve_against_the_injected_workspace
+    workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(workspace)
+    @registry.all.each { |tool| tool.workspace = workspace if tool.respond_to?(:workspace=) }
+
+    result = @registry.execute("file_ops", {
+      "operation" => "write",
+      "path" => "note.txt",
+      "content" => "in the workspace"
+    })
+
+    assert_includes result, "Written"
+    assert_equal "in the workspace", File.read(File.join(workspace, "note.txt"))
+    refute File.exist?(File.join(Dir.pwd, "note.txt"))
+  end
+
+  def test_shell_runs_in_the_injected_workspace
+    workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(workspace)
+    tool = @registry.get("shell_exec")
+    tool.workspace = workspace
+
+    result = tool.execute({ "command" => "pwd" })
+
+    assert_includes result, File.realpath(workspace)
+  end
+
   def test_file_write_and_read
     filepath = File.join(@tmpdir, "test.txt")
     write_result = @registry.execute("file_ops", {

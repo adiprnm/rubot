@@ -9,11 +9,13 @@ module Rubot
     # consistent and extensible.
     class TuiChannel < Channel
       def initialize(agent: nil, pool: nil, app_config: nil, channel_config: {})
-        # The terminal channel treats the directory it was launched from as
-        # its workspace: sessions, SOUL.md, MEMORY.md, skills, cron jobs and
-        # the safety guard all follow the project you are standing in, not
-        # the workspace configured in config.yml.
-        app_config = app_config.with_workspace(Dir.pwd) if app_config && pool.nil? && agent.nil?
+        # The terminal channel writes files to the configured workspace
+        # (~/.rubot/workspace by default), not to the directory rubot was
+        # launched from. The launch directory is still recorded as the
+        # sessions' origin so /resume can filter to the current project.
+        if app_config && pool.nil? && agent.nil?
+          app_config = app_config.with_workspace(app_config.workspace, sessions_cwd: Dir.pwd)
+        end
         super(agent: agent, pool: pool, app_config: app_config, channel_config: channel_config)
         @stream = channel_config.fetch("stream", true)
       end

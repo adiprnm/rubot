@@ -158,7 +158,7 @@ module Rubot
         return nil if path.nil? || path.to_s.strip.empty?
 
         target = begin
-          Pathname.new(path).expand_path
+          resolve_path(path)
         rescue StandardError
           return nil
         end
@@ -211,8 +211,17 @@ module Rubot
         nil
       end
 
+      # Resolve a path against the agent's workspace when one is set. The
+      # process cwd is only a fallback for tools used outside a channel (tests,
+      # scripts), where no workspace has been injected.
+      def resolve_path(path)
+        candidate = Pathname.new(path.to_s)
+        candidate = Pathname.new(workspace).join(candidate) if !candidate.absolute? && workspace
+        candidate.expand_path
+      end
+
       def safe_path(path)
-        expanded = Pathname.new(path).expand_path
+        expanded = resolve_path(path)
         # FIX (VULN-9): Resolve symlinks at operation time to prevent TOCTOU attacks
         # where a file is replaced with a symlink between check and use
         return expanded if expanded.to_s.start_with?("/dev/")

@@ -2657,14 +2657,18 @@ end
       assert_equal Channels::TuiChannel, Channels::Registry::CHANNEL_MAP["repl"]
     end
 
-    def test_tui_channel_takes_the_launch_directory_as_its_workspace
+    def test_tui_channel_writes_to_the_configured_workspace_and_records_the_launch_dir
       Dir.mktmpdir do |dir|
-        config = isolated_config(dir).with_workspace(File.join(dir, "configured"))
+        configured = File.join(dir, "configured")
+        FileUtils.mkdir_p(configured)
+        config = isolated_config(dir).with_workspace(configured)
         config.data["tools"] = false
         channel = Channels::TuiChannel.new(app_config: config)
         begin
-          assert_equal File.realpath(Dir.pwd), File.realpath(channel.pool.workspace),
-                       "files must be looked up in the cwd, not the configured workspace"
+          assert_equal File.realpath(configured), File.realpath(channel.pool.workspace),
+                       "files belong in the configured workspace, not the cwd"
+          assert_equal File.realpath(Dir.pwd), File.realpath(channel.pool.sessions_cwd),
+                       "/resume still filters on where rubot was launched"
         ensure
           channel.stop
         end

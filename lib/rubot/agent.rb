@@ -160,6 +160,7 @@ module Rubot
       @tools = tools || Tools::Registry.new
       # Always inject safety guard into tools, even when passed from outside
       inject_safety_guard
+      inject_tool_workspace
       inject_tool_context
 
       # Warn if safety guard is disabled
@@ -1799,6 +1800,16 @@ module Rubot
       @tools.all.each do |tool|
         next unless tool.respond_to?(:safety_guard=)
         tool.safety_guard = @safety_guard
+      end
+    end
+
+    # Tell tools where relative paths belong. The web channel roots the config
+    # at the persona's directory and the TUI at the configured workspace, so
+    # this is the one place that knows the right answer for both.
+    def inject_tool_workspace
+      return unless @tools.respond_to?(:all)
+      @tools.all.each do |tool|
+        tool.workspace = @config.workspace if tool.respond_to?(:workspace=)
       end
     end
 

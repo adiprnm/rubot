@@ -115,11 +115,7 @@ module Rubot
       private
 
       def default_base
-        if @safety_guard&.workspace
-          @safety_guard.workspace
-        else
-          Dir.pwd
-        end
+        workspace || @safety_guard&.workspace || Dir.pwd
       end
 
       def check_path(path)

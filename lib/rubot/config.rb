@@ -480,7 +480,7 @@ module Rubot
     # `assets_workspace` keeps pointing at the configured workspace, so the
     # SOUL.md, MEMORY.md, AGENTS.md and skills/ that were set up there are
     # still loaded while code work happens in the project directory.
-    def with_workspace(path)
+    def with_workspace(path, sessions_cwd: nil)
       original = workspace
       copy = self.class.from_data(snapshot, config_path: config_path)
       agents = copy.data["agents"]
@@ -490,8 +490,10 @@ module Rubot
       defaults["workspace"] = File.expand_path(path)
       # The directory the TUI was launched from. Sessions are stored centrally
       # (see #sessions_dir), so this marker is what lets /resume show only the
-      # conversations that belong to the project the user is standing in.
-      defaults["sessions_cwd"] ||= File.expand_path(path)
+      # conversations that belong to the project the user is standing in. It
+      # is independent of the workspace now: files go to the configured
+      # workspace, while /resume still filters on where rubot was launched.
+      defaults["sessions_cwd"] = File.expand_path(sessions_cwd) if sessions_cwd
       copy
     end
 

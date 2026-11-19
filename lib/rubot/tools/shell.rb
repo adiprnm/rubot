@@ -250,7 +250,12 @@ module Rubot
         cancellation = Thread.current[:rubot_cancellation]
         limit = command_timeout
 
-        Open3.popen3(cmd, pgroup: true) do |stdin, stdout, stderr, wait_thr|
+        # Run in the agent's workspace when one is set, so relative paths in
+        # shell commands land where the agent's files live rather than in the
+        # directory rubot was launched from.
+        opts = { pgroup: true }
+        opts[:chdir] = workspace if workspace && File.directory?(workspace)
+        Open3.popen3(cmd, **opts) do |stdin, stdout, stderr, wait_thr|
           stdin.close
           cancellation&.track(wait_thr.pid)
           begin

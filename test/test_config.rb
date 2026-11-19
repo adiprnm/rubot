@@ -236,9 +236,19 @@ class TestConfig < Minitest::Test
 
     assert_equal File.join(@tmpdir, "sessions"), copy.sessions_dir,
                  "one central sessions directory, outside the workspace"
-    assert_equal "/tmp/project", copy.sessions_cwd
+    assert_nil copy.sessions_cwd, "the workspace is no longer the session origin"
     assert_nil config.sessions_cwd, "the original config is untouched"
     refute_includes copy.sessions_dir, "workspace"
+  end
+
+  def test_with_workspace_can_set_the_session_origin_separately
+    config = isolated_config(@tmpdir)
+
+    copy = config.with_workspace("/tmp/files", sessions_cwd: "/tmp/launch")
+
+    assert_equal "/tmp/files", copy.workspace
+    assert_equal "/tmp/launch", copy.sessions_cwd
+    assert_nil config.sessions_cwd, "the original config is untouched"
   end
 
   def test_sessions_dir_ignores_an_explicit_assets_workspace

@@ -9,6 +9,16 @@ module Rubot
   #   - parameters (JSON schema)
   #   - execute(arguments)
   class Tool
+    # The directory relative paths are resolved against. Channels set this to
+    # the agent's workspace: the persona directory on web, the configured
+    # workspace on TUI. Without it, tools fall back to the process cwd, which
+    # is where rubot happened to be launched and not where files belong.
+    attr_writer :workspace
+
+    def workspace
+      @workspace
+    end
+
     # Human-readable name of the tool
     def name
       raise NotImplementedError, "#{self.class} must implement #name"
