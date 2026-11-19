@@ -16,8 +16,8 @@ class TestSessionArchive < Minitest::Test
     FileUtils.remove_entry(@dir) if File.directory?(@dir)
   end
 
-  def session(id = "s1", max_messages: Rubot::Session::DEFAULT_MAX_MESSAGES)
-    Rubot::Session.new(id, workspace: @dir, archive: @client, max_messages: max_messages)
+  def session(id = "s1")
+    Rubot::Session.new(id, workspace: @dir, archive: @client)
   end
 
   def test_messages_round_trip_through_the_archive
@@ -95,17 +95,6 @@ class TestSessionArchive < Minitest::Test
 
     assert_equal 2, before
     assert_equal 2, after, "saving again must not duplicate history"
-  end
-
-  def test_trim_keeps_the_archive_and_moves_the_window
-    s = session(max_messages: 4)
-    10.times { |i| s.add("user", "pesan #{i}") }
-
-    reloaded = session(max_messages: 4)
-
-    assert_equal 10, @store.message_count("s1"), "the archive keeps every message"
-    assert_operator reloaded.messages.size, :<, 10, "the live window was trimmed"
-    assert_equal "pesan 9", reloaded.messages.last["content"]
   end
 
   def test_clear_starts_a_new_window_without_reusing_indices

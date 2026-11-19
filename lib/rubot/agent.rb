@@ -2715,15 +2715,6 @@ end
       min_keep = @config.token_based_compaction? ? 2 : @config.compact_keep_recent_messages
       return if @session.message_count <= min_keep
 
-      # The hard trim in Session#trim! drops messages from the front, which moves
-      # the first block of the transcript -- so everything after the system
-      # prompt and the tool catalog has to be read again. Measured at ~110k
-      # tokens per event, for five to forty messages dropped. Compaction pays the
-      # same one request and leaves a summary plus the recent messages: smaller
-      # and it keeps what the trim throws away. So compact a block before the
-      # trim would fire.
-      return compact_session(protect_current_turn: true) if transcript_near_the_trim_cap?
-
       window = context_window_tokens
       # An unknown model used to disable compaction entirely, which left an
       # unbounded transcript and a silently trimmed request. Fall back to a
@@ -2742,13 +2733,6 @@ end
              "context #{result[:context_before]} -> #{result[:context_after]} tokens (estimated)"
       end
       result
-    end
-
-    # True when the transcript is close enough to `session_max_messages` that the
-    # next few appends would trigger the silent trim. The rule lives on the
-    # session, next to the trim it guards, so the two cannot drift apart.
-    def transcript_near_the_trim_cap?
-      @session.near_trim_cap?
     end
   end
 end

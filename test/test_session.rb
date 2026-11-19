@@ -470,63 +470,6 @@ class TestSessionSummarization < Minitest::Test
     assert_operator @session.context_tokens[:tokens], :<, 5_000
   end
 
-  def test_hard_message_trim_invalidates_the_context_anchor
-    session = Rubot::Session.new("context-trim", workspace: @workspace, max_messages: 10)
-    10.times { session.add("user", "Message") }
-    session.record_usage({ "prompt_tokens" => 5_000, "completion_tokens" => 100 })
-
-    session.add("user", "one more message past the cap")
-
-    refute session.context_anchored?
-  end
-
-  # A transcript parked at the cap used to drop one message per append, which
-  # moved the front of the conversation on every request. Prompt caching
-  # matches on the prefix, so a capped session missed the cache every time and
-  # paid the full input price for its whole transcript again: measured on this
-  # repo's own sessions, 5x the cost per request of an uncapped one.
-  def test_the_hard_trim_cuts_a_block_so_the_prefix_stays_put
-    session = Rubot::Session.new("trim-block", workspace: @workspace, max_messages: 100)
-    100.times { |i| session.add("user", "Message #{i}") }
-
-    session.add("user", "past the cap")
-
-    # 10% of the cap goes in one cut, so the next 9 appends keep the prefix.
-    assert_equal 90, session.message_count
-  end
-
-  # The predicate compaction asks before it takes over: one block of headroom
-  # before the cap, because the trim lands a block below it. Asking at the cap
-  # arrives one append too late -- by then the front has already moved and the
-  # prefix is gone (see test_the_hard_trim_cuts_a_block_so_the_prefix_stays_put).
-  def test_near_trim_cap_reports_one_block_of_headroom
-    session = Rubot::Session.new("near-cap", workspace: @workspace, max_messages: 100)
-
-    89.times { |i| session.add("user", "Message #{i}") }
-    refute session.near_trim_cap?, "one block of room is still room"
-
-    10.times { |i| session.add("user", "Message #{89 + i}") }
-    assert session.near_trim_cap?, "the next append would make trim! cut"
-    assert_equal 99, session.message_count
-  end
-
-  # `max_messages: 0` falls back to the default cap, so a short transcript must
-  # still read as far from it -- the predicate is a distance, not a flag.
-  def test_a_short_transcript_is_far_from_the_trim_cap
-    session = Rubot::Session.new("short", workspace: @workspace, max_messages: 0)
-
-    20.times { |i| session.add("user", "Message #{i}") }
-
-    refute session.near_trim_cap?
-  end
-
-  def test_the_hard_trim_never_empties_the_transcript    session = Rubot::Session.new("trim-tiny", workspace: @workspace, max_messages: 1)
-
-    5.times { |i| session.add("user", "Message #{i}") }
-
-    assert_equal 1, session.message_count
-  end
-
   # --- Task statement ---------------------------------------------------
 
   def test_the_first_user_message_is_kept_as_the_task
@@ -539,19 +482,19 @@ class TestSessionSummarization < Minitest::Test
     refute session.task_anchor_needed?, "the transcript still states the goal itself"
   end
 
-  def test_the_task_survives_the_hard_message_trim
-    session = Rubot::Session.new("task-2", workspace: @workspace, max_messages: 6)
+  def test_the_task_survives_compaction
+    session = Rubot::Session.new("task-2", workspace: @workspace)
     session.add("user", "Refactor the auth flow")
     10.times { |i| session.add("assistant", "step #{i}") }
+    session.compact!(provider: @provider, keep_recent: 2, system_prompt: "")
 
-    assert_operator session.message_count, :<=, 6
     refute_includes session.messages.map { |m| m["content"] }, "Refactor the auth flow"
     assert_equal "Refactor the auth flow", session.task_statement
-    assert session.task_anchor_needed?, "the trimmed transcript no longer states the goal"
+    assert session.task_anchor_needed?, "the compacted transcript no longer states the goal"
   end
 
   def test_the_task_is_persisted_and_loaded
-    session = Rubot::Session.new("task-3", workspace: @workspace, max_messages: 3)
+    session = Rubot::Session.new("task-3", workspace: @workspace)
     session.add("user", "Ship the search tool")
     6.times { |i| session.add("assistant", "step #{i}") }
 

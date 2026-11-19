@@ -37,8 +37,6 @@ module Rubot
     DEFAULT_COMPACT_KEEP_RECENT_TOKENS = 20_000
     DEFAULT_TOOL_RESULT_KEEP = 3
     DEFAULT_TOOL_RESULT_MAX_CHARS = 2_000
-    # Messages kept in the session file before the oldest are dropped.
-    DEFAULT_SESSION_MAX_MESSAGES = 400
     # Used for the compaction threshold when the model's real window cannot be
     # resolved, so an unknown model still gets a bound instead of no compaction.
     DEFAULT_CONTEXT_WINDOW = 128_000
@@ -721,7 +719,6 @@ module Rubot
     #         auto: true              # summarize old turns automatically
     #         threshold_percent: 60   # ...when the context is 60% full
     #         keep_recent_messages: 10 # turns kept verbatim after compaction
-    #         max_messages: 400      # messages kept in the session file
     #
     # Flat aliases (`auto_compact`, `compact_threshold_percent`,
     # `compact_keep_recent_messages`) are accepted for convenience.

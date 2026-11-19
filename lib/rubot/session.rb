@@ -52,14 +52,6 @@ module Rubot
     # (73 sessions, 2026-11-10): three were parked at the cap, the ninetieth
     # percentile was 293 messages and the median 38 — so the ceiling is reached,
     # which is what a file-size guard is for. What the count is *not* is a
-    # measure of size: the largest file held 388 messages at 3.8 MB while a
-    # capped one held 400 at 1.0 MB, because a tool result can be a hundred
-    # times the size of a sentence. Raising the cap would not buy context (the
-    # window is 1M and compaction fires long before 400 messages); it would only
-    # let those two files grow. A byte budget is the honest guard if this ever
-    # needs to move.
-    DEFAULT_MAX_MESSAGES = 400
-
     attr_reader :id, :messages, :workspace, :usage, :last_usage, :cost
     attr_reader :task, :cwd, :cache_history, :cache_records, :system_additions, :system_patch
     attr_accessor :summary, :forced_skill, :model_override, :model_preset, :thinking_level, :title
@@ -91,7 +83,7 @@ module Rubot
     TOKEN_TRIM_TARGET_FRACTION = 0.8
 
     def initialize(id = "default", workspace: nil, sessions_dir: nil, cwd: nil,
-                   max_messages: DEFAULT_MAX_MESSAGES, archive: nil)
+                   archive: nil)
       @id = id
       @messages = []
       @workspace = workspace
@@ -114,7 +106,6 @@ module Rubot
       # Directory this session was launched from, used to filter /resume.
       # nil means "no origin" (Telegram, one-shot runs, legacy files).
       @cwd = cwd
-      @max_messages = max_messages.to_i.positive? ? max_messages.to_i : DEFAULT_MAX_MESSAGES
       # The user's original instruction for this session. Kept outside the
       # message list so neither the hard trim nor compaction can delete the
       # goal of a long task; it is injected into the system prompt.
@@ -334,7 +325,6 @@ module Rubot
       # transcript can be trimmed, so a long turn cannot lose its own goal.
       @task = msg["content"].to_s.strip if role.to_s == "user" && @task.nil?
       @messages << msg
-      trim! if @workspace
       save!
       msg
     end
@@ -551,19 +541,6 @@ module Rubot
 
     def message_count
       @messages.size
-    end
-
-    # True when the next few appends would make #trim! drop the oldest messages.
-    #
-    # One block of headroom, because a trim lands a block below the cap (see
-    # #trim_block_size): asking at the cap itself arrives one append too late,
-    # after the trim has already moved the front of the transcript. Agent asks
-    # this before compaction so the summary takes over instead of the cut.
-    def near_trim_cap?
-      limit = @max_messages
-      return false unless limit.positive?
-
-      @messages.size >= limit - trim_block_size(limit)
     end
 
     # Pi's `CHARS_PER_TOKEN`. Ruby has no tokenizer, so this is the same
@@ -1447,38 +1424,9 @@ module Rubot
     # for many requests, so the cache stays warm between cuts.
     TRIM_BLOCK_FRACTION = 0.1
 
-    # How many messages one cut removes. Always at least one, and never more
-    # than the cap itself, so a small `max_messages` still behaves.
+    # How many messages one cut removes. Always at least one.
     def trim_block_size(limit)
       [ (limit * TRIM_BLOCK_FRACTION).round, 1 ].max
-    end
-
-    def trim!
-      # Keep only the last N messages so the session file cannot grow forever.
-      # This is a last resort: the request is bounded by the context window and
-      # compaction, and the task statement lives outside @messages.
-      return unless @workspace
-      limit = @max_messages
-      return unless limit.positive? && @messages.size > limit
-
-      # Land below the cap instead of exactly on it (see TRIM_BLOCK_FRACTION):
-      # the next `limit - block` appends then leave the prefix untouched.
-      trim_index = @messages.size - limit + trim_block_size(limit)
-      trim_index = 0 if trim_index.negative?
-      # A cut must never empty the transcript the turn is still being built on.
-      trim_index = @messages.size - 1 if trim_index >= @messages.size
-
-      # If the first kept message is a tool result, its parent assistant message
-      # (with tool_calls) was trimmed out. Skip all consecutive tool results to
-      # prevent orphaned tool_call_id references that cause API errors.
-      while trim_index < @messages.size && @messages[trim_index]["role"] == "tool"
-        trim_index += 1
-      end
-
-      @messages = @messages[trim_index..]
-      @archive_offset += trim_index
-      @archived = [ @archived - trim_index, 0 ].max
-      invalidate_context_anchor!
     end
 
     # Remove tool messages whose tool_call_id doesn't correspond to any
