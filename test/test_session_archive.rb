@@ -134,9 +134,9 @@ class TestSessionArchive < Minitest::Test
     s.add("assistant", "sudah, semua beres", reasoning_content: "selesai")
     6.times { |i| s.add(i.even? ? "user" : "assistant", "giliran #{i}") }
 
-    before = JSON.generate(s.safe_history(limit: 400))
+    before = JSON.generate(s.safe_history)
     reloaded = session
-    after = JSON.generate(reloaded.safe_history(limit: 400))
+    after = JSON.generate(reloaded.safe_history)
 
     assert_equal before, after, "a reloaded session must build the same request payload"
   end

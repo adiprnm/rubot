@@ -299,7 +299,7 @@ class TestAgentTruncationHandling < Minitest::Test
 
     answer = agent.process("baca folder", stream: false)
 
-    tool_messages = agent.session.safe_history(limit: 50).select { |m| m["role"] == "tool" }
+    tool_messages = agent.session.safe_history.select { |m| m["role"] == "tool" }
     assert_equal 1, tool_messages.size
     assert_includes tool_messages.first["content"], "cut off before its arguments finished"
     assert_equal "Sudah gue ulang.", answer
@@ -319,7 +319,7 @@ class TestAgentTruncationHandling < Minitest::Test
 
     answer = agent.process("baca folder", stream: false)
 
-    tool_messages = agent.session.safe_history(limit: 50).select { |m| m["role"] == "tool" }
+    tool_messages = agent.session.safe_history.select { |m| m["role"] == "tool" }
     assert_equal 1, tool_messages.size
     assert_includes tool_messages.first["content"], "not a valid JSON object"
     assert_equal "Sudah gue ulang.", answer

@@ -66,22 +66,6 @@ module Rubot
     # a reader asks about, and it is what a file-only session can persist.
     CACHE_RECORDS_LIMIT = 50
 
-    # A token-budget cut lands here, not at the budget itself: a cut that
-
-    # sits just under the budget is re-exceeded after a couple of appends,
-
-    # so the front moves again — and every move of the front is a full cache
-
-    # miss. On deepseek-style pricing a cached token costs ~30x less than an
-
-    # uncached one, so the cadence of misses dominates the input cost.
-
-    # Leaving headroom stretches the cycle proportionally: the same history
-
-    # is dropped either way, only in fewer, deeper steps.
-
-    TOKEN_TRIM_TARGET_FRACTION = 0.8
-
     def initialize(id = "default", workspace: nil, sessions_dir: nil, cwd: nil,
                    archive: nil)
       @id = id
@@ -396,65 +380,12 @@ module Rubot
       remove_orphaned_tool_messages(history)
     end
 
-    # Returns conversation history with an optional limit, ensuring no orphaned
-    # tool_call_id references (tool results whose parent tool_call was trimmed).
-    #
-    # `max_tokens` additionally drops the oldest messages until the remaining
-    # block fits that approximate budget (0/nil disables it).
-    #
-    # Both limits land a block below the threshold instead of exactly on it, and
-    # are allowed to grow a block past it before cutting again (see
-    # TRIM_BLOCK_FRACTION). A window that slides one message per append moves the
-    # front of every request with it, and nothing in front of the change is
-    # reusable: the cached prefix is exactly the part that moved.
-    def safe_history(limit: nil, max_tokens: nil, reasoning_tail: nil)
-      history = conversation_history(reasoning_tail: reasoning_tail)
-
-      limit = limit.to_i
-      if limit.positive? && history.size > limit
-        # Cut in whole blocks once a block has grown past the limit, so the front
-        # of the window stands still for the block of appends that follows.
-        # A boundary that moved on every append carried the cached prefix with
-        # it, which is the whole reason the pin exists.
-        block = trim_block_size(limit)
-        trim_index = ((history.size - limit) / block + 1) * block
-        trim_index = history.size - 1 if trim_index >= history.size
-
-        # If the first kept message is a tool result, its parent assistant was
-        # trimmed out. Skip all consecutive tool results to avoid orphaned IDs.
-        while trim_index < history.size && history[trim_index]["role"] == "tool"
-          trim_index += 1
-        end
-
-        history = history[trim_index..]
-      end
-
-      budget = max_tokens.to_i
-      if budget.positive? && !history.empty?
-        trim_index = 0
-        tokens = history.sum { |msg| self.class.message_tokens(msg) }
-        target = (budget * TOKEN_TRIM_TARGET_FRACTION).to_i
-        while tokens > target && trim_index < history.size
-          tokens -= self.class.message_tokens(history[trim_index])
-          trim_index += 1
-        end
-        # The same block rule, in messages: the boundary only moves when a whole
-        # block of growth has pushed the budget over, so the prefix survives the
-        # appends in between. Measured on a 2k-token budget over 200 appends of
-        # ~50-token messages: 35 moves, one per 4 appends — a tenth of the
-        # window, which is exactly the rule. A bigger block would break the
-        # cache less often and throw away more history each time it did; the
-        # budget is the reader's own choice of window, so the fraction follows
-        # it rather than a fixed count.
-        block = trim_block_size(history.size)
-        trim_index = ((trim_index + block - 1) / block) * block
-        trim_index = history.size - 1 if trim_index >= history.size
-        # Same orphan rule as the count limit above.
-        trim_index += 1 while trim_index < history.size && history[trim_index]["role"] == "tool"
-        history = history[trim_index..] if trim_index.positive?
-      end
-
-      history
+    # Conversation history as it will be sent to the provider. The only
+    # remaining knob is `reasoning_tail`: reasoning from finished turns is
+    # dropped, while the turn being executed keeps it. Trimming the transcript
+    # itself is compaction's job (see #compact!).
+    def safe_history(reasoning_tail: nil)
+      conversation_history(reasoning_tail: reasoning_tail)
     end
 
     # Drop the old anchor when the hard message cap removes messages from the
@@ -1410,23 +1341,6 @@ module Rubot
       # A truncated/corrupt session must not take the bot down: start fresh.
       warn "[session] ignoring unreadable session #{file_path}: #{e.message}"
       nil
-    end
-
-    # Share of the cap dropped in a single cut once the transcript reaches it.
-    #
-    # Dropping one message per append keeps the transcript at the cap, and that
-    # costs real money: every append moves the front of the conversation, and a
-    # provider's prompt cache matches on the prefix, so a session parked at the
-    # cap misses it on every request and pays the full input price for its whole
-    # transcript again. Measured on this repo's own sessions, a capped one cost
-    # 5x per request ($0.0056 vs $0.0011) with a 45% cache hit next to 98% for
-    # sessions below the cap. Cutting a block at a time leaves the prefix stable
-    # for many requests, so the cache stays warm between cuts.
-    TRIM_BLOCK_FRACTION = 0.1
-
-    # How many messages one cut removes. Always at least one.
-    def trim_block_size(limit)
-      [ (limit * TRIM_BLOCK_FRACTION).round, 1 ].max
     end
 
     # Remove tool messages whose tool_call_id doesn't correspond to any
