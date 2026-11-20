@@ -44,6 +44,13 @@ module Rubot
     # request per turn. Batching it over a few turns keeps the same coverage
     # for a fraction of the cost (0 disables extraction).
     DEFAULT_MEMORY_EXTRACT_EVERY = 3
+    # Delegation lets one agent hand a task to another persona. Off by default
+    # so an existing install never starts spawning extra provider requests it
+    # did not ask for. The limits are a net against a runaway chain: a sub agent
+    # cannot delegate again (depth 1), and one turn cannot fan out past a few.
+    DEFAULT_DELEGATION_ENABLED = false
+    DEFAULT_DELEGATION_MAX_PER_TURN = 4
+    DEFAULT_DELEGATION_MAX_DEPTH = 1
 
     attr_reader :config_path, :data
 
@@ -819,6 +826,33 @@ module Rubot
 
       raw = raw.to_s.downcase if raw.is_a?(String)
       ![ false, 0, "0", "false", "no", "off" ].include?(raw)
+    end
+
+    # Delegation settings live under `delegation:` at the top level, next to
+    # `tools:`. Kept separate from the tool toggle on purpose: enabling the
+    # `delegate` tool alone should not silently turn on a feature that spends
+    # provider requests on other personas.
+    def delegation
+      raw = data["delegation"]
+      raw.is_a?(Hash) ? raw : {}
+    end
+
+    def delegation_enabled?
+      raw = delegation["enabled"]
+      return DEFAULT_DELEGATION_ENABLED if raw.nil?
+
+      raw = raw.to_s.downcase if raw.is_a?(String)
+      ![ false, 0, "0", "false", "no", "off" ].include?(raw)
+    end
+
+    def delegation_max_per_turn
+      value = delegation["max_per_turn"].to_i
+      value.positive? ? value : DEFAULT_DELEGATION_MAX_PER_TURN
+    end
+
+    def delegation_max_depth
+      value = delegation["max_depth"].to_i
+      value.positive? ? value : DEFAULT_DELEGATION_MAX_DEPTH
     end
 
     def tool_enabled?(name)

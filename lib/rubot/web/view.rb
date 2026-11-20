@@ -987,6 +987,12 @@ module Rubot
           []
         end
 
+        # A partial rendered by a test has no sub-agent list to pass; the
+        # working band still draws without one.
+        def subagents
+          []
+        end
+
         # The connect card defaults to no linked accounts when a caller (a
         # test, or a page outside the channel) has no Instagram status to pass.
         # The channel's own locals override this.

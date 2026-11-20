@@ -168,6 +168,27 @@ module Rubot
       assert_match(/working · \d+s · esc cancels/, row)
     end
 
+    def test_working_badge_shows_running_subagents
+      badge = TUI::WorkingBadge.new
+      badge.layout(::TUI::Rect.new(0, 0, 100, 3))
+      badge.tick(:work)
+      badge.subagent(run_id: "r1", agent: "writer", phase: "started", detail: "write a poem")
+      badge.subagent(run_id: "r2", agent: "researcher", phase: "tool", detail: "search docs")
+
+      assert_equal 2, badge.subagent_count
+      canvas = ::TUI::Canvas.new(100, 3)
+      badge.render(canvas)
+      row = plain(canvas.lines)[1]
+      assert_includes row, "2 subagent", row.inspect
+      assert_includes row, "writer", row.inspect
+      assert_includes row, "researcher", row.inspect
+
+      badge.subagent(run_id: "r1", agent: "writer", phase: "done", detail: "3s")
+      assert_equal 1, badge.subagent_count
+      badge.clear_subagents
+      assert_equal 0, badge.subagent_count
+    end
+
     def test_working_badge_counts_minutes_and_clears_when_idle
       badge = TUI::WorkingBadge.new
       badge.layout(::TUI::Rect.new(0, 0, 80, 3))
@@ -1884,6 +1905,22 @@ end
                     .map { |entry| entry[:segments].map(&:first).join }
 
       refute(texts.any? { |text| text.match?(/\A[+-]\d/) }, "no metadata, no diff")
+    end
+
+    def test_subagent_event_adds_a_transcript_row
+      repl = build_repl
+      log = repl.instance_variable_get(:@log)
+      before = log.entry_count
+      repl.send(:apply_event, [ :subagent, { run_id: "r1", agent: "writer", phase: "started", detail: "write a poem" } ])
+      repl.send(:apply_event, [ :subagent, { run_id: "r1", agent: "writer", phase: "done", detail: "3s" } ])
+
+      assert_equal before + 2, log.entry_count
+      texts = (before...(before + 2)).map do |i|
+        log.entry_at(i).map(&:first).join
+      end
+      assert_includes texts.first, "subagent"
+      assert_includes texts.first, "writer"
+      assert_includes texts.first, "write a poem"
     end
 
     # --- dangerous-action confirmation ---------------------------------

@@ -78,7 +78,7 @@ module Rubot
 
       def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil,
                   on_assistant_text: nil, on_reasoning: nil, on_steer: nil, on_stopped: nil, on_usage: nil,
-                  stream: true, &on_chunk)
+                  on_subagent: nil, stream: true, &on_chunk)
         events = Ractor::Port.new
         control = nil
 
@@ -105,6 +105,8 @@ module Rubot
             on_progress&.call(event[1], event[2])
           when :usage
             on_usage&.call(event[1])
+          when :subagent
+            on_subagent&.call(event[1])
           when :steered
             on_steer&.call(event[1])
           when :stopped

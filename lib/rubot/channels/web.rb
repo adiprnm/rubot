@@ -307,6 +307,10 @@ module Rubot
           store.sidebar(limit: nil).filter_map do |row|
             id = row[:id].to_s
             next unless id == base || id.start_with?(prefix)
+            # A sub agent's conversation is an internal work log, not one of
+            # the persona's chats. It stays in the archive and is reachable by
+            # id, but must not clutter the sidebar.
+            next if id.include?("~sub-")
 
             Session.entry_from_row(row)
           end
@@ -316,7 +320,7 @@ module Rubot
 
           Dir.glob(File.join(dir, "#{base}*.json"))
             .filter_map { |path| Session.describe(path) }
-            .select { |entry| entry[:id] == base || entry[:id].to_s.start_with?(prefix) }
+            .select { |entry| (entry[:id] == base || entry[:id].to_s.start_with?(prefix)) && !entry[:id].to_s.include?("~sub-") }
         end
 
         rows.sort_by { |entry| entry[:timestamp] }.reverse
@@ -2890,7 +2894,7 @@ module Rubot
         # while the turn runs (the row never changes, and a replacement only made
         # the text flash), so without this the band stayed empty for every prompt
         # typed into the page and "Working…" was seen only after a refresh.
-        res.body = working_markup(turn.epoch) +
+        res.body = working_markup(turn.epoch, subagents: turn.subagent_list) +
                    View.render("_turn", turn: turn, text: text, token_query: token_query)
       end
 
@@ -2917,6 +2921,10 @@ module Rubot
           end,
           on_tool_result: ->(name, result, diff) { tool_finished(turn, name, result, diff) },
           on_reasoning: ->(delta) { turn.thinking(delta) },
+          on_subagent: lambda do |info|
+            turn.subagent(info)
+            turn.subagent_item(info) unless info[:phase].to_s == "thinking"
+          end,
           on_usage: ->(report) {
             markup = usage_markup_from(report)
             turn.emit(:usage, markup) if markup
@@ -2954,10 +2962,18 @@ module Rubot
       # rather than for the thread it travels beside. The turn fragment is a
       # fragment of the conversation; this row is a state of the page, and htmx
       # only knows that from the out-of-band marker.
-      def working_markup(since)
-        View.render("_working", since: since)
+      def working_markup(since, subagents: [])
+        View.render("_working", since: since, subagents: subagents)
             .sub(%(<div class="working-band" id="working">),
                  %(<div class="working-band" id="working" hx-swap-oob="true">))
+      end
+
+      # The sub-agent strip as an out-of-band swap. The partial carries its own
+      # id, so htmx replaces the strip wherever it sits in the working band.
+      def subagents_markup(turn)
+        View.render("_subagents", subagents: turn.subagent_list)
+            .sub(%(<div class="subagents" id="subagents">),
+                 %(<div class="subagents" id="subagents" hx-swap-oob="true">))
       end
 
       # A fragment meant for the status row rather than for the turn: the swap
@@ -3243,6 +3259,11 @@ module Rubot
           # Same trick for the sidebar and the header: what the conversation is
           # called is only known after the first turn has been saved.
           sse(out, "sidebar", payload.to_s)
+        when :subagents
+          # An out-of-band swap of the strip in the working band: the reader
+          # sees how many sub agents are running and what each is doing without
+          # the timeline being redrawn.
+          sse(out, "subagents", subagents_markup(turn))
         when :heartbeat
           out.write(": keepalive\n\n")
           out.flush if out.respond_to?(:flush)

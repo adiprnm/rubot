@@ -152,6 +152,7 @@ module Rubot
           # Live cost/cache/context, computed inside the Ractor so the caller
           # never has to ask a busy actor for it.
           on_usage: ->(report) { events << [ :usage, report ] },
+          on_subagent: ->(info) { events << [ :subagent, info ] },
           on_steer: ->(text) { events << [ :steered, text ] },
           on_stopped: -> { events << [ :stopped ] },
           on_confirm: lambda do |name, args, reason|

@@ -147,6 +147,33 @@ module Rubot
         end
       end
 
+      def test_subagent_events_track_running_count_and_render_in_the_strip
+        turn = Rubot::Web::Turn.new(id: "t1", session_id: "web_rubot")
+        turn.subagent(run_id: "r1", agent: "writer", phase: "started", detail: "write a poem", depth: 0)
+        turn.subagent(run_id: "r2", agent: "researcher", phase: "tool", detail: "search docs", depth: 0)
+
+        assert_equal 2, turn.running_subagents
+        html = Rubot::Web::View.render("_subagents", subagents: turn.subagent_list)
+        assert_includes html, "2 subagent aktif"
+        assert_includes html, "writer"
+        assert_includes html, "researcher"
+        assert_includes html, "search docs"
+
+        turn.subagent(run_id: "r1", agent: "writer", phase: "done", detail: "3s", depth: 0)
+        assert_equal 1, turn.running_subagents
+      end
+
+      def test_subagent_phases_become_timeline_rows
+        turn = Rubot::Web::Turn.new(id: "t1", session_id: "web_rubot")
+        turn.subagent_item(run_id: "r1", agent: "writer", phase: "started", detail: "write a poem", depth: 0)
+        turn.subagent_item(run_id: "r1", agent: "writer", phase: "done", detail: "3s", depth: 0)
+        html = Rubot::Web::View.turn_body(turn, token_query: "")
+
+        assert_includes html, "subagent-row"
+        assert_includes html, "subagent · writer"
+        assert_includes html, "write a poem"
+      end
+
       def test_connect_card_is_drawn_in_the_timeline
         turn = Rubot::Web::Turn.new(id: "t1", session_id: "web_rubot")
         turn.add_instagram_card
@@ -3713,6 +3740,21 @@ module Rubot
         assert_includes ids, "web_kanyaah"
         assert_includes ids, "web_kanyaah~20261108-101010"
         refute_includes ids, "web_rubot"
+      end
+
+      def test_subagent_sessions_are_hidden_from_the_sidebar
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: {
+            "web_kanyaah" => "Bikin carousel",
+            "web_kanyaah~sub-abc123" => "internal work log"
+          }
+        )
+
+        ids = channel.send(:sessions_for, "kanyaah").map { |entry| entry[:id] }
+
+        assert_includes ids, "web_kanyaah"
+        refute_includes ids, "web_kanyaah~sub-abc123", "a sub agent's log is not a chat"
       end
 
       def test_a_session_row_is_named_by_the_prompt_that_started_it

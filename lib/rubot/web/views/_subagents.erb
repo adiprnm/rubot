@@ -1,0 +1,18 @@
+<%# The live strip for delegated work. It sits in the working band, above the
+    composer, because "how many sub agents are running and what they are doing"
+    is a state of the turn in flight, not an entry in the transcript. Rendered
+    whole on every subagent event, so a reconnect just paints the latest state. -%>
+<% if subagents.any? -%>
+<div class="subagents" id="subagents">
+  <span class="subagents-head"><%= subagents.count { |s| %w[started thinking tool].include?(s[:phase]) } %> subagent aktif</span>
+  <ul class="subagents-list">
+<% subagents.each do |s| -%>
+    <li class="subagent subagent-<%= h(s[:phase]) %>">
+      <span class="subagent-mark" aria-hidden="true"><%= s[:phase] == "done" ? "✓" : (s[:phase] == "failed" ? "✗" : "⟡") %></span>
+      <span class="subagent-name"><%= h(s[:agent]) %></span>
+      <span class="subagent-detail"><%= h(s[:detail]) %></span>
+    </li>
+<% end -%>
+  </ul>
+</div>
+<% end -%>

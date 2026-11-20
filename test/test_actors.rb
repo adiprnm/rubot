@@ -757,6 +757,7 @@ end
           msg[:events] << [ :chunk, "he" ]
           msg[:events] << [ :assistant_text, "Checking first." ]
           msg[:events] << [ :tool_started, "shell_exec", { "command" => "ls" } ]
+          msg[:events] << [ :subagent, { run_id: "abc", agent: "writer", phase: :started, detail: "task" } ]
           msg[:events] << [ :progress, 1, 1 ]
           msg[:events] << [ :done, "#{msg[:text]}!" ]
         when :shutdown
@@ -769,10 +770,12 @@ end
     tool_calls = []
     chunks = []
     narrations = []
+    subagents = []
     response = handle.process(
       "hi",
       on_tool_call: ->(name, args, _snapshot) { tool_calls << [ name, args ] },
-      on_assistant_text: ->(text) { narrations << text }
+      on_assistant_text: ->(text) { narrations << text },
+      on_subagent: ->(info) { subagents << info }
     ) do |chunk|
       chunks << chunk
     end
@@ -781,6 +784,7 @@ end
     assert_equal [ "he" ], chunks
     assert_equal [ "Checking first." ], narrations
     assert_equal [ [ "shell_exec", { "command" => "ls" } ] ], tool_calls
+    assert_equal [ { run_id: "abc", agent: "writer", phase: :started, detail: "task" } ], subagents
     assert_equal :info, handle.call(:info)
   ensure
     ractor&.send({ type: :shutdown })

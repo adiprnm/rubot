@@ -36,7 +36,7 @@ module Rubot
       # asking for it.
       SWAP_SECONDS = 0.30
 
-      attr_reader :id, :session_id, :response, :epoch, :prompt
+      attr_reader :id, :session_id, :response, :epoch, :prompt, :subagents
 
       # `clock` is injectable so the timing rules can be tested without
       # sleeping through them. `epoch_clock` is the wall clock the timeline rows
@@ -83,6 +83,59 @@ module Rubot
         @confirm_mutex = Mutex.new
         @confirm_cv = ConditionVariable.new
         @confirm_answer = nil
+        # Sub agents this turn delegated to, keyed by run id. Each holds its
+        # latest phase and detail, so the strip above the composer can show how
+        # many are running and what each is doing. Plain data, rendered on the
+        # reader's side from a snapshot.
+        @subagents = {}
+      end
+
+      # A snapshot of the sub agents, newest first. A copy so the renderer never
+      # shares a Hash the producer thread is still updating.
+      def subagent_list
+        @mutex.synchronize { @subagents.values.reverse.map(&:dup) }
+      end
+
+      # How many sub agents are still running.
+      def running_subagents
+        @mutex.synchronize { @subagents.values.count { |s| RUNNING_PHASES.include?(s[:phase]) } }
+      end
+
+      RUNNING_PHASES = %w[started thinking tool].freeze
+
+      # Called from the agent's on_subagent callback. Records the latest state
+      # of one run and publishes a dedicated SSE event so the strip updates
+      # without re-rendering the whole timeline.
+      def subagent(info)
+        run_id = info[:run_id].to_s
+        return if run_id.empty?
+
+        @mutex.synchronize do
+          entry = (@subagents[run_id] ||= { run_id: run_id })
+          entry[:agent] = info[:agent].to_s
+          entry[:phase] = info[:phase].to_s
+          entry[:detail] = info[:detail].to_s
+          entry[:depth] = info[:depth].to_i
+          entry[:epoch] = epoch_now
+          @events << [ :subagents, nil ]
+          @cond.broadcast
+        end
+      end
+
+      # A sub agent's phase becomes a timeline row too, so the finished turn
+      # records that work happened in another persona. Kept as a plain item so
+      # the transcript it becomes carries the same rows the live page showed.
+      def subagent_item(info)
+        @mutex.synchronize do
+          @items << {
+            kind: :subagent,
+            agent: info[:agent].to_s,
+            phase: info[:phase].to_s,
+            detail: info[:detail].to_s,
+            epoch: epoch_now
+          }
+          publish_locked
+        end
       end
 
       def closed?

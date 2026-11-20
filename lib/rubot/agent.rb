@@ -2,12 +2,14 @@
 
 require "json"
 require "digest"
+require "securerandom"
 require_relative "cancellation"
 require_relative "config"
 require_relative "model_info"
 require_relative "model_catalog"
 require_relative "opencode_usage"
 require_relative "persona"
+require_relative "persona_store"
 require_relative "pricing_catalog"
 require_relative "session"
 require_relative "usage"
@@ -120,11 +122,35 @@ module Rubot
     # Appended to the answer when a turn is stopped early.
     STOP_NOTICE = "⏹️ Stopped by user."
 
+    # How a lead agent is told about delegation. Kept in the shipped rules so
+    # the prompt epoch moves when this text changes (see #shipped_rules).
+    DELEGATION_RULE = <<~PROMPT.strip.freeze
+      # Delegating to Other Agents
+
+      `delegate` hands a self-contained task to another persona, which has its
+      own model, prompt, memory and workspace. Use it when a part of the work
+      is better done in a specialist's voice or context, and you can state the
+      whole task in one message and check the result when it returns. Do not
+      delegate a task that needs the conversation you are having now. The sub
+      agent cannot delegate further, and its answer comes back to you as a tool
+      result: read it, then answer the user yourself.
+    PROMPT
+
     attr_reader :config, :provider, :session, :tools, :soul, :memory, :agents_file, :skill_registry, :safety_guard, :session_model, :persona, :active_preset_name
 
     # Cancellation token for the turn currently running on this agent. The
     # session actor swaps in the token its watcher thread listens on.
     attr_accessor :cancellation
+
+    # Set by the channel (through the session actor) so a sub agent's progress
+    # can be shown live. A Proc that crosses no Ractor boundary: it is built
+    # inside the actor from shareable ports, like the other callbacks.
+    attr_accessor :on_subagent
+
+    # Optional provider (or callable taking the persona slug) used for sub
+    # agents. Production leaves it nil so each sub agent builds its own from
+    # the target persona's config; tests inject a fake to avoid the network.
+    attr_accessor :subagent_provider
 
     def initialize(config:, provider: nil, session_id: "default", tools: nil, persona: nil,
                    archive: nil)
@@ -139,6 +165,12 @@ module Rubot
       # from tearing the list that the turn thread is draining.
       @steering = []
       @steering_mutex = Mutex.new
+      # Delegation counters are per turn, reset at the start of #process. The
+      # depth is carried into a sub agent so it cannot spawn another one.
+      @subagent_depth = 0
+      @subagent_count = 0
+      @subagent_mutex = Mutex.new
+      @subagent = false
       @persona = Persona.from(persona)
       # Auto mode: the preference lives in config.yml and is remembered across
       # launches; the setter writes it back.
@@ -242,6 +274,69 @@ module Rubot
       copy
     end
 
+    # Run one self-contained task in another persona and return its written
+    # answer. Called by the delegate tool from inside this agent's turn, so it
+    # runs on the same thread in the same Ractor: no new actor, no lock, no
+    # cross-Ractor message. The sub agent gets its own session and a config
+    # rooted at the target persona's workspace, so its memory and files are
+    # that persona's, not the caller's.
+    #
+    # Guards: delegation must be enabled, the slug must name a real persona,
+    # the depth and per-turn count must be within config limits. A refusal is
+    # returned as a string the model can read, never raised into the turn.
+    def spawn_subagent(agent_slug:, task:, model: nil)
+      unless @config.delegation_enabled?
+        return "ERROR: delegation is disabled in config (delegation.enabled)."
+      end
+      if @subagent_depth >= @config.delegation_max_depth
+        return "ERROR: a sub agent cannot delegate further."
+      end
+
+      slug = agent_slug.to_s.strip.downcase
+      return "ERROR: no agent slug given." if slug.empty?
+      return "ERROR: cannot delegate to the current agent." if slug == @persona&.slug.to_s
+
+      persona = load_subagent_persona(slug)
+      return "ERROR: unknown agent #{slug.inspect}." unless persona
+
+      allowed = @subagent_mutex.synchronize do
+        if @subagent_count < @config.delegation_max_per_turn
+          @subagent_count += 1
+          true
+        else
+          false
+        end
+      end
+      unless allowed
+        return "ERROR: delegation limit reached for this turn (#{@config.delegation_max_per_turn})."
+      end
+
+      run_id = SecureRandom.hex(6)
+      audit_start(run_id, slug, task, model)
+      emit_subagent(run_id, slug, :started, task)
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+      begin
+        sub = build_subagent(persona, slug, run_id, model)
+        answer = sub.process(
+          task,
+          stream: false,
+          on_subagent: @on_subagent,
+          on_tool_call: ->(name, args, _snapshot) {
+            emit_subagent(run_id, slug, :tool, "#{name} #{summarize_subagent_args(args)}")
+          },
+          on_assistant_text: ->(text) { emit_subagent(run_id, slug, :thinking, text) }
+        )
+        audit_finish(run_id, "done", sub_session: sub.session.id)
+        emit_subagent(run_id, slug, :done, elapsed_label(started))
+        answer.to_s
+      rescue StandardError => e
+        audit_finish(run_id, "failed", error: "#{e.class}: #{e.message}")
+        emit_subagent(run_id, slug, :failed, e.message)
+        "ERROR: sub agent #{slug} failed: #{e.class}: #{e.message}"
+      end
+    end
+
     # Process a user message and return the final assistant response.
     # Due cron jobs are fired first, their output prepended to the response.
     #
@@ -282,7 +377,7 @@ module Rubot
     #                     for a model that does not stream its reasoning.
     def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil,
                 on_assistant_text: nil, on_reasoning: nil, on_steer: nil, on_stopped: nil, on_usage: nil,
-                on_retry: nil,
+                on_subagent: nil, on_retry: nil,
                 stream: true, &on_chunk)
       # Fire any due cron jobs and collect their results
       cron_results = fire_due_cron_jobs
@@ -296,6 +391,9 @@ module Rubot
       # this turn has to be stamped on it now — not at boot, where a second
       # persona's actor would silently overwrite the first one's scope.
       inject_tool_persona
+      inject_tool_delegate
+      @subagent_count = 0
+      @on_subagent = on_subagent
 
       # Reasoning from earlier turns is dropped from the request; only what is
       # produced inside this turn is kept, because a tool loop needs it.
@@ -1430,7 +1528,7 @@ module Rubot
     # the epoch, or a session that is already running keeps answering under the
     # rules it was pinned with.
     def shipped_rules
-      [ FILE_DELIVERY_RULE, NOTIFY_RULE, SILENT_TOOL_RULE, BATCH_REMINDER ].join("\u0000")
+      [ FILE_DELIVERY_RULE, NOTIFY_RULE, SILENT_TOOL_RULE, DELEGATION_RULE, BATCH_REMINDER ].join("\u0000")
     end
 
     # The persona parts that reach the prompt: its own instructions and the
@@ -1499,6 +1597,9 @@ module Rubot
       # delivery tools this agent can actually call are named here.
       delivery_rule = file_delivery_rule
       parts << delivery_rule if delivery_rule
+
+      # 1f. Delegation, only when the tool is available and enabled.
+      parts << DELEGATION_RULE if tool_names.include?("delegate") && @config.delegation_enabled?
 
       # 2. SOUL.md (personality and identity). SOUL.md ships with its own
       # "# Soul" heading (see Soul::DEFAULT_SOUL), so the file's copy is
@@ -1606,6 +1707,122 @@ module Rubot
     end
 
     private
+
+    # --- delegation helpers ---------------------------------------------
+
+    # Read the persona registry fresh from disk so a persona created after the
+    # pool started can still be delegated to. Only specialists (slug keys) are
+    # valid targets: a Telegram topic key is a conversation, not an agent.
+    def load_subagent_persona(slug)
+      store = PersonaStore.new(
+        dir: @config.respond_to?(:personas_dir) ? File.dirname(@config.personas_file) : nil,
+        legacy_workspace: @config.workspace,
+        available_models: Array(@config.models).filter_map { |m| m["name"] if m.is_a?(Hash) },
+        available_presets: @config.respond_to?(:model_preset_names) ? @config.model_preset_names : []
+      )
+      persona = store[slug]
+      return nil unless persona && !persona.reference?
+      return nil unless PersonaStore.slug_for_key(slug)
+
+      persona
+    rescue StandardError => e
+      warn "[delegate] could not load persona #{slug}: #{e.class}: #{e.message}"
+      nil
+    end
+
+    # Build the sub agent. Its config is re-rooted at the target persona's
+    # workspace (SOUL, MEMORY, files), while sessions stay in the central
+    # directory. The session id carries a `~sub-` marker so channels can keep
+    # these internal conversations out of the sidebar.
+    def build_subagent(persona, slug, run_id, model_override)
+      base_config = @config.respond_to?(:with_persona_workspace) ? @config : Config.from_data(@config.snapshot, config_path: @config.config_path)
+      workspace = PersonaStore.new(
+        dir: File.dirname(base_config.personas_file),
+        legacy_workspace: base_config.workspace
+      ).workspace_for(slug)
+      config = workspace ? base_config.with_persona_workspace(workspace) : base_config
+
+      persona_data = persona.to_h
+      if model_override && !model_override.to_s.strip.empty?
+        name = model_override.to_s.strip
+        if config.model_entry_by_name(name) || config.model_preset(name)
+          persona_data["model"] = name
+          persona_data["preset"] = nil
+        end
+      end
+
+      sub = Agent.new(
+        config: config,
+        provider: resolve_subagent_provider(slug),
+        session_id: "#{@session.id}~sub-#{run_id}",
+        persona: persona_data,
+        archive: @archive
+      )
+      sub.cancellation = @cancellation
+      sub.cron_ractor = @cron_ractor if @cron_ractor
+      sub.on_subagent = @on_subagent
+      sub.instance_variable_set(:@subagent, true)
+      sub.instance_variable_set(:@subagent_depth, @subagent_depth + 1)
+      sub
+    end
+
+    # Write the audit rows through the archive port when one is available.
+    # In-process agents (tests, REPL) have no archive, so auditing is a no-op
+    # there — the feature must never depend on the database being open.
+    def audit_start(run_id, slug, task, model)
+      return unless @archive
+
+      @archive.start_subagent_run(
+        run_id: run_id, parent_session: @session.id, agent_slug: slug,
+        task: task, model: model
+      )
+    rescue StandardError => e
+      warn "[delegate] could not audit start: #{e.class}: #{e.message}"
+    end
+
+    def audit_finish(run_id, status, sub_session: nil, error: nil)
+      return unless @archive
+
+      @archive.finish_subagent_run(
+        run_id: run_id, status: status, sub_session: sub_session, error: error
+      )
+    rescue StandardError => e
+      warn "[delegate] could not audit finish: #{e.class}: #{e.message}"
+    end
+
+    # A provider injected for tests, or nil so the sub agent builds its own
+    # from the target persona's config. A callable receives the persona slug.
+    def resolve_subagent_provider(slug)
+      factory = @subagent_provider
+      return nil if factory.nil?
+
+      factory.respond_to?(:call) ? factory.call(slug) : factory
+    end
+
+    # Push a progress event to the channel, if one is listening. Plain data
+    # only, so it can cross a Ractor boundary through the actor's port.
+    def emit_subagent(run_id, slug, phase, detail)
+      @on_subagent&.call({
+        run_id: run_id,
+        agent: slug,
+        phase: phase,
+        detail: detail.to_s,
+        depth: @subagent_depth
+      })
+    end
+
+    def summarize_subagent_args(args)
+      return "" unless args.is_a?(Hash)
+
+      text = args.values.find { |v| v.is_a?(String) && v.length > 24 }
+      text ||= args.values.first
+      text.to_s.tr("\n", " ")[0, 60]
+    end
+
+    def elapsed_label(started)
+      seconds = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+      "#{seconds.round}s"
+    end
 
     # Where this agent's session files go, and the directory they are marked as
     # coming from. Both come from the config so a channel can re-root them: the
@@ -1840,6 +2057,16 @@ module Rubot
       end
     end
 
+    # The delegate tool needs a handle back to this agent to do the spawning.
+    # Set at the start of every turn, like the persona stamp, because the tool
+    # registry is shared between agents in the same Ractor.
+    def inject_tool_delegate
+      return unless @tools.respond_to?(:all)
+
+      tool = @tools.get("delegate")
+      tool.agent = self if tool && tool.respond_to?(:agent=)
+    end
+
     # Fire any due cron jobs and return their results.
     def fire_due_cron_jobs
       return [] if @cron_ractor
@@ -2023,6 +2250,12 @@ end
       (tool_definitions || []).map(&:name)
     end
 
+    # Tools a sub agent must never call: delegating again (recursion), ringing
+    # the user, scheduling jobs or drawing an Instagram card from a background
+    # worker would all be surprising. A sub agent does its work and returns a
+    # written result; the lead stays the one voice the user hears.
+    SUBAGENT_FORBIDDEN_TOOLS = %w[delegate notify cron instagram].freeze
+
     def tool_definitions
       return nil unless @config.tools_enabled
       enabled_list = @config.enabled_tools
@@ -2040,6 +2273,7 @@ end
         tools << memory_tool if memory_tool && !tools.include?(memory_tool)
       end
 
+      tools = tools.reject { |t| SUBAGENT_FORBIDDEN_TOOLS.include?(t.name) } if @subagent
       tools
     end
 

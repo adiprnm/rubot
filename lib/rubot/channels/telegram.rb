@@ -79,6 +79,9 @@ module Rubot
         # step numbering and the elapsed clock must survive it.
         @status_state = {}      # chat_thread_key => { tool_name:, emoji:, preview:, step:,
                                 #                     started_at:, finished:, round:, hint_sent: }
+        # Delegated work in flight, keyed by run id, so the status card can say
+        # how many sub agents are running and what each is doing.
+        @subagents = {}         # chat_thread_key => { run_id => { agent:, phase:, detail: } }
         @status_last_text = {}  # chat_thread_key => String last rendered
         @status_last_edit = {}  # chat_thread_key => Float monotonic seconds
         @last_retry_after = 0   # seconds Telegram asked us to wait after a 429
@@ -1121,6 +1124,8 @@ module Rubot
           notify_tool_started(chat_id, thread_id, tool_name, args)
         }, on_tool_result: ->(tool_name, result, _ui_diff) {
           notify_tool_finished(chat_id, thread_id, tool_name, result)
+        }, on_subagent: ->(info) {
+          notify_subagent(chat_id, thread_id, info)
         }, on_progress: ->(round, tool_count) {
           notify_progress(chat_id, thread_id, round)
         }, on_confirm: ->(tool_name, args, reason) {
@@ -2492,6 +2497,31 @@ module Rubot
         warn "[telegram] Tool #{tool_name} finished" if Rubot.debug?
       end
 
+      # A sub agent changed phase. Record it and refresh the status card so the
+      # reader sees how many are running and what each is doing. The card is
+      # throttled like every other status edit, so a burst of tool events from
+      # several sub agents does not flood the chat.
+      SUBAGENT_RUNNING_PHASES = %w[started thinking tool].freeze
+
+      def notify_subagent(chat_id, thread_id, info)
+        key = status_key(chat_id, thread_id)
+        run_id = info[:run_id].to_s
+        return if run_id.empty?
+
+        state = @status_mutex.synchronize do
+          runs = (@subagents[key] ||= {})
+          runs[run_id] = {
+            agent: info[:agent].to_s,
+            phase: info[:phase].to_s,
+            detail: info[:detail].to_s
+          }
+          st = (@status_state[key] ||= { started_at: monotonic_now })
+          st[:subagents] = runs.dup
+          st.dup
+        end
+        update_or_send_status(chat_id, thread_id, render_tool_status(state))
+      end
+
       # Called after each agent round, i.e. once the model has been asked again.
       # No tool is running at this point, so the card marks the finished step
       # (✓) and refreshes the elapsed clock and the one-time /stop hint.
@@ -2525,6 +2555,18 @@ module Rubot
         lines = [ head ]
         preview = state[:preview].to_s
         lines.push("", preview) unless preview.empty?
+        subagents = state[:subagents]
+        if subagents && !subagents.empty?
+          running = subagents.values.count { |s| SUBAGENT_RUNNING_PHASES.include?(s[:phase]) }
+          lines.push("", "⟡ #{running} subagent aktif")
+          subagents.each_value do |s|
+            mark = s[:phase] == "done" ? "✓" : (s[:phase] == "failed" ? "✗" : "·")
+            detail = s[:detail].to_s.gsub(/\s+/, " ").strip
+            line = "#{mark} #{s[:agent]}"
+            line += " — #{truncate(detail, 40)}" unless detail.empty?
+            lines.push(line)
+          end
+        end
         lines.push("", STATUS_STOP_HINT) if state[:hint_sent]
         lines.join("\n")
       end
@@ -2672,6 +2714,7 @@ module Rubot
           if reset_count
             @tool_counts.delete(key)
             @status_state.delete(key)
+            @subagents.delete(key)
             @status_last_text.delete(key)
             @status_last_edit.delete(key)
           end

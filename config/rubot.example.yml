@@ -112,7 +112,17 @@ tools:
     enabled: true          # Schedule recurring and one-time jobs
   send_files:
     enabled: true          # Send generated files/images back to the chat
+  delegate:
+    enabled: true          # Let an agent hand a task to another persona
   # memory is always enabled when workspace exists
+
+# Sub-agent delegation. Off by default: enabling it costs extra provider
+# requests. A sub agent runs in the same session actor, uses the target
+# persona's model/prompt/memory/workspace, and cannot delegate further.
+# delegation:
+#   enabled: false
+#   max_per_turn: 4
+#   max_depth: 1
 
 # Channels — how users interact with Rubot.
 # Multiple channels can run simultaneously.

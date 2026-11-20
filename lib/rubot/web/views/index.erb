@@ -235,7 +235,7 @@
         the one element that owns it. The stream never touches this band again:
         the row is drawn once and the clock inside it counts on its own. -%>
     <% if live_turn %>
-      <%= View.render("_working", since: live_turn.epoch) %>
+      <%= View.render("_working", since: live_turn.epoch, subagents: live_turn.subagent_list) %>
     <% else %>
       <div id="working" class="working-band"></div>
     <% end %>

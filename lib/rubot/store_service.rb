@@ -135,6 +135,16 @@ module Rubot
         true
       when :cache_records
         @store.cache_records(arguments.fetch(:session_id), limit: arguments.fetch(:limit, 50))
+      when :start_subagent_run
+        @store.start_subagent_run(**arguments)
+        true
+      when :finish_subagent_run
+        @store.finish_subagent_run(**arguments)
+        true
+      when :subagent_runs
+        @store.subagent_runs(
+          arguments.fetch(:parent_session), limit: arguments.fetch(:limit, 50)
+        )
       when :counts
         @store.counts
       when :ig_settings

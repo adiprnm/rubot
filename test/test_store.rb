@@ -24,6 +24,49 @@ class TestStore < Minitest::Test
     assert_equal File.join(@dir, "sessions.db"), @db_path
   end
 
+  def test_subagent_run_opens_and_finishes
+    assert @store.start_subagent_run(
+      run_id: "r1", parent_session: "web_rubot", agent_slug: "writer",
+      task: "write a poem", model: "model-b"
+    )
+
+    runs = @store.subagent_runs("web_rubot")
+    assert_equal 1, runs.size
+    assert_equal "running", runs.first[:status]
+    assert_equal "writer", runs.first[:agent_slug]
+    assert_equal "write a poem", runs.first[:task]
+
+    assert @store.finish_subagent_run(
+      run_id: "r1", status: "done", sub_session: "web_rubot~sub-r1"
+    )
+    runs = @store.subagent_runs("web_rubot")
+    assert_equal "done", runs.first[:status]
+    assert_equal "web_rubot~sub-r1", runs.first[:sub_session]
+    refute_nil runs.first[:finished_at]
+  end
+
+  def test_subagent_run_start_is_idempotent
+    @store.start_subagent_run(run_id: "r1", parent_session: "web_rubot", agent_slug: "writer")
+    refute @store.start_subagent_run(run_id: "r1", parent_session: "web_rubot", agent_slug: "writer")
+    assert_equal 1, @store.subagent_runs("web_rubot").size
+  end
+
+  def test_subagent_runs_are_scoped_to_the_parent_and_newest_first
+    @store.start_subagent_run(run_id: "r1", parent_session: "web_rubot", agent_slug: "writer",
+                              started_at: "2026-11-10T08:00:00Z")
+    @store.start_subagent_run(run_id: "r2", parent_session: "web_rubot", agent_slug: "researcher",
+                              started_at: "2026-11-10T09:00:00Z")
+    @store.start_subagent_run(run_id: "r3", parent_session: "web_other", agent_slug: "writer")
+
+    runs = @store.subagent_runs("web_rubot")
+    assert_equal %w[r2 r1], runs.map { |r| r[:run_id] }
+    assert_equal 1, @store.subagent_runs("web_other").size
+  end
+
+  def test_finishing_an_unknown_subagent_run_is_a_no_op
+    refute @store.finish_subagent_run(run_id: "nope", status: "done")
+  end
+
   def test_append_and_load_round_trips_a_tool_call
     tool_call = {
       "role" => "assistant",

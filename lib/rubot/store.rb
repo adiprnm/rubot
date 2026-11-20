@@ -307,6 +307,59 @@ module Rubot
       @db.changes.positive?
     end
 
+    # --- sub-agent runs ------------------------------------------------
+
+    # Open a run when a delegation starts. INSERT OR IGNORE so a retried call
+    # with the same run id cannot create a second audit row.
+    def start_subagent_run(run_id:, parent_session:, agent_slug:, task: nil, model: nil,
+                           started_at: Time.now.utc.iso8601)
+      @db.execute(
+        <<~SQL,
+          INSERT OR IGNORE INTO subagent_runs(
+            run_id, parent_session, agent_slug, task, model, status, started_at
+          ) VALUES(?, ?, ?, ?, ?, 'running', ?)
+        SQL
+        [ text_id(run_id), text_id(parent_session), text_id(agent_slug), task, model, started_at ]
+      )
+      @db.changes.positive?
+    end
+
+    # Close a run. `sub_session` is filled in once the sub agent's session id is
+    # known; `error` is set only on failure. A run that was never opened is a
+    # no-op rather than an error, so a channel that audits optionally cannot
+    # break the turn.
+    def finish_subagent_run(run_id:, status:, sub_session: nil, error: nil,
+                            finished_at: Time.now.utc.iso8601)
+      @db.execute(
+        <<~SQL,
+          UPDATE subagent_runs
+          SET status = ?, sub_session = ?, error = ?, finished_at = ?
+          WHERE run_id = ?
+        SQL
+        [ status.to_s, sub_session, error, finished_at, text_id(run_id) ]
+      )
+      @db.changes.positive?
+    end
+
+    # Runs of one parent conversation, newest first. `limit: nil` reads all.
+    def subagent_runs(parent_session, limit: 50)
+      sql = +"SELECT run_id, parent_session, sub_session, agent_slug, task, model, " \
+             "status, error, started_at, finished_at FROM subagent_runs WHERE parent_session = ? " \
+             "ORDER BY started_at DESC"
+      params = [ text_id(parent_session) ]
+      if limit
+        sql << " LIMIT ?"
+        params << limit.to_i
+      end
+      @db.execute(sql, params).map do |row|
+        {
+          run_id: row[0], parent_session: row[1], sub_session: row[2], agent_slug: row[3],
+          task: row[4], model: row[5], status: row[6], error: row[7],
+          started_at: row[8], finished_at: row[9]
+        }
+      end
+    end
+
     # --- push subscriptions -------------------------------------------
     #
     # A device that agreed to be woken. `persona` nil means every persona: the

@@ -11,12 +11,39 @@ module Rubot
     class WorkingBadge < ::TUI::Component
       SPINS = %w[⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏].freeze
 
+      # Phases that mean a sub agent is still working.
+      RUNNING_PHASES = %w[started thinking tool].freeze
+
       def initialize
         super
         @frame = 0
         @mode = nil
         @notice = nil
         @started_at = nil
+        @subagents = {}
+      end
+
+      # Record the latest state of one delegated run. Called from the agent's
+      # on_subagent callback through the TUI event pump.
+      def subagent(info)
+        run_id = info[:run_id].to_s
+        return self if run_id.empty?
+
+        @subagents[run_id] = {
+          agent: info[:agent].to_s,
+          phase: info[:phase].to_s,
+          detail: info[:detail].to_s
+        }
+        self
+      end
+
+      def clear_subagents
+        @subagents.clear
+        self
+      end
+
+      def subagent_count
+        @subagents.values.count { |s| RUNNING_PHASES.include?(s[:phase]) }
       end
 
       def tick(mode)
@@ -85,6 +112,23 @@ module Rubot
         end
 
         canvas.put(x, y, " · esc cancels", :hint)
+        render_subagents(canvas) unless @subagents.empty?
+      end
+
+      # One compact line: how many sub agents are running, then each one's
+      # persona and current activity. Kept on the badge's single status row so
+      # the layout never grows; a long detail is clipped to the room left.
+      def render_subagents(canvas)
+        y = @rect.y + 1
+        parts = +" · ⟡ #{subagent_count} subagent"
+        @subagents.each_value do |s|
+          mark = s[:phase] == "done" ? "✓" : (s[:phase] == "failed" ? "✗" : "")
+          detail = s[:detail].to_s.gsub(/\s+/, " ").strip
+          parts << " · #{mark}#{s[:agent]}#{detail.empty? ? "" : " (#{detail})"}"
+        end
+        room = [ @rect.w - 2, 0 ].max
+        text = ::TUI::Text.truncate(parts, room)
+        canvas.put(@rect.x + 2, y, text, :hint)
       end
 
       # A live counter: seconds while the turn is young, minutes after that.

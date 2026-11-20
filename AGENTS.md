@@ -62,8 +62,15 @@ bundle exec rubocop                # lint (RuboCop Rails Omakase, Rails cops off
 - **CronActor** (`actors/cron_actor.rb`) owns the scheduler and job stores;
   a single actor serves every workspace, with a store per directory.
 - Cross-Ractor communication uses message passing over `Ractor::Port`
-  (chunks, tool events, progress, confirm, done). Procs and mutexes never
-  cross a boundary.
+  (chunks, tool events, progress, confirm, done, subagent). Procs and mutexes
+  never cross a boundary.
+- **Delegation** (`tools/delegate.rb`) runs a sub agent inside the parent's
+  SessionActor, on the same thread — never through `SessionPool#for`, which
+  lives in the main Ractor. The sub agent gets the target persona's config and
+  a `~sub-` session id. Its progress reaches channels through the `on_subagent`
+  callback (Agent → SessionActor → SessionHandle → Channel). Sub agents have a
+  restricted tool set (no `delegate`, `notify`, `cron`, `instagram`) and write
+  an audit row to `subagent_runs` via `StoreClient`.
 - File-backed state (`MEMORY.md`, session JSON) is written with `flock`.
 - The SQLite connection is not Ractor-safe: `SQLite3::Database` must live in
   the main Ractor (see `Rubot::Store`) and is reached through a port /
@@ -98,7 +105,12 @@ vendor/ruby-tui       local TUI gem
 
 - Verify changes with the relevant tests (or `rake test`) before finishing.
 - When adding a SQLite migration, place it in `lib/rubot/store/migrations/`
-  with the next sequence number; never edit a migration already in use.
+  with the next sequence number; never edit a migration already in use. Update
+  the version list and expected columns in `test/test_store_migrations.rb`.
+- Adding a tool means registering it in `tools/registry.rb`, requiring it from
+  `lib/rubot.rb`, and updating the tool-count assertions in `test/test_tools.rb`
+  and `test/test_providers.rb`. If the tool changes the system prompt, add its
+  rule to `shipped_rules` so the cache epoch moves.
 - Changes to the prompt/system prompt can affect caching — see
   `test/test_payload_stability.rb`.
 - Feature documentation lives in `README.md`; the active task list is in

@@ -2676,6 +2676,58 @@ select:focus-visible { outline: none; }
 
 .working-band .row { margin: 0; }
 
+/* Delegated work, shown live above the composer. One line per sub agent with
+   the persona it is running as and what it last did, plus a count of how many
+   are still going. The strip only appears while a turn has delegated, so it
+   costs no space on an ordinary answer. */
+.subagents {
+  margin-top: 0.35rem;
+  font-size: 0.82rem;
+}
+.subagents-head {
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.subagents-list {
+  list-style: none;
+  margin: 0.2rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.subagent {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  color: var(--fg-muted);
+}
+.subagent-mark { color: var(--yellow); }
+.subagent-done .subagent-mark { color: var(--green); }
+.subagent-failed .subagent-mark { color: var(--red); }
+.subagent-name { color: var(--fg); }
+.subagent-detail {
+  color: var(--fg-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The same rows inside the finished transcript: indented under the turn so a
+   delegation reads as work done on its behalf, not as a message from the user. */
+.subagent-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  margin-left: 1.1rem;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+}
+.subagent-row .subagent-mark { color: var(--yellow); }
+.subagent-row.subagent-done .subagent-mark { color: var(--green); }
+.subagent-row.subagent-failed .subagent-mark { color: var(--red); }
+.subagent-row .subagent-name { color: var(--fg); }
+.subagent-row .subagent-detail { color: var(--fg-faint); }
+
 /* A prompt the server refused: the text stays in the field, so the reason
    belongs on the edge of it rather than up in the thread. Kept to the
    composer's own width so it reads as a note on the field. */

@@ -737,6 +737,24 @@ module Rubot
       refute_includes texts.last, "round", "the round counter stays internal"
     end
 
+    def test_status_card_shows_running_subagents
+      texts = capture_status_texts
+
+      @tg.send(:notify_tool_started, 42, 7, "shell_exec", { "command" => "ls" })
+      @tg.send(:notify_subagent, 42, 7, { run_id: "r1", agent: "writer", phase: "started", detail: "write a poem" })
+      @tg.send(:notify_subagent, 42, 7, { run_id: "r2", agent: "researcher", phase: "tool", detail: "search docs" })
+
+      card = texts.last
+      assert_includes card, "2 subagent aktif"
+      assert_includes card, "writer"
+      assert_includes card, "researcher"
+      assert_includes card, "search docs"
+
+      @tg.send(:notify_subagent, 42, 7, { run_id: "r1", agent: "writer", phase: "done", detail: "3s" })
+      assert_includes texts.last, "1 subagent aktif"
+      assert_includes texts.last, "✓ writer"
+    end
+
     def test_progress_without_a_tool_card_does_nothing
       texts = capture_status_texts
 

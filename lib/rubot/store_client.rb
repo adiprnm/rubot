@@ -63,6 +63,26 @@ module Rubot
       request(:cache_records, session_id: id, limit: limit)
     end
 
+    # Sub-agent audit trail (see Store#start_subagent_run).
+    def start_subagent_run(run_id:, parent_session:, agent_slug:, task: nil, model: nil)
+      request(
+        :start_subagent_run,
+        run_id: run_id, parent_session: parent_session, agent_slug: agent_slug,
+        task: task, model: model
+      )
+    end
+
+    def finish_subagent_run(run_id:, status:, sub_session: nil, error: nil)
+      request(
+        :finish_subagent_run,
+        run_id: run_id, status: status, sub_session: sub_session, error: error
+      )
+    end
+
+    def subagent_runs(parent_session, limit: 50)
+      request(:subagent_runs, parent_session: parent_session, limit: limit)
+    end
+
     private
 
     def request(operation, **arguments)

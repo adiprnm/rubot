@@ -24,6 +24,9 @@
   <%# Where the status row's out-of-band swap arrives. The payload carries
       hx-swap-oob, so htmx applies it to #usage and this slot stays empty. -%>
   <div class="status-slot" sse-swap="usage" hidden></div>
+  <%# The sub-agent strip lives in the working band above the composer; the
+      event carries an out-of-band swap, so this slot stays empty. -%>
+  <div class="subagents-slot" sse-swap="subagents" hidden></div>
   <%# Same for the sidebar and the header: the conversation gains its name when
       this turn is written to disk. -%>
   <div class="sidebar-slot" sse-swap="sidebar" hidden></div>

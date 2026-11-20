@@ -6,6 +6,7 @@ require "shellwords"
 require "tmpdir"
 
 require_relative "usage"
+require_relative "persona_store"
 require_relative "opencode_usage"
 require_relative "clipboard_image"
 require_relative "tui/compat"
@@ -96,6 +97,7 @@ module Rubot
       "/soul"     => "Show the bot's soul (SOUL.md)",
       "/memory"   => "Show persistent memory (MEMORY.md)",
       "/agents"   => "Show agent rules (AGENTS.md)",
+      "/delegates" => "List personas available for sub-agent delegation",
       "/cron"     => "List scheduled cron jobs",
       "/web-restart" => "Restart the web channel (bin/rubot web)",
       "/auto on|off" => "Auto mode: run non-destructive actions without asking (remembered)",
@@ -633,6 +635,7 @@ module Rubot
       when :status_left then @status.left = event[1]
       when :stream_start
         @working.notice = nil
+        @working.clear_subagents
         @turn_started_at = monotonic_now
         # The answer's row (and the blank above it) is created when the first
         # token lands, in #append_live. Reserving it here would leave two
@@ -650,6 +653,12 @@ module Rubot
         @thinking_shown = nil
         @thinking_blank = false
       when :thinking then append_thinking(event[1])
+      when :subagent
+        @working.subagent(event[1])
+        # A finished delegation is also a row in the transcript, so a resumed
+        # session shows the same work the live turn did.
+        info = event[1]
+        add_subagent_row(info) unless info[:phase].to_s == "thinking"
       when :chunk
         # The answer has started, so the model is done thinking. The block
         # collapses here rather than at the end of the turn: a long answer
@@ -733,6 +742,22 @@ module Rubot
         @busy = false
         @stopping = false
       end
+    end
+
+    # A delegation as a transcript row: the persona that answered and the
+    # phase it reached. Indented like a tool row so it reads as work done on
+    # the turn's behalf, not as a message from the reader.
+    def add_subagent_row(info)
+      mark = case info[:phase].to_s
+      when "done" then MARK[:ok]
+      when "failed" then MARK[:err]
+      else MARK[:tool]
+      end
+      style = info[:phase].to_s == "failed" ? :error : :muted
+      detail = info[:detail].to_s.gsub(/\s+/, " ").strip
+      segments = [ [ "#{mark} ", style ], [ "subagent ", :muted ], [ info[:agent].to_s, :accent ] ]
+      segments += [ [ " · #{detail}", :dim ] ] unless detail.empty?
+      @log.add_entry(segments, keep_leading: true, indent: 2)
     end
 
     # The row for a tool call in flight. A skill load is not shown as
@@ -993,6 +1018,7 @@ module Rubot
                             end,
                             on_stopped: -> { stopped = true },
                             on_reasoning: proc { |delta| @events << [ :thinking, delta.to_s ] },
+                            on_subagent: proc { |info| @events << [ :subagent, info ] },
                             on_usage: ->(report) { live_usage(report) },
                             stream: @stream) do |chunk|
         @events << [ :chunk, chunk.to_s ]
@@ -1486,6 +1512,8 @@ module Rubot
         else
           say("No AGENTS.md found in workspace.", :warn)
         end
+      when "/delegates"
+        handle_delegates_command
       when "/cron"
         cron_tool = agent.tools.get("cron")
         if cron_tool
@@ -1545,6 +1573,37 @@ module Rubot
         say("Web server restart failed.", :err)
         output.lines.map(&:strip).reject(&:empty?).last(3).each { |line| say_text(line) }
       end
+    end
+
+    # The personas a lead agent can hand work to. Read fresh from the store so
+    # a persona created after launch shows up. Says plainly when delegation is
+    # off, since listing targets that cannot be used would be misleading.
+    def handle_delegates_command
+      config = agent.config
+      unless config.respond_to?(:delegation_enabled?) && config.delegation_enabled?
+        say("Delegation is off. Set delegation.enabled: true in config.yml.", :warn)
+        return
+      end
+
+      store = Rubot::PersonaStore.new(
+        dir: File.dirname(config.personas_file),
+        legacy_workspace: config.workspace
+      )
+      specialists = store.specialists
+      if specialists.empty?
+        say("No personas to delegate to yet.", :warn)
+        return
+      end
+
+      say("Delegates (#{specialists.size}):", :info)
+      specialists.each do |slug, persona|
+        model = persona.model.to_s
+        label = "#{persona.emoji_or} #{persona.label} (#{slug})"
+        label += " · #{model}" unless model.empty?
+        say_text("  - #{label}")
+      end
+    rescue StandardError => e
+      say("Could not list delegates: #{e.class}: #{e.message}", :err)
     end
 
     def handle_auto_command(argument)

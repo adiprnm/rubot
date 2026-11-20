@@ -14,6 +14,7 @@ Rubot connects to LLM providers (OpenAI, Anthropic, Ollama, or any OpenAI-compat
 - 📡 **Multi-channel** — terminal, Telegram, and a browser UI (HTMX + SSE, no build step)
 - 🗃️ **SQLite session archive** — full-text search across past conversations, with backup/export tooling
 - 🧬 **Personas** — per-topic or per-browser persona with its own model, prompt, soul, and memory
+- 🤝 **Sub-agent delegation** — hand a task to another persona; live progress in every channel
 - 🗜️ **Context compaction** — automatic or `/compact`, with a lean request history
 - 🧠 **Persistent memory** — global and per-project/persona, with batched extraction and post-answer learning
 - ⏰ **Cron scheduling** — reminders, recurring tasks, and timed alerts
@@ -242,7 +243,7 @@ Scheduled jobs and explicitly requested announcements can wake the device throug
 
 ## Tools
 
-Rubot ships with nine built-in tools:
+Rubot ships with ten built-in tools:
 
 | Tool | Purpose |
 |------|---------|
@@ -255,6 +256,22 @@ Rubot ships with nine built-in tools:
 | `send_files` | Deliver local files (pictures, videos, PDFs, notes) into the chat thread |
 | `notify` | Ask for the end of the current turn to be announced on the user's devices |
 | `instagram` | Connect an Instagram Business/Creator account and schedule feed posts |
+| `delegate` | Hand a self-contained task to another persona (when delegation is enabled) |
+
+## Sub-agent Delegation
+
+An agent can hand a self-contained task to another persona. The sub agent runs in the same session actor, uses the target persona's model, prompt, memory and workspace, and returns a written result that the lead folds into its answer. Sub agents cannot delegate further, and one turn has a cap on how many it can start.
+
+Delegation is **off by default** because each sub agent is an extra provider request. Enable it in `config.yml`:
+
+```yaml
+delegation:
+  enabled: true
+  max_per_turn: 4
+  max_depth: 1
+```
+
+The lead calls `delegate` with the target persona's slug and a complete task. Every channel shows live progress: a count of running sub agents and what each is doing (the web working band, the TUI working badge, and the Telegram status card). The web and TUI also keep a row per delegation in the transcript. Runs are recorded in the `subagent_runs` table of the session archive; a sub agent's own conversation is kept out of the sidebar.
 
 New scripts and snippets are written in Ruby (`ruby -e '...'` or a `.rb` file). Existing Python in a repo or skill is run as-is. To add a tool, subclass `Rubot::Tool` in `lib/rubot/tools/` and register it in `registry.rb`.
 

@@ -31,5 +31,11 @@
 <div class="text<%= item[:live] ? " is-live" : "" %>"><%= fmt(item[:text]) %></div>
 <% when :diff -%>
 <%= item[:html] %>
+<% when :subagent -%>
+<div class="subagent-row subagent-<%= h(item[:phase]) %>">
+  <span class="subagent-mark" aria-hidden="true"><%= item[:phase] == "done" ? "✓" : (item[:phase] == "failed" ? "✗" : "⟡") %></span>
+  <span class="subagent-name">subagent · <%= h(item[:agent]) %></span>
+  <span class="subagent-detail"><%= h(item[:detail]) %></span>
+</div>
 <% end -%>
 <% end -%>
