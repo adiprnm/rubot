@@ -5,6 +5,7 @@ require "fileutils"
 require "time"
 require_relative "model_catalog"
 require_relative "persona"
+require_relative "subagent_registry"
 
 module Rubot
   # File-backed store for personas.
@@ -110,9 +111,26 @@ module Rubot
     # A persona by key. A key that points at another persona resolves to that
     # persona: the topic gets the specialist's model, prompt, skills and
     # memory, while its conversations stay its own.
+    #
+    # Built-in sub agents are looked up here too, so `delegate` can target
+    # them, but they are deliberately absent from `all` and `specialists`:
+    # they are not user personas and must never show up in a sidebar, a
+    # /delegates list or a topic picker.
     def [](key)
+      text = key.to_s
+      builtin = SubagentRegistry[text]
+      return Persona.from(builtin) if builtin
+
       data = all
-      resolve(key.to_s, data)
+      resolve(text, data)
+    end
+
+    # The built-in sub agents, as slug => Persona. Kept out of `all` on purpose.
+    def subagents
+      SubagentRegistry.slugs.each_with_object({}) do |slug, result|
+        definition = SubagentRegistry[slug]
+        result[slug] = Persona.from(definition) if definition
+      end
     end
 
     def get(chat_id, thread_id)
@@ -262,7 +280,8 @@ module Rubot
         disabled_skills: persona.disabled_skills,
         tool_output: persona.tool_output,
         ref: persona.ref,
-        created_at: persona.created_at
+        created_at: persona.created_at,
+        internal: persona.internal
       )
     end
 
@@ -299,6 +318,9 @@ module Rubot
 
         persona = Persona.from(value)
         next unless persona
+        # An internal persona is a built-in sub agent, not a user persona. It
+        # must never leak into the sidebar, /delegates or a topic picker.
+        next if persona.internal
 
         personas[key] = normalize_persona(persona)
       end

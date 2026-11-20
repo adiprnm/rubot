@@ -1412,6 +1412,7 @@ module Rubot
           provider: @app_config&.provider.to_s,
           default_model: @app_config&.model.to_s,
           auxiliary_model: @app_config&.auxiliary_model.to_s,
+          subagent_model: @app_config&.subagent_model.to_s,
           key_set: !@app_config&.api_key.to_s.empty?,
           key_from_archive: !store&.setting("api_key").to_s.strip.empty?,
           ig_app_id: store&.setting("instagram_app_id").to_s,
@@ -1463,7 +1464,8 @@ module Rubot
         values = {
           "provider" => form(req, "provider"),
           "default_model" => form(req, "default_model"),
-          "auxiliary_model" => form(req, "auxiliary_model")
+          "auxiliary_model" => form(req, "auxiliary_model"),
+          "subagent_model" => form(req, "subagent_model")
         }
         # An empty key field means "leave the key alone": it is a password box,
         # it never carries the current value back, and a form that blanked the

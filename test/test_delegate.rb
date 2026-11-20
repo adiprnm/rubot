@@ -118,6 +118,36 @@ class TestDelegate < Minitest::Test
     assert_equal "model-b", store["writer"].model
   end
 
+  def test_configured_subagent_model_overrides_the_persona_preset
+    @config.apply_settings({ "subagent_model" => "model-a" })
+    agent = build_agent
+    sub = agent.send(:build_subagent,
+                     Rubot::PersonaStore.new(dir: @tmpdir)["writer"],
+                     "writer", "abc123", nil)
+
+    assert_equal "model-a", sub.instance_variable_get(:@persona).model
+    assert_nil sub.instance_variable_get(:@persona).preset
+  end
+
+  def test_explicit_model_override_beats_the_configured_subagent_model
+    @config.apply_settings({ "subagent_model" => "model-a" })
+    agent = build_agent
+    sub = agent.send(:build_subagent,
+                     Rubot::PersonaStore.new(dir: @tmpdir)["writer"],
+                     "writer", "abc123", "model-b")
+
+    assert_equal "model-b", sub.instance_variable_get(:@persona).model
+  end
+
+  def test_without_a_configured_subagent_model_the_persona_is_untouched
+    agent = build_agent
+    sub = agent.send(:build_subagent,
+                     Rubot::PersonaStore.new(dir: @tmpdir)["writer"],
+                     "writer", "abc123", nil)
+
+    assert_equal "model-b", sub.instance_variable_get(:@persona).model
+  end
+
   def test_sub_agent_cannot_delegate_again
     write_config(delegation: true, max_depth: 1)
     @config = Rubot::Config.new(@config_path)
@@ -207,5 +237,50 @@ class TestDelegate < Minitest::Test
     assert_equal 1, archive.finished.size, archive.finished.inspect
     assert_equal "done", archive.finished.first[:status], archive.finished.first[:error].to_s
     assert_match(/~sub-/, archive.finished.first[:sub_session])
+  end
+
+  def test_builtin_subagents_are_available_but_not_user_personas
+    store = Rubot::PersonaStore.new(dir: @tmpdir)
+
+    assert_equal 6, store.subagents.size
+    assert_equal "Debugger", store["sub_debugger"].name
+    refute store.all.key?("sub_debugger")
+    refute store.specialists.map(&:first).include?("sub_debugger")
+  end
+
+  def test_delegates_to_a_builtin_subagent
+    agent = build_agent
+
+    result = agent.spawn_subagent(agent_slug: "sub_planner", task: "plan a small task")
+
+    assert_equal "sub answer", result
+  end
+
+  def test_builtin_subagent_tool_set_is_narrowed_by_allowed_tools
+    agent = build_agent
+    sub = agent.send(:build_subagent,
+                     Rubot::PersonaStore.new(dir: @tmpdir)["sub_researcher"],
+                     "sub_researcher", "abc123", nil)
+    names = sub.send(:tool_definitions).map(&:name)
+
+    assert_equal ["web_fetch"], names
+  end
+
+  def test_internal_persona_in_file_is_hidden_from_user_lists
+    store = Rubot::PersonaStore.new(dir: @tmpdir)
+    store.set("hidden", Rubot::Persona.new(
+      slug: "hidden", name: "Hidden", internal: true,
+      system_prompt: "You are hidden."
+    ))
+
+    refute store.all.key?("hidden")
+    refute store.specialists.map(&:first).include?("hidden")
+  end
+
+  def test_internal_flag_round_trips_through_persona_hash
+    persona = Rubot::Persona.from(Rubot::SubagentRegistry["sub_planner"])
+
+    assert persona.internal
+    assert persona.to_h["internal"]
   end
 end

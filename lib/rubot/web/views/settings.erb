@@ -123,6 +123,22 @@
           <p class="settings-note">Model untuk pekerjaan di belakang layar, seperti merangkum dan menamai sesi.</p>
         </div>
       </div>
+
+      <div class="settings-field">
+        <label for="setting-subagent-model">Model subagent</label>
+        <div class="settings-control">
+          <select id="setting-subagent-model" name="subagent_model">
+            <option value="">Ikuti preset subagent (flash)</option>
+            <% model_choices.each do |choice| %>
+              <option value="<%= h(choice[:value]) %>"<%= " selected" if choice[:value] == subagent_model %>><%= h(choice[:label]) %></option>
+            <% end %>
+            <% unless subagent_model.empty? || model_choices.any? { |choice| choice[:value] == subagent_model } %>
+              <option value="<%= h(subagent_model) %>" selected><%= h(subagent_model) %></option>
+            <% end %>
+          </select>
+          <p class="settings-note">Nama model untuk semua subagent. Kosongkan untuk memakai preset bawaan.</p>
+        </div>
+      </div>
     </section>
 
     <section class="settings-group" aria-labelledby="settings-group-instagram">

@@ -659,6 +659,21 @@ class TestConfigMemory < Minitest::Test
     assert_equal "sk-install", config.provider_settings.api_key
   end
 
+  def test_subagent_model_setting_round_trips_through_apply_settings
+    config = Rubot::Config.from_data(
+      { "provider" => "openai", "agents" => { "defaults" => { "name" => "gpt-4o-mini" } } },
+      config_path: @config_path
+    )
+
+    assert_nil config.subagent_model
+
+    config.apply_settings({ "subagent_model" => "gpt-4o" })
+    assert_equal "gpt-4o", config.subagent_model
+
+    config.apply_settings({ "subagent_model" => "" })
+    assert_nil config.subagent_model
+  end
+
   def test_settings_from_other_screens_are_left_alone
     config = Rubot::Config.from_data(
       { "provider" => "openai", "agents" => { "defaults" => { "temperature" => 0.2 } } },

@@ -78,7 +78,7 @@ module Rubot
     # provider, the one key for it, and the default model. A page that could
     # reach the rest of the file would be a config editor wearing a form's
     # labels, with none of the review.
-    SETTINGS = { "provider" => "provider", "api_key" => "api_key", "default_model" => "model", "auxiliary_model" => "auxiliary_model" }.freeze
+    SETTINGS = { "provider" => "provider", "api_key" => "api_key", "default_model" => "model", "auxiliary_model" => "auxiliary_model", "subagent_model" => "subagent_model" }.freeze
 
     # Lay saved settings over what config.yml says.
     #
@@ -247,6 +247,17 @@ module Rubot
       return nil if name.nil?
 
       model_preset(name) ? provider_settings_for_preset(name) : provider_settings(name)
+    end
+
+    # The model for delegated sub agents. A bare model name (a config.yml
+    # entry or a provider catalog id), never a preset: the sub agent builder
+    # writes it straight into the persona's `model` field so the conversation
+    # uses that model instead of the built-in `flash` preset. Unset means the
+    # sub agents keep their preset, which is the behaviour before this setting.
+    def subagent_model
+      raw = data["subagent_model"] || agent_defaults["subagent_model"] || agent_defaults["subagentModel"]
+      text = raw.to_s.strip
+      text.empty? ? nil : text
     end
 
     # Command the TUI runs on ctrl+g to edit the prompt before sending it.

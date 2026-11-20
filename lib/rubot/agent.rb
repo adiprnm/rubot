@@ -10,6 +10,7 @@ require_relative "model_catalog"
 require_relative "opencode_usage"
 require_relative "persona"
 require_relative "persona_store"
+require_relative "subagent_registry"
 require_relative "pricing_catalog"
 require_relative "session"
 require_relative "usage"
@@ -134,6 +135,16 @@ module Rubot
       delegate a task that needs the conversation you are having now. The sub
       agent cannot delegate further, and its answer comes back to you as a tool
       result: read it, then answer the user yourself.
+
+      Built-in sub agents (always available, not listed as personas):
+      - sub_code_reviewer: review a diff for bugs, security and style
+      - sub_debugger: find the cause of an error and the smallest fix
+      - sub_researcher: look up docs or references with source URLs
+      - sub_test_writer: write and run Ruby minitest cases
+      - sub_docs_writer: draft English README and AGENTS.md sections
+      - sub_planner: break a task into ordered, actionable steps
+
+      You may also delegate to any of the user's own personas by slug.
     PROMPT
 
     attr_reader :config, :provider, :session, :tools, :soul, :memory, :agents_file, :skill_registry, :safety_guard, :session_model, :persona, :active_preset_name
@@ -1743,6 +1754,16 @@ module Rubot
       config = workspace ? base_config.with_persona_workspace(workspace) : base_config
 
       persona_data = persona.to_h
+
+      # A configured subagent model wins over the built-in `flash` preset.
+      # It is a bare model name, so clear the preset: resolve_initial_preset
+      # checks `preset` first and would otherwise ignore the model field.
+      subagent_model = config.subagent_model if config.respond_to?(:subagent_model)
+      if subagent_model && !subagent_model.to_s.strip.empty?
+        persona_data["model"] = subagent_model.to_s.strip
+        persona_data["preset"] = nil
+      end
+
       if model_override && !model_override.to_s.strip.empty?
         name = model_override.to_s.strip
         if config.model_entry_by_name(name) || config.model_preset(name)
@@ -2273,7 +2294,13 @@ end
         tools << memory_tool if memory_tool && !tools.include?(memory_tool)
       end
 
-      tools = tools.reject { |t| SUBAGENT_FORBIDDEN_TOOLS.include?(t.name) } if @subagent
+      if @subagent
+        tools = tools.reject { |t| SUBAGENT_FORBIDDEN_TOOLS.include?(t.name) }
+        if @persona&.internal
+          allowed = SubagentRegistry.allowed_tools(@persona.slug)
+          tools = tools.select { |t| allowed.include?(t.name) } if allowed
+        end
+      end
       tools
     end
 

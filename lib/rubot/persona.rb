@@ -18,7 +18,7 @@ module Rubot
   # portable and cannot point an agent at an arbitrary path.
   class Persona
     attr_reader :slug, :name, :emoji, :accent, :preset, :model, :thinking, :system_prompt,
-                :skills, :disabled_skills, :ref, :created_at
+                :skills, :disabled_skills, :ref, :created_at, :internal
 
     # The reasoning efforts a model understands, in the order the pickers show
     # them. A level outside this list is not a preference, it is a typo.
@@ -43,7 +43,7 @@ module Rubot
 
     def initialize(slug: nil, name: nil, emoji: nil, accent: nil, preset: nil, model: nil,
                    thinking: nil, system_prompt: nil, skills: nil, disabled_skills: nil,
-                   ref: nil, created_at: nil, tool_output: nil)
+                   ref: nil, created_at: nil, tool_output: nil, internal: false)
       @slug = normalize_string(slug)
       @name = normalize_string(name)
       @emoji = normalize_string(emoji)
@@ -59,6 +59,7 @@ module Rubot
       # never chose stays out of the file (and an older file reads as verbose).
       @tool_output = normalize_tool_output(tool_output)
       @created_at = created_at || Time.now.utc.iso8601
+      @internal = internal == true || internal.to_s == "true"
     end
 
     # Build a Persona from a Hash (string or symbol keys) or return the
@@ -84,7 +85,8 @@ module Rubot
         disabled_skills: fetch.call("disabled_skills"),
         ref: fetch.call("ref"),
         tool_output: fetch.call("tool_output"),
-        created_at: fetch.call("created_at")
+        created_at: fetch.call("created_at"),
+        internal: fetch.call("internal")
       )
       persona.empty? ? nil : persona
     end
@@ -103,7 +105,8 @@ module Rubot
         "disabled_skills" => @disabled_skills,
         "ref" => @ref,
         "tool_output" => @tool_output,
-        "created_at" => @created_at
+        "created_at" => @created_at,
+        "internal" => @internal
       }
     end
 
