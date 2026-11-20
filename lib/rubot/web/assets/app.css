@@ -2701,13 +2701,16 @@ select:focus-visible { outline: none; }
   align-items: baseline;
   gap: 0.45rem;
   color: var(--fg-muted);
+  font-family: var(--mono);
 }
 .subagent-mark { color: var(--yellow); }
 .subagent-done .subagent-mark { color: var(--green); }
 .subagent-failed .subagent-mark { color: var(--red); }
-.subagent-name { color: var(--fg); }
+.subagent-name { color: var(--fg); font-size: 10.5px; white-space: nowrap; }
 .subagent-detail {
+  min-width: 0;
   color: var(--fg-faint);
+  font-size: 10.5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2718,15 +2721,26 @@ select:focus-visible { outline: none; }
   display: flex;
   align-items: baseline;
   gap: 0.45rem;
-  margin-left: 1.1rem;
+  margin: 0 0 0.4rem 1.1rem;
+  font-family: var(--mono);
   font-size: 0.85rem;
   color: var(--fg-muted);
 }
 .subagent-row .subagent-mark { color: var(--yellow); }
 .subagent-row.subagent-done .subagent-mark { color: var(--green); }
 .subagent-row.subagent-failed .subagent-mark { color: var(--red); }
-.subagent-row .subagent-name { color: var(--fg); }
-.subagent-row .subagent-detail { color: var(--fg-faint); }
+.subagent-row .subagent-name { color: var(--fg); font-size: 10.5px; white-space: nowrap; }
+.subagent-row .subagent-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-faint);
+  font-size: 10.5px;
+}
+/* The answer under the last delegation gets the same air as under a tool row:
+   the row claims 0.4rem, the paragraph brings the rest of its 1.05rem. */
+.subagent-row + .text { margin-top: calc(1.05rem - 0.4rem); }
 
 /* A prompt the server refused: the text stays in the field, so the reason
    belongs on the edge of it rather than up in the thread. Kept to the
