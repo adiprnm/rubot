@@ -4029,9 +4029,10 @@ html.settings-doc body {
   border-radius: 3px;
   background: var(--bg0);
   color: var(--fg);
-  /* 16px is the size below which iOS zooms the whole page into the field. */
+  /* 13px matches the labels and notes around it. iOS zooms a focused field
+     below 16px, but the touch layout already accepted that tradeoff. */
   font-family: var(--mono);
-  font-size: 16px;
+  font-size: 13px;
   letter-spacing: -0.02em;
 }
 
@@ -4046,6 +4047,21 @@ html.settings-doc body {
 }
 .settings-note code { font-family: var(--mono); font-size: 11px; }
 .settings-note strong { color: var(--fg-dim); font-weight: 600; }
+
+.settings-preset-row { padding-top: 0.6rem; }
+.settings-preset-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.settings-preset-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 11px;
+  color: var(--fg-faint);
+}
 
 .settings-check {
   display: flex;
@@ -4089,16 +4105,13 @@ html.settings-doc body {
   .settings-field-label { padding-top: 0; }
 }
 
-/* On a phone the 16px mono value was a full size larger than every other
-   control in the app and made each field look like a separate input screen.
-   iOS still zooms a focused field below 16px, so keep 16px there and shrink
-   only the surrounding chrome on touch screens. */
+/* On touch screens the fields keep the same 13px as everywhere else; only
+   the padding tightens so the rows stay compact. */
 @media (max-width: 860px), (pointer: coarse) {
   .settings-control input[type="text"],
   .settings-control input[type="url"],
   .settings-control input[type="password"],
   .settings-control select {
-    font-size: 13px;
     padding: 0.3rem 0.45rem;
   }
   .settings-note { font-size: 11.5px; }

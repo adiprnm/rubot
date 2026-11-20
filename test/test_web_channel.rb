@@ -50,6 +50,108 @@ module Rubot
         assert_equal "sk-baru", config.api_key
       end
 
+      def test_settings_page_lists_editable_presets_and_the_default_picker
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+        config = channel.instance_variable_get(:@app_config)
+        config.set_model_preset("cepat", "model" => "mimo-v2.6-flash", "temperature" => 0.2)
+        config.set_default_model_preset("cepat")
+
+        res = FakeResponse.new
+        channel.send(:render_settings, res, FakeRequest.new("/settings"))
+
+        assert_includes res.body, %(name="preset_name" value="cepat")
+        assert_includes res.body, %(value="mimo-v2.6-flash" selected)
+        assert_includes res.body, %(name="default_preset")
+        assert_includes res.body, %(value="cepat" selected)
+        assert_includes res.body, %(name="new_preset_name")
+        assert_equal 3, res.body.scan(%(name="new_preset_name")).size, "three blank rows for bulk create"
+        refute_includes res.body, "Preset disimpan di config.yml"
+      end
+
+      def test_settings_page_lists_each_subagent_with_model_and_thinking
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+        config = channel.instance_variable_get(:@app_config)
+        config.set_subagent_settings("planner", "model" => "mimo-v2.6-flash", "thinking" => "high")
+
+        res = FakeResponse.new
+        channel.send(:render_settings, res, FakeRequest.new("/settings"))
+
+        assert_includes res.body, %(name="subagent_slug" value="planner")
+        assert_includes res.body, %(value="mimo-v2.6-flash" selected)
+        assert_includes res.body, %(name="subagent_thinking")
+        assert_includes res.body, %(value="high" selected)
+      end
+
+      def test_saving_settings_writes_per_subagent_model_and_thinking
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+        config = channel.instance_variable_get(:@app_config)
+
+        channel.send(:save_settings, FakeResponse.new, form_post(
+          { "provider" => "opencode",
+            "subagent_slug" => [ "planner", "researcher" ],
+            "subagent_model_choice" => [ "mimo-v2.6-flash", "deepseek-v4.1-flash" ],
+            "subagent_thinking" => [ "high", "" ] }
+        ))
+
+        assert_equal "mimo-v2.6-flash", config.subagent_settings("planner")["model"]
+        assert_equal "high", config.subagent_settings("planner")["thinking"]
+        assert_equal "deepseek-v4.1-flash", config.subagent_settings("researcher")["model"]
+        assert_nil config.subagent_settings("researcher")["thinking"]
+        assert_equal "mimo-v2.6-flash", YAML.load_file(config.config_path).dig("subagents", "planner", "model")
+      end
+
+      def test_saving_settings_adds_multiple_new_presets_at_once
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+        config = channel.instance_variable_get(:@app_config)
+
+        channel.send(:save_settings, FakeResponse.new, form_post(
+          { "provider" => "opencode",
+            "new_preset_name" => [ "cepat", "lama", "" ],
+            "new_preset_model" => [ "mimo-v2.6-flash", "deepseek-v4.1-flash", "" ],
+            "new_preset_temperature" => [ "0.2", "", "" ],
+            "new_preset_max_tokens" => [ "4096", "", "" ],
+            "new_preset_reasoning_effort" => [ "low", "", "" ] }
+        ))
+
+        preset = config.model_preset("cepat")
+        assert_equal "mimo-v2.6-flash", preset["model"]
+        assert_equal 0.2, preset["temperature"]
+        assert_equal 4096, preset["max_tokens"]
+        assert_equal "low", preset["reasoning_effort"]
+        assert_equal "deepseek-v4.1-flash", config.model_preset("lama")["model"]
+        assert_equal 2, config.model_presets.size
+        assert_equal "mimo-v2.6-flash", YAML.load_file(config.config_path).dig("model_presets", "cepat", "model")
+      end
+
+      def test_saving_settings_writes_presets_to_config_and_can_delete_them
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+        config = channel.instance_variable_get(:@app_config)
+
+        channel.send(:save_settings, FakeResponse.new, form_post(
+          { "provider" => "opencode", "preset_name" => [ "cepat", "lama" ],
+            "preset_model" => [ "mimo-v2.6-flash", "deepseek-v4.1-flash" ],
+            "preset_temperature" => [ "0.2", "" ],
+            "preset_max_tokens" => [ "4096", "" ],
+            "preset_reasoning_effort" => [ "low", "" ],
+            "default_preset" => "cepat" }
+        ))
+
+        assert_equal "mimo-v2.6-flash", config.model_preset("cepat")["model"]
+        assert_includes config.model_preset_names, "lama"
+        assert_equal "cepat", config.primary_model_preset_name
+        assert_equal "mimo-v2.6-flash", YAML.load_file(config.config_path).dig("model_presets", "cepat", "model")
+
+        channel.send(:save_settings, FakeResponse.new, form_post(
+          { "provider" => "opencode", "preset_name" => [ "lama" ], "preset_model" => [ "" ] }
+        ))
+        refute_includes config.model_preset_names, "lama"
+      end
+
       # A password box that comes back empty means "I did not touch it", not
       # "delete the key" — deleting is its own checkbox, because the two are one
       # keystroke apart and only one of them can be undone from this page.

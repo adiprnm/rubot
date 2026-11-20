@@ -137,12 +137,12 @@ module Rubot
       result: read it, then answer the user yourself.
 
       Built-in sub agents (always available, not listed as personas):
-      - sub_code_reviewer: review a diff for bugs, security and style
-      - sub_debugger: find the cause of an error and the smallest fix
-      - sub_researcher: look up docs or references with source URLs
-      - sub_test_writer: write and run Ruby minitest cases
-      - sub_docs_writer: draft English README and AGENTS.md sections
-      - sub_planner: break a task into ordered, actionable steps
+      - code_reviewer: review a diff for bugs, security and style
+      - debugger: find the cause of an error and the smallest fix
+      - researcher: look up docs or references with source URLs
+      - test_writer: write and run Ruby minitest cases
+      - docs_writer: draft English README and AGENTS.md sections
+      - planner: break a task into ordered, actionable steps
 
       You may also delegate to any of the user's own personas by slug.
     PROMPT
@@ -1755,14 +1755,19 @@ module Rubot
 
       persona_data = persona.to_h
 
-      # A configured subagent model wins over the built-in `flash` preset.
-      # It is a bare model name, so clear the preset: resolve_initial_preset
-      # checks `preset` first and would otherwise ignore the model field.
-      subagent_model = config.subagent_model if config.respond_to?(:subagent_model)
-      if subagent_model && !subagent_model.to_s.strip.empty?
-        persona_data["model"] = subagent_model.to_s.strip
+      # Per-sub-agent settings win over the built-in definition. A bare model
+      # name clears the preset, because resolve_initial_preset checks `preset`
+      # first and would otherwise ignore the model field. The global
+      # `subagent_model` is the fallback for sub agents without their own.
+      settings = config.respond_to?(:subagent_settings) ? config.subagent_settings(slug) : {}
+      model = settings["model"].to_s.strip
+      model = config.subagent_model.to_s.strip if model.empty? && config.respond_to?(:subagent_model)
+      unless model.empty?
+        persona_data["model"] = model
         persona_data["preset"] = nil
       end
+      thinking = settings["thinking"].to_s.strip
+      persona_data["thinking"] = thinking unless thinking.empty?
 
       if model_override && !model_override.to_s.strip.empty?
         name = model_override.to_s.strip

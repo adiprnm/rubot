@@ -141,6 +141,130 @@
       </div>
     </section>
 
+    <section class="settings-group" aria-labelledby="settings-group-presets">
+      <h2 class="settings-group-title" id="settings-group-presets">Model preset</h2>
+
+      <% preset_rows.each do |row| %>
+        <div class="settings-field settings-preset-row">
+          <label for="preset-model-<%= h(row[:name]) %>"><%= h(row[:name]) %></label>
+          <div class="settings-control">
+            <input type="hidden" name="preset_name" value="<%= h(row[:name]) %>">
+            <select id="preset-model-<%= h(row[:name]) %>" name="preset_model">
+              <option value="">Hapus preset ini</option>
+              <% model_choices.each do |choice| %>
+                <option value="<%= h(choice[:value]) %>"<%= " selected" if choice[:value] == row[:model] %>><%= h(choice[:label]) %></option>
+              <% end %>
+              <% unless row[:model].empty? || model_choices.any? { |choice| choice[:value] == row[:model] } %>
+                <option value="<%= h(row[:model]) %>" selected><%= h(row[:model]) %></option>
+              <% end %>
+            </select>
+            <div class="settings-preset-fields">
+              <label>Temperature
+                <input type="text" name="preset_temperature" value="<%= h(row[:temperature]) %>" placeholder="bawaan">
+              </label>
+              <label>Max tokens
+                <input type="text" name="preset_max_tokens" value="<%= h(row[:max_tokens]) %>" placeholder="bawaan">
+              </label>
+              <label>Reasoning
+                <select name="preset_reasoning_effort">
+                  <option value="">Bawaan</option>
+                  <% Persona::THINKING_LEVELS.each do |level| %>
+                    <option value="<%= h(level) %>"<%= " selected" if level == row[:reasoning_effort] %>><%= h(level) %></option>
+                  <% end %>
+                  <% unless row[:reasoning_effort].empty? || Persona::THINKING_LEVELS.include?(row[:reasoning_effort]) %>
+                    <option value="<%= h(row[:reasoning_effort]) %>" selected><%= h(row[:reasoning_effort]) %></option>
+                  <% end %>
+                </select>
+              </label>
+            </div>
+          </div>
+        </div>
+      <% end %>
+
+      <% 3.times do |i| %>
+        <div class="settings-field settings-preset-row">
+          <label for="new-preset-name-<%= i %>">Preset baru</label>
+          <div class="settings-control">
+            <input id="new-preset-name-<%= i %>" type="text" name="new_preset_name" value=""
+                   autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+                   placeholder="nama preset">
+            <div class="settings-preset-fields">
+              <label>Model
+                <select name="new_preset_model">
+                  <option value="">Pilih model</option>
+                  <% model_choices.each do |choice| %>
+                    <option value="<%= h(choice[:value]) %>"><%= h(choice[:label]) %></option>
+                  <% end %>
+                </select>
+              </label>
+              <label>Temperature
+                <input type="text" name="new_preset_temperature" value="" placeholder="bawaan">
+              </label>
+              <label>Max tokens
+                <input type="text" name="new_preset_max_tokens" value="" placeholder="bawaan">
+              </label>
+              <label>Reasoning
+                <select name="new_preset_reasoning_effort">
+                  <option value="">Bawaan</option>
+                  <% Persona::THINKING_LEVELS.each do |level| %>
+                    <option value="<%= h(level) %>"><%= h(level) %></option>
+                  <% end %>
+                </select>
+              </label>
+            </div>
+          </div>
+        </div>
+      <% end %>
+      <p class="settings-note">Isi nama dan pilih model pada baris yang ingin ditambahkan, lalu Simpan. Bisa beberapa sekaligus.</p>
+
+      <div class="settings-field">
+        <label for="setting-default-preset">Preset default</label>
+        <div class="settings-control">
+          <select id="setting-default-preset" name="default_preset">
+            <option value="">Ikut config.yml</option>
+            <% preset_rows.each do |row| %>
+              <option value="<%= h(row[:name]) %>"<%= " selected" if row[:name] == default_preset %>><%= h(row[:name]) %></option>
+            <% end %>
+          </select>
+          <p class="settings-note">Preset untuk sesi baru. Pilih "Ikut config.yml" untuk memakai nilai dari berkas.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="settings-group" aria-labelledby="settings-group-subagents">
+      <h2 class="settings-group-title" id="settings-group-subagents">Subagent</h2>
+
+      <% subagent_rows.each do |row| %>
+        <div class="settings-field settings-preset-row">
+          <label for="subagent-model-<%= h(row[:slug]) %>"><%= h(row[:name]) %></label>
+          <div class="settings-control">
+            <input type="hidden" name="subagent_slug" value="<%= h(row[:slug]) %>">
+            <div class="settings-preset-fields">
+              <label>Model
+                <select id="subagent-model-<%= h(row[:slug]) %>" name="subagent_model_choice">
+                  <option value="">Bawaan</option>
+                  <% model_choices.each do |choice| %>
+                    <option value="<%= h(choice[:value]) %>"<%= " selected" if choice[:value] == row[:model] %>><%= h(choice[:label]) %></option>
+                  <% end %>
+                  <% unless row[:model].empty? || model_choices.any? { |choice| choice[:value] == row[:model] } %>
+                    <option value="<%= h(row[:model]) %>" selected><%= h(row[:model]) %></option>
+                  <% end %>
+                </select>
+              </label>
+              <label>Thinking
+                <select name="subagent_thinking">
+                  <option value="">Bawaan</option>
+                  <% Persona::THINKING_LEVELS.each do |level| %>
+                    <option value="<%= h(level) %>"<%= " selected" if level == row[:thinking] %>><%= h(level) %></option>
+                  <% end %>
+                </select>
+              </label>
+            </div>
+          </div>
+        </div>
+      <% end %>
+    </section>
+
     <section class="settings-group" aria-labelledby="settings-group-instagram">
       <h2 class="settings-group-title" id="settings-group-instagram">Instagram</h2>
 

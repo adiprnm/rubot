@@ -17,7 +17,7 @@ module Rubot
 
     DEFINITIONS = [
       {
-        "slug" => "sub_code_reviewer",
+        "slug" => "code_reviewer",
         "internal" => true,
         "name" => "Code Reviewer",
         "emoji" => "🔍",
@@ -32,7 +32,7 @@ module Rubot
         PROMPT
       },
       {
-        "slug" => "sub_debugger",
+        "slug" => "debugger",
         "internal" => true,
         "name" => "Debugger",
         "emoji" => "🐛",
@@ -47,7 +47,7 @@ module Rubot
         PROMPT
       },
       {
-        "slug" => "sub_researcher",
+        "slug" => "researcher",
         "internal" => true,
         "name" => "Researcher",
         "emoji" => "📚",
@@ -62,7 +62,7 @@ module Rubot
         PROMPT
       },
       {
-        "slug" => "sub_test_writer",
+        "slug" => "test_writer",
         "internal" => true,
         "name" => "Test Writer",
         "emoji" => "🧪",
@@ -77,7 +77,7 @@ module Rubot
         PROMPT
       },
       {
-        "slug" => "sub_docs_writer",
+        "slug" => "docs_writer",
         "internal" => true,
         "name" => "Docs Writer",
         "emoji" => "📝",
@@ -92,7 +92,7 @@ module Rubot
         PROMPT
       },
       {
-        "slug" => "sub_planner",
+        "slug" => "planner",
         "internal" => true,
         "name" => "Planner",
         "emoji" => "🧭",

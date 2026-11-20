@@ -661,17 +661,24 @@ module Rubot
       # both, and the raw query string is the only place both still exist.
       def form_values(req, key)
         raw = +""
-        query = req.request_uri&.query
+        query = req.respond_to?(:request_uri) ? req.request_uri&.query : nil
         raw << query.to_s if query
-        body = req.body.to_s
+        body = req.respond_to?(:body) ? req.body.to_s : ""
         raw << "&" << body unless body.empty?
 
-        raw.split(/[&;]/).filter_map do |pair|
+        values = raw.split(/[&;]/).filter_map do |pair|
           name, value = pair.split("=", 2)
           next if name.nil?
 
           utf8(WEBrick::HTTPUtils.unescape(name)) == key ? utf8(WEBrick::HTTPUtils.unescape(value.to_s)) : nil
         end
+        # Test doubles and non-WEBrick requests may carry repeated keys as an
+        # array in #query instead of a raw body.
+        if values.empty? && req.respond_to?(:query)
+          candidate = req.query[key]
+          values = candidate.is_a?(Array) ? candidate.map { |v| utf8(v) } : []
+        end
+        values
       end
 
       def authorized?(req)
@@ -1413,6 +1420,9 @@ module Rubot
           default_model: @app_config&.model.to_s,
           auxiliary_model: @app_config&.auxiliary_model.to_s,
           subagent_model: @app_config&.subagent_model.to_s,
+          subagent_rows: settings_subagent_rows,
+          preset_rows: settings_preset_rows,
+          default_preset: @app_config&.primary_model_preset_name.to_s,
           key_set: !@app_config&.api_key.to_s.empty?,
           key_from_archive: !store&.setting("api_key").to_s.strip.empty?,
           ig_app_id: store&.setting("instagram_app_id").to_s,
@@ -1509,8 +1519,94 @@ module Rubot
             warn "[web] instagram link: #{e.message}"
           end
         end
+        save_settings_presets(req)
         apply_saved_settings
         redirect_to(res, settings_url(saved: true))
+      end
+
+      # Presets live in config.yml, not in the settings archive: they are the
+      # install's model definitions, edited here with the same form as the
+      # provider and key. Each row posts its name and fields; a blank model
+      # deletes the preset, and the default picker writes agents.defaults.
+      def save_settings_presets(req)
+        config = @app_config
+        return unless config
+
+        names = form_values(req, "preset_name")
+
+        names.each_with_index do |name, index|
+          name = name.to_s.strip
+          next if name.empty?
+
+          model = form_values(req, "preset_model")[index].to_s.strip
+          if model.empty?
+            begin
+              config.delete_model_preset(name)
+            rescue StandardError => e
+              warn "[web] delete preset #{name}: #{e.class}: #{e.message}"
+            end
+            next
+          end
+
+          attrs = { "model" => model }
+          %w[preset_max_tokens preset_temperature preset_reasoning_effort].each do |field|
+            value = form_values(req, field)[index].to_s.strip
+            attrs[field.delete_prefix("preset_")] = value unless value.empty?
+          end
+          begin
+            config.set_model_preset(name, attrs)
+          rescue ArgumentError => e
+            warn "[web] preset #{name}: #{e.message}"
+          end
+        end
+
+        new_names = form_values(req, "new_preset_name")
+        new_models = form_values(req, "new_preset_model")
+        new_temps = form_values(req, "new_preset_temperature")
+        new_tokens = form_values(req, "new_preset_max_tokens")
+        new_reasoning = form_values(req, "new_preset_reasoning_effort")
+        new_names.each_with_index do |raw_name, index|
+          name = raw_name.to_s.strip
+          model = new_models[index].to_s.strip
+          next if name.empty? || model.empty?
+
+          attrs = { "model" => model }
+          { "temperature" => new_temps[index], "max_tokens" => new_tokens[index],
+            "reasoning_effort" => new_reasoning[index] }.each do |key, value|
+            text = value.to_s.strip
+            attrs[key] = text unless text.empty?
+          end
+          begin
+            config.set_model_preset(name, attrs)
+          rescue ArgumentError => e
+            warn "[web] new preset #{name}: #{e.message}"
+          end
+        end
+
+        default = form(req, "default_preset").to_s.strip
+        unless default.empty?
+          begin
+            config.set_default_model_preset(default)
+          rescue ArgumentError => e
+            warn "[web] default preset: #{e.message}"
+          end
+        end
+
+        slugs = form_values(req, "subagent_slug")
+        models = form_values(req, "subagent_model_choice")
+        thinkings = form_values(req, "subagent_thinking")
+        slugs.each_with_index do |slug, index|
+          slug = slug.to_s.strip
+          next if slug.empty?
+
+          config.set_subagent_settings(slug, {
+            "model" => models[index].to_s.strip,
+            "thinking" => thinkings[index].to_s.strip
+          })
+        end
+        config.save
+      rescue StandardError => e
+        warn "[web] save presets: #{e.class}: #{e.message}"
       end
 
       # Re-fetch the provider's model list and rewrite the on-disk cache, so
@@ -1990,6 +2086,46 @@ module Rubot
       # catalog comes first because that is where the real choices are;
       # config.yml entries follow as named aliases that still resolve through
       # Config. Nothing here reaches the network.
+      # One editable row per built-in sub agent, with its current model and
+      # thinking override (blank means it follows the built-in definition).
+      def settings_subagent_rows
+        config = @app_config
+        return [] unless config
+
+        Rubot::SubagentRegistry.slugs.map do |slug|
+          settings = config.respond_to?(:subagent_settings) ? config.subagent_settings(slug) : {}
+          {
+            slug: slug,
+            name: Rubot::SubagentRegistry[slug]["name"].to_s,
+            model: settings["model"].to_s,
+            thinking: settings["thinking"].to_s
+          }
+        end
+      end
+
+      # The model presets as editable rows for the settings page. The implicit
+      # `default` preset is built from the direct model fields, so it has no
+      # stored attributes to edit here and is left out.
+      def settings_preset_rows
+        config = @app_config
+        return [] unless config
+
+        config.model_preset_names.filter_map do |name|
+          next if name.casecmp?("default")
+
+          raw = config.model_presets.find { |key, _| key.to_s.casecmp?(name) }&.last
+          next unless raw.is_a?(Hash)
+
+          {
+            name: name,
+            model: raw["model"].to_s,
+            max_tokens: raw["max_tokens"].to_s,
+            temperature: raw["temperature"].to_s,
+            reasoning_effort: raw["reasoning_effort"].to_s
+          }
+        end
+      end
+
       def model_choices
         config = @app_config
         return [] unless config

@@ -260,6 +260,34 @@ module Rubot
       text.empty? ? nil : text
     end
 
+    # Per-sub-agent overrides, keyed by slug. Each value is a Hash with
+    # "model" and/or "thinking". A missing key means the sub agent keeps the
+    # model and thinking from its built-in definition.
+    def subagent_settings(slug)
+      raw = data["subagents"]
+      return {} unless raw.is_a?(Hash)
+
+      entry = raw[slug.to_s] || raw[slug.to_sym]
+      entry.is_a?(Hash) ? entry.each_with_object({}) { |(k, v), acc| acc[k.to_s] = v } : {}
+    end
+
+    def set_subagent_settings(slug, attributes)
+      raw = data["subagents"].is_a?(Hash) ? data["subagents"] : {}
+      key = raw.keys.find { |candidate| candidate.to_s.casecmp?(slug.to_s) } || slug.to_s
+      entry = raw[key].is_a?(Hash) ? raw[key] : {}
+      attributes.each do |name, value|
+        text = value.to_s.strip
+        text.empty? ? entry.delete(name.to_s) : entry[name.to_s] = text
+      end
+      if entry.empty?
+        raw.delete(key)
+      else
+        raw[key] = entry
+      end
+      data["subagents"] = raw
+      subagent_settings(slug)
+    end
+
     # Command the TUI runs on ctrl+g to edit the prompt before sending it.
     # Resolved from config first; the TUI falls back to $VISUAL, $EDITOR and
     # then `vi`. The command has to block until the file is written (use

@@ -129,6 +129,30 @@ class TestDelegate < Minitest::Test
     assert_nil sub.instance_variable_get(:@persona).preset
   end
 
+  def test_per_subagent_model_and_thinking_override_the_definition
+    @config.set_subagent_settings("writer", "model" => "model-c", "thinking" => "high")
+    agent = build_agent
+    sub = agent.send(:build_subagent,
+                     Rubot::PersonaStore.new(dir: @tmpdir)["writer"],
+                     "writer", "abc123", nil)
+
+    persona = sub.instance_variable_get(:@persona)
+    assert_equal "model-c", persona.model
+    assert_nil persona.preset
+    assert_equal "high", persona.thinking
+  end
+
+  def test_per_subagent_settings_beat_the_global_subagent_model
+    @config.apply_settings({ "subagent_model" => "model-a" })
+    @config.set_subagent_settings("writer", "model" => "model-c")
+    agent = build_agent
+    sub = agent.send(:build_subagent,
+                     Rubot::PersonaStore.new(dir: @tmpdir)["writer"],
+                     "writer", "abc123", nil)
+
+    assert_equal "model-c", sub.instance_variable_get(:@persona).model
+  end
+
   def test_explicit_model_override_beats_the_configured_subagent_model
     @config.apply_settings({ "subagent_model" => "model-a" })
     agent = build_agent
@@ -243,15 +267,15 @@ class TestDelegate < Minitest::Test
     store = Rubot::PersonaStore.new(dir: @tmpdir)
 
     assert_equal 6, store.subagents.size
-    assert_equal "Debugger", store["sub_debugger"].name
-    refute store.all.key?("sub_debugger")
-    refute store.specialists.map(&:first).include?("sub_debugger")
+    assert_equal "Debugger", store["debugger"].name
+    refute store.all.key?("debugger")
+    refute store.specialists.map(&:first).include?("debugger")
   end
 
   def test_delegates_to_a_builtin_subagent
     agent = build_agent
 
-    result = agent.spawn_subagent(agent_slug: "sub_planner", task: "plan a small task")
+    result = agent.spawn_subagent(agent_slug: "planner", task: "plan a small task")
 
     assert_equal "sub answer", result
   end
@@ -259,8 +283,8 @@ class TestDelegate < Minitest::Test
   def test_builtin_subagent_tool_set_is_narrowed_by_allowed_tools
     agent = build_agent
     sub = agent.send(:build_subagent,
-                     Rubot::PersonaStore.new(dir: @tmpdir)["sub_researcher"],
-                     "sub_researcher", "abc123", nil)
+                     Rubot::PersonaStore.new(dir: @tmpdir)["researcher"],
+                     "researcher", "abc123", nil)
     names = sub.send(:tool_definitions).map(&:name)
 
     assert_equal ["web_fetch"], names
@@ -278,7 +302,7 @@ class TestDelegate < Minitest::Test
   end
 
   def test_internal_flag_round_trips_through_persona_hash
-    persona = Rubot::Persona.from(Rubot::SubagentRegistry["sub_planner"])
+    persona = Rubot::Persona.from(Rubot::SubagentRegistry["planner"])
 
     assert persona.internal
     assert persona.to_h["internal"]
