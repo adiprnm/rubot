@@ -27,6 +27,7 @@ require_relative "../web/routes/push"
 require_relative "../web/session_browser"
 require_relative "../web/routes/sessions"
 require_relative "../web/routes/settings"
+require_relative "../web/search"
 require_relative "../web/subagents"
 require_relative "../web/tool_rows"
 require_relative "../web/turns"
@@ -76,10 +77,9 @@ module Rubot
       # The pin cap lives with the sidebar that enforces it, because the sidebar
       # is where the number is drawn; unpinning the oldest reads the same one.
       PINNED_LIMIT = Rubot::Web::SessionBrowser::PINNED_LIMIT
-      # How many messages one search answers with. The sidebar is a list, not a
-      # page: a query that matches hundreds of rows is answered with the best of
-      # them, and a narrower query is how the reader asks for more.
-      SEARCH_LIMIT = 20
+      # How many messages one search answers with. The limit belongs to the
+      # search that applies it, so it lives with it.
+      SEARCH_LIMIT = Rubot::Web::Search::SEARCH_LIMIT
       # How much of a conversation the page draws at once. A long session is a
       # lot of DOM to build for a reader who only ever looks at the end of it,
       # so the page starts at the tail and earlier turns arrive as the reader
@@ -138,6 +138,7 @@ module Rubot
       include Rubot::Web::Routes::Instagram
       include Rubot::Web::Routes::Sessions
       include Rubot::Web::Routes::Settings
+      include Rubot::Web::Search
       include Rubot::Web::Media
       include Rubot::Web::SessionBrowser
       include Rubot::Web::HistoryView
@@ -512,85 +513,6 @@ module Rubot
         end
       end
 
-      # --- search ---------------------------------------------------------
-
-      # Search results, drawn the way the sidebar lists conversations: one
-      # block per conversation with its hits underneath. The ranking already
-      # orders hits best first (bm25 over three weighted columns, see
-      # Store#search), and grouping keeps that order — a conversation appears
-      # where its best hit does, so a flat list of twenty rows from one session
-      # does not read as twenty conversations that all share a title.
-      def render_search(res, req)
-        query = form(req, "q").strip
-
-        res["Content-Type"] = "text/html; charset=utf-8"
-        res["Cache-Control"] = "no-store"
-        res.body = View.render("_search", query: query, groups: search_groups(query),
-                                          token_query: token_query)
-      end
-
-      def search_groups(query)
-        return {} if query.empty?
-
-        store = Session.store
-        return {} unless store
-
-        # The archive is shared by every channel, so the prefix keeps the answer
-        # to conversations this channel can open: a hit in a Telegram chat has
-        # no page here. Asking for more than a page of results and then cutting
-        # is not the same as asking for a page — the SQL keeps the limit honest.
-        hits = store.search(query, limit: SEARCH_LIMIT * 2, prefix: "web_")
-        rows = hits.filter_map do |hit|
-          sid = hit[:session_id]
-          slug = owner_slug(sid)
-          next unless slug
-
-          persona = persona_store&.[](slug)
-          {
-            href: hit_url(sid, hit[:idx]),
-            who: role_label(hit[:role]),
-            html: hit[:html],
-            idx: hit[:idx],
-            session_id: sid,
-            title: hit[:title].to_s.strip.empty? ? UNTITLED_SESSION : hit[:title].to_s.strip,
-            emoji: persona ? persona.emoji_or : "🤖",
-            persona_label: persona ? persona.label : slug.capitalize,
-            age: iso_age(hit[:created_at])
-          }
-        end
-
-        rows.first(SEARCH_LIMIT).group_by { |row| row[:session_id] }
-      end
-
-      # The URL a hit opens: the conversation, asked to land on that message.
-      # No fragment — a turn wraps several messages, so `at` is the only thing
-      # that names the place, and the page marks the entry that holds it.
-      def hit_url(sid, idx)
-        params = [ token_query.delete_prefix("?"), "at=#{idx}" ].reject(&:empty?)
-        "/s/#{sid}?#{params.join("&")}"
-      end
-
-      # Who said it, in the words the thread uses: the person is "kamu", the
-      # assistant is the product's own name, and a tool row is a tool.
-      def role_label(role)
-        case role.to_s
-        when "user" then "kamu"
-        when "tool" then "tool"
-        else "rubot"
-        end
-      end
-
-      # A stored timestamp is ISO-8601 text, and the sidebar speaks in ages: a
-      # difference between two instants needs no timezone, an absolute time
-      # would have to assume one.
-      def iso_age(value)
-        return "" if value.to_s.empty?
-
-        elapsed_label(Time.iso8601(value.to_s).to_f)
-      rescue ArgumentError
-        ""
-      end
-
       # Static assets are cached for an hour, so the URL carries the mtime of
       # the newest of them. One stamp for the whole shell: a JS-only change has
       # to reach the browser just as a CSS change does, and the stylesheet alone
@@ -601,95 +523,6 @@ module Rubot
         %w[app.css app.js sw.js].map { |name| File.mtime(File.join(ASSETS, name)).to_i }.max
       rescue SystemCallError
         0
-      end
-
-      def persona_rows(current_slug)
-        counts = unread_counts
-        personas.map do |key, persona|
-          {
-            slug: key,
-            label: persona.label,
-            emoji: persona.emoji_or,
-            active: key == current_slug,
-            # How many conversations of this persona finished something unseen.
-            # Zero for a roster read before the first turn, which is why the
-            # badge only draws when it is positive.
-            unread: counts[key].to_i,
-            model: persona.model || persona.preset || "default"
-          }
-        end
-      end
-
-      # Sessions with something new, counted per persona. The persona of an id is
-      # `PersonaStore.key_for_session`'s answer — the same rule every other
-      # screen uses — so a Telegram topic's id is not silently counted twice.
-      def unread_counts
-        store = Session.store
-        return {} unless store
-
-        store.unread_sessions.each_with_object(Hash.new(0)) do |row, counts|
-          slug = PersonaStore.key_for_session(row[:id])
-          counts[slug] += 1 if slug
-        end
-      end
-
-      # Everything waiting, across every persona. The roster counts per persona
-      # because the roster is a choice between them; the drawer's handle speaks
-      # for the install, because the drawer is where all of them live.
-      def unread_total
-        unread_counts.values.sum
-      end
-
-      # Both tool contexts are bound before a turn starts: the file tool at the
-      # folder the page serves pictures from, the cron tool at the workspace the
-      # reminder belongs to. Each lives with the slice that owns that tool.
-      def prepare_delivery(sid)
-        bind_file_delivery(sid)
-        bind_cron_delivery(sid)
-      end
-
-      # The sidebar and the header after a turn. A conversation is named by its
-      # first prompt, and that prompt only exists in the session file once the
-      # turn has been saved — so both have to be re-rendered from the server
-      # rather than patched in the browser. Each fragment carries the
-      # out-of-band marker, so htmx replaces the element wherever it sits.
-      def sidebar_markup(sid)
-        slug = owner_slug(sid)
-        return "" unless slug
-
-        persona = persona_store&.[](slug)
-        persona_label = persona ? persona.label : slug.capitalize
-        label = named_session_label(slug, sid)
-
-        nav = View.render("_sessions",
-                          groups: session_groups(slug, sid),
-                          token_query: token_query)
-                  .sub(%(<nav class="sessions" id="sessions">),
-                       %(<nav class="sessions" id="sessions" hx-swap-oob="true">))
-        # The count on the roster belongs to the same fact as the dot on the
-        # row — a conversation of this persona finished unseen — so it travels
-        # with the same swap. Without it the number goes stale the moment a
-        # mark is written, and only a reload would say how many are waiting.
-        rail = View.render("_rail", personas: persona_rows(slug), token_query: token_query)
-                   .sub(%(<ul class="rail-list" id="rail-list">),
-                        %(<ul class="rail-list" id="rail-list" hx-swap-oob="true">))
-        # The header carries the handle that opens the drawer, and the handle
-        # wears the install's count — one number across every persona, because
-        # on a phone the roster is behind it. Swapping the header is what keeps
-        # that number honest after a turn or a mark, so the badge needs no swap
-        # of its own.
-        head = View.render("_chathead",
-                           persona_emoji: persona ? persona.emoji_or : "🤖",
-                           persona_label: persona_label,
-                           session_label: label,
-                           session_id: sid,
-                           token_query: token_query,
-                           unread_total: unread_total,
-                           document_title: document_title(persona_label, label))
-                   .sub(%(<header class="chat-head" id="chat-head"),
-                        %(<header class="chat-head" id="chat-head" hx-swap-oob="true"))
-
-        nav + rail + head
       end
 
       # Read under the same lock the button claims, so a stream opening at the
@@ -711,43 +544,6 @@ module Rubot
 
       def after_learning(session_id)
         broadcast_sessions if owner_slug(session_id)
-      end
-
-      # Tell every open page that the sidebar has changed. Each page is answered
-      # in its own session id, because that is what decides which row is the
-      # active one.
-      #
-      # Every page, not only the persona's own: the roster and the drawer's
-      # count are about the install, so a turn finishing in one persona is news
-      # on a page showing another — the avatar there gains a number. The rows a
-      # page draws are still its own, so the extra work is a re-render, not a
-      # page it should not see.
-      def broadcast_sessions
-        subs = @event_mutex.synchronize { @event_subs.dup }
-        subs.each do |sid, queue|
-          markup = sidebar_markup(sid)
-          queue << markup unless markup.to_s.empty?
-        end
-      end
-
-      # A finished turn that nobody had on screen gets a mark in the list.
-      #
-      # The open pages are the signal: each page holds one event stream,
-      # subscribed with the session id it is showing, so a stream with that id
-      # means the conversation is being watched and the mark would be about
-      # something the reader already saw. Returns whether it marked anything,
-      # which is what decides the broadcast.
-      def mark_unread_unless_watched(sid)
-        store = Session.store
-        return false unless store
-        return false if watched?(sid)
-
-        store.mark_unread(sid)
-        true
-      end
-
-      def watched?(sid)
-        @event_mutex.synchronize { @event_subs.any? { |sub, _queue| sub == sid } }
       end
 
       def shorten(text, limit)
