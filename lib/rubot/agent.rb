@@ -129,11 +129,25 @@ module Rubot
       # Delegating to Other Agents
 
       `delegate` hands a self-contained task to another persona, which has its
-      own model, prompt, memory and workspace. Use it when a part of the work
-      is better done in a specialist's voice or context, and you can state the
-      whole task in one message and check the result when it returns. Do not
-      delegate a task that needs the conversation you are having now. The sub
-      agent cannot delegate further.
+      own model, prompt, memory and workspace. The sub agent cannot delegate
+      further.
+
+      Delegate when the task is big enough to be worth its own context. Any one
+      of these is enough:
+
+      - it touches more than a few files, or more than one area of the code
+      - it needs outside reading or research before it can be worked on
+      - it is plainly another persona's work: review, debugging, tests, docs,
+        or research
+      - it is large enough to be written as one self-contained brief without
+        asking the user anything back
+
+      When it is unclear whether the work is that big, delegate.
+
+      Do not delegate a task that needs the conversation you are having now, a
+      change to a single small file, or a question you can answer directly.
+      Say in one line what was delegated and to whom, then fold the result into
+      your answer rather than repeating it.
 
       In a channel where delegation runs in the background, `delegate` returns
       as soon as the run has started and the run keeps working after your turn
