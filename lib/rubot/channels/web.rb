@@ -13,10 +13,12 @@ require_relative "../opencode_usage"
 require_relative "../persona_store"
 require_relative "../session"
 require_relative "../tools/send_files"
+require_relative "../web/auth"
 require_relative "../web/diff"
 require_relative "../web/highlight"
 require_relative "../web/notifier"
 require_relative "../web/push"
+require_relative "../web/router"
 require_relative "../web/tool_rows"
 require_relative "../web/subagent_jobs"
 require_relative "../web/subagent_line"
@@ -104,13 +106,6 @@ module Rubot
       # What a conversation is called before its first prompt has been saved.
       UNTITLED_SESSION = "Sesi baru"
 
-      # What the page hands back: the pictures the agent sends through
-      # send_files, and the two documents a browser already opens on its own —
-      # a PDF and a markdown note. The name the server writes is a hex id this
-      # channel generated, an optional slug of the file's own name, and a known
-      # extension — the slug is what makes a download read like a file, the id
-      # is what makes it impossible to guess.
-      MEDIA_EXTENSIONS = %w[png jpg gif webp mp4 webm pdf md].freeze
       # A markdown note is served as text, not as text/markdown: a browser
       # downloads a type it has no viewer for, and a note the reader has to
       # save first is a note they cannot read. PDFs are served as PDFs and
@@ -125,25 +120,10 @@ module Rubot
         ".pdf" => "application/pdf",
         ".md" => "text/plain; charset=utf-8"
       }.freeze
-      # The shape a stored name always has, spelled once and used by the route
-      # that serves it and by the reader that picks it back out of a tool
-      # result.
-      MEDIA_NAME_SOURCE = "[0-9a-f]{32}(?:-[a-z0-9-]{1,60})?\\.(?:#{MEDIA_EXTENSIONS.join("|")})"
-      MEDIA_NAME = /\A#{MEDIA_NAME_SOURCE}\z/
-
-      SLUG_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})\z}
-      SESSION_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})\z}
-      SESSION_HISTORY_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/history\z}
-      SESSION_RECENT_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/recent\z}
-      SESSION_TURN_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/turn\z}
-      SESSION_MEDIA_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/media/(#{MEDIA_NAME_SOURCE})\z}
-      SESSION_DELETE_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/delete\z}
-      SESSION_PIN_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/pin\z}
-      SESSION_RENAME_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/rename\z}
-      SESSION_QUOTA_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/quota\z}
-      SESSION_REPIN_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/repin\z}
-      SESSION_COMPACT_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/compact\z}
-      SESSION_SETTINGS_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/settings\z}
+      # The name shape lives with the route table, which also spells the
+      # extension list; the reader that picks a stored name back out of a tool
+      # result has to accept exactly what the route serves.
+      MEDIA_NAME = Rubot::Web::Router::MEDIA_NAME
 
       # The level a persona starts from, and the one a session falls back to
       # when neither it nor its persona has chosen: the middle of what the
@@ -154,19 +134,6 @@ module Rubot
       # them.
       QUOTA_METER_LABELS = { "rolling" => "5 jam", "weekly" => "mingguan",
                              "monthly" => "bulanan" }.freeze
-      PERSONA_SESSIONS_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/sessions\z}
-      PERSONA_EDIT_PATH = %r{\A/p/([a-z0-9][a-z0-9_-]{0,31})/edit\z}
-      # Where the token form posts. Not under /s/ or /p/ because it belongs to
-      # the way in rather than to any conversation behind it.
-      UNLOCK_PATH = "/unlock"
-      # Instagram's OAuth endpoints. The callback is where Meta sends the
-      # browser back; it is not behind a session id because the account belongs
-      # to the install, not to a conversation.
-      IG_CONNECT_PATH = "/instagram/connect"
-      IG_CALLBACK_PATH = "/instagram/callback"
-      IG_DISCONNECT_PATH = "/instagram/disconnect"
-      IG_LINK_PATH = "/instagram/link"
-
       ASSETS = File.expand_path("../web/assets", __dir__)
       VENDOR = File.expand_path("../../../vendor/web", __dir__)
 
@@ -196,6 +163,12 @@ module Rubot
       VapidKey = Rubot::Web::Vapid
       # The part that decides who gets told and what it costs in round trips.
       PushNotifier = Rubot::Web::Notifier
+
+      # The way in and the route table. Both are written as modules so each can
+      # be read on its own; including them keeps every call site inside this
+      # class, which is what the views and the tests already expect.
+      include Rubot::Web::Auth
+      include Rubot::Web::Router
 
       attr_reader :host, :port
 
@@ -570,115 +543,6 @@ module Rubot
 
       # --- routing -------------------------------------------------------
 
-      def dispatch(req, res)
-        # WEBrick hands over the request line as ASCII-8BIT, so every capture
-        # from `path` inherits that encoding. A session id built from one was
-        # bound to SQLite as a BLOB, and a BLOB never equals the TEXT id of the
-        # same bytes: the conversation got a second row that no lookup found.
-        # Decode once, here, so every route works with plain UTF-8 text.
-        path = utf8(req.path)
-        method = req.request_method
-
-        return serve_static(res, path) if path.start_with?("/assets/", "/vendor/")
-        # The installed app reads these before it has a page: the manifest is a
-        # description of the app and the worker is its cache, and neither holds
-        # anything about a conversation. The worker has to live at the root —
-        # its scope is its own path — so it is read out of the asset folder
-        # rather than served from under /assets.
-        return serve_manifest(res) if method == "GET" && path == "/manifest.webmanifest"
-        return serve_worker(res) if method == "GET" && path == "/sw.js"
-
-        # The way in: the gate posts here, and a match writes the same cookie a
-        # rendered page does. It has to run before the check below, obviously —
-        # the token is what it is asking for.
-        return unlock(req, res) if method == "POST" && path == UNLOCK_PATH
-        # Meta cannot carry the install's token, so the callback is reached
-        # with the one-time `state` instead. The connect link itself is behind
-        # the token like every other page.
-        return instagram_callback(req, res) if method == "GET" && path == IG_CALLBACK_PATH
-
-        return refuse(res, req) unless authorized?(req)
-
-        return instagram_connect(req, res) if method == "GET" && path == IG_CONNECT_PATH
-        return instagram_disconnect(req, res) if method == "POST" && path == IG_DISCONNECT_PATH
-        return instagram_link(req, res) if method == "POST" && path == IG_LINK_PATH
-
-        if method == "GET" && path == "/"
-          redirect(res, "/p/#{default_slug}")
-        elsif method == "GET" && (match = SLUG_PATH.match(path))
-          open_persona(res, match[1], req)
-        elsif method == "POST" && (match = PERSONA_SESSIONS_PATH.match(path))
-          create_session(res, match[1], req)
-        elsif method == "GET" && path == "/search"
-          render_search(res, req)
-        elsif method == "GET" && path == "/settings"
-          render_settings(res, req)
-        elsif method == "POST" && path == "/settings"
-          save_settings(res, req)
-        elsif method == "GET" && path == "/settings/refresh-models"
-          refresh_models(res, req)
-        elsif method == "POST" && path == "/settings/refresh-models"
-          refresh_models(res, req)
-        elsif method == "GET" && path == "/settings/refresh_models"
-          refresh_models(res, req)
-        elsif method == "POST" && path == "/settings/refresh_models"
-          refresh_models(res, req)
-        elsif method == "GET" && path == "/settings/refresh"
-          refresh_models(res, req)
-        elsif method == "POST" && path == "/settings/refresh"
-          refresh_models(res, req)
-        elsif method == "GET" && (match = SESSION_PATH.match(path))
-          render_session(res, match[1], req)
-        elsif method == "GET" && (match = SESSION_HISTORY_PATH.match(path))
-          render_history(res, match[1], req)
-        elsif method == "GET" && (match = SESSION_RECENT_PATH.match(path))
-          render_recent(res, match[1], req)
-        elsif method == "POST" && path == "/personas"
-          create_persona(req, res)
-        elsif method == "POST" && (match = PERSONA_EDIT_PATH.match(path))
-          edit_persona(req, res, match[1])
-        elsif method == "POST" && (match = SESSION_TURN_PATH.match(path))
-          create_turn(req, res, match[1])
-        elsif method == "GET" && (match = SESSION_MEDIA_PATH.match(path))
-          serve_media(res, match[1], match[2])
-        elsif method == "GET" && path == "/events"
-          stream_events(res, req)
-        elsif method == "GET" && (match = SESSION_QUOTA_PATH.match(path))
-          render_quota(res, match[1])
-        elsif method == "POST" && (match = SESSION_REPIN_PATH.match(path))
-          repin_prompt(res, match[1])
-        elsif method == "POST" && (match = SESSION_COMPACT_PATH.match(path))
-          compact_session_now(res, match[1], req)
-        elsif method == "POST" && (match = SESSION_DELETE_PATH.match(path))
-          delete_session(res, match[1], req)
-        elsif method == "POST" && (match = SESSION_PIN_PATH.match(path))
-          toggle_pin(res, match[1], req)
-        elsif method == "POST" && (match = SESSION_RENAME_PATH.match(path))
-          rename_session(res, match[1], req)
-        elsif method == "POST" && (match = SESSION_SETTINGS_PATH.match(path))
-          update_session_settings(res, match[1], req)
-        elsif method == "GET" && path == "/push/key"
-          push_public_key(res)
-        elsif method == "POST" && path == "/push/subscribe"
-          push_subscribe(req, res)
-        elsif method == "POST" && path == "/push/unsubscribe"
-          push_unsubscribe(req, res)
-        elsif method == "POST" && path == "/push/test"
-          push_test(req, res)
-        elsif method == "GET" && (match = %r{\A/turns/([\w-]+)/stream\z}.match(path))
-          stream_turn(res, match[1])
-        elsif method == "POST" && (match = %r{\A/turns/([\w-]+)/(steer|stop|confirm)\z}.match(path))
-          control_turn(req, res, match[1], match[2])
-        else
-          not_found(res)
-        end
-      rescue StandardError => e
-        warn "[web] #{e.class}: #{e.message}"
-        warn e.backtrace.first(5).join("\n") if Rubot.debug?
-        res.status = 500
-        res.body = "internal error"
-      end
-
       # WEBrick delivers form/query values as ASCII-8BIT, so anything past
       # ASCII explodes later when a persona is serialised to JSON. Decode to
       # UTF-8 at the edge so the rest of the code can assume valid text.
@@ -696,12 +560,6 @@ module Rubot
       def form_field?(req, key)
         query = req.query
         query.respond_to?(:key?) && query.key?(key)
-      end
-
-      def utf8(raw)
-        value = raw.to_s
-        value = value.dup.force_encoding(Encoding::UTF_8) if value.encoding == Encoding::ASCII_8BIT
-        value.valid_encoding? ? value : value.scrub
       end
 
       # Every value a form field carried, in the order it appeared. #query keeps
@@ -728,35 +586,6 @@ module Rubot
           values = candidate.is_a?(Array) ? candidate.map { |v| utf8(v) } : []
         end
         values
-      end
-
-      def authorized?(req)
-        return true if @token.nil?
-
-        # WEBrick parses only the body for a form POST, so `?token=` in the
-        # action URL is invisible to #form. Every link the page writes carries
-        # it, and the "+" button submits before any cookie exists, so read the
-        # query string directly before falling back to the cookie.
-        given = form(req, "token")
-        given = query_token(req) if given.empty?
-        given = cookie_token(req) if given.empty?
-        !given.empty? && given == @token
-      end
-
-      def query_token(req)
-        raw = req.query_string.to_s
-        return "" if raw.empty?
-
-        # URI, not CGI: `CGI.parse` is gone in Ruby 4 (and `CGI.escape`, which
-        # the links use, is still there, so this is easy to get wrong).
-        URI.decode_www_form(raw).to_h["token"].to_s
-      rescue StandardError
-        ""
-      end
-
-      def cookie_token(req)
-        cookie = req.cookies.find { |c| c.name == "rubot_token" }
-        cookie ? cookie.value : ""
       end
 
       def serve_static(res, path)
@@ -980,121 +809,6 @@ module Rubot
       # came from. `Sec-Fetch-Site` is what current browsers send; `Origin` is
       # the older proof; a client sending neither (curl, a test) is not a
       # browser that could be tricked into this.
-      def same_origin?(req)
-        site = req["Sec-Fetch-Site"].to_s
-        return %w[same-origin none].include?(site) unless site.empty?
-
-        origin = req["Origin"].to_s
-        return true if origin.empty?
-
-        host = req["Host"].to_s.sub(/:\d+\z/, "")
-        URI.parse(origin).host.to_s == host
-      rescue URI::InvalidURIError
-        false
-      end
-
-      def cross_site(res)
-        json(res, 403, { "error" => "cross-origin request refused" })
-      end
-
-      def deny(res)
-        res.status = 403
-        res["Content-Type"] = "text/plain; charset=utf-8"
-        res.body = "token required"
-      end
-
-      # Only a browser asking for a page can be shown a form: htmx swaps a
-      # fragment into the page it is already on, and an SSE client or curl has
-      # nowhere to put a card, so those keep the plain refusal.
-      def navigation?(req)
-        return false unless req.request_method == "GET"
-        return false if req["HX-Request"].to_s == "true"
-
-        accept = req["Accept"].to_s
-        accept.empty? || accept.include?("text/html")
-      end
-
-      def refuse(res, req)
-        return deny(res) unless navigation?(req)
-        return deny(res) if @token.nil?
-
-        gate(res, req)
-      end
-
-      # The way in. The token used to ride in every URL, so arriving without
-      # one — a bookmark, a URL typed from the address bar, the installed app's
-      # start_url — answered "token required" and left the reader nothing to do
-      # about it. The field writes the cookie the pages already read and takes
-      # them on to the page they asked for, so the token stops being something
-      # you have to keep in the address.
-      def gate(res, req, error: nil, next_path: nil, status: 403)
-        body = View.render("gate",
-                           error: error,
-                           next_path: next_path || gate_next(req),
-                           asset_version: asset_version)
-        res.status = status
-        res["Content-Type"] = "text/html; charset=utf-8"
-        res["Cache-Control"] = "no-store"
-        res.body = body
-      end
-
-      # Where the reader was trying to go. The token is dropped rather than
-      # carried: the point of the form is that the next URL does not need it.
-      def gate_next(req)
-        path = utf8(req.path).to_s
-        return "/" unless path.start_with?("/") && !path.start_with?("//")
-
-        query = utf8(req.query_string).to_s
-        return path if query.empty?
-
-        kept = URI.decode_www_form(query).reject { |key, _value| key == "token" }
-        kept.empty? ? path : "#{path}?#{URI.encode_www_form(kept)}"
-      rescue StandardError
-        path
-      end
-
-      def unlock(req, res)
-        given = form(req, "token").strip
-        nxt = safe_next(form(req, "next"))
-
-        # No token on this install: there is nothing to check and nothing to
-        # write, so the reader goes on to the page they asked for.
-        return redirect_to(res, nxt) if @token.nil?
-
-        unless given == @token
-          error = given.empty? ? nil : "Token tidak cocok."
-          return gate(res, req, error: error, next_path: nxt)
-        end
-
-        # The same cookie #render_session writes, so from here on the browser
-        # reads the app without a token in the address bar at all.
-        res["Set-Cookie"] = token_cookie
-        redirect_to(res, nxt)
-      end
-
-      # A `next` is a path this app chose, so anything that is not one — an
-      # absolute URL a stranger wrote into the form — goes to the doorway.
-      def safe_next(raw)
-        path = raw.to_s.strip
-        return "/" unless path.start_with?("/") && !path.start_with?("//")
-        return "/" if path.match?(/[\r\n]/)
-
-        path
-      end
-
-      def token_cookie
-        "rubot_token=#{@token}; Path=/; HttpOnly; SameSite=Lax"
-      end
-
-      # A plain 303, without the token every other redirect appends: the cookie
-      # has just been set, and putting it back in the URL would undo the reason
-      # the form exists.
-      def redirect_to(res, location)
-        res.status = 303
-        res["Location"] = location
-        res.body = ""
-      end
-
       def not_found(res)
         res.status = 404
         res.body = "not found"
@@ -1118,23 +832,6 @@ module Rubot
           res["Location"] = target
         end
         res.body = ""
-      end
-
-      def token_query
-        @token ? "?token=#{CGI.escape(@token)}" : ""
-      end
-
-      # Where a notification lands: the conversation it is about, carrying the
-      # token the way every link the pages write does.
-      #
-      # A tap is not a request the app made. It may open a window that never
-      # saw the gate, or a phone that dropped the session cookie when the app
-      # was closed — and then the URL without the token earns a token prompt
-      # instead of the answer the notification just promised. So the token
-      # travels in the push payload, which is sealed to the device's own key:
-      # the push service carrying it cannot read it.
-      def session_url(sid)
-        "/s/#{sid}#{token_query}"
       end
 
       # --- page ----------------------------------------------------------
