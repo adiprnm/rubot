@@ -3,6 +3,7 @@
 require "json"
 require "tui"
 
+require_relative "../formatting"
 require_relative "markdown"
 require_relative "diff"
 
@@ -46,18 +47,10 @@ module Rubot
         end
       end
 
-      # How long a call waited, e.g. "4s" or "1m 5s". Only calls slow enough
-      # to make the reader wonder get one, so the ordinary quick call stays a
-      # single quiet line.
+      # The duration label lives in Rubot::Formatting so every channel reads the
+      # same; this name stays because the TUI calls it.
       def self.elapsed_label(seconds)
-        total = seconds.to_i
-        minutes, secs = total.divmod(60)
-        return "#{secs}s" if minutes.zero?
-
-        hours, minutes = minutes.divmod(60)
-        return "#{minutes}m #{secs}s" if hours.zero?
-
-        "#{hours}h #{minutes}m"
+        Rubot::Formatting.duration(seconds)
       end
 
       # The duration as a right-pinned tail (see LogView#add_entry). It reads

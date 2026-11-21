@@ -6,6 +6,7 @@ require "net/http"
 require "securerandom"
 require "uri"
 require_relative "../provider"
+require_relative "../sse"
 
 module Rubot
   module Providers
@@ -208,7 +209,7 @@ module Rubot
         uri = URI("#{api_base}/chat/completions")
         log_debug("Stream request: #{JSON.generate(payload)}")
 
-        buffer = ""
+        reader = Sse::Reader.new
         accumulated = ""
         reasoning_content = ""
         tool_calls_accum = {}
@@ -233,29 +234,10 @@ module Rubot
 
           with_cancellable_http(http) do
             http.request(request, JSON.generate(payload)) do |response|
-              unless response.code.to_i == 200
-                body = +""
-                response.read_body { |b| body << b }
-                if Rubot::Provider.quota_exhausted_text?(body)
-                  raise QuotaExhaustedError.new(nil, message: "API error #{response.code}: #{body}")
-                end
-                if response.code.to_i == 429
-                  raise RateLimitError.new(parse_retry_after(response))
-                end
-                raise "API error #{response.code}: #{body}"
-              end
+              Sse.raise_for_response(response) { parse_retry_after(response) }
 
               response.read_body do |chunk|
-                # of the answer first.
-                Rubot::Cancellation.check!
-                buffer += chunk
-                while (newline_idx = buffer.index("\n"))
-                  line = buffer[0...newline_idx].strip
-                  buffer = buffer[(newline_idx + 1)..] || ""
-                  next if line.empty?
-                  next unless line.start_with?("data: ")
-
-                  data_str = line[6..]
+                reader.feed(chunk).each do |data_str|
                   if data_str == "[DONE]"
                     saw_done = true
                     next
@@ -311,22 +293,18 @@ module Rubot
           # A provider that closes the connection mid-frame leaves the last
           # event in the buffer with no trailing newline. Parse it instead of
           # dropping it, so the tail of the answer is not lost.
-          unless buffer.strip.empty?
-            line = buffer.strip
-            if line.start_with?("data: ") && line[6..] != "[DONE]"
-              begin
-                data = JSON.parse(line[6..])
-                finish_reason = data.dig("choices", 0, "finish_reason") || finish_reason
-                tail = data.dig("choices", 0, "delta", "content")
-                if tail
-                  accumulated += tail
-                  yield tail, nil if on_chunk
-                end
-              rescue JSON::ParserError
-                # skip malformed trailing frame
+          if (last = reader.tail) && last != "[DONE]"
+            begin
+              data = JSON.parse(last)
+              finish_reason = data.dig("choices", 0, "finish_reason") || finish_reason
+              tail = data.dig("choices", 0, "delta", "content")
+              if tail
+                accumulated += tail
+                yield tail, nil if on_chunk
               end
+            rescue JSON::ParserError
+              # skip malformed trailing frame
             end
-            buffer = ""
           end
 
           tool_calls = tool_calls_accum.empty? ? nil : tool_calls_accum.values

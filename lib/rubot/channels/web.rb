@@ -8,6 +8,7 @@ require "json"
 require "timeout"
 
 require_relative "../channel"
+require_relative "../formatting"
 require_relative "../opencode_usage"
 require_relative "../persona_store"
 require_relative "../session"
@@ -516,17 +517,8 @@ module Rubot
         label == UNTITLED_SESSION ? nil : label
       end
 
-      # How long ago, in the units a reader actually uses. Absolute times would
-      # have to assume a timezone; a difference between two instants does not.
       def elapsed_label(epoch)
-        seconds = Time.now.to_f - epoch.to_f
-        return "baru saja" if seconds < 90
-        return "#{(seconds / 60).round} mnt" if seconds < 3600
-        return "#{(seconds / 3600).round} jam" if seconds < 86_400
-        return "#{(seconds / 86_400).round} hr" if seconds < 2_592_000
-
-        date = Time.at(epoch).utc.strftime("%d %b").sub(/\A0/, "")
-        "#{date} lalu"
+        Rubot::Formatting.age(epoch)
       end
 
       private
@@ -4303,15 +4295,8 @@ module Rubot
         end.reject(&:empty?)
       end
 
-      # Cut a line to what a notification can show without swallowing a word in
-      # the middle of it.
       def shorten(text, limit)
-        line = text.to_s.strip
-        return line if line.length <= limit
-
-        cut = line[0, limit - 1]
-        cut = cut.sub(/\s+\S*\z/, "") if cut.include?(" ")
-        "#{cut.rstrip}…"
+        Rubot::Formatting.shorten(text, limit)
       end
 
       def cron_session_title(result)

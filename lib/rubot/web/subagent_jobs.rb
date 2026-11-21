@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require_relative "../formatting"
 require_relative "subagent_line"
 
 module Rubot
@@ -156,12 +157,7 @@ module Rubot
       end
 
       def elapsed_label(seconds)
-        value = seconds.to_f
-        return "#{value.round(1)}s" if value < 60
-
-        minutes = (value / 60).floor
-        rest = (value % 60).round
-        rest.zero? ? "#{minutes}m" : "#{minutes}m #{rest}s"
+        Rubot::Formatting.precise_duration(seconds)
       end
     end
   end

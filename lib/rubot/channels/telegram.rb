@@ -7,6 +7,7 @@ require "fileutils"
 require "thread"
 require "securerandom"
 
+require_relative "../formatting"
 require_relative "../image_info"
 require_relative "../model_catalog"
 require_relative "../persona"
@@ -2813,8 +2814,7 @@ module Rubot
       end
 
       def truncate(str, max_len)
-        return str unless str && str.length > max_len
-        str[0, max_len] + "…"
+        Rubot::Formatting.truncate(str, max_len)
       end
 
     end

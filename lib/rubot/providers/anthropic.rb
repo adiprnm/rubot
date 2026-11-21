@@ -4,6 +4,7 @@ require "json"
 require "net/http"
 require "uri"
 require_relative "../provider"
+require_relative "../sse"
 
 module Rubot
   module Providers
@@ -240,7 +241,7 @@ module Rubot
         Rubot::Cancellation.check!
         uri = URI("#{api_base}/v1/messages")
 
-        buffer = ""
+        reader = Sse::Reader.new
         accumulated = ""
         tool_calls_accum = {}
         current_tool_name = ""
@@ -263,28 +264,10 @@ module Rubot
 
           with_cancellable_http(http) do
             http.request(request, JSON.generate(payload)) do |response|
-              unless response.code.to_i == 200
-                body = +""
-                response.read_body { |b| body << b }
-                if Rubot::Provider.quota_exhausted_text?(body)
-                  raise QuotaExhaustedError.new(nil, message: "API error #{response.code}: #{body}")
-                end
-                if response.code.to_i == 429
-                  raise RateLimitError.new(parse_retry_after(response))
-                end
-                raise "API error #{response.code}: #{body}"
-              end
+              Sse.raise_for_response(response) { parse_retry_after(response) }
 
               response.read_body do |chunk|
-                Rubot::Cancellation.check!
-                buffer += chunk
-                while (newline_idx = buffer.index("\n"))
-                  line = buffer[0...newline_idx].strip
-                  buffer = buffer[(newline_idx + 1)..] || ""
-                  next if line.empty?
-                  next unless line.start_with?("data: ")
-
-                  data_str = line[6..]
+                reader.feed(chunk).each do |data_str|
                   begin
                     data = JSON.parse(data_str)
                     type = data["type"]
