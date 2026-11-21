@@ -18,7 +18,9 @@ require_relative "../web/diff"
 require_relative "../web/highlight"
 require_relative "../web/notifier"
 require_relative "../web/push"
+require_relative "../web/media"
 require_relative "../web/router"
+require_relative "../web/routes/push"
 require_relative "../web/tool_rows"
 require_relative "../web/subagent_jobs"
 require_relative "../web/subagent_line"
@@ -106,25 +108,6 @@ module Rubot
       # What a conversation is called before its first prompt has been saved.
       UNTITLED_SESSION = "Sesi baru"
 
-      # A markdown note is served as text, not as text/markdown: a browser
-      # downloads a type it has no viewer for, and a note the reader has to
-      # save first is a note they cannot read. PDFs are served as PDFs and
-      # opened by the browser's own viewer.
-      MEDIA_TYPES = {
-        ".png" => "image/png",
-        ".jpg" => "image/jpeg",
-        ".gif" => "image/gif",
-        ".webp" => "image/webp",
-        ".mp4" => "video/mp4",
-        ".webm" => "video/webm",
-        ".pdf" => "application/pdf",
-        ".md" => "text/plain; charset=utf-8"
-      }.freeze
-      # The name shape lives with the route table, which also spells the
-      # extension list; the reader that picks a stored name back out of a tool
-      # result has to accept exactly what the route serves.
-      MEDIA_NAME = Rubot::Web::Router::MEDIA_NAME
-
       # The level a persona starts from, and the one a session falls back to
       # when neither it nor its persona has chosen: the middle of what the
       # models understand, and the one effort a reasoning model accepts.
@@ -169,6 +152,8 @@ module Rubot
       # class, which is what the views and the tests already expect.
       include Rubot::Web::Auth
       include Rubot::Web::Router
+      include Rubot::Web::Routes::Push
+      include Rubot::Web::Media
 
       attr_reader :host, :port
 
@@ -627,115 +612,6 @@ module Rubot
         res["Cache-Control"] = "no-cache"
         res["Service-Worker-Allowed"] = "/"
         res.body = File.binread(file).sub("__VERSION__", asset_version.to_s)
-      end
-
-      # --- web push ------------------------------------------------------
-
-      # The key pair that signs a notification request. Beside config.yml,
-      # because it is this install's identity to the push services and outlives
-      # every conversation; never in the repository, because anyone holding it
-      # could notify the devices that subscribed here.
-      def vapid
-        @vapid_mutex.synchronize { @vapid ||= VapidKey.new(vapid_path, subject: @vapid_subject) }
-      end
-
-      def vapid_path
-        dir = @app_config ? @app_config.catalog_dir : File.expand_path("~/.rubot")
-        File.join(dir, "vapid.json")
-      end
-
-      # What the page needs before it may subscribe: the public half only.
-      def push_public_key(res)
-        json(res, 200, { "key" => vapid.public_key, "subject" => @vapid_subject })
-      rescue StandardError => e
-        warn "[web] push key: #{e.class}: #{e.message}"
-        json(res, 500, { "error" => "key unavailable" })
-      end
-
-      # `pushManager.subscribe` hands over three strings and no identity: the
-      # endpoint is what identifies the device, so subscribing again is an
-      # update of the keys, not a second device.
-      #
-      # The subscription belongs to the device, not to the conversation it was
-      # made in — the browser keeps exactly one per registration, so a row
-      # tagged with a persona would make the drawer say "aktif" in every other
-      # persona while their notifications silently went nowhere. Hence a null
-      # persona, which means "all of them".
-      def push_subscribe(req, res)
-        return cross_site(res) unless same_origin?(req)
-
-        endpoint = form(req, "endpoint")
-        p256dh = form(req, "p256dh")
-        auth = form(req, "auth")
-        return bad_request(res) if endpoint.empty? || p256dh.empty? || auth.empty?
-
-        unless store = Session.store
-          json(res, 503, { "error" => "archive unavailable" })
-          return
-        end
-
-        store.add_push_subscription(endpoint: endpoint, p256dh: p256dh, auth: auth, persona: nil)
-        json(res, 200, { "ok" => true })
-      end
-
-      def push_unsubscribe(req, res)
-        return cross_site(res) unless same_origin?(req)
-
-        endpoint = form(req, "endpoint")
-        return bad_request(res) if endpoint.empty?
-
-        Session.store&.drop_push_subscription(endpoint)
-        json(res, 200, { "ok" => true })
-      end
-
-      # A notification now, to the device that asked. The drawer's button is
-      # how a reader finds out whether the permission, the keys and the push
-      # service all work — better than waiting for a reminder hours later.
-      def push_test(req, res)
-        return cross_site(res) unless same_origin?(req)
-
-        slug = form(req, "persona")
-        slug = default_slug unless !slug.empty? && known_slug?(slug)
-
-        result = notify_push(slug,
-                             title: persona_title(slug),
-                             body: "Notifikasi percobaan. Kalau ini muncul, semuanya sudah tersambung.",
-                             url: session_url(session_id(slug)),
-                             sync: true,
-                             # The page that presses this button is on screen,
-                             # and the worker's "the reader is already looking"
-                             # rule would swallow the very notification that is
-                             # meant to prove the path works.
-                             force: true)
-        json(res, 200, result)
-      end
-
-      # Tell a persona's devices that something arrived.
-      #
-      # Delivering means one HTTPS round trip per device to a push service, so
-      # it never happens on the caller's thread: a turn or a cron fire must not
-      # wait on Apple's or Google's edge. The exception is the test button,
-      # which exists precisely to report the result. The sending itself lives in
-      # `Notifier`, because the same job has to be possible from the command
-      # line — this method is the channel's doorway to it.
-      def notify_push(slug, title:, body:, url:, sync: false, force: false)
-        notifier = push_notifier
-        return { "sent" => 0, "reason" => "no archive" } unless notifier
-
-        if sync
-          notifier.deliver(slug, title: title, body: body, url: url, force: force)
-        else
-          notifier.notify(slug, title: title, body: body, url: url, force: force)
-        end
-      end
-
-      # Built per call rather than memoised: the archive behind `Session.store`
-      # is a setting tests swap between one call and the next, and a notifier
-      # holding the old one would answer from a stale list of devices.
-      def push_notifier
-        store = Session.store
-        store && PushNotifier.new(store: store, vapid: vapid, subject: @vapid_subject,
-                                  urgency: @push_urgency)
       end
 
       # The end of a turn somebody asked to hear about.
@@ -2817,69 +2693,6 @@ module Rubot
         end
       end
 
-      # --- pictures -------------------------------------------------------
-
-      # Where this conversation's pictures live: the folder that send_files
-      # copies into, inside the persona's own workspace. It is the same
-      # per-session folder the Telegram channel writes to, so a tool call that
-      # worked in one channel has somewhere to land in the other.
-      def attachments_dir(sid)
-        store = persona_store
-        slug = owner_slug(sid)
-        return nil unless store && slug
-
-        workspace = store.workspace_for(slug)
-        workspace && File.join(workspace, "attachments", sid)
-      end
-
-      # Where a picture is drawn from. The token rides in it like every other
-      # URL the page writes: an <img> cannot send a cookie it was not given.
-      def media_url(sid, name)
-        "/s/#{sid}/media/#{name}#{token_query}"
-      end
-
-      # The files a call handed back, read out of the result the call left in
-      # the transcript. The markers are the only record of which stored files it
-      # produced — that is how a conversation drawn from disk a week later can
-      # still show them. One result can name several: `send_files` sends a batch
-      # in a single call and writes a marker per file.
-      #
-      # A picture is drawn as a picture and anything else as a document card,
-      # and the type the route serves it under is what decides which: the two
-      # questions have one answer.
-      def sent_attachments(name, result, sid)
-        # Old transcripts still carry calls named `send_file` from before the
-        # two tools were merged. They are read here, never produced: the only
-        # tool now is `send_files`.
-        return [] unless %w[send_files send_file].include?(name.to_s)
-
-        result.to_s.scan(Rubot::Tools::SendFiles::WEB_MARKER_RE).flatten.filter_map do |stored|
-          next unless MEDIA_NAME.match?(stored)
-
-          extension = File.extname(stored)
-          url = media_url(sid, stored)
-
-          # The stored file's own id is its stable identity on the page: the
-          # timeline is redrawn on every token, and a file that kept its node
-          # is not fetched or decoded again while the answer grows under it.
-          { url: url, name: download_name(stored), id: stored[0, 32],
-            kind: attachment_kind(stored),
-            label: extension.delete_prefix(".").upcase }
-        end.uniq { |attachment| attachment[:id] }
-      end
-
-      def attachment_kind(name)
-        type = MEDIA_TYPES.fetch(File.extname(name), "")
-        return :video if type.start_with?("video/")
-        return :picture if type.start_with?("image/")
-
-        :document
-      end
-
-      def picture?(name)
-        MEDIA_TYPES.fetch(File.extname(name), "").start_with?("image/")
-      end
-
       # Point the agent's file tools at this conversation, so a picture they
       # hand back lands where the page can serve it. Telegram sets the same
       # field with a chat id; here it is a folder. Plain strings only, because
@@ -2891,14 +2704,6 @@ module Rubot
       def prepare_delivery(sid)
         bind_file_delivery(sid)
         bind_cron_delivery(sid)
-      end
-
-      def bind_file_delivery(sid)
-        dir = attachments_dir(sid)
-        return unless dir
-
-        tool = session_for(sid).tools.get("send_files")
-        tool.delivery_context = { channel: "web", dir: dir } if tool
       end
 
       def bind_cron_delivery(sid)
@@ -2924,31 +2729,6 @@ module Rubot
       # What a file is called when it is downloaded: the stored name minus the
       # id in front of it. A name the slug could not keep — a file called only
       # in symbols — falls back to a word for what it is.
-      def download_name(name)
-        extension = File.extname(name)
-        base = File.basename(name, extension).sub(/\A[0-9a-f]{32}-?/, "")
-        return "#{base}#{extension}" unless base.empty?
-
-        "#{picture?(name) ? "gambar" : "berkas"}#{extension}"
-      end
-
-      def serve_media(res, sid, name)
-        return not_found(res) unless owner_slug(sid) && MEDIA_NAME.match?(name)
-
-        dir = attachments_dir(sid)
-        path = dir && File.join(dir, name)
-        return not_found(res) unless path && File.file?(path)
-
-        res["Content-Type"] = MEDIA_TYPES.fetch(File.extname(name), "application/octet-stream")
-        res["Content-Length"] = File.size(path).to_s
-        res["Cache-Control"] = "private, max-age=3600"
-        # The name the reader can download as is set by the `download`
-        # attribute on the anchor; inline keeps a click from navigating away
-        # from the conversation on browsers that ignore it.
-        res["Content-Disposition"] = %(inline; filename="#{download_name(name)}")
-        res.body = File.binread(path)
-      end
-
       # --- turn lifecycle ------------------------------------------------
 
       # The turn this session is running right now, if any. Nothing is written
