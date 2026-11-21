@@ -120,6 +120,7 @@ module Rubot
       SESSION_RENAME_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/rename\z}
       SESSION_QUOTA_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/quota\z}
       SESSION_REPIN_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/repin\z}
+      SESSION_COMPACT_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/compact\z}
       SESSION_SETTINGS_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/settings\z}
 
       # The level a persona starts from, and the one a session falls back to
@@ -184,6 +185,7 @@ module Rubot
         @access_log = channel_config["access_log"]
         @turns = {}
         @active = {}
+        @compacting = {}
         @turns_mutex = Mutex.new
         # Pages that are open and idle, listening for news that arrives on its
         # own. Each one keeps its session id, which is what decides the active
@@ -600,6 +602,8 @@ module Rubot
           render_quota(res, match[1])
         elsif method == "POST" && (match = SESSION_REPIN_PATH.match(path))
           repin_prompt(res, match[1])
+        elsif method == "POST" && (match = SESSION_COMPACT_PATH.match(path))
+          compact_session_now(res, match[1], req)
         elsif method == "POST" && (match = SESSION_DELETE_PATH.match(path))
           delete_session(res, match[1], req)
         elsif method == "POST" && (match = SESSION_PIN_PATH.match(path))
@@ -1807,6 +1811,69 @@ module Rubot
         end
       end
 
+      # The manual compaction button is pressed while the page is idle, so there
+      # is no live turn to draw its progress into. The always-on /events stream
+      # carries the rows instead, out of band, into #compaction-slot in the
+      # thread. `turn` holds the row state (a running row, then the seam); nil
+      # clears the slot, which is how a failed or empty compaction takes the
+      # "in progress" row back off the screen.
+      def compaction_broadcast(sid, turn)
+        body = turn ? View.turn_body(turn, token_query: token_query) : ""
+        markup = %(<div id="compaction-slot" hx-swap-oob="innerHTML">#{body}</div>)
+        push_to_session(sid, :notice, markup)
+      end
+
+      # The background compaction tells the page to reload once the transcript
+      # has been rewritten. A reload event cannot travel as an HTTP header from
+      # a request that already answered, so it rides the same /events stream as
+      # the progress rows; the browser listens for it and reloads.
+      def broadcast_refresh(sid)
+        # The payload is the signal itself. The browser reads it from the
+        # MessageEvent's `data` rather than from a DOM slot, so an OOB swap
+        # landing first cannot take the slot away before the reload is seen.
+        push_to_session(sid, :refresh, "reload")
+      end
+
+      # An empty or failed compaction leaves the page as it was, so there is no
+      # reload to reset the composer. Tell the browser to release the compacting
+      # flag explicitly, or the Send button stays disabled until a manual reload.
+      def broadcast_compact_done(sid)
+        push_to_session(sid, :"compact-done", "done")
+      end
+
+      # Compaction rewrites the transcript, so the context figure in the footer
+      # is stale until it is redrawn. A turn already emits :usage when it ends,
+      # but a manual compaction has no turn of its own, and an automatic one can
+      # finish before the turn's own :usage is emitted. Push the fresh row over
+      # the always-on /events stream so the percentage moves on its own, with
+      # no reload. The payload carries hx-swap-oob, so it replaces #usage in
+      # place wherever the footer is drawn.
+      def broadcast_usage(sid)
+        markup = usage_markup(sid)
+        push_to_session(sid, :usage, markup) if markup
+      end
+
+      # A compaction that found nothing to do (or failed) leaves the page as it
+      # was, so the reader needs the one-line reason under the button. It goes
+      # out of band into the note slot, the same way the progress rows reach the
+      # thread.
+      def broadcast_compact_note(sid, state)
+        body = View.render("_compact_note", state: state)
+        markup = %(<div id="compact-note" hx-swap-oob="innerHTML">#{body}</div>)
+        push_to_session(sid, :"compact-note", markup)
+      end
+
+      # One page, identified by the session it is showing, gets the event. The
+      # roster broadcasts reach every page because counts are install-wide; a
+      # compaction row or a reload belongs only to the conversation it changed.
+      def push_to_session(sid, type, markup)
+        @event_mutex.synchronize { @event_subs.dup }.each do |sub, queue|
+          next unless sub == sid
+
+          queue << [ type, markup ]
+        end
+      end
+
       # The connect card as it should look now. Two callers need it: the SSE
       # broadcast (which needs hx-swap-oob so htmx replaces #ig-status instead
       # of dropping the markup into the notice slot) and the disconnect button's
@@ -1966,6 +2033,99 @@ module Rubot
         res["Content-Type"] = "text/html; charset=utf-8"
         res["Cache-Control"] = "no-store"
         res.body = View.render("_repin_note", state: repin_state(sid))
+      end
+
+      # The reader asking for the transcript to be summarized now, rather than
+      # waiting for the automatic threshold. The actor answers requests only
+      # between turns, so a press during a running turn would queue behind it
+      # and look like a hang; the running turn may also need the very messages
+      # that would be summarized away. Refuse it, the way repin does.
+      #
+      # A successful compaction rewrites the transcript, so the thread the
+      # reader is looking at has to be redrawn: HX-Refresh makes htmx reload the
+      # page, where the new seam is drawn from the session metadata.
+      def compact_session_now(res, sid, req)
+        return not_found(res) unless owner_slug(sid)
+
+        htmx = req && req["HX-Request"].to_s == "true"
+        # A turn is tracked in two places: @running_handles once process_message
+        # starts, and @active as soon as create_turn accepts the prompt. The
+        # gap between them is small but real, so check both before touching a
+        # transcript a turn may still need. Claim @compacting in the same lock
+        # so two quick presses cannot start two compactions against one session.
+        claimed = @turns_mutex.synchronize do
+          if @active[sid] || @compacting[sid]
+            false
+          else
+            @compacting[sid] = true
+            true
+          end
+        end
+        if !claimed || session_running?(sid)
+          @turns_mutex.synchronize { @compacting.delete(sid) } if claimed
+          if htmx
+            res.body = View.render("_compact_note", state: :busy)
+          else
+            res.status = 409
+            res.body = ""
+          end
+          return
+        end
+
+        # The summarizer call is the slow part: several provider requests over
+        # a large transcript. It must not hold this response open, or the page
+        # cannot refresh until it is done and the button looks hung. Draw the
+        # "in progress" row, answer at once, and do the work in the background;
+        # the /events stream carries the seam and the reload signal when it is
+        # ready. The row is a plain Turn used only as a row accumulator, not a
+        # live turn, because no prompt is being answered and there is no turn
+        # stream to feed.
+        turn = Turn.new(id: "c#{SecureRandom.hex(6)}", session_id: sid)
+        turn.compaction_start
+        compaction_broadcast(sid, turn)
+
+        Thread.new do
+          result = session_for(sid).compact_session
+          if result
+            turn.compaction(result)
+            compaction_broadcast(sid, turn)
+            # Say it finished in words, and refresh the footer's context figure
+            # in place. No reload: the seam is already drawn live by the row
+            # above, and the fresh usage row lands over /events as an OOB swap.
+            # The composer was held closed for the whole compaction, so release
+            # it here — there is no reload left to reset the flag.
+            broadcast_compact_note(sid, :done)
+            broadcast_compact_done(sid)
+            broadcast_usage(sid)
+          else
+            compaction_broadcast(sid, nil)
+            broadcast_compact_note(sid, :empty)
+            broadcast_compact_done(sid)
+          end
+        rescue StandardError => e
+          compaction_broadcast(sid, nil)
+            broadcast_compact_note(sid, :error)
+            broadcast_compact_done(sid)
+          warn "[web] compact: #{e.class}: #{e.message}"
+        ensure
+          @turns_mutex.synchronize { @compacting.delete(sid) }
+        end
+
+        if htmx
+          # Accepted: the browser keeps its progress row and waits for the
+          # reload event. No HX-Refresh here — that header would make htmx
+          # reload now, while the summarizer is still running. An empty body
+          # matters: WEBrick rejects a 204 without a Content-Length with
+          # LengthRequired, which the browser sees as a failed request.
+          res.status = 204
+          res.body = ""
+        else
+          redirect(res, "/s/#{sid}", req)
+        end
+      rescue StandardError => e
+        warn "[web] compact: #{e.class}: #{e.message}"
+        res.status = 500
+        res.body = ""
       end
 
       # :busy, :rebuilt or :unpinned — the three things the note can say.
@@ -2319,8 +2479,9 @@ module Rubot
         # point compaction stopped sending it to the model. Those are two
         # different things — the rows are still there, only the request starts
         # later — and drawing the second made a long conversation look like it
-        # had been cut in half. Nothing is drawn for the seam: the reader asked
-        # to read the conversation, not the window management behind it.
+        # had been cut in half. The seam itself is drawn as a quiet row: the
+        # reader asked to read the conversation, and an automatic compaction is
+        # part of what happened in it.
         archived = Session.archive_transcript(
           @app_config.workspace,
           sid,
@@ -2329,6 +2490,23 @@ module Rubot
         messages = archived[:messages]
         results = tool_results(messages)
         diffs = tool_diffs(messages)
+        # Each seam names the absolute index of the first message compaction
+        # summarized away. Everything before that index is gone from the
+        # transcript; the first surviving turn starts at or after it. Collect
+        # the seams as cut points so a refresh can hang each one on the first
+        # turn that follows the cut, the same place the live timeline drew it.
+        seams = Array(archived[:compaction_events]).map do |event|
+          {
+            cut: event["index"].to_i,
+            item: {
+              kind: :compaction,
+              summarized: event["summarized"].to_i,
+              before: event["before"].to_i,
+              after: event["after"].to_i,
+              elapsed: event["elapsed"].to_f
+            }
+          }
+        end.sort_by { |seam| seam[:cut] }
 
         turns = []
         current = nil
@@ -2368,6 +2546,16 @@ module Rubot
             else
               current = { kind: :turn, items: items, idx: idx, last: idx }
               turns << current
+            end
+            # The seam belongs to the turn that carried on after the cut, not
+            # to the messages that were summarized away. Hang each seam on the
+            # first surviving turn at or past its cut point, once, so a refresh
+            # draws the same row the live timeline showed.
+            seams.each do |seam|
+              next if seam[:placed] || seam[:cut] > current[:idx]
+
+              current[:items] = [ seam[:item] ] + current[:items]
+              seam[:placed] = true
             end
           when "tool"
             # A hit inside a tool result lands on the turn that called it, so
@@ -3018,6 +3206,15 @@ module Rubot
             res.body = %(<div class="notice"><div class="error">Masih ada giliran yang berjalan. Tunggu sebentar atau tekan Stop.</div></div>)
             return
           end
+          # A compaction rewrites the transcript this prompt would be appended
+          # to, so a prompt must not start while one is running. The browser
+          # normally holds the composer closed, but a dropped stream can make it
+          # let go early; the truth is kept here, where the transcript is.
+          if @compacting[sid]
+            res.status = 409
+            res.body = %(<div class="notice"><div class="error">Sedang meringkas percakapan. Tunggu sebentar, lalu kirim lagi.</div></div>)
+            return
+          end
 
           @turns[turn.id] = turn
           @active[sid] = turn.id
@@ -3046,6 +3243,12 @@ module Rubot
         # the line it wants said. A request outranks the clock below — the
         # reader asked, so the wait is not what decides.
         announcement = nil
+        # An automatic compaction rewrites the transcript mid-turn. The seam is
+        # drawn live in the timeline, but the footer's context figure goes
+        # stale, so remember that it happened and push a fresh usage row once
+        # the answer is complete (see the end of this method). No reload: the
+        # reader keeps their place and the percentage moves on its own.
+        compacted = false
         Thread.current[:rubot_web_turn] = turn
         prepare_delivery(turn.session_id)
 
@@ -3063,6 +3266,12 @@ module Rubot
             turn.subagent(info)
             turn.subagent_item(info) unless info[:phase].to_s == "thinking"
           end,
+          on_compaction: lambda do |result|
+            turn.compaction(result)
+            compacted = true
+          end,
+          on_compaction_start: -> { turn.compaction_start },
+          on_compaction_failed: -> { turn.compaction_failed },
           on_usage: ->(report) {
             markup = usage_markup_from(report)
             turn.emit(:usage, markup) if markup
@@ -3078,6 +3287,11 @@ module Rubot
         # once the turn has been written to the session file.
         turn.emit(:sidebar, sidebar_markup(turn.session_id))
         turn.finish(response)
+        # An automatic compaction rewrote the transcript mid-turn, so the
+        # footer's context figure is stale. Push the fresh row over /events as
+        # an OOB swap; the seam itself was already drawn live in the timeline.
+        # No reload: the answer is complete and the reader keeps their place.
+        broadcast_usage(turn.session_id) if compacted
         # A turn that finished while the conversation was not on screen gets a
         # mark in the list; every open page is told, so the row and the counts
         # appear without a reload.
@@ -3298,7 +3512,9 @@ module Rubot
         res.body = proc do |out|
           # What the page already shows, sent first: a stream that was dropped
           # and reopened must not sit on a list that has moved on.
-          sse(out, "sidebar", sidebar_markup(sid))
+          event_stream_opening(sid).each do |type, markup|
+            sse(out, type.to_s, markup)
+          end
 
           loop do
             break unless @running
@@ -3319,6 +3535,24 @@ module Rubot
         ensure
           stop_listening_for_events(queue)
         end
+      end
+
+      # What a page is told first, when it opens or reopens its idle stream. The
+      # roster, because a page that was away has missed moves; and, when nothing
+      # is being summarized, the release for the compacting flag. That release
+      # is what makes the lock self-healing: a page whose stream dropped while a
+      # compaction ended would otherwise keep its composer shut until someone
+      # reloaded, and a manual compaction would look like a dead button.
+      def event_stream_opening(sid)
+        opening = [[:sidebar, sidebar_markup(sid)]]
+        opening << [:"compact-done", "done"] unless compacting?(sid)
+        opening
+      end
+
+      # Read under the same lock the button claims, so a stream opening at the
+      # moment a compaction starts cannot report a state that is already stale.
+      def compacting?(sid)
+        @turns_mutex.synchronize { @compacting[sid] }
       end
 
       # Naming, memory extraction and correction-learning are a provider

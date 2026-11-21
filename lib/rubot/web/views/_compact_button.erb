@@ -1,0 +1,13 @@
+<%# The manual compaction button, in the footer beside the usage figures. It
+    is a plain button, not a reading: pressing it starts a compaction whose
+    progress and result are drawn as rows in the timeline, the same way an
+    automatic compaction is. The response carries those rows and reopens the
+    stream, so the reader watches the work where it happens. -%>
+<button type="button" class="usage-toggle compact-toggle"
+        hx-post="/s/<%= h(session_id) %>/compact<%= h(token_query) %>"
+        hx-target="#compact-note" hx-swap="innerHTML"
+        hx-disabled-elt="this"
+        x-bind:disabled="$store.turn.compacting"
+        title="Ringkas konteks sekarang" aria-label="Ringkas konteks sekarang">
+  <%= usage_icon(:compact) %>
+</button>

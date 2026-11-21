@@ -276,6 +276,50 @@ module Rubot
         assert_includes html, "write a poem"
       end
 
+      def test_a_compaction_callback_becomes_a_timeline_row
+        turn = Rubot::Web::Turn.new(id: "t1", session_id: "web_rubot")
+        turn.compaction(summarized_messages: 8, context_before: 2029, context_after: 1565)
+        html = Rubot::Web::View.turn_body(turn, token_query: "")
+
+        assert_includes html, "compaction-row"
+        assert_includes html, "2029 → 1565 token"
+        refute_includes html, "pesan diringkas"
+      end
+
+      def test_a_running_compaction_shows_a_progress_row_then_turns_into_the_result
+        turn = Rubot::Web::Turn.new(id: "t1", session_id: "web_rubot")
+        turn.compaction_start
+        running = Rubot::Web::View.turn_body(turn, token_query: "")
+
+        assert_includes running, "compaction-row is-running"
+        assert_includes running, "Compaction sedang berlangsung"
+        refute_includes running, "2029 → 1565 token"
+
+        turn.compaction(summarized_messages: 8, context_before: 2029, context_after: 1565)
+        done = Rubot::Web::View.turn_body(turn, token_query: "")
+
+        refute_includes done, "is-running"
+        assert_includes done, "Konteks diringkas."
+        assert_includes done, "2029 → 1565 token"
+        refute_includes done, "pesan diringkas"
+        assert_equal 1, turn.items.count { |item| item[:kind] == :compaction }
+      end
+
+      def test_a_failed_compaction_retires_the_progress_row
+        turn = Rubot::Web::Turn.new(id: "t1", session_id: "web_rubot")
+        turn.compaction_start
+        running = Rubot::Web::View.turn_body(turn, token_query: "")
+        assert_includes running, "Compaction sedang berlangsung"
+
+        turn.compaction_failed
+        failed = Rubot::Web::View.turn_body(turn, token_query: "")
+
+        refute_includes failed, "is-running"
+        refute_includes failed, "Compaction sedang berlangsung"
+        assert_includes failed, "Ringkasan tidak berhasil dibuat"
+        assert_equal 1, turn.items.count { |item| item[:kind] == :compaction }
+      end
+
       def test_connect_card_is_drawn_in_the_timeline
         turn = Rubot::Web::Turn.new(id: "t1", session_id: "web_rubot")
         turn.add_instagram_card
@@ -1616,6 +1660,52 @@ module Rubot
         refute_includes View.render("_timeline", items: [ item ]), ">1s<"
       end
 
+      def test_timeline_draws_an_automatic_compaction_seam
+        item = { kind: :compaction, summarized: 8, before: 2029, after: 1565,
+                 epoch: Time.now.to_f }
+
+        html = View.render("_timeline", items: [ item ])
+
+        assert_includes html, "compaction-row"
+        assert_includes html, "Konteks diringkas."
+        assert_includes html, "2029 → 1565 token"
+        # The counted messages were dropped from the seam: the figures are what
+        # a reader checks, and the count only made the line longer.
+        refute_includes html, "pesan diringkas"
+      end
+
+      def test_timeline_shows_how_long_a_compaction_took
+        item = { kind: :compaction, summarized: 8, before: 2029, after: 1565,
+                 elapsed: 67.4, epoch: Time.now.to_f }
+
+        html = View.render("_timeline", items: [ item ])
+
+        assert_includes html, "1m 7s"
+      end
+
+      def test_timeline_omits_duration_for_old_seams_without_one
+        item = { kind: :compaction, summarized: 8, before: 2029, after: 1565,
+                 epoch: Time.now.to_f }
+
+        html = View.render("_timeline", items: [ item ])
+
+        refute_includes html, "0s"
+      end
+
+      # The running row wears the mark a thought wears, not a ring of its own:
+      # both say "a pause in the work", and a second mark for the same meaning
+      # made the timeline look like it had two kinds of waiting.
+      def test_timeline_draws_a_running_compaction_with_the_thought_mark
+        item = { kind: :compaction, state: :running, epoch: Time.now.to_f }
+
+        html = View.render("_timeline", items: [ item ])
+
+        assert_includes html, "compaction-row is-running"
+        assert_includes html, "Compaction sedang berlangsung"
+        assert_includes html, View::MARKS[:think]
+        refute_includes html, "mark-svg spin", "a compaction is not a spinner of its own"
+      end
+
       def test_timeline_collapses_a_kept_thought_to_one_row
         item = { kind: :thinking, epoch: Time.now.to_f, started_at: 0.0,
                  closed_at: Time.now.to_f, elapsed: 12.0 }
@@ -1759,6 +1849,18 @@ module Rubot
                         "the connection coming back must not retire the turn"
       end
 
+      # The idle stream carries the end of a manual compaction. When it closes,
+      # the compacting flag would otherwise wait for a message that is not
+      # coming, so the page releases the composer itself; the server refuses a
+      # prompt while the summarizer is really running.
+      def test_a_closed_idle_stream_releases_the_composer
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+
+        assert_includes js, 'closest(".session-events")'
+        assert_match(/closest\("\.session-events"\)\) return;\s*Alpine\.store\("turn"\)\.compacting = false;/,
+                     js, "the idle stream's close has to unlock the composer")
+      end
+
       # The page also keeps an idle stream open for news about other
       # conversations, and it lives as long as the page does. Its closing says
       # nothing about a turn, so the element the stream hangs off decides what
@@ -1810,6 +1912,45 @@ module Rubot
                      "a second band in the response would be a second copy on the page"
       end
 
+      # A manual compaction rewrites the transcript the prompt would land in, so
+      # the server must refuse it even if the browser let go of the composer
+      # (a dropped stream can release the flag early). The transcript is the
+      # thing that must not be written while it is being summarized.
+      def test_a_prompt_is_refused_while_a_compaction_is_running
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        channel.define_singleton_method(:owner_slug) { |_sid| "kanyaah" }
+        channel.instance_variable_get(:@compacting)["web_kanyaah"] = true
+
+        res = FakeResponse.new
+        channel.send(:create_turn, turn_request("halo"), res, "web_kanyaah")
+
+        assert_equal 409, res.status
+        assert_includes res.body, "Sedang meringkas percakapan"
+        refute channel.instance_variable_get(:@turns).any? { |_id, turn| turn.session_id == "web_kanyaah" },
+               "no turn may be created against a transcript being rewritten"
+      end
+
+      # A page that reconnects its idle stream is often a page that lost it
+      # while a compaction ended. The compose flag is cleared by a message on
+      # that stream, so without an opening word a lost message would lock the
+      # composer for the rest of the day and the button would look dead.
+      def test_an_idle_event_stream_releases_the_composer_on_reconnect
+        channel = channel_with_archive(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          messages: { "web_kanyaah" => [ [ "user", "isi percakapan" ] ] }
+        )
+        channel.instance_variable_get(:@compacting)["web_kanyaah"] = true
+
+        types = channel.send(:event_stream_opening, "web_kanyaah").map(&:first)
+        refute_includes types, :"compact-done",
+                        "a compaction still running must not be unlocked"
+
+        channel.instance_variable_get(:@compacting).delete("web_kanyaah")
+        types = channel.send(:event_stream_opening, "web_kanyaah").map(&:first)
+        assert_includes types, :"compact-done",
+                        "an idle stream has to let a reconnecting page type again"
+      end
+
       def test_the_turn_notification_threshold_comes_from_the_config
         assert_equal 0,
                      Rubot::Channels::Web.new(channel_config: { "turn_notify_after" => 0 })
@@ -1850,6 +1991,61 @@ module Rubot
         assert_equal true, options[:force],
                      "the reader asked to be told, so a visible page does not silence it"
         assert_equal "/s/web_kanyaah", options[:url]
+      end
+
+      # An automatic compaction rewrites the transcript while the turn is still
+      # answering. The seam is drawn live, but the footer's context figure goes
+      # stale, so once the answer is complete a fresh usage row must be pushed
+      # over /events. No reload: the reader keeps their place and the percentage
+      # moves on its own.
+      def test_an_automatic_compaction_refreshes_the_context_figure_after_the_turn_ends
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        channel.define_singleton_method(:prepare_delivery) { |_sid| nil }
+        channel.define_singleton_method(:usage_markup) { |_sid| '<span class="metrics" id="usage" hx-swap-oob="true">25%</span>' }
+        channel.define_singleton_method(:sidebar_markup) { |_sid| "" }
+        channel.define_singleton_method(:notify_push) { |*_args, **_opts| nil }
+        channel.define_singleton_method(:mark_unread_unless_watched) { |_sid| false }
+        channel.define_singleton_method(:process_message) do |_text, **options|
+          options[:on_compaction_start]&.call
+          options[:on_compaction]&.call({ summarized_messages: 8, context_before: 90_000,
+                                          context_after: 25_000, elapsed: 3.0 })
+          "jawaban siap"
+        end
+
+        queue = Queue.new
+        channel.send(:listen_for_events, "web_kanyaah", queue)
+
+        channel.send(:run_turn, Turn.new(id: "t1", session_id: "web_kanyaah", prompt: "halo"), "halo")
+
+        events = []
+        events << queue.pop until queue.empty?
+        usage = events.find { |type, _payload| type == :usage }
+        refute_nil usage, "an automatic compaction must refresh the context figure"
+        assert_includes usage[1], 'id="usage"'
+        refute events.any? { |type, _payload| type == :refresh },
+               "the page must not reload just to move a number"
+      end
+
+      # A turn with no compaction leaves the transcript untouched, so there is
+      # no stale figure to correct and no reason to push a usage row either.
+      def test_a_turn_without_compaction_does_not_push_a_usage_row
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        channel.define_singleton_method(:prepare_delivery) { |_sid| nil }
+        channel.define_singleton_method(:usage_markup) { |_sid| '<span class="metrics" id="usage" hx-swap-oob="true">25%</span>' }
+        channel.define_singleton_method(:sidebar_markup) { |_sid| "" }
+        channel.define_singleton_method(:notify_push) { |*_args, **_opts| nil }
+        channel.define_singleton_method(:mark_unread_unless_watched) { |_sid| false }
+        channel.define_singleton_method(:process_message) { |_text, **| "jawaban siap" }
+
+        queue = Queue.new
+        channel.send(:listen_for_events, "web_kanyaah", queue)
+
+        channel.send(:run_turn, Turn.new(id: "t1", session_id: "web_kanyaah", prompt: "halo"), "halo")
+
+        events = []
+        events << queue.pop until queue.empty?
+        refute events.any? { |type, _payload| type == :usage },
+               "no compaction means no stale figure to refresh"
       end
 
       def test_the_notify_tool_is_registered_and_only_carries_the_request
@@ -2690,6 +2886,301 @@ module Rubot
         refute_includes res.body, "akan dibangun ulang"
       end
 
+      def test_the_manual_compaction_button_posts_to_a_route_that_reaches_the_handler
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } },
+                                        sessions: { "web_kanyaah" => "Halo" })
+        channel.define_singleton_method(:owner_slug) { |_sid| "kanyaah" }
+
+        asked = Queue.new
+        handle = Object.new
+        handle.define_singleton_method(:compact_session) do
+          asked << :asked
+          { summarized_messages: 8 }
+        end
+        channel.define_singleton_method(:session_for) { |_sid| handle }
+
+        req = Struct.new(:query) do
+          def [](key) = key == "HX-Request" ? "true" : nil
+        end.new({})
+        res = FakeResponse.new
+        channel.send(:dispatch, req_with_path(req, "/s/web_kanyaah/compact", "POST"), res)
+
+        assert_equal 204, res.status
+        # WEBrick rejects a 204 with no body as LengthRequired, which the
+        # browser sees as a failed request and the button as doing nothing.
+        assert_equal "", res.body
+        # The request is answered at once; the summarizer runs in the background
+        # and must not hold the response (or the page's refresh) open.
+        assert_nil res.headers["HX-Refresh"]
+        assert_equal :asked, asked.pop, "the button has to ask, not just describe"
+      end
+
+      def test_a_second_press_is_refused_while_a_compaction_is_running
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } },
+                                        sessions: { "web_kanyaah" => "Halo" })
+        channel.define_singleton_method(:owner_slug) { |_sid| "kanyaah" }
+
+        release = Queue.new
+        asked = Queue.new
+        handle = Object.new
+        handle.define_singleton_method(:compact_session) do
+          asked << :asked
+          release.pop
+          { summarized_messages: 8 }
+        end
+        channel.define_singleton_method(:session_for) { |_sid| handle }
+
+        first = FakeResponse.new
+        channel.send(:compact_session_now, first, "web_kanyaah", form_post({}))
+        assert_equal 204, first.status
+        assert_equal :asked, asked.pop
+
+        # The first compaction is still in flight; a second press must be
+        # refused instead of starting a second summarizer against the same
+        # transcript.
+        second = FakeResponse.new
+        channel.send(:compact_session_now, second, "web_kanyaah", form_post({}))
+        assert_includes second.body, "Turn masih berjalan"
+        assert asked.empty?, "only the first press may reach the summarizer"
+
+        release << :go
+        sleep 0.05
+      end
+
+      def test_the_manual_compaction_button_refuses_while_a_turn_is_running
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } },
+                                        sessions: { "web_kanyaah" => "Halo" })
+        channel.define_singleton_method(:owner_slug) { |_sid| "kanyaah" }
+        channel.define_singleton_method(:session_running?) { |_sid| true }
+
+        res = FakeResponse.new
+        channel.send(:compact_session_now, res, "web_kanyaah", form_post({}))
+
+        assert_includes res.body, "Turn masih berjalan"
+        refute_includes res.body, "berhasil diringkas"
+      end
+
+      def test_the_manual_compaction_button_says_when_there_is_nothing_to_summarize
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } },
+                                        sessions: { "web_kanyaah" => "Halo" })
+        channel.define_singleton_method(:owner_slug) { |_sid| "kanyaah" }
+
+        handle = Object.new
+        handle.define_singleton_method(:compact_session) { nil }
+        channel.define_singleton_method(:session_for) { |_sid| handle }
+
+        queue = Queue.new
+        channel.send(:listen_for_events, "web_kanyaah", queue)
+
+        res = FakeResponse.new
+        channel.send(:compact_session_now, res, "web_kanyaah", form_post({}))
+
+        assert_equal 204, res.status
+        assert_nil res.headers["HX-Refresh"]
+        # The reason is pushed over SSE, not held in the response body.
+        running = queue.pop
+        assert_includes running[1], "Compaction sedang berlangsung"
+        cleared = queue.pop
+        assert_includes cleared[1], 'id="compaction-slot"'
+        note = queue.pop
+        assert_equal :"compact-note", note[0]
+        assert_includes note[1], 'id="compact-note"'
+        assert_includes note[1], "terlalu pendek"
+        assert_equal :"compact-done", queue.pop[0]
+      end
+
+      def test_the_manual_compaction_button_is_drawn_in_the_usage_panel
+        html = render_page
+
+        assert_includes html, 'hx-post="/s/web_rubot/compact"'
+        assert_includes html, 'title="Ringkas konteks sekarang"'
+        assert_includes html, 'id="compaction-slot"'
+      end
+
+      def test_the_compact_button_sits_right_after_the_context_usage_metric
+        html = render_page
+
+        context = html.index('title="Porsi context window model yang terpakai permintaan berikutnya"')
+        compact = html.index('hx-post="/s/web_rubot/compact"')
+        refute_nil context
+        refute_nil compact
+        assert_operator compact, :>, context, "the button belongs beside the context figure"
+        # Nothing but the closing metric span and the button may sit between.
+        assert_operator compact - context, :<, 600
+      end
+
+      def test_the_composer_is_disabled_while_compacting
+        erb = File.read(File.expand_path("../lib/rubot/web/views/_composer.erb", __dir__))
+
+        assert_includes erb, 'x-bind:disabled="!text.trim() || compacting"'
+      end
+
+      # The note slot sits between the compact button and the two sheets, and a
+      # flex row charges its gap on both sides of every item, empty or not. Left
+      # in the row when it says nothing, it made the button read further from
+      # the sheets than they are from each other.
+      def test_an_empty_compaction_note_does_not_hold_a_gap
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+
+        assert_match(/#compact-note:empty\s*\{\s*display:\s*none;/, css)
+      end
+
+      # The button is pressed while the page is idle, so the progress row goes
+      # out over the always-on /events stream before the summarizer is called.
+      # A handle that blocks lets us assert the reader sees "in progress" while
+      # the work is still running, not only once the result is in hand.
+      def test_the_manual_compaction_button_broadcasts_progress_then_the_seam
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } },
+                                        sessions: { "web_kanyaah" => "Halo" })
+        channel.define_singleton_method(:owner_slug) { |_sid| "kanyaah" }
+
+        release = Queue.new
+        handle = Object.new
+        handle.define_singleton_method(:compact_session) do
+          release.pop
+          { summarized_messages: 8, context_before: 2029, context_after: 1565 }
+        end
+        channel.define_singleton_method(:session_for) { |_sid| handle }
+
+        queue = Queue.new
+        channel.send(:listen_for_events, "web_kanyaah", queue)
+
+        res = FakeResponse.new
+        channel.send(:compact_session_now, res, "web_kanyaah", form_post({}))
+
+        # The handler answered before the summarizer was released: the page is
+        # free to refresh while the work continues in the background.
+        assert_equal 204, res.status
+        running = queue.pop
+        assert_includes running[1], "compaction-row is-running"
+        assert_includes running[1], "Compaction sedang berlangsung"
+
+        release << :go
+
+        seam = queue.pop
+        assert_includes seam[1], "Konteks diringkas."
+        assert_includes seam[1], "2029 → 1565 token"
+        refute_includes seam[1], "pesan diringkas"
+        # The explicit "done" line under the button is the confirmation the
+        # reader was waiting for.
+        note = queue.pop
+        assert_equal :"compact-note", note[0]
+        assert_includes note[1], "berhasil diringkas"
+        # The composer is held closed for the whole compaction and there is no
+        # reload any more, so it must be released explicitly.
+        done = queue.pop
+        assert_equal :"compact-done", done[0]
+        # The footer's context figure is refreshed in place over /events, so
+        # the percentage moves without a reload.
+        usage = queue.pop
+        assert_equal :usage, usage[0]
+        assert_includes usage[1], 'id="usage"'
+      end
+
+      def test_the_manual_compaction_button_clears_the_progress_row_when_there_is_nothing_to_summarize
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } },
+                                        sessions: { "web_kanyaah" => "Halo" })
+        channel.define_singleton_method(:owner_slug) { |_sid| "kanyaah" }
+
+        handle = Object.new
+        handle.define_singleton_method(:compact_session) { nil }
+        channel.define_singleton_method(:session_for) { |_sid| handle }
+
+        queue = Queue.new
+        channel.send(:listen_for_events, "web_kanyaah", queue)
+
+        res = FakeResponse.new
+        channel.send(:compact_session_now, res, "web_kanyaah", form_post({}))
+
+        running = queue.pop
+        assert_includes running[1], "Compaction sedang berlangsung"
+        cleared = queue.pop
+        assert_includes cleared[1], 'id="compaction-slot"'
+        refute_includes cleared[1], "compaction-row"
+        note = queue.pop
+        assert_equal :"compact-note", note[0]
+        assert_includes note[1], 'id="compact-note"'
+        assert_includes note[1], "terlalu pendek"
+        # No reload (the transcript was not rewritten), but the composer must
+        # still be released so Send is not left disabled forever.
+        done = queue.pop
+        assert_equal :"compact-done", done[0]
+        assert_equal "done", done[1]
+        assert queue.empty?
+      end
+
+      def test_the_page_has_a_slot_for_the_compaction_reload_signal
+        html = render_page
+
+        assert_includes html, 'id="compaction-refresh"'
+        assert_includes html, 'sse-swap="refresh"'
+      end
+
+      def test_the_page_has_a_visible_slot_for_the_compaction_note
+        html = render_page
+
+        assert_includes html, 'id="compact-note"'
+        assert_includes html, 'sse-swap="compact-note"'
+      end
+
+      # The footer's context figure is refreshed over the always-on /events
+      # stream, so that stream needs its own usage slot. The one inside a turn
+      # only exists while that turn is on screen and cannot serve a manual
+      # compaction, which has no turn at all.
+      def test_the_events_stream_has_a_usage_slot
+        html = render_page
+
+        events = html[/<div class="session-events".*?<\/div>/m]
+        refute_nil events, "the always-on events stream must be on the page"
+        assert_includes events, 'sse-swap="usage"',
+                        "the context figure must be refreshable without a reload"
+      end
+
+      def test_the_compact_button_disables_itself_while_compacting
+        erb = File.read(File.expand_path("../lib/rubot/web/views/_compact_button.erb", __dir__))
+
+        assert_includes erb, 'hx-disabled-elt="this"'
+        assert_includes erb, 'x-bind:disabled="$store.turn.compacting"'
+      end
+
+      def test_the_compact_note_has_a_failure_branch
+        erb = File.read(File.expand_path("../lib/rubot/web/views/_compact_note.erb", __dir__))
+
+        assert_includes erb, "when :error"
+        assert_includes erb, "Ringkasan gagal"
+      end
+
+      def test_broadcast_refresh_reaches_only_the_page_showing_that_session
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } },
+                                        sessions: { "web_kanyaah" => "Halo" })
+        mine = Queue.new
+        elsewhere = Queue.new
+        channel.send(:listen_for_events, "web_kanyaah", mine)
+        channel.send(:listen_for_events, "web_english-tutor", elsewhere)
+
+        channel.send(:broadcast_refresh, "web_kanyaah")
+
+        assert_equal 1, mine.size
+        item = mine.pop
+        assert_equal :refresh, item[0]
+        assert_equal "reload", item[1]
+        assert elsewhere.empty?, "another session's page must not reload"
+      end
+
+      def test_compaction_broadcast_only_reaches_the_page_showing_that_session
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } },
+                                        sessions: { "web_kanyaah" => "Halo" })
+        mine = Queue.new
+        elsewhere = Queue.new
+        channel.send(:listen_for_events, "web_kanyaah", mine)
+        channel.send(:listen_for_events, "web_english-tutor", elsewhere)
+
+        channel.send(:compaction_broadcast, "web_kanyaah", nil)
+
+        refute mine.empty?
+        assert elsewhere.empty?, "another session's thread must not be touched"
+      end
+
       def test_the_repin_button_says_when_there_was_nothing_pinned
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } },
                                         sessions: { "web_kanyaah" => "Halo" })
@@ -2708,8 +3199,8 @@ module Rubot
       def test_each_usage_icon_draws_a_different_shape
         bodies = View::SVG_ICONS.values
 
-        assert_equal 5, bodies.size, "cost, cache, context, the report and the allowance"
-        assert_equal 5, bodies.uniq.size
+        assert_equal 6, bodies.size, "cost, cache, context, the report, the allowance and compact"
+        assert_equal 6, bodies.uniq.size
         bodies.each { |body| assert_includes body, "<", "every icon needs at least one shape" }
       end
 
@@ -4098,6 +4589,14 @@ module Rubot
         request.new(fields)
       end
 
+      # A request that only differs from a form post by its path and method,
+      # for the routes a button reaches without a form of its own.
+      def req_with_path(request, path, method)
+        request.define_singleton_method(:path) { path }
+        request.define_singleton_method(:request_method) { method }
+        request
+      end
+
       # The pin is pressed beside a conversation, not on a page of its own: the
       # answer is the sidebar, and the row the reader was on stays marked.
       def test_pinning_in_place_answers_with_the_sidebar_and_keeps_the_open_row_marked
@@ -5359,6 +5858,36 @@ module Rubot
         assert_equal :picture, items.last[:list].first[:kind]
       end
 
+      # A refresh draws the same seam the live timeline showed: the event is
+      # stored beside the transcript, not in a message the model would see.
+      def test_history_replays_an_automatic_compaction_seam
+        sid = "web_kanyaah"
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: { sid => "Lanjutkan kerjaan" }
+        )
+        dir = channel.instance_variable_get(:@app_config).sessions_dir
+        File.write(File.join(dir, "#{sid}.json"), JSON.generate({
+          "id" => sid,
+          "updated_at" => Time.now.utc.iso8601,
+          "messages" => [
+            { "role" => "user", "content" => "Lanjutkan kerjaan" },
+            { "role" => "assistant", "content" => "Lanjut." }
+          ],
+          "compaction_events" => [
+            { "index" => 1, "summarized" => 8, "before" => 2029, "after" => 1565 }
+          ]
+        }))
+
+        items = channel.send(:history, sid).last[:items]
+
+        seam = items.find { |item| item[:kind] == :compaction }
+        refute_nil seam, "the seam has to survive a refresh, not vanish with the cut"
+        assert_equal 8, seam[:summarized]
+        assert_equal :compaction, items.first[:kind], "the seam leads into the turn it belongs to"
+        assert_equal :text, items.last[:kind], "the answer follows the seam"
+      end
+
       # A PDF read back from a week-old transcript comes back as a card: the
       # word the tool result used is the only thing that has to survive.
       def test_history_draws_a_document_the_agent_sent
@@ -5782,7 +6311,7 @@ module Rubot
         css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
 
         assert_match(/@keyframes label-glow/, css, "the glow keyframes are missing")
-        assert_match(/\.row \.label\.glow span \{[^}]*animation: label-glow/, css)
+        assert_match(/\.row \.label\.glow span,\s*\.compaction-row \.compaction-label\.glow span \{[^}]*animation: label-glow/, css)
         assert_match(/animation-delay: calc\(var\(--i/, css, "each letter needs its own phase")
       end
 
@@ -5924,9 +6453,9 @@ module Rubot
       end
 
       # Spinning a full ring would look exactly like a still ring, so a mark that
-      # turns is an arc: the gap is what the eye reads as motion. The thought no
-      # longer has one — it wears the half disc and keeps still — so the arc is
-      # checked where it is still used: the turn that is running.
+      # turns is an arc: the gap is what the eye reads as motion. Only the turn
+      # that is running wears one — the thought and a compaction in progress
+      # both wear the still half disc, so they are not checked here.
       def test_a_mark_that_turns_is_an_arc
         working = View.render("_working", since: 1.0)
         css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
@@ -5934,7 +6463,20 @@ module Rubot
         assert_includes working, "stroke-dasharray", "a full ring cannot show that it turns"
         assert_match(/@keyframes mark-spin/, css, "the spin keyframes are missing")
         assert_match(/\.mark \.mark-svg\.spin \{[^}]*animation: mark-spin/,
-                     css, "the live marks have to be the ones that turn")
+                     css, "the live mark has to be the one that turns")
+      end
+
+      # The seam usually lands under the tool call that was running when the
+      # summarizer took over. The tool row keeps 0.4rem under itself and
+      # .turn-body is a flex column, so the two rows would sit 6px apart and
+      # read as one block of log. The seam takes the paragraph's air instead.
+      def test_a_compaction_seam_gives_way_from_the_tool_row_above_it
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+
+        # Same declaration as the thought, so the two pauses stay the same
+        # distance under the call that came before them.
+        assert_match(/\.tool-row \+ \.row\.thinking,\s*\.tool-row \+ \.compaction-row \{[^}]*margin-top/,
+                     css, "the seam must share the thought's room under a tool row")
       end
 
       # Centring is the box's job: the mark has no baseline to sit on, so the

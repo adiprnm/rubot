@@ -158,6 +158,14 @@ module Rubot
     # inside the actor from shareable ports, like the other callbacks.
     attr_accessor :on_subagent
 
+    # Same idea for automatic compaction: a Proc built inside the actor that
+    # receives the plain-data result of a compaction, so a channel can draw the
+    # seam in its timeline. `on_compaction_start` fires just before the
+    # summarizer request goes out, which is the part that takes time; a channel
+    # uses it to show that compaction is in progress. Manual /compact happens at
+    # rest and has no turn to draw into, so only the automatic path calls them.
+    attr_accessor :on_compaction, :on_compaction_start, :on_compaction_failed
+
     # Optional provider (or callable taking the persona slug) used for sub
     # agents. Production leaves it nil so each sub agent builds its own from
     # the target persona's config; tests inject a fake to avoid the network.
@@ -388,7 +396,7 @@ module Rubot
     #                     for a model that does not stream its reasoning.
     def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil,
                 on_assistant_text: nil, on_reasoning: nil, on_steer: nil, on_stopped: nil, on_usage: nil,
-                on_subagent: nil, on_retry: nil,
+                on_subagent: nil, on_compaction: nil, on_compaction_start: nil, on_compaction_failed: nil, on_retry: nil,
                 stream: true, &on_chunk)
       # Fire any due cron jobs and collect their results
       cron_results = fire_due_cron_jobs
@@ -405,6 +413,9 @@ module Rubot
       inject_tool_delegate
       @subagent_count = 0
       @on_subagent = on_subagent
+      @on_compaction = on_compaction
+      @on_compaction_start = on_compaction_start
+      @on_compaction_failed = on_compaction_failed
 
       # Reasoning from earlier turns is dropped from the request; only what is
       # produced inside this turn is kept, because a tool loop needs it.
@@ -1077,22 +1088,38 @@ module Rubot
     # suddenly re-explores the repo looks like from the outside. /compact at
     # rest keeps the plain rule: there is no turn to protect.
     def compact_session(protect_current_turn: false)
+      # A long transcript splits into dozens of summarizer batches. Give the
+      # session a factory so it can fan them out over a few workers, each with
+      # its own provider instance (a provider carries per-request state that
+      # would race if shared). The settings come from the conversation's own
+      # provider, so the model and routing are unchanged; only the concurrency
+      # is new. Callers that inject a fake provider have no config to build
+      # from, so they keep the serial path.
+      factory = compaction_provider_factory
       if @config.token_based_compaction?
         result = @session.compact!(
           provider: @provider,
           keep_recent_tokens: @config.compact_keep_recent_tokens,
           min_keep: protect_current_turn ? current_turn_message_count : nil,
-          system_prompt: build_system_prompt
+          system_prompt: build_system_prompt,
+          provider_factory: factory
         )
       else
         keep = protect_current_turn ? compaction_keep_recent : @config.compact_keep_recent_messages
         result = @session.compact!(
           provider: @provider,
           keep_recent: keep,
-          system_prompt: build_system_prompt
+          system_prompt: build_system_prompt,
+          provider_factory: factory
         )
       end
       return nil unless result
+
+      # Both callers want the seam remembered: the automatic path draws it in
+      # the live turn, and a manual /compact has no turn to draw into but still
+      # leaves a mark in the transcript a refresh reads back. Recording here
+      # keeps the two paths from writing the same event twice.
+      @session.record_compaction(result)
 
       # Compaction drops messages from the front, so the mark that says where
       # this turn began has to move with them. Left alone it points past the
@@ -2519,6 +2546,24 @@ end
     # conversation's own provider, so a config that says nothing behaves
     # exactly as before. Built once per agent and then reused, because a
     # provider is a connection pool, not a value.
+    # A factory for the summarizer's parallel workers. Each call builds a fresh
+    # provider from the conversation provider's immutable settings, so batches
+    # never share the last-usage or cancellation state. Returns nil when there
+    # is nothing to build from (an injected fake provider in tests), which
+    # leaves the session on its serial path.
+    def compaction_provider_factory
+      # Use the conversation's own provider settings, not the auxiliary model.
+      # A fast auxiliary model is tempting for a job this large, but it can
+      # refuse batches made mostly of tool output by answering with empty
+      # content, which makes the whole compaction fail and leaves the context
+      # unchanged. The parallelism below is where the speed comes from; the
+      # model has to be one that actually summarizes every batch.
+      settings = @provider.respond_to?(:config) ? @provider.config : nil
+      return nil if settings.nil?
+
+      -> { Provider.build(settings) }
+    end
+
     def auxiliary_provider
       settings = @config.auxiliary_settings
       return @provider if settings.nil?
@@ -2993,7 +3038,19 @@ end
       used = estimated_context_tokens
       return if used < threshold
 
+      # The summarizer call is the slow part, and it happens inside compact!.
+      # Announce it before entering so the reader sees "in progress" while the
+      # provider is working, not only once the result is already in hand.
+      @on_compaction_start&.call
       result = compact_session(protect_current_turn: true)
+      if result
+        @on_compaction&.call(result)
+      else
+        # The "in progress" row was already drawn. Without this the reader is
+        # left staring at it forever when the summarizer fails or finds nothing
+        # to do, because the success callback is the only thing that retires it.
+        @on_compaction_failed&.call
+      end
       if result && Rubot.debug?
         warn "[compaction] auto: #{result[:summarized_messages]} messages summarized, " \
              "context #{result[:context_before]} -> #{result[:context_after]} tokens (estimated)"

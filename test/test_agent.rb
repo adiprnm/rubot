@@ -1237,6 +1237,7 @@ class TestAgentCompaction < Minitest::Test
     assert_equal 8, result[:summarized_messages]
     assert_equal 2, result[:kept_messages]
     assert_equal "Summarized.", result[:summary]
+    assert_equal 1, @agent.session.compaction_events.size
     assert @agent.session.summarized?
   end
 
@@ -1339,6 +1340,44 @@ class TestAgentCompaction < Minitest::Test
 
     refute_nil result
     assert @agent.session.summarized?
+  end
+
+  def test_auto_compaction_reports_failure_when_the_summarizer_returns_nothing
+    fill_session(10)
+    failed = 0
+    notified = 0
+
+    empty = SummaryProvider.new
+    empty.define_singleton_method(:chat) { |_messages, tools: nil, on_retry: nil| { "content" => "" } }
+    @agent.instance_variable_set(:@provider, empty)
+
+    @agent.on_compaction = ->(_result) { notified += 1 }
+    @agent.on_compaction_failed = -> { failed += 1 }
+    @agent.send(:run_auto_compaction)
+
+    assert_equal 0, notified
+    assert_equal 1, failed, "the in-progress row must be retired on failure"
+  end
+
+  def test_auto_compaction_notifies_the_channel_and_records_the_seam
+    fill_session(10)
+    notified = []
+    started = 0
+
+    @agent.on_compaction = ->(result) { notified << result }
+    @agent.on_compaction_start = -> { started += 1 }
+    @agent.send(:run_auto_compaction)
+
+    assert_equal 1, started
+    assert_equal 1, notified.size
+    assert_equal 8, notified.first[:summarized_messages]
+    events = @agent.session.compaction_events
+    assert_equal 1, events.size
+    assert_equal 8, events.first["summarized"]
+    # The seam must point at the first message that was summarized away, not
+    # one past the end of the shrunken transcript — otherwise a refresh cannot
+    # find the turn it belongs to and drops the row.
+    assert_equal 8, events.first["index"]
   end
 
   def test_auto_compaction_can_be_disabled

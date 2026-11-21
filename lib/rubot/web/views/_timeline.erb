@@ -31,6 +31,18 @@
 <div class="text<%= item[:live] ? " is-live" : "" %>"><%= fmt(item[:text]) %></div>
 <% when :diff -%>
 <%= item[:html] %>
+<% when :compaction -%>
+<div class="compaction-row<%= " is-running" if item[:state] == :running %><%= " is-done" unless item[:state] %>" role="status" title="Ringkasan otomatis: percakapan lama diringkas untuk mengosongkan konteks">
+  <span class="compaction-mark" aria-hidden="true"><%= item[:state] == :running ? mark(:think) : mark(:compaction) %></span>
+<% if item[:state] == :running -%>
+  <span class="compaction-label glow" aria-label="Compaction sedang berlangsung"><%= glow("Compaction sedang berlangsung…") %></span>
+<% elsif item[:state] == :failed -%>
+  <span class="compaction-label">Ringkasan tidak berhasil dibuat</span>
+<% else -%>
+  <span class="compaction-label">Konteks diringkas.</span>
+  <span class="compaction-detail"><%= item[:before] %> → <%= item[:after] %> token<% if item[:elapsed].to_f.positive? %> · <%= dur(item[:elapsed]) %><% end %></span>
+<% end -%>
+</div>
 <% when :subagent -%>
 <div class="subagent-row subagent-<%= h(item[:phase]) %>">
   <span class="subagent-mark" aria-hidden="true"><%= item[:phase] == "done" ? "✓" : (item[:phase] == "failed" ? "✗" : "⟡") %></span>

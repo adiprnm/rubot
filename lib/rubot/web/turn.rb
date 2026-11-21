@@ -222,6 +222,63 @@ module Rubot
         end
       end
 
+      # The summarizer request is the slow part of an automatic compaction.
+      # Draw its row as soon as it starts, so the reader sees that the pause is
+      # work in progress rather than a turn that stopped answering. The row is
+      # replaced in place by #compaction when the result arrives; a failed or
+      # cancelled compaction leaves the running row behind, which is the honest
+      # record of work that was attempted.
+      def compaction_start
+        @mutex.synchronize do
+          seal_text_locked
+          @items << { kind: :compaction, state: :running, epoch: epoch_now }
+          publish_locked
+        end
+      end
+
+      # The summarizer failed or found nothing to do. Retire the "in progress"
+      # row so it does not sit there glowing forever; the reader is told the
+      # attempt did not take, and the transcript is left untouched.
+      def compaction_failed
+        @mutex.synchronize do
+          row = @items.reverse.find { |item| item[:kind] == :compaction && item[:state] == :running }
+          if row
+            row[:state] = :failed
+          else
+            @items << { kind: :compaction, state: :failed, epoch: epoch_now }
+          end
+          publish_locked
+        end
+      end
+
+      # An automatic compaction is a seam in the work, not a tool call: the
+      # transcript before it was summarized away and the model carried on with
+      # less context. It gets its own row so the reader can see why the answer
+      # that follows no longer has the earlier detail in view.
+      def compaction(result)
+        @mutex.synchronize do
+          row = @items.reverse.find { |item| item[:kind] == :compaction && item[:state] == :running }
+          if row
+            row.delete(:state)
+            row[:summarized] = result[:summarized_messages].to_i
+            row[:before] = result[:context_before].to_i
+            row[:after] = result[:context_after].to_i
+            row[:elapsed] = result[:elapsed].to_f
+          else
+            seal_text_locked
+            @items << {
+              kind: :compaction,
+              summarized: result[:summarized_messages].to_i,
+              before: result[:context_before].to_i,
+              after: result[:context_after].to_i,
+              elapsed: result[:elapsed].to_f,
+              epoch: epoch_now
+            }
+          end
+          publish_locked
+        end
+      end
+
       def tool_started(name, detail, op: nil)
         @mutex.synchronize do
           # Thinking is over once the model has decided what to run.

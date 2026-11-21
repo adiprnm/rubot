@@ -17,6 +17,11 @@ module Rubot
     # Without it, compacting a very long transcript could overflow the
     # summarizer's own context window.
     MAX_SUMMARY_INPUT_CHARS = 24_000
+    # How many summarizer requests may be in flight at once. A long transcript
+    # splits into dozens of batches; running them serially made compaction take
+    # minutes. Four is the same ceiling the tool runner uses, low enough not to
+    # trip the gateway's rate limit but enough to cut the wall time severalfold.
+    SUMMARY_WORKERS = 4
     # How much of the running summary is injected into the system prompt. Each
     # compaction used to append another paragraph, so a long session ended up
     # re-sending every summary it had ever produced (35 KB in one live
@@ -53,7 +58,7 @@ module Rubot
     # percentile was 293 messages and the median 38 — so the ceiling is reached,
     # which is what a file-size guard is for. What the count is *not* is a
     attr_reader :id, :messages, :workspace, :usage, :last_usage, :cost
-    attr_reader :task, :cwd, :cache_history, :cache_records, :system_additions, :system_patch
+    attr_reader :task, :cwd, :cache_history, :cache_records, :compaction_events, :system_additions, :system_patch
     attr_accessor :summary, :forced_skill, :model_override, :model_preset, :thinking_level, :title
 
     # How many recent requests keep their cache share. Enough to see a pattern
@@ -65,6 +70,13 @@ module Rubot
     # more (Store::CACHE_RECORDS_KEPT) and prunes the oldest; this is the window
     # a reader asks about, and it is what a file-only session can persist.
     CACHE_RECORDS_LIMIT = 50
+
+    # Compaction seams the reader can still see in the transcript. Each one
+    # names the absolute message index it moved past, so a page that reads the
+    # whole archive can draw the marker in the turn it happened in. Bounded for
+    # the same reason as the cache records: a long session must not grow a
+    # metadata blob forever just to remember its own history.
+    COMPACTION_EVENTS_LIMIT = 50
 
     def initialize(id = "default", workspace: nil, sessions_dir: nil, cwd: nil,
                    archive: nil)
@@ -125,6 +137,7 @@ module Rubot
       # The request records behind those numbers: what each request was made
       # of, and what the provider said the cache did with it.
       @cache_records = []
+      @compaction_events = []
       @memory_backlog = []
       @system_additions = []
       # Newer text for prompt sections the model already has. Kept apart from
@@ -599,7 +612,7 @@ module Rubot
     # (safe to cross a Ractor boundary):
     #   { summary:, summarized_messages:, kept_messages:,
     #     context_before:, context_after: }
-    def compact!(provider:, keep_recent: DEFAULT_KEEP_RECENT_MESSAGES, keep_recent_tokens: nil, min_keep: nil, system_prompt: nil)
+    def compact!(provider:, keep_recent: DEFAULT_KEEP_RECENT_MESSAGES, keep_recent_tokens: nil, min_keep: nil, system_prompt: nil, provider_factory: nil)
       return nil unless @workspace
       return nil if @messages.empty?
 
@@ -637,12 +650,21 @@ module Rubot
       # The merge input is the whole running summary, not the capped view the
       # prompt shows: the summarizer is the one place where dropping the older
       # part is a decision, and it can only make it with the text in hand.
-      summary_text = call_summarizer(provider, system_prompt, to_summarize, previous: @summary)
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      summary_text = call_summarizer(provider, system_prompt, to_summarize, previous: @summary,
+                                     provider_factory: provider_factory)
+      elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
       return nil if summary_text.nil? || summary_text.strip.empty?
 
       prompt_chars = system_prompt.to_s.length
       context_before = context_tokens(extra_chars: prompt_chars)[:tokens]
       clean_summary = self.class.normalize_utf8(summary_text.strip)
+      # The absolute index of the first message being summarized away. Capture
+      # it before drop_front! moves the window: afterwards @archive_offset and
+      # @messages.size cancel each other out and the cut is no longer locatable.
+      # A reader refreshing the page uses this to put the seam in the turn that
+      # was in flight when compaction ran.
+      cut_index = @archive_offset + cutoff
       # Replace the old summary: the summarizer already merged it into this
       # one. Appending here is what made the prompt grow without bound.
       @summary = clean_summary
@@ -656,8 +678,10 @@ module Rubot
         summary: summary_text.strip,
         summarized_messages: to_summarize.size,
         kept_messages: @messages.size,
+        cut_index: cut_index,
         context_before: context_before,
-        context_after: context_tokens(extra_chars: prompt_chars)[:tokens]
+        context_after: context_tokens(extra_chars: prompt_chars)[:tokens],
+        elapsed: elapsed
       }
     end
 
@@ -820,29 +844,31 @@ module Rubot
       dir ||= sessions_dir(workspace)
       if (archive = store)
         loaded = archive.load_session(id, all: true)
-        return { messages: [], cut: 0, summary: "" } if loaded.nil?
+        return { messages: [], cut: 0, summary: "", compaction_events: [] } if loaded.nil?
 
         meta = loaded[:meta] || {}
         return {
           messages: normalize_utf8(loaded[:messages]),
           cut: loaded[:cut].to_i,
-          summary: meta["summary"].to_s
+          summary: meta["summary"].to_s,
+          compaction_events: normalize_utf8(meta["compaction_events"])
         }
       end
-      return { messages: [], cut: 0, summary: "" } unless dir
+      return { messages: [], cut: 0, summary: "", compaction_events: [] } unless dir
 
       path = File.join(dir, "#{id}.json")
-      return { messages: [], cut: 0, summary: "" } unless File.file?(path)
+      return { messages: [], cut: 0, summary: "", compaction_events: [] } unless File.file?(path)
 
       data = JSON.parse(File.read(path))
       messages = data["messages"]
       {
         messages: messages.is_a?(Array) ? normalize_utf8(messages) : [],
         cut: 0,
-        summary: data["summary"].to_s
+        summary: data["summary"].to_s,
+        compaction_events: normalize_utf8(data["compaction_events"])
       }
     rescue JSON::ParserError, SystemCallError, EncodingError
-      { messages: [], cut: 0, summary: "" }
+      { messages: [], cut: 0, summary: "", compaction_events: [] }
     end
 
     # The list shape the channels already expect from #describe. `updated_at` is
@@ -999,6 +1025,7 @@ module Rubot
       data["last_usage_watermark"] = @last_usage_watermark if @last_usage_watermark
       data["cache_history"] = @cache_history if @cache_history && !@cache_history.empty?
       data["cache_records"] = @cache_records if @cache_records && !@cache_records.empty?
+      data["compaction_events"] = @compaction_events if @compaction_events && !@compaction_events.empty?
       data["system_prompt"] = @system_prompt if @system_prompt
       data["system_prompt_epoch"] = @system_prompt_epoch if @system_prompt_epoch
       data["memory_backlog"] = @memory_backlog if @memory_backlog && !@memory_backlog.empty?
@@ -1016,6 +1043,29 @@ module Rubot
         file.flush
         file.flock(File::LOCK_UN)
       end
+    end
+
+    # Remember where an automatic compaction cut the transcript. The index is
+    # absolute (the archive's numbering), so a reader that loads from the first
+    # message can put the marker on the turn that was in flight when it happened.
+    # The event is plain data: it crosses the actor boundary with the compaction
+    # result and is persisted with the session's other metadata.
+    def record_compaction(result)
+      # Use the cut index captured inside compact! before the window moved.
+      # Deriving it here from @archive_offset + @messages.size would point one
+      # past the last message, which belongs to no turn, so a refresh would
+      # silently drop the seam. Fall back to the old derivation only for a
+      # result that did not carry the index (e.g. a hand-built test double).
+      index = result[:cut_index] || (@archive_offset + @messages.size)
+      @compaction_events << {
+        "index" => index,
+        "summarized" => result[:summarized_messages].to_i,
+        "before" => result[:context_before].to_i,
+        "after" => result[:context_after].to_i,
+        "elapsed" => result[:elapsed].to_f
+      }
+      @compaction_events.shift while @compaction_events.size > COMPACTION_EVENTS_LIMIT
+      save!
     end
 
     private
@@ -1062,6 +1112,7 @@ module Rubot
         "cost_partial" => @cost_partial,
         "last_usage_watermark" => @last_usage_watermark,
         "cache_history" => @cache_history,
+        "compaction_events" => @compaction_events,
         # The pin: losing either of these rebuilds the system prompt, and a
         # rebuilt prompt at the front of the request is a cold cache.
         "system_prompt" => @system_prompt,
@@ -1102,28 +1153,89 @@ module Rubot
     # Call the LLM to summarize a batch of old messages into a compact form.
     # Very long transcripts are split into chunks so the summarizer request
     # itself stays within the model's context window.
-    def call_summarizer(provider, system_prompt, messages, previous: nil)
+    #
+    # A long transcript becomes dozens of batches, and each one is an LLM
+    # request. Running them one after another made a 900-message compaction
+    # take minutes. With a provider_factory the batches go out over a small
+    # worker pool instead; results land in an indexed array so the summary is
+    # assembled in the original order no matter which worker finished first.
+    # Without a factory the old serial path stays, which keeps callers that
+    # inject a single (often fake) provider behaving exactly as before.
+    def call_summarizer(provider, system_prompt, messages, previous: nil, provider_factory: nil)
       batches = split_summary_batches(messages)
       carry = words_in(previous)
       # Each part carries the length it is allowed as well as its text, so the
       # merge can keep what the parts between them could hold instead of
       # answering in the length of one of them.
-      parts = batches.map do |batch|
+      budgets = batches.map do |batch|
         # A single batch can take the previous summary directly in its prompt;
         # with several batches the merge step below does that instead. Its own
         # budget carries what the summary already says, so merging more
         # material never makes the summary shorter than it was.
-        budget = summary_word_budget(batch_chars(batch)) + (batches.size == 1 ? carry : 0)
-        text = summarize_batch(provider, system_prompt, batch,
-                               previous: batches.size == 1 ? previous : nil,
-                               word_budget: budget)
-        text && { "text" => text, "words" => budget.clamp(MIN_SUMMARY_WORDS, MAX_SUMMARY_WORDS) }
-      end.compact
+        summary_word_budget(batch_chars(batch)) + (batches.size == 1 ? carry : 0)
+      end
+
+      texts = if provider_factory && batches.size > 1
+        summarize_batches_parallel(provider_factory, system_prompt, batches, budgets)
+      else
+        batches.map.with_index do |batch, i|
+          summarize_batch(provider, system_prompt, batch,
+                          previous: batches.size == 1 ? previous : nil,
+                          word_budget: budgets[i])
+        end
+      end
+
+      # A failed batch must not turn into a silent hole in the summary: the
+      # caller drops every summarized message once a summary comes back, so a
+      # nil here would lose that batch's content from both the summary and the
+      # transcript. Refuse the whole compaction instead and keep the messages.
+      return nil if texts.any?(&:nil?)
+
+      parts = texts.each_with_index.map do |text, i|
+        { "text" => text, "words" => budgets[i].clamp(MIN_SUMMARY_WORDS, MAX_SUMMARY_WORDS) }
+      end
       return nil if parts.empty?
       return parts.first["text"] if parts.size == 1
 
-      merge_summaries(provider, system_prompt, parts, previous) ||
+      # The merge is one more summarizer request, so it belongs to the same
+      # model as the batches. With a factory, build a fresh provider for it
+      # rather than reusing the conversation's, which may be a different model.
+      merge_provider = provider_factory ? provider_factory.call : provider
+      merge_summaries(merge_provider, system_prompt, parts, previous) ||
         [ previous, *parts.map { |part| part["text"] } ].compact.join("\n\n")
+    end
+
+    # Fan the batch requests out over a few workers. Each worker builds its own
+    # provider from the factory: a provider carries per-request state (last
+    # usage, cancellation), so sharing one across threads would let batches
+    # overwrite each other's bookkeeping. The cancellation token is carried
+    # over too, so a Stop still reaches the in-flight requests.
+    def summarize_batches_parallel(provider_factory, system_prompt, batches, budgets)
+      token = defined?(Cancellation) ? Cancellation.current : nil
+      queue = Queue.new
+      batches.each_index { |i| queue << i }
+      texts = Array.new(batches.size)
+      lock = Mutex.new
+
+      [ batches.size, SUMMARY_WORKERS ].min.times.map do
+        Thread.new do
+          Thread.current[:rubot_cancellation] = token if token
+          worker = provider_factory.call
+          while (i = begin
+            queue.pop(true)
+          rescue ThreadError
+            nil
+          end)
+            text = summarize_batch(worker, system_prompt, batches[i],
+                                   previous: nil, word_budget: budgets[i])
+            lock.synchronize { texts[i] = text }
+          end
+        rescue StandardError => e
+          warn "[session:summarize] worker failed: #{e.class}: #{e.message}" if Rubot.debug?
+        end
+      end.each(&:join)
+
+      texts
     end
 
     # Fold the partial summaries into one, a group at a time, until one is left.
@@ -1306,6 +1418,9 @@ module Rubot
       @cache_records = Array(data["cache_records"])
         .select { |record| record.is_a?(Hash) }
         .last(CACHE_RECORDS_LIMIT)
+      @compaction_events = Array(data["compaction_events"])
+        .select { |event| event.is_a?(Hash) }
+        .last(COMPACTION_EVENTS_LIMIT)
       @system_prompt = data["system_prompt"].to_s.empty? ? nil : data["system_prompt"].to_s
       @system_prompt_epoch = data["system_prompt_epoch"].is_a?(Hash) ? data["system_prompt_epoch"] : nil
       @memory_backlog = Array(data["memory_backlog"]).map(&:to_s)

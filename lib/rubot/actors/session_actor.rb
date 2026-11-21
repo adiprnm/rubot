@@ -153,6 +153,9 @@ module Rubot
           # never has to ask a busy actor for it.
           on_usage: ->(report) { events << [ :usage, report ] },
           on_subagent: ->(info) { events << [ :subagent, info ] },
+          on_compaction: ->(result) { events << [ :compaction, result ] },
+          on_compaction_start: -> { events << [ :compaction_start ] },
+          on_compaction_failed: -> { events << [ :compaction_failed ] },
           on_steer: ->(text) { events << [ :steered, text ] },
           on_stopped: -> { events << [ :stopped ] },
           on_confirm: lambda do |name, args, reason|

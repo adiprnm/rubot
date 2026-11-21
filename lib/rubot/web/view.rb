@@ -817,7 +817,13 @@ module Rubot
         # instrument panel taught everyone to read — an arc with a needle in
         # it, not another page of numbers.
         quota: %(<path d="M1.7 7.5a3.3 3.3 0 0 1 6.6 0"/>) +
-               %(<path d="M5 7.5 6.5 4.8"/>)
+               %(<path d="M5 7.5 6.5 4.8"/>),
+        # The footer button that asks for a compaction now. Three lines closing
+        # in on the middle, so it reads as "make this smaller" next to the
+        # meter and the card the other two toggles wear.
+        compact: %(<path d="M1.5 2.5h7"/>) +
+                 %(<path d="M2.5 5h5"/>) +
+                 %(<path d="M3.5 7.5h3"/>)
       }.freeze
 
       # The round marks are drawn for the same reason: ◌ and ◐ are a fallback
@@ -849,7 +855,13 @@ module Rubot
         running: spinner_mark("mark-svg spin").freeze,
         thought: %(<svg class="mark-svg" viewBox="0 0 10 10" fill="none" stroke="currentColor" ) +
                  %(stroke-width="1.2" stroke-linecap="round" aria-hidden="true" focusable="false">) +
-                 %(<circle cx="5" cy="5" r="3.5" stroke-dasharray="1.7 1.5"/></svg>).freeze
+                 %(<circle cx="5" cy="5" r="3.5" stroke-dasharray="1.7 1.5"/></svg>).freeze,
+        # A seam in the transcript: two pages folding into one. Drawn rather
+        # than typed so the mark keeps the same weight as the other row marks.
+        compaction: %(<svg class="mark-svg" viewBox="0 0 10 10" fill="none" stroke="currentColor" ) +
+                    %(stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" ) +
+                    %(aria-hidden="true" focusable="false">) +
+                    %(<path d="M1.5 2.5h3l1 5h3"/><path d="M7 6l1.5 1.5L7 9"/></svg>).freeze
       }.freeze
 
       class Scope

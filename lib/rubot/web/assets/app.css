@@ -1094,6 +1094,10 @@ select:focus-visible { outline: none; }
    words: the block that answers it is already on its way. */
 .load-more.htmx-request { opacity: 0.5; }
 
+/* The manual compaction button calls the summarizer, which takes a moment.
+   Dim it while the request is in flight so a second press is not sent. */
+.usage-repin .btn.htmx-request { opacity: 0.5; pointer-events: none; }
+
 .sessions {
   display: flex;
   flex-direction: column;
@@ -1559,7 +1563,8 @@ select:focus-visible { outline: none; }
 .thread > .msg,
 .thread > .empty,
 .thread > .history-more,
-.thread > .turn { width: 100%; max-width: 52rem; margin-inline: auto; }
+.thread > .turn,
+.thread > #compaction-slot { width: 100%; max-width: 52rem; margin-inline: auto; }
 
 /* The marker that asks for the page above. A reader who has scrolled all the
    way up should find more conversation arriving, not a button to press, so it
@@ -2276,10 +2281,14 @@ select:focus-visible { outline: none; }
    whatever happens to sit above and below them. The margins are claimed once,
    like the tool row's: `.turn-body` is a flex column, so two siblings' margins
    add up, and a thinking block between two blocks used to get both its own
-   0.5/0.7rem and the neighbour's, which is the extra space. */
+   0.5/0.7rem and the neighbour's, which is the extra space.
+
+   The compaction seam takes the same room under a tool call: it is a pause in
+   the work too, and 6px under the last call read as one more line of the log. */
 .row.thinking { margin: 0.5rem 0 0.7rem; }
 .text + .row.thinking { margin-top: 0; }
-.tool-row + .row.thinking { margin-top: calc(1.05rem - 0.4rem); }
+.tool-row + .row.thinking,
+.tool-row + .compaction-row { margin-top: calc(1.05rem - 0.4rem); }
 .turn-body > .attachments + .row.thinking { margin-top: calc(1.05rem - 0.2rem); }
 .diff + .row.thinking { margin-top: calc(1.05rem - 0.55rem); }
 .row.thinking + .text { margin-top: calc(1.05rem - 0.7rem); }
@@ -2303,7 +2312,8 @@ select:focus-visible { outline: none; }
    This is safe to animate where the rest of the timeline is not: a thought is
    drawn when the wait starts and nothing redraws it until tokens arrive, which
    is exactly when it is replaced. */
-.row .label.glow span {
+.row .label.glow span,
+.compaction-row .compaction-label.glow span {
   animation: label-glow 2s ease-in-out infinite;
   animation-delay: calc(var(--i, 0) * 0.1s);
 }
@@ -2311,6 +2321,49 @@ select:focus-visible { outline: none; }
 @keyframes label-glow {
   0% { color: var(--fg); }
   22%, 100% { color: var(--fg-faint); }
+}
+
+/* The seam an automatic compaction leaves in the timeline: older messages
+   were summarized away and the model carried on with a smaller window. It is
+   a quiet rule between two pieces of work, not another status to read, so it
+   takes the faint colour and a hairline instead of a bordered card. */
+.compaction-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0 0 0.4rem;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: -0.03em;
+  color: var(--fg-faint);
+}
+
+.compaction-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 0.8em;
+  height: 0.8em;
+  color: var(--blue);
+}
+
+.compaction-mark .mark-svg { display: block; width: 100%; height: 100%; }
+
+/* While the summarizer is working the row wears the mark and the travelling
+   light a thought wears: both are a pause in the work, and a mark of its own
+   made the timeline look like it had two kinds of waiting. Once the result
+   lands the mark becomes the folded page and the light stops. */
+.compaction-row.is-running .compaction-label { color: var(--fg); }
+
+.compaction-label { color: var(--fg-dim); }
+
+.compaction-detail { color: var(--fg-faint); }
+
+.compaction-detail::before {
+  content: "·";
+  margin-right: 0.4rem;
+  color: var(--line);
 }
 
 /* The row that says the turn is not over. It is not part of the timeline any
@@ -3193,11 +3246,25 @@ body.lightbox-open { overflow: hidden; }
    words live in its label. */
 .status-line .usage-sheet { margin-left: 0.35rem; }
 .status-line .usage-sheet[open] { margin-left: 0; }
+/* The compact button is a plain button rather than a <details> sheet, but it
+   sits in the same row and wears the same toggle face, so it takes the same
+   breathing room as the two sheets beside it. */
+.status-line .compact-toggle { margin-left: 0.35rem; }
+/* The note slot sits between the compact button and the two sheets, and a flex
+   row charges its gap on both sides of every item — even an empty one. The slot
+   made the button read further from the sheets than they are from each other;
+   it belongs to the row only when it has something to say. */
+#compact-note:empty { display: none; }
 
 .usage-toggle {
   display: flex;
   align-items: center;
   padding: 0.1rem 0.15rem;
+  /* The two sheets use a <summary>, which has no browser chrome. The compact
+     button is a <button>, so without this it wears the default border and
+     background and reads as a different control beside the same row. */
+  border: 0;
+  background: none;
   color: var(--fg-faint);
   cursor: pointer;
   list-style: none;
@@ -3381,6 +3448,23 @@ body.lightbox-open { overflow: hidden; }
 /* ---------- narrow ----------------------------------------------- */
 
 @media (max-width: 860px) {
+  /* On a narrow screen the compaction seam has no room to keep its label and
+     its numbers on one line. The label stays beside the mark so the text sits
+     level with the icon; only the detail drops to a second row, indented to
+     start under the label rather than under the mark. */
+  .compaction-row.is-done {
+    flex-wrap: wrap;
+    row-gap: 0.1rem;
+  }
+
+  .compaction-row.is-done .compaction-detail {
+    flex: 1 0 100%;
+    box-sizing: border-box;
+    padding-left: calc(0.8em + 0.35rem);
+  }
+
+  .compaction-row.is-done .compaction-detail::before { content: none; }
+
   /* One column. There is no room beside the conversation for either list, so
      both are in one drawer over it, opened from the header button: the
      personas as a strip across its top, the sessions below. */
@@ -4142,6 +4226,7 @@ html.settings-doc body {
   .status-line .metrics { gap: 0.5rem; }
   .status-line .metric { gap: 0.2rem; }
   .status-line .usage-sheet { margin-left: 0.25rem; }
+  .status-line .compact-toggle { margin-left: 0.25rem; }
   .session-settings { gap: 0.4rem; margin: -0.2rem auto 0.1rem; }
   .session-setting-label { font-size: 8.5px; }
   .session-select { font-size: 10px; padding: 0.12rem 0.8rem 0.12rem 0.2rem; }

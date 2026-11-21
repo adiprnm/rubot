@@ -136,6 +136,15 @@
           in another tab, so this always-on stream carries the card's OOB swap
           back to the page that started it. -%>
       <span sse-swap="notice"></span>
+      <%# Compaction rewrites the transcript, so the footer's context figure
+          goes stale. The fresh row arrives here as an out-of-band swap and
+          replaces #usage in place, no reload needed. -%>
+      <span sse-swap="usage"></span>
+      <%# A manual compaction runs in the background and answers its button
+          before the work is done. When the transcript is ready this event tells
+          the page to reload, so the seam is drawn from the saved metadata. -%>
+      <span id="compaction-refresh" sse-swap="refresh"></span>
+      <span sse-swap="compact-done"></span>
     </div>
 
     <div class="sidebar-foot">
@@ -223,6 +232,12 @@
                         text: live_prompt_shown ? nil : live_turn.prompt,
                         token_query: token_query) %>
       <% end %>
+      <%# Where the manual compaction button's progress and result land. The
+          button is pressed while the page is idle, so there is no live turn to
+          draw into; the always-on /events stream swaps the rows here out of
+          band. A refresh then draws the same seam from the session metadata,
+          and this slot is empty again. -%>
+      <div id="compaction-slot"></div>
     </div>
 
     <%# The band the working row lands in. It sits between the thread and the
@@ -265,6 +280,11 @@
         party, and it was the one readers had to scroll to reach. -%>
     <div class="status-line">
       <%= View.render("_usage", **usage) %>
+      <%= View.render("_compact_button", session_id: session_id, token_query: token_query) %>
+      <%# The one-line result of a manual compaction lands here, beside the
+          button that was pressed. It is an SSE slot because the answer comes
+          from a background thread, after the button's own request is gone. -%>
+      <div id="compact-note" sse-swap="compact-note"></div>
       <%= View.render("_usage_sheet", session_id: session_id, token_query: token_query,
                                       facts: usage_facts) %>
       <%= View.render("_quota_sheet", session_id: session_id, token_query: token_query) %>

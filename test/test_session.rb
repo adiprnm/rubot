@@ -342,6 +342,29 @@ class TestSessionSummarization < Minitest::Test
     assert_equal 70, @session.message_count
   end
 
+  # One failed batch must not leave a hole in the summary while the messages
+  # it covered are dropped from the transcript. Refuse the whole compaction.
+  def test_parallel_batch_failure_keeps_all_messages
+    8.times { |i| @session.add("user", "#{i}:" + ("x" * 20_000)) }
+    before = @session.message_count
+
+    factory = lambda do
+      provider = Object.new
+      provider.define_singleton_method(:chat) do |messages, tools: nil|
+        prompt = messages.last["content"]
+        number = prompt[/^\[user\]: (\d+):/, 1].to_i
+        raise StandardError, "batch failed" if number == 3
+        "part-#{number}"
+      end
+      provider
+    end
+
+    result = @session.compact!(provider: Object.new, keep_recent: 1, provider_factory: factory)
+
+    assert_nil result
+    assert_equal before, @session.message_count, "a failed batch must not drop messages"
+  end
+
   # The summary has to be the size of the material it replaces. A fixed 200
   # words was a caption, not a summary: 278 messages of tool work became one
   # paragraph, and the turn that followed spent its rounds re-reading the repo
@@ -417,6 +440,82 @@ class TestSessionSummarization < Minitest::Test
     # One request per batch plus one merge request.
     assert_operator @provider.calls, :>, 2
     assert_equal 1, @session.message_count
+  end
+
+  # With a factory the batches go out over several workers. The results must
+  # still be assembled in batch order, and more than one worker must have been
+  # used, or the "parallel" path is just the serial one wearing a new name.
+  def test_compact_parallelizes_batches_and_keeps_their_order
+    8.times { |i| @session.add("user", "#{i}:" + ("x" * 20_000)) }
+
+    started = Queue.new
+    release = Queue.new
+    built = 0
+    build_lock = Mutex.new
+    factory = lambda do
+      build_lock.synchronize { built += 1 }
+      provider = Object.new
+      provider.define_singleton_method(:chat) do |messages, tools: nil|
+        started << true
+        release.pop
+        "summary"
+      end
+      provider
+    end
+
+    worker = Thread.new do
+      @session.compact!(provider: @provider, keep_recent: 1, provider_factory: factory)
+    end
+
+    # Wait for the first wave to block, then let everyone through. The queue
+    # is refilled as workers pick up later batches, so no batch waits forever.
+    Rubot::Session::SUMMARY_WORKERS.times { started.pop }
+    feeder = Thread.new do
+      loop do
+        started.pop
+        release << :go
+      end
+    end
+    Rubot::Session::SUMMARY_WORKERS.times { release << :go }
+    result = worker.value
+    feeder.kill
+
+    refute_nil result
+    assert_operator built, :>=, 2, "each worker should build its own provider"
+  end
+
+  # Each batch's text must land at its own index even when workers finish out
+  # of order. A provider that answers after a delay proportional to the batch
+  # number makes the last batch finish first, so a naive append would scramble
+  # the summary.
+  def test_parallel_batches_are_assembled_in_batch_order
+    8.times { |i| @session.add("user", "#{i}:" + ("x" * 20_000)) }
+
+    seen = Queue.new
+    factory = lambda do
+      provider = Object.new
+      provider.define_singleton_method(:chat) do |messages, tools: nil|
+        prompt = messages.last["content"]
+        if prompt.start_with?("Merge the following")
+          seen << prompt
+          "merged"
+        else
+          number = prompt[/^\[user\]: (\d+):/, 1].to_i
+          sleep((8 - number) * 0.002)
+          "part-#{number}"
+        end
+      end
+      provider
+    end
+
+    @session.compact!(provider: Object.new, keep_recent: 1, provider_factory: factory)
+
+    merged = seen.pop
+    (0...8).each do |i|
+      pos = merged.index("part-#{i}")
+      next_pos = merged.index("part-#{i + 1}")
+      assert_operator pos, :<, next_pos, "part #{i} must come before part #{i + 1}" if next_pos
+    end
   end
 
   def test_session_persists_summary_to_disk

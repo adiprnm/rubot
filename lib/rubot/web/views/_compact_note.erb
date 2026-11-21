@@ -1,0 +1,13 @@
+<%# What the manual compaction button did. One line: the reader pressed a
+    button and wants to know whether it took. The seam itself is drawn in the
+    thread after the page reloads, so it is not repeated here. -%>
+<% case state -%>
+<% when :busy -%>
+  <p class="usage-note">Turn masih berjalan. Ringkas setelah selesai: percakapan yang sedang berjalan tidak boleh ikut diringkas.</p>
+<% when :done -%>
+  <p class="usage-note">Percakapan berhasil diringkas. Baris penandanya ada di bawah, di tempat compaction terjadi.</p>
+<% when :error -%>
+  <p class="usage-note">Ringkasan gagal. Coba lagi sebentar.</p>
+<% else -%>
+  <p class="usage-note">Belum ada yang perlu diringkas — percakapan masih terlalu pendek.</p>
+<% end -%>

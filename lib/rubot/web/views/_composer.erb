@@ -62,8 +62,8 @@
       <button type="button"
               class="btn primary"
               x-on:click="send()"
-              x-bind:disabled="!text.trim()"
-              x-bind:title="busy ? 'Kirim sebagai arahan ke turn yang berjalan' : ''">Kirim</button>
+              x-bind:disabled="!text.trim() || compacting"
+              x-bind:title="compacting ? 'Menunggu compaction selesai' : (busy ? 'Kirim sebagai arahan ke turn yang berjalan' : '')">Kirim</button>
       <button type="button"
               class="btn composer-stop"
               x-show="busy"
