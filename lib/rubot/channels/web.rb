@@ -20,6 +20,8 @@ require_relative "../web/notifier"
 require_relative "../web/push"
 require_relative "../web/media"
 require_relative "../web/router"
+require_relative "../web/routes/cron"
+require_relative "../web/routes/instagram"
 require_relative "../web/routes/push"
 require_relative "../web/tool_rows"
 require_relative "../web/subagent_jobs"
@@ -65,7 +67,9 @@ module Rubot
       TURN_NOTIFY_AFTER = 0
       # A notification body is read on a lock screen: two or three lines, one
       # glance. The whole answer is one tap away, so what travels is the gist.
-      TURN_NOTIFY_CHARS = 140
+      # The number lives with the cron delivery, which is where most of it is
+      # spent; the turn note below reads the same one.
+      TURN_NOTIFY_CHARS = Rubot::Web::Routes::Cron::TURN_NOTIFY_CHARS
       # How many subagent answers one automatic report carries. A batch is
       # usually small; a long backlog is handed over in instalments rather than
       # as one wall of text, and only the runs actually quoted are marked read.
@@ -84,9 +88,6 @@ module Rubot
       # waiting. Long enough that a slow model is not cut, short enough that a
       # dead read does not take the answers with it.
       REPORT_TIMEOUT_SECONDS = 90
-      # The bold line of a notification is the shortest thing on the screen, so
-      # it gets the least room: a hook that does not fit is not a hook.
-      NOTIFY_HOOK_CHARS = 60
       # How many conversations can be pinned for one persona. A pin is a way of
       # saying "this one again", and a list long enough to scroll is not a way
       # of saying it: past ten the oldest pin gives way, so the cap needs no
@@ -153,6 +154,8 @@ module Rubot
       include Rubot::Web::Auth
       include Rubot::Web::Router
       include Rubot::Web::Routes::Push
+      include Rubot::Web::Routes::Cron
+      include Rubot::Web::Routes::Instagram
       include Rubot::Web::Media
 
       attr_reader :host, :port
@@ -1284,157 +1287,6 @@ module Rubot
         warn "[web] settings applied to this process only: #{e.class}: #{e.message}"
       end
 
-      # --- instagram -----------------------------------------------------
-
-      def instagram_client(persona: "")
-        Rubot::Instagram.new(store: Session.store, persona: persona)
-      end
-
-      # Which persona's account set a request is about. The card posts the
-      # persona it was drawn for; a session id in the query is the fallback for
-      # a request that came from a page without that field. A hand-edited form
-      # cannot name a persona this install does not have.
-      def ig_persona_for(req)
-        named = form(req, "persona")
-        return named if known_slug?(named)
-
-        sid = req&.query && utf8(req.query["sid"].to_s)
-        owner = sid.empty? ? nil : owner_slug(sid)
-        owner || default_slug
-      end
-
-      # The connect button on the card opens this. A fresh state is minted on
-      # every click and kept in its own row, so two handshakes can be in flight
-      # at once — one per account.
-      def instagram_connect(req, res)
-        persona = ig_persona_for(req)
-        ig = instagram_client(persona: persona)
-        unless Session.store
-          return redirect_to(res, "/settings#{token_query}")
-        end
-        begin
-          redirect_to(res, ig.authorize_url(persona: persona))
-        rescue Rubot::Instagram::Error => e
-          warn "[web] instagram connect: #{e.message}"
-          redirect_to(res, "/settings#{token_query}")
-        end
-      end
-
-      # The "Putuskan" button on the connected card posts here. The account is
-      # named so a second connected account can be dropped without touching the
-      # default one. The token is deleted from the archive, never echoed back.
-      def instagram_disconnect(req, res)
-        persona = ig_persona_for(req)
-        ig = instagram_client(persona: persona)
-        ref = form(req, "account").to_s
-        begin
-          # The account name comes from the card, but the lookup stays inside
-          # this persona's set — a forged name cannot reach another persona's
-          # account even if it happens to match one there.
-          raise Rubot::Instagram::Error, "Akun Instagram tidak ditemukan" if ref.empty?
-          ig.disconnect(username: ref)
-          instagram_broadcast(persona: persona)
-        rescue Rubot::Instagram::Error => e
-          warn "[web] instagram disconnect: #{e.message}"
-        end
-
-        # The button is an htmx request targeting #ig-status, so answer with the
-        # card itself: htmx swaps it straight back to the connect state. A
-        # redirect would reload the whole page and lose the turn's live stream.
-        res["Content-Type"] = "text/html; charset=utf-8"
-        res["Cache-Control"] = "no-store"
-        res.body = instagram_card_markup(persona: persona)
-      end
-
-      # Meta sends the browser here with `code` and the state we wrote before
-      # leaving. The token never travels through the page: it is written to the
-      # archive and the reader is told only the username.
-      # Link an account another persona already connected. No OAuth: the token
-      # is install-wide, this only grants the current persona access to it.
-      def instagram_link(req, res)
-        persona = ig_persona_for(req)
-        ig = instagram_client(persona: persona)
-        ref = form(req, "account").to_s
-        begin
-          raise Rubot::Instagram::Error, "Akun Instagram tidak ditemukan" if ref.empty?
-          ig.link_account(username: ref)
-          instagram_broadcast(persona: persona)
-        rescue Rubot::Instagram::Error => e
-          warn "[web] instagram link: #{e.message}"
-        end
-
-        res["Content-Type"] = "text/html; charset=utf-8"
-        res["Cache-Control"] = "no-store"
-        res.body = instagram_card_markup(persona: persona)
-      end
-
-      def instagram_callback(req, res)
-        res["Content-Type"] = "text/html; charset=utf-8"
-        res["Cache-Control"] = "no-store"
-        state = form(req, "state")
-        persona = instagram_client.state_persona(state)
-        ig = instagram_client(persona: persona)
-        unless Session.store
-          res.status = 500
-          return res.body = instagram_result_page("Gagal", "Arsip sesi belum terbuka.")
-        end
-        # An empty persona is a legacy state minted before scoping; it belongs
-        # to the install's default. Anything else must be a real persona.
-        persona = default_slug if persona.empty?
-        unless known_slug?(persona)
-          return res.body = instagram_result_page("Gagal", "State OAuth tidak dikenal — coba lagi.")
-        end
-        # A state that was already used (or never minted) must not reach Meta's
-        # token endpoint. complete_authorization checks this too; checking here
-        # keeps the failure on the callback page instead of an API call.
-        unless ig.valid_state?(state)
-          return res.body = instagram_result_page("Gagal", "State OAuth tidak cocok atau sudah kedaluwarsa — coba lagi.")
-        end
-
-        begin
-          acc = ig.complete_authorization(form(req, "code"), state)
-          instagram_broadcast(persona: persona)
-          res.body = instagram_result_page("Terhubung", "Instagram terhubung sebagai @#{acc["username"]}.", close: true)
-        rescue Rubot::Instagram::Error => e
-          res.body = instagram_result_page("Gagal", e.message)
-        end
-      end
-
-      # The callback runs in the tab the connect button opened. On success the
-      # card in the original tab is already being swapped by the broadcast, so
-      # this tab has nothing left to say — close it. A failure keeps the page so
-      # the reader can see what went wrong; `window.close()` is a no-op when the
-      # tab was not opened by script, so the link stays as a way out either way.
-      def instagram_result_page(title, message, close: false)
-        close_script = close ? "<script>window.close();</script>" : ""
-        <<~HTML
-          <!DOCTYPE html><html lang="id"><head><meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>rubot · instagram</title>
-          <link rel="stylesheet" href="/assets/app.css">
-          </head><body><form class="settings-card">
-          <h1>#{CGI.escapeHTML(title)}</h1><p>#{CGI.escapeHTML(message)}</p>
-          <a class="btn primary" href="/">Kembali ke rubot</a>
-          </form>#{close_script}</body></html>
-        HTML
-      end
-
-      # Every open page is told the connection changed, so a card that said
-      # "Connect" can turn into "Terhubung" without a reload. The whole card is
-      # sent with hx-swap-oob, which replaces #ig-status wherever it is drawn —
-      # in a live turn or in the archived history. A bare text swap could not do
-      # that: it would land in the notice slot instead of on the button.
-      def instagram_broadcast(persona: "")
-        markup = instagram_card_markup(persona: persona, oob: true)
-        @event_mutex.synchronize { @event_subs.dup }.each do |sid, queue|
-          # Only pages showing this persona get the swap. A card in another
-          # persona's conversation must keep showing that persona's account.
-          next unless (owner_slug(sid) || default_slug) == persona
-
-          queue << [ :notice, markup ]
-        end
-      end
-
       # The manual compaction button is pressed while the page is idle, so there
       # is no live turn to draw its progress into. The always-on /events stream
       # carries the rows instead, out of band, into #compaction-slot in the
@@ -1563,50 +1415,6 @@ module Rubot
       # of dropping the markup into the notice slot) and the disconnect button's
       # own response (which already has hx-target + outerHTML, so the extra
       # attribute would make htmx swap the same element twice).
-      # The locals every render of the connect card needs: the accounts linked
-      # to this persona. The card always offers Connect (that is how a second
-      # account is added) and lists whatever is already linked below it.
-      def ig_account_locals(persona)
-        ig = instagram_client(persona: persona)
-        { ig_accounts: ig.accounts.map do |a|
-            { "id" => a["id"], "username" => a["username"].to_s, "is_default" => a["is_default"] }
-          end,
-          ig_linkable_accounts: ig.linkable_accounts.map do |a|
-            { "id" => a["id"], "username" => a["username"].to_s }
-          end }
-      end
-
-      def instagram_card_markup(persona: "", oob: false)
-        locals = ig_account_locals(persona)
-        card = View.render("_instagram_connect", token_query: token_query,
-                                                 ig_persona: persona,
-                                                 ig_accounts: locals[:ig_accounts],
-                                                 ig_linkable_accounts: locals[:ig_linkable_accounts])
-        return card unless oob
-
-        card.sub(/<div class="ig-connect-card" id="ig-status">/,
-                 '<div class="ig-connect-card" id="ig-status" hx-swap-oob="true">')
-      end
-
-      # Due posts are published on a minute ticker, not on a user turn: a
-      # schedule is a promise to publish at 07:00 whether or not anyone is
-      # talking to the bot then.
-      def start_instagram_ticker
-        return unless Session.store
-
-        @instagram_thread = Thread.new do
-          loop do
-            sleep 60
-            break unless @running
-            begin
-              instagram_client.publish_due
-            rescue StandardError => e
-              warn "[web] instagram ticker: #{e.class}: #{e.message}"
-            end
-          end
-        end
-      end
-
       def settings_url(saved: false)
         query = []
         query << "saved=1" if saved
@@ -2693,42 +2501,14 @@ module Rubot
         end
       end
 
-      # Point the agent's file tools at this conversation, so a picture they
-      # hand back lands where the page can serve it. Telegram sets the same
-      # field with a chat id; here it is a folder. Plain strings only, because
-      # the value crosses into the session's Ractor.
-      #
-      # The cron tool is told which workspace the conversation runs in, so a
-      # reminder written in a persona's chat is filed with that persona — the
-      # same thing a Telegram topic does.
+      # Both tool contexts are bound before a turn starts: the file tool at the
+      # folder the page serves pictures from, the cron tool at the workspace the
+      # reminder belongs to. Each lives with the slice that owns that tool.
       def prepare_delivery(sid)
         bind_file_delivery(sid)
         bind_cron_delivery(sid)
       end
 
-      def bind_cron_delivery(sid)
-        cron = session_for(sid).tools.get("cron")
-        return unless cron
-
-        cron.delivery_context = {
-          channel: "web",
-          workspace: workspace_for_session(sid),
-          # Which persona the reminder belongs to, so a fired job can open a
-          # conversation there instead of falling back to the default one.
-          slug: owner_slug(sid)
-        }
-      end
-
-      def workspace_for_session(sid)
-        rooted = @pool.workspace_for_session(sid) if actor_mode? && @pool.respond_to?(:workspace_for_session)
-        rooted || @app_config&.workspace
-      rescue StandardError
-        @app_config&.workspace
-      end
-
-      # What a file is called when it is downloaded: the stored name minus the
-      # id in front of it. A name the slug could not keep — a file called only
-      # in symbols — falls back to a word for what it is.
       # --- turn lifecycle ------------------------------------------------
 
       # The turn this session is running right now, if any. Nothing is written
@@ -3655,132 +3435,10 @@ module Rubot
         res.body = ""
       end
 
-      # A fired job has no browser waiting on it, so it is delivered by
-      # writing to a conversation: the page shows it the next time it asks for
-      # the persona's sessions. A job that asked for its own conversation gets
-      # a new session each run, which is how a daily practice prompt arrives as
-      # a fresh chat instead of piling up in one.
-      def handle_cron_fire(result)
-        case result[:mode]
-        when "agent_turn"
-          deliver_cron_turn(result)
-        when "deliver"
-          # A "deliver" job has no turn to run: it is a message written for the
-          # moment it fires. There is no session to open, so the notification
-          # points at the persona's own conversation instead.
-          slug = result[:slug].to_s
-          slug = default_slug unless known_slug?(slug)
-          notify_push(
-            slug,
-            title: persona_title(slug),
-            body: result[:result][:deliver_message].to_s.strip.then { |text| text.empty? ? cron_note(result) : text },
-            url: session_url(session_id(slug))
-          )
-        else
-          warn "[web] cron fired (#{result[:mode]}) with nowhere to put it in the browser"
-        end
-      rescue StandardError => e
-        warn "[web] cron delivery failed: #{e.class}: #{e.message}"
-      end
-
-      def deliver_cron_turn(result)
-        slug = result[:slug].to_s
-        slug = default_slug unless known_slug?(slug)
-
-        sid = if result[:new_session]
-          new_session_id(slug)
-        else
-          session_id(slug)
-        end
-
-        prepare_delivery(sid)
-        session = session_for(sid)
-        reply = session.process_cron(
-          result[:result][:agent_message],
-          fresh: result[:new_session] ? true : false
-        )
-
-        # A conversation the job opened has no user message to be named after,
-        # so it takes the job's own description and the day it ran.
-        if result[:new_session] && session.respond_to?(:set_session_title)
-          session.set_session_title(cron_session_title(result))
-        end
-
-        # Whoever has the app open hears about it now, rather than on the next
-        # reload — any persona's page, because the roster and the drawer's count
-        # are the install's.
-        broadcast_sessions
-
-        # And whoever does not: a reminder is the whole point of firing while
-        # the app is closed. Pages that are open are skipped by the worker
-        # itself, so this cannot ring twice for the same news.
-        #
-        # A conversation the job just opened has already been given its first
-        # line by the persona, and that line is the better invitation: the
-        # job's description says what the job is ("Daily English speaking
-        # practice"), while the opening says why to unlock the phone ("What's
-        # one small win you had this week?"). So a new conversation announces
-        # itself in its own words, and a reminder — which has no opening worth
-        # quoting — keeps saying what it is.
-        title, note = if result[:new_session]
-          hook = cron_hook(slug, reply)
-          [ hook, cron_note(result, reply: reply, spoken: hook) ]
-        else
-          [ persona_title(slug), cron_note(result) ]
-        end
-
-        notify_push(slug, title: title, body: note, url: session_url(sid))
-      end
-
-      # What a notification says about a fired job.
-      #
-      # With a reply to quote, it says whatever the persona asked — a question
-      # is the one thing a reader can answer straight from the lock screen. A
-      # reply with no question is quoted by its first line. Nothing to quote
-      # leaves the description, which is the reader's own words for the job
-      # ("minum air", "cek inbox") and more useful than a timestamp — and it is
-      # sealed to the device, so a push service never reads it.
-      def cron_note(result, reply: nil, spoken: nil)
-        lines = cron_lines(reply).reject { |candidate| candidate == spoken }
-        # A question is what a reader can answer straight from the lock screen,
-        # so it is preferred over a line that only sets the scene.
-        line = lines.find { |candidate| candidate.include?("?") } || lines.first
-        return shorten(line, TURN_NOTIFY_CHARS) if line
-
-        label = result[:description].to_s.gsub(/\s+/, " ").strip
-        label.empty? ? "Sesi terjadwal sudah siap." : shorten(label, TURN_NOTIFY_CHARS)
-      end
-
-      # The bold line on the lock screen for a conversation that just began: the
-      # first thing the persona said, which is the invitation itself.
-      def cron_hook(slug, reply)
-        line = cron_lines(reply).first
-        line ? shorten(line, NOTIFY_HOOK_CHARS) : persona_title(slug)
-      end
-
-      # A reply is markdown written for a page — headings, bold, code spans and
-      # blank lines between paragraphs. A notification is one glance at one
-      # line, so the punctuation that only means something next to a stylesheet
-      # is dropped and the lines are handed back in the order they were spoken.
-      def cron_lines(reply)
-        reply.to_s.split("\n").map do |line|
-          line.strip
-              .sub(/\A[#>*\-]+\s*/, "")
-              .gsub(/\*\*|__|`/, "")
-              .gsub(/\s+/, " ")
-              .strip
-        end.reject(&:empty?)
-      end
-
       def shorten(text, limit)
         Rubot::Formatting.shorten(text, limit)
       end
 
-      def cron_session_title(result)
-        label = result[:description].to_s.strip
-        label = "Scheduled session" if label.empty?
-        "#{label} — #{Time.now.strftime('%Y-%m-%d')}"
-      end
     end
   end
 end
