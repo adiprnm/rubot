@@ -62,6 +62,7 @@ module Rubot
         register Notify.new
         register Instagram.new
         register Delegate.new
+        register SubagentResults.new
       end
     end
   end

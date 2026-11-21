@@ -100,11 +100,16 @@ module Rubot
         # Still one turn at a time, exactly as before: a second message waits
         # in this queue until the first one finishes.
         turns = Queue.new
+        # One line per actor, so the log can answer the question a stuck turn
+        # raises first: did this conversation get a second actor, and which of
+        # them did the message go to.
+        warn "[actor] serve #{session_id} in #{Ractor.current.object_id}" if Rubot.debug?
         runner = Thread.new do
           loop do
             msg = turns.pop
             break if msg == :shutdown
 
+            warn "[actor] runner picked #{msg.is_a?(Hash) ? msg[:type].inspect : msg.inspect}" if Rubot.debug?
             begin
               handle_message(agent, msg)
             rescue StandardError => e
@@ -117,8 +122,9 @@ module Rubot
 
         loop do
           msg = Ractor.receive
+          warn "[actor] serve recv #{msg[:type].inspect}" if Rubot.debug?
           case msg[:type]
-          when :message
+          when :message, :background
             turns << msg
           when :request
             handle_request(agent, session_id, msg)
@@ -137,6 +143,8 @@ module Rubot
       def self.handle_message(agent, msg)
         events = msg[:events]
 
+        return handle_background(agent, msg) if msg[:type] == :background
+
         # Ractor::Port#receive is only allowed in the Ractor that created the
         # port, so the confirmation channel is created here and sent to the
         # caller (which may only send on it).
@@ -153,6 +161,10 @@ module Rubot
           # never has to ask a busy actor for it.
           on_usage: ->(report) { events << [ :usage, report ] },
           on_subagent: ->(info) { events << [ :subagent, info ] },
+          # A delegated run the channel is expected to execute. It travels as
+          # plain data for the same reason every other event does, and the
+          # parent turn carries on without waiting for it.
+          on_delegate: ->(request) { events << [ :delegate, request ] },
           on_compaction: ->(result) { events << [ :compaction, result ] },
           on_compaction_start: -> { events << [ :compaction_start ] },
           on_compaction_failed: -> { events << [ :compaction_failed ] },
@@ -182,6 +194,34 @@ module Rubot
         events << [ :error, e.class.name, e.message, Array(e.backtrace).first(5) ]
       ensure
         control&.close
+      end
+
+      # A turn the reader did not speak, run inside the Ractor that owns the
+      # session. Its answer comes back as `[:chunk, text]` events while it is
+      # being written and `[:done, response]` at the end, so a channel can show
+      # it arriving instead of waiting for the whole thing.
+      #
+      # Every write is guarded: a channel that gave up on the answer closes the
+      # port, and a turn that finishes late must not take the actor's thread with
+      # it — the next prompt of that conversation would have nothing to run on.
+      def self.handle_background(agent, msg)
+        events = msg[:events]
+        warn "[actor] background turn in #{Ractor.current.object_id}" if Rubot.debug?
+        response = agent.process_background(
+          msg[:text],
+          label: msg[:label].to_s,
+          fresh: msg[:fresh] ? true : false
+        ) { |text| emit_event(events, [ :chunk, text ]) }
+
+        emit_event(events, [ :done, response ])
+      rescue StandardError => e
+        emit_event(events, [ :error, e.class.name, e.message, Array(e.backtrace).first(5) ])
+      end
+
+      def self.emit_event(events, event)
+        events << event
+      rescue Ractor::ClosedError
+        nil
       end
 
       def self.handle_request(agent, session_id, msg)

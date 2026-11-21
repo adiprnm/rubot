@@ -23,7 +23,7 @@ require_relative "../lib/rubot"
 
 ROOT = File.expand_path("..", __dir__)
 SERVE_ARGS = %w[bin/rubot web].freeze
-STOP_TIMEOUT = 8.0
+STOP_TIMEOUT = 15.0
 BOOT_TIMEOUT = 20.0
 
 def log(message)

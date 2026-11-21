@@ -223,6 +223,81 @@ class TestAgentRoundLimit < Minitest::Test
     assert_equal [ nil ], provider.retry_values
   end
 
+  # A turn the reader did not speak: the text reaches the model as context and
+  # the transcript keeps only the answer. Otherwise a background report would
+  # appear in the conversation in the reader's own voice, saying words they
+  # never typed.
+  def test_a_background_turn_leaves_out_the_message_it_was_given
+    @tmpdir = Dir.mktmpdir
+    workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(workspace)
+    config_path = File.join(@tmpdir, "background-config.yml")
+    File.write(config_path, {
+      "agents" => { "defaults" => { "workspace" => workspace } },
+      "models" => [ { "name" => "test", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ]
+    }.to_yaml)
+
+    agent = Rubot::Agent.new(
+      config: Rubot::Config.new(config_path),
+      provider: CronProvider.new,
+      session_id: "background-report"
+    )
+
+    response = agent.process_background("## writer\npuisi jadi",
+                                        label: "Hasil subagent yang sudah selesai:\n\n")
+
+    assert_equal "cron answer", response
+    roles = agent.session.messages.map { |message| message["role"] }
+    assert_equal [ "assistant" ], roles, "only the answer joins the transcript"
+    assert_includes agent.session.messages.first["content"], "cron answer"
+    refute_includes agent.session.messages.first["content"], "puisi jadi"
+    assert agent.session.messages.first["background"],
+           "the reply is stamped as one nobody prompted, so the page can give it its own block"
+  end
+
+  # A provider that answers only by streaming: asking the background turn to
+  # hand its answer over passage by passage must go through `chat_stream`, or
+  # the reader gets the whole thing at once after the full wait.
+  class StreamingBackgroundProvider
+    def name
+      "openai"
+    end
+
+    def chat(_messages, tools: nil, on_retry: nil)
+      raise "a background turn with a block must stream"
+    end
+
+    def chat_stream(_messages, tools: nil, on_retry: nil)
+      yield "Halo", nil, nil
+      yield " dunia", nil, nil
+      { "content" => "Halo dunia", "finish_reason" => "stop" }
+    end
+  end
+
+  def test_a_background_turn_hands_its_answer_over_as_it_is_written
+    @tmpdir = Dir.mktmpdir
+    workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(workspace)
+    config_path = File.join(@tmpdir, "stream-config.yml")
+    File.write(config_path, {
+      "agents" => { "defaults" => { "workspace" => workspace } },
+      "models" => [ { "name" => "test", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ]
+    }.to_yaml)
+
+    agent = Rubot::Agent.new(
+      config: Rubot::Config.new(config_path),
+      provider: StreamingBackgroundProvider.new,
+      session_id: "background-stream"
+    )
+
+    written = []
+    response = agent.process_background("hasil subagent") { |text| written << text }
+
+    assert_equal "Halo dunia", response
+    assert_equal [ "Halo", "Halo dunia" ], written,
+                 "each call carries the passage so far, so a repaint cannot lose a word"
+  end
+
   def test_uses_configured_limit_instead_of_hardcoded_ten
     agent = build_agent(max_rounds: 3)
 

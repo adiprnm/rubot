@@ -145,6 +145,15 @@ module Rubot
         @store.subagent_runs(
           arguments.fetch(:parent_session), limit: arguments.fetch(:limit, 50)
         )
+      when :pending_subagent_results
+        @store.pending_subagent_results(
+          arguments.fetch(:parent_session), limit: arguments.fetch(:limit, 20),
+          newest_first: arguments.fetch(:newest_first, false)
+        )
+      when :mark_subagent_results_reported
+        @store.mark_subagent_results_reported(arguments.fetch(:run_ids, []))
+      when :release_subagent_results
+        @store.release_subagent_results(arguments.fetch(:run_ids, []))
       when :counts
         @store.counts
       when :ig_settings

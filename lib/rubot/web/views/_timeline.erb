@@ -44,9 +44,9 @@
 <% end -%>
 </div>
 <% when :subagent -%>
-<div class="subagent-row subagent-<%= h(item[:phase]) %>">
+<div class="subagent-row subagent-<%= h(item[:phase]) %>"<% if item[:task] && !item[:task].empty? %> title="<%= h(item[:task]) %>"<% end %>>
   <span class="subagent-mark" aria-hidden="true"><%= item[:phase] == "done" ? "✓" : (item[:phase] == "failed" ? "✗" : "⟡") %></span>
-  <span class="subagent-name">subagent · <%= h(item[:agent]) %></span>
+  <span class="subagent-name"><%= h(item[:agent]) %></span>
   <span class="subagent-detail"><%= h(item[:detail]) %></span>
 </div>
 <% end -%>

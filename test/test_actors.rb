@@ -672,6 +672,44 @@ ensure
   ractor&.join
 end
 
+# A background turn has no prompt behind it, so it travels as a message type of
+# its own — and its answer comes back passage by passage, which is what lets a
+# page show the report being written instead of waiting for the whole thing.
+def test_session_handle_streams_a_background_turn
+  ractor = Ractor.new do
+    agent = Class.new do
+      def process_background(_text, label: "", fresh: false, &on_chunk)
+        on_chunk&.call("Halo")
+        on_chunk&.call("Halo dunia")
+        "Halo dunia"
+      end
+    end.new
+
+    loop do
+      msg = Ractor.receive
+      break if msg[:type] == :shutdown
+
+      Rubot::Actors::SessionActor.handle_message(agent, msg)
+    end
+  end
+
+  handle = Rubot::Actors::SessionHandle.new(ractor, "background")
+  written = []
+  answer = Timeout.timeout(5) do
+    handle.process_background("hasil subagent", label: "Hasil: ") { |text| written << text }
+  end
+
+  assert_equal "Halo dunia", answer
+  assert_equal [ "Halo", "Halo dunia" ], written
+ensure
+  begin
+    ractor&.send({ type: :shutdown })
+  rescue StandardError
+    nil
+  end
+  ractor&.join
+end
+
   # Regression: the confirmation port must be created by the session Ractor,
   # because Ractor::Port#receive only works in the Ractor that created it.
   def test_session_handle_confirm_round_trip
@@ -950,5 +988,50 @@ class TestRactorShareableConstants < Minitest::Test
     ractor = Ractor.new { Rubot::TUI::AUTO_TOGGLE["on"] }
 
     assert_equal true, ractor.value
+  end
+end
+
+# Shutting a pool down is the last thing the process does, and it happens while
+# a restart is counting down: every actor is told to stop at once, so the wait is
+# the slowest one and not the sum. Sequential, three conversations with a turn in
+# flight spent six seconds and the restart's KILL arrived mid-shutdown.
+class TestSessionPoolShutdown < Minitest::Test
+  # One actor as far as the pool is concerned: it records that it was closed and
+  # how long closing it took.
+  class SlowActor
+    def initialize(delay, log)
+      @delay = delay
+      @log = log
+    end
+
+    def shutdown
+      sleep @delay
+      @log << self
+    end
+  end
+
+  def build_pool(actors)
+    pool = Rubot::Actors::SessionPool.allocate
+    pool.instance_variable_set(:@mutex, Mutex.new)
+    pool.instance_variable_set(:@actors, actors.to_h { |actor| [ actor.object_id.to_s, actor ] })
+    pool.instance_variable_set(:@cron, nil)
+    pool.instance_variable_set(:@store_service, nil)
+    pool.instance_variable_set(:@store, nil)
+    pool
+  end
+
+  def test_every_actor_is_closed_and_they_are_closed_at_once
+    closed = []
+    actors = Array.new(4) { SlowActor.new(0.2, closed) }
+    pool = build_pool(actors)
+
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    pool.shutdown
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+    assert_equal 4, closed.size, "every actor is closed"
+    assert_empty pool.instance_variable_get(:@actors), "and the pool forgets them"
+    assert_operator elapsed, :<, 0.6,
+                    "four actors that each need 0.2s must not cost 0.8s"
   end
 end

@@ -249,22 +249,6 @@ module Rubot
         end
       end
 
-      def test_subagent_events_track_running_count_and_render_in_the_strip
-        turn = Rubot::Web::Turn.new(id: "t1", session_id: "web_rubot")
-        turn.subagent(run_id: "r1", agent: "writer", phase: "started", detail: "write a poem", depth: 0)
-        turn.subagent(run_id: "r2", agent: "researcher", phase: "tool", detail: "search docs", depth: 0)
-
-        assert_equal 2, turn.running_subagents
-        html = Rubot::Web::View.render("_subagents", subagents: turn.subagent_list)
-        assert_includes html, "2 subagent aktif"
-        assert_includes html, "writer"
-        assert_includes html, "researcher"
-        assert_includes html, "search docs"
-
-        turn.subagent(run_id: "r1", agent: "writer", phase: "done", detail: "3s", depth: 0)
-        assert_equal 1, turn.running_subagents
-      end
-
       def test_subagent_phases_become_timeline_rows
         turn = Rubot::Web::Turn.new(id: "t1", session_id: "web_rubot")
         turn.subagent_item(run_id: "r1", agent: "writer", phase: "started", detail: "write a poem", depth: 0)
@@ -272,8 +256,170 @@ module Rubot
         html = Rubot::Web::View.turn_body(turn, token_query: "")
 
         assert_includes html, "subagent-row"
-        assert_includes html, "subagent · writer"
+        assert_includes html, %(<span class="subagent-name">writer</span>)
+        refute_includes html, "subagent ·"
         assert_includes html, "write a poem"
+      end
+
+      # The channel calls both callbacks for every phase: one keeps the count of
+      # calls a run made, the other decides what the transcript keeps.
+      def feed_subagent(turn, info)
+        turn.subagent(info)
+        turn.subagent_item(info)
+      end
+
+      # Delegated runs have one place on the page: the footer. The band above
+      # the composer says the turn is still working and nothing else, so a run
+      # is not reported twice in two registers.
+      def test_the_working_band_does_not_carry_subagents
+        html = Rubot::Web::View.render("_working", since: 12.5)
+
+        assert_includes html, "Working…"
+        refute_includes html, "subagent"
+      end
+
+      # The footer is where a delegated run is read: it outlives the turn that
+      # asked for it, so it cannot live in the turn's own view — and it is not
+      # there at all when there is nothing to say.
+      def test_the_footer_sheet_names_itself_and_lists_the_runs
+        running = [
+          { agent: "writer", phase: "tool", detail: "read notes.md", line: "1 call · read notes.md" },
+          { agent: "researcher", phase: "started", detail: "find docs", line: "find docs" }
+        ]
+        html = Rubot::Web::View.render("_subagent_sheet", subagents: running)
+        assert_includes html, %(<span class="subagent-label">subagent</span>)
+        assert_includes html, "researcher"
+        assert_includes html, "1 call · read notes.md"
+        refute_includes html, %(id="subagent-sheet" hidden)
+
+        finished = [
+          { agent: "writer", phase: "done", detail: "9s", line: "1 call · 9s", finished_at: Time.now }
+        ]
+        html = Rubot::Web::View.render("_subagent_sheet", subagents: finished)
+        assert_includes html, "subagent-done"
+
+        # Nothing running and the last run long gone: the row keeps nothing.
+        stale = [
+          { agent: "writer", phase: "done", detail: "9s", line: "1 call · 9s",
+            finished_at: Time.now - (Rubot::Web::SubagentJobs::DONE_MARK_SECONDS + 60) }
+        ]
+        html = Rubot::Web::View.render("_subagent_sheet", subagents: stale)
+        assert_includes html, %(id="subagent-sheet" hidden)
+
+        html = Rubot::Web::View.render("_subagent_sheet", subagents: [])
+        assert_includes html, %(id="subagent-sheet" hidden)
+      end
+
+      # A page that was away has missed the events that moved the footer, and
+      # the sheet otherwise only ever arrives as a diff (the slots inside it).
+      # One lost event left a run that had come back still wearing the mark it
+      # wore while it worked — the reader saw two runs apparently stuck and one
+      # ticked. The stream hands the whole sheet over on every (re)connect, so
+      # a page with a stale footer repairs itself without a reload.
+      def test_a_reopened_stream_hands_the_page_the_whole_footer_again
+        channel = channel_with_sessions(personas: { "rubot" => { "name" => "Rubot" } },
+                                        sessions: { "web_rubot" => "Halo" })
+        jobs = channel.instance_variable_get(:@subagent_jobs)
+        jobs.start(session_id: "web_rubot", run_id: "r1", agent: "writer", task: "tulis puisi")
+        jobs.start(session_id: "web_rubot", run_id: "r2", agent: "researcher", task: "cari docs")
+        jobs.finish(session_id: "web_rubot", run_id: "r1", status: "done", result: "puisi")
+        jobs.finish(session_id: "web_rubot", run_id: "r2", status: "done", result: "docs")
+
+        sheet = channel.send(:event_stream_opening, "web_rubot").to_h[:"subagent-sheet"]
+
+        assert_includes sheet, %(id="subagent-sheet" hx-swap-oob="true")
+        assert_equal 2, sheet.scan("subagent-done").size, "both runs read as finished"
+        assert_includes sheet, "writer"
+        assert_includes sheet, "researcher"
+      end
+
+      # The footer is a reply to "did it finish?", not a permanent decoration.
+      # Three seconds after the last run lands the sheet goes — and nothing else
+      # will ever mention it, so the channel schedules that hiding itself rather
+      # than waiting for an event that never comes.
+      def test_the_footer_hides_once_the_mark_has_had_its_three_seconds
+        channel = channel_with_sessions(personas: { "rubot" => { "name" => "Rubot" } },
+                                        sessions: { "web_rubot" => "Halo" })
+        sent = []
+        channel.define_singleton_method(:push_to_session) { |_sid, type, markup| sent << [ type, markup ] }
+
+        jobs = channel.instance_variable_get(:@subagent_jobs)
+        jobs.start(session_id: "web_rubot", run_id: "r1", agent: "writer", task: "tulis puisi")
+        jobs.finish(session_id: "web_rubot", run_id: "r1", status: "done", result: "puisi")
+        sent.clear
+
+        channel.send(:hide_finished_subagents, "web_rubot")
+        assert_empty sent, "the tick is still inside its three seconds"
+
+        # The same call, three seconds later, is what takes the row away. Time is
+        # moved on the run rather than waited out.
+        jobs.instance_variable_get(:@runs)["web_rubot"]["r1"][:finished_at] =
+          Time.now - (Rubot::Web::SubagentJobs::DONE_MARK_SECONDS + 1)
+        channel.send(:hide_finished_subagents, "web_rubot")
+
+        assert_match(/id="subagent-sheet"[^>]*\shidden/, sent.last[1])
+      end
+
+      # One element, one source: the sheet appears when the first run starts
+      # and afterwards only its slots move, so an open panel stays open.
+      def test_the_footer_appears_on_the_first_event_and_then_only_moves_its_slots
+        channel = channel_with_sessions(personas: { "rubot" => { "name" => "Rubot" } },
+                                        sessions: { "web_rubot" => "Halo" })
+        sent = []
+        channel.define_singleton_method(:push_to_session) { |_sid, type, markup| sent << [ type, markup ] }
+
+        jobs = channel.instance_variable_get(:@subagent_jobs)
+        jobs.start(session_id: "web_rubot", run_id: "r1", agent: "writer", task: "tulis puisi")
+
+        assert_equal 1, sent.size
+        assert_includes sent.first[1], %(id="subagent-sheet" hx-swap-oob="true")
+        assert_includes sent.first[1], %(id="subagent-sheet-body")
+
+        jobs.update(session_id: "web_rubot", run_id: "r1", phase: "tool", detail: "grep rhyme")
+
+        assert_equal 2, sent.size
+        refute_includes sent.last[1], %(id="subagent-sheet" hx-swap-oob="true")
+        assert_includes sent.last[1], %(id="subagent-sheet-body" hx-swap-oob="innerHTML")
+        assert_includes sent.last[1], "1 call · grep rhyme"
+      end
+
+      # A compact turn does not narrate the calls a delegated agent made: the
+      # strip above the composer already names the agent and the call it is on
+      # while it works. What survives into the transcript is one row per run,
+      # with the count of calls it took.
+      def test_a_compact_turn_records_one_row_per_subagent_run
+        turn = Rubot::Web::Turn.new(id: "t1", session_id: "web_rubot", tool_output: "compact")
+        feed_subagent(turn, run_id: "r1", agent: "writer", phase: "started", detail: "write a poem", depth: 0)
+        feed_subagent(turn, run_id: "r1", agent: "writer", phase: "tool", detail: "read notes.md", depth: 0)
+        feed_subagent(turn, run_id: "r1", agent: "writer", phase: "tool", detail: "grep rhyme", depth: 0)
+        feed_subagent(turn, run_id: "r1", agent: "writer", phase: "thinking", detail: "hmm", depth: 0)
+        html = Rubot::Web::View.turn_body(turn, token_query: "")
+
+        assert_equal 0, turn.items.count { |item| item[:kind] == :subagent }
+
+        feed_subagent(turn, run_id: "r1", agent: "writer", phase: "done", detail: "12s", depth: 0)
+        html = Rubot::Web::View.turn_body(turn, token_query: "")
+
+        assert_equal 1, turn.items.count { |item| item[:kind] == :subagent }
+        assert_equal 1, html.scan("subagent-row").size
+        assert_includes html, "2 call · 12s"
+        refute_includes html, "read notes.md"
+        refute_includes html, "grep rhyme"
+        # The task still rides on the row, just not as a line of its own.
+        assert_includes html, %(title="write a poem")
+      end
+
+      def test_a_compact_turn_keeps_the_reason_a_run_failed
+        turn = Rubot::Web::Turn.new(id: "t1", session_id: "web_rubot", tool_output: "compact")
+        feed_subagent(turn, run_id: "r1", agent: "writer", phase: "started", detail: "write a poem", depth: 0)
+        feed_subagent(turn, run_id: "r1", agent: "writer", phase: "tool", detail: "read notes.md", depth: 0)
+        feed_subagent(turn, run_id: "r1", agent: "writer", phase: "failed", detail: "rate limited", depth: 0)
+        html = Rubot::Web::View.turn_body(turn, token_query: "")
+
+        assert_equal 1, html.scan("subagent-row").size
+        assert_includes html, "subagent-failed"
+        assert_includes html, "rate limited"
+        refute_includes html, "1 call"
       end
 
       def test_a_compaction_callback_becomes_a_timeline_row
@@ -1238,6 +1384,364 @@ module Rubot
       # next to config.yml, conversations in <dir>/sessions. The channel is
       # given the config directly, so no session pool (and no Ractor) is
       # spawned just to list files.
+      # A delegate request is run outside the turn that asked for it: the job is
+      # tracked by the channel, and the answer is kept where the footer and
+      # `subagent_results` can both find it.
+      def test_a_delegate_request_runs_outside_the_turn_and_lands_in_the_footer
+        channel = channel_with_sessions(personas: { "rubot" => { "name" => "Rubot" } },
+                                        sessions: { "web_rubot" => "Halo" })
+        handle = FakeDelegateHandle.new("jawaban writer")
+        pool = Object.new
+        pool.define_singleton_method(:delegate) { |**_kwargs| handle }
+        channel.instance_variable_set(:@pool, pool)
+
+        channel.send(:start_delegate, "web_rubot",
+                     { run_id: "r1", agent: "writer", task: "tulis puisi", model: "" })
+
+        jobs = channel.instance_variable_get(:@subagent_jobs)
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 2
+        while jobs.running_count("web_rubot").positive? &&
+              Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
+          sleep 0.01
+        end
+
+        run = jobs.runs("web_rubot").first
+        assert_equal "done", run[:phase]
+        assert_equal "jawaban writer", run[:result]
+        assert_equal "web_rubot~sub-r1", handle.session_id
+      end
+
+      def test_a_delegate_request_for_an_unknown_persona_fails_the_run
+        channel = channel_with_sessions(personas: { "rubot" => { "name" => "Rubot" } },
+                                        sessions: { "web_rubot" => "Halo" })
+        pool = Object.new
+        pool.define_singleton_method(:delegate) { |**_kwargs| nil }
+        channel.instance_variable_set(:@pool, pool)
+
+        channel.send(:start_delegate, "web_rubot",
+                     { run_id: "r1", agent: "nobody", task: "tulis puisi", model: "" })
+
+        run = channel.instance_variable_get(:@subagent_jobs).runs("web_rubot").first
+        assert_equal "failed", run[:phase]
+        assert_match(/nobody/, run[:error])
+      end
+
+      # A finished delegation is news the reader asked for, and it lands after
+      # the turn that asked is over — so it rings, instead of waiting to be
+      # noticed in a panel nobody has opened.
+      def test_a_finished_delegate_run_rings_the_lock_screen
+        channel = channel_with_sessions(personas: { "rubot" => { "name" => "Rubot" } },
+                                        sessions: { "web_rubot" => "Halo" })
+        handle = FakeDelegateHandle.new("jawaban writer")
+        pool = Object.new
+        pool.define_singleton_method(:delegate) { |**_kwargs| handle }
+        channel.instance_variable_set(:@pool, pool)
+
+        pushes = []
+        channel.define_singleton_method(:notify_push) do |slug, title:, body:, url:, **_rest|
+          pushes << { slug: slug, title: title, body: body, url: url }
+        end
+
+        channel.send(:start_delegate, "web_rubot",
+                     { run_id: "r1", agent: "writer", task: "tulis puisi", model: "" })
+
+        jobs = channel.instance_variable_get(:@subagent_jobs)
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 2
+        while jobs.running_count("web_rubot").positive? &&
+              Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
+          sleep 0.01
+        end
+
+        assert_equal 1, pushes.size
+        assert_includes pushes.first[:body], "writer"
+        assert_includes pushes.first[:body], "jawaban writer"
+        assert_includes pushes.first[:url], "/s/web_rubot"
+      end
+
+      # The sheet is only replaced when what it should show changes, so the page
+      # has to have been told what it shows — otherwise a stale note says
+      # "already visible" and the section never appears on a page that is in
+      # fact showing nothing. Both the page load and every stream opening leave
+      # that note behind, so a delegation that starts right after one redraws
+      # the element whole.
+      def test_a_run_starting_after_a_page_load_shows_the_whole_sheet
+        channel = channel_with_sessions(personas: { "rubot" => { "name" => "Rubot" } },
+                                        sessions: { "web_rubot" => "Halo" })
+        sent = []
+        channel.define_singleton_method(:push_to_session) do |_sid, type, markup|
+          sent << [ type, markup ]
+        end
+
+        # What the page was just told: nothing to show.
+        channel.send(:subagent_runs_for_page, "web_rubot")
+
+        jobs = channel.instance_variable_get(:@subagent_jobs)
+        jobs.start(session_id: "web_rubot", run_id: "r1", agent: "writer", task: "tulis puisi")
+
+        assert_equal 1, sent.size
+        assert_includes sent.first[1], %(id="subagent-sheet" hx-swap-oob="true")
+        refute_includes sent.first[1], %(id="subagent-sheet" hidden)
+      end
+
+      # A batch belongs to the conversation that asked for it. When the last run
+      # lands, what came back becomes a turn of its own, so the reader gets the
+      # report without asking a second time — and each answer is handed over
+      # once, because the store records what it has already given.
+      def test_the_last_run_hands_the_batch_back_to_the_conversation
+        channel = channel_with_archive(
+          personas: { "rubot" => { "name" => "Rubot" } },
+          messages: { "web_rubot" => [ [ "user", "Halo" ], [ "assistant", "Siap." ] ] }
+        )
+        channel.instance_variable_set(:@running, true)
+        store = Rubot::Session.store
+        store.start_subagent_run(run_id: "r1", parent_session: "web_rubot",
+                                 agent_slug: "writer", task: "tulis puisi")
+        store.start_subagent_run(run_id: "r2", parent_session: "web_rubot",
+                                 agent_slug: "researcher", task: "cari docs")
+        store.finish_subagent_run(run_id: "r1", status: "done", result: "puisi jadi")
+        store.finish_subagent_run(run_id: "r2", status: "done", result: "docs ketemu")
+
+        said = record_reports(channel)
+        appended = []
+        channel.define_singleton_method(:broadcast_report_entry) do |sid, _index, text|
+          appended << [ sid, text ]
+        end
+
+        jobs = channel.instance_variable_get(:@subagent_jobs)
+        jobs.start(session_id: "web_rubot", run_id: "r1", agent: "writer", task: "tulis puisi")
+        jobs.start(session_id: "web_rubot", run_id: "r2", agent: "researcher", task: "cari docs")
+        jobs.finish(session_id: "web_rubot", run_id: "r1", status: "done", result: "puisi jadi")
+
+        channel.send(:report_subagents_when_done, "web_rubot")
+        assert_empty said, "one run is still working, so there is nothing to report yet"
+
+        jobs.finish(session_id: "web_rubot", run_id: "r2", status: "done", result: "docs ketemu")
+        channel.send(:report_subagents_when_done, "web_rubot")
+
+        assert_equal 1, said.size, "one batch, one report"
+        payload = said.first
+        assert_includes payload[:text], "puisi jadi"
+        assert_includes payload[:text], "docs ketemu"
+        assert_includes payload[:text], "Tugas: cari docs"
+        # Background, not a user message: the label is the framing the model
+        # sees, and nothing of it is written into the transcript as the reader.
+        assert_includes payload[:label], "Hasil subagent"
+        refute payload[:fresh]
+        assert_equal "Siap, hasilnya kubaca.", appended.last[1],
+                     "the reply is put on the page as its own block"
+        assert_equal "web_rubot", appended.last[0]
+
+        channel.send(:report_subagents_when_done, "web_rubot")
+        assert_equal 1, said.size, "an answer is handed over once"
+      end
+
+      # A backlog must not starve the batch that just landed: the report takes
+      # the newest answers and says that the rest are still waiting, instead of
+      # swallowing them unread or burying the news behind old news.
+      def test_a_report_takes_the_fresh_batch_and_names_what_is_still_waiting
+        channel = channel_with_archive(
+          personas: { "rubot" => { "name" => "Rubot" } },
+          messages: { "web_rubot" => [ [ "user", "Halo" ], [ "assistant", "Siap." ] ] }
+        )
+        channel.instance_variable_set(:@running, true)
+        store = Rubot::Session.store
+        total = Rubot::Channels::Web::SUBAGENT_REPORT_LIMIT + 1
+        (1..total).each do |i|
+          store.start_subagent_run(run_id: "r#{i}", parent_session: "web_rubot",
+                                   agent_slug: "writer", started_at: "2026-11-10T0#{i}:00:00Z")
+          store.finish_subagent_run(run_id: "r#{i}", status: "done", result: "jawaban #{i}")
+        end
+
+        said = record_reports(channel)
+        channel.send(:report_subagents_when_done, "web_rubot")
+
+        assert_equal 1, said.size
+        text = said.first[:text]
+        assert_includes text, "jawaban #{total}", "the newest answer is the news"
+        refute_includes text, "jawaban 1", "the oldest one waits for the next report"
+        assert_includes text, "subagent_results"
+        assert_equal 1, store.pending_subagent_results("web_rubot").size,
+                     "only what was quoted is marked read"
+      end
+
+      # A stand-in for a conversation's handle: it records what it was asked to
+      # say, and its tools answer nothing (the report only binds delivery
+      # context, it does not call a tool).
+      def record_reports(channel)
+        said = []
+        channel.define_singleton_method(:session_for) do |_sid|
+          fake = Object.new
+          fake.define_singleton_method(:process_background) do |text, label: "", fresh: false, &chunk|
+            said << { text: text, label: label, fresh: fresh }
+            chunk&.call("Siap, ")
+            chunk&.call("hasilnya kubaca.")
+            "Siap, hasilnya kubaca."
+          end
+          fake.define_singleton_method(:tools) do
+            tools = Object.new
+            tools.define_singleton_method(:get) { |_name| nil }
+            tools
+          end
+          fake
+        end
+        said
+      end
+
+      # The report becomes a turn nobody is following, so it is appended to the
+      # page that is open: written to the archive and announced nowhere, the
+      # answer looked like it never came.
+      def test_a_report_is_appended_to_the_open_page
+        channel = channel_with_archive(
+          personas: { "rubot" => { "name" => "Rubot" } },
+          messages: { "web_rubot" => [ [ "user", "Halo" ], [ "assistant", "Siap." ] ] }
+        )
+        channel.instance_variable_set(:@running, true)
+        store = Rubot::Session.store
+        store.start_subagent_run(run_id: "r1", parent_session: "web_rubot",
+                                 agent_slug: "writer", task: "tulis puisi")
+        store.finish_subagent_run(run_id: "r1", status: "done", result: "puisi jadi")
+
+        said = record_reports(channel)
+        queue = Queue.new
+        channel.send(:listen_for_events, "web_rubot", queue)
+
+        channel.send(:report_subagents_when_done, "web_rubot")
+
+        assert_equal 1, said.size
+        sent = []
+        sent << queue.pop until queue.empty?
+        appends = sent.select { |item| item.is_a?(Array) && item[0] == :append }
+        refute_empty appends, "the reply is appended to the thread"
+
+        # First the block where the answer will be written, then the prose inside
+        # it — and only the prose. The block is never re-created while it streams:
+        # the entry carries the animation that plays when a turn arrives, and
+        # replaying that on every passage made the answer blink instead of grow.
+        assert_includes appends.first[1], %(id="thread" hx-swap-oob="beforeend")
+        assert_includes appends.first[1], %(class="turn is-done is-report")
+        assert_includes appends.last[1], %(hx-swap-oob="innerHTML")
+        assert_includes appends.last[1], "Siap, hasilnya kubaca."
+        refute_includes appends.last[1], %(class="turn"),
+                        "the block around the answer is left standing while it is written"
+      end
+
+      # A report that could not be delivered must not leave its answers marked
+      # read: the model never saw them, and the store would never offer them
+      # again. The pile is what the next attempt draws from.
+      def test_a_report_that_fails_hands_the_answers_back
+        channel = channel_with_archive(
+          personas: { "rubot" => { "name" => "Rubot" } },
+          messages: { "web_rubot" => [ [ "user", "Halo" ], [ "assistant", "Siap." ] ] }
+        )
+        channel.instance_variable_set(:@running, true)
+        store = Rubot::Session.store
+        store.start_subagent_run(run_id: "r1", parent_session: "web_rubot",
+                                 agent_slug: "writer", task: "tulis puisi")
+        store.finish_subagent_run(run_id: "r1", status: "done", result: "puisi jadi")
+
+        channel.define_singleton_method(:session_for) do |_sid|
+          fake = Object.new
+          fake.define_singleton_method(:process_background) { |*_args, **_kwargs, &_block| raise "provider mati" }
+          fake.define_singleton_method(:tools) do
+            tools = Object.new
+            tools.define_singleton_method(:get) { |_name| nil }
+            tools
+          end
+          fake
+        end
+
+        channel.send(:report_subagents_when_done, "web_rubot")
+
+        assert_equal 1, store.pending_subagent_results("web_rubot").size,
+                     "an answer that was not delivered is still waiting to be read"
+      end
+
+      # A report is a turn of its own, and the actor serves one at a time. Started
+      # while the reader's own turn is running, the report spends its whole life
+      # in that queue — invisible to a deadline that only ever saw "no answer
+      # yet" — and was thrown away instead of arriving late. So it waits: the end
+      # of the turn asks again (see Web#report_later).
+      def test_a_report_waits_for_the_conversation_to_be_idle
+        channel = channel_with_archive(
+          personas: { "rubot" => { "name" => "Rubot" } },
+          messages: { "web_rubot" => [ [ "user", "Halo" ], [ "assistant", "Siap." ] ] }
+        )
+        channel.instance_variable_set(:@running, true)
+        store = Rubot::Session.store
+        store.start_subagent_run(run_id: "r1", parent_session: "web_rubot",
+                                 agent_slug: "writer", task: "tulis puisi")
+        store.finish_subagent_run(run_id: "r1", status: "done", result: "puisi jadi")
+
+        live = Rubot::Web::Turn.new(id: "t-live", session_id: "web_rubot")
+        channel.instance_variable_get(:@turns)["t-live"] = live
+        channel.instance_variable_get(:@active)["web_rubot"] = "t-live"
+
+        said = record_reports(channel)
+        channel.send(:report_subagents_when_done, "web_rubot")
+
+        assert_empty said, "nothing is reported over a turn that is still running"
+        assert_equal 1, store.pending_subagent_results("web_rubot").size,
+                     "the answers are still waiting for their turn"
+      end
+
+      # The toggle has to say whether anything is still working: the mark is the
+      # only thing a reader sees without opening the panel.
+      def test_the_footer_toggle_marks_a_run_as_still_working
+        jobs = Rubot::Web::SubagentJobs.new
+        jobs.start(session_id: "web_rubot", run_id: "r1", agent: "writer", task: "tulis puisi")
+        jobs.update(session_id: "web_rubot", run_id: "r1", phase: "tool", detail: "grep rhyme")
+
+        html = Rubot::Web::View.render("_subagent_sheet", subagents: jobs.runs("web_rubot"))
+        assert_includes html, %(<span class="subagent-run")
+        assert_includes html, %(1 subagent berjalan)
+
+        jobs.finish(session_id: "web_rubot", run_id: "r1", status: "done", result: "puisi")
+        html = Rubot::Web::View.render("_subagent_sheet", subagents: jobs.runs("web_rubot"))
+        refute_includes html, %(<span class="subagent-run")
+        assert_includes html, "subagent-done"
+      end
+
+      # The mark has three states, and the reader should be able to tell "still
+      # working" from "finished a moment ago" from "nothing has happened".
+      def test_the_toggle_mark_settles_into_a_tick_after_the_last_run
+        fresh = Rubot::Web::View.render("_subagent_state", subagents: [
+          { phase: "done", finished_at: Time.now }
+        ])
+        assert_includes fresh, "subagent-settled"
+        assert_includes fresh, "✓"
+        refute_includes fresh, "subagent-run"
+
+        failed = Rubot::Web::View.render("_subagent_state", subagents: [
+          { phase: "failed", finished_at: Time.now }
+        ])
+        assert_includes failed, "subagent-settled-failed"
+        assert_includes failed, "✗"
+
+        stale = Rubot::Web::View.render("_subagent_state", subagents: [
+          { phase: "done", finished_at: Time.now - (Rubot::Web::SubagentJobs::DONE_MARK_SECONDS + 60) }
+        ])
+        assert_empty stale.strip
+
+        working = Rubot::Web::View.render("_subagent_state", subagents: [
+          { phase: "tool", finished_at: Time.now }
+        ])
+        assert_includes working, "subagent-run"
+        refute_includes working, "subagent-settled"
+      end
+
+      class FakeDelegateHandle
+        attr_reader :session_id
+
+        def initialize(answer)
+          @answer = answer
+          @session_id = "web_rubot~sub-r1"
+        end
+
+        def process(_task, **_callbacks)
+          @answer
+        end
+      end
+
       def channel_with_sessions(personas:, sessions: {}, titles: {})
         dir = Dir.mktmpdir("rubot-web-sessions")
         @fixtures << dir
@@ -3123,6 +3627,46 @@ module Rubot
         assert_includes html, 'sse-swap="compact-note"'
       end
 
+      # A restart sends TERM, and stopping has to reach the work that is not a
+      # request: the learning queue may be naming a conversation or writing
+      # memory when the signal arrives. The order matters too — it is drained
+      # while the process still has a store to write to, before the loop that
+      # owns everything lets go. The three seconds are the share of the restart's
+      # window the queue gets; past it the KILL would cut the drain anyway.
+      def test_stopping_drains_the_learning_queue_before_the_server_loop
+        channel = channel_with_sessions(personas: { "rubot" => { "name" => "Rubot" } })
+        channel.instance_variable_set(:@running, true)
+
+        calls = []
+        channel.define_singleton_method(:stop_learning_worker) { |timeout: nil| calls << [ :learning, timeout ] }
+        server = Object.new
+        server.define_singleton_method(:shutdown) { calls << [ :server, nil ] }
+        channel.instance_variable_set(:@server, server)
+
+        channel.stop
+
+        assert_equal [ [ :learning, 3 ], [ :server, nil ] ], calls
+        refute channel.running?
+      end
+
+      # htmx finds a `sse-swap` element by walking up to the one that owns the
+      # EventSource, and nowhere else. A slot drawn outside that element is
+      # silently orphaned: the server pushes, htmx knows nobody is listening, and
+      # the page keeps showing what it had. That is how the footer's subagent
+      # sheet went missing — drawn correctly, pushed correctly, heard by nobody —
+      # so the rule is asserted here instead of remembered.
+      def test_every_idle_slot_sits_inside_the_event_stream
+        html = render_page
+        stream = html[/<div class="session-events".*?<\/div>/m]
+
+        assert stream, "the idle page carries an event stream of its own"
+        slots = html.scan(/sse-swap="([^"]+)"/).flatten
+        assert_includes slots, "subagent-sheet"
+        assert_includes slots, "compact-note"
+        assert_equal slots.sort, stream.scan(/sse-swap="([^"]+)"/).flatten.sort,
+                     "a slot outside the stream is a slot that never hears anything"
+      end
+
       # The footer's context figure is refreshed over the always-on /events
       # stream, so that stream needs its own usage slot. The one inside a turn
       # only exists while that turn is on screen and cannot serve a manual
@@ -3199,8 +3743,8 @@ module Rubot
       def test_each_usage_icon_draws_a_different_shape
         bodies = View::SVG_ICONS.values
 
-        assert_equal 6, bodies.size, "cost, cache, context, the report, the allowance and compact"
-        assert_equal 6, bodies.uniq.size
+        assert_equal 7, bodies.size, "cost, cache, context, the report, the allowance, compact and subagent"
+        assert_equal 7, bodies.uniq.size
         bodies.each { |body| assert_includes body, "<", "every icon needs at least one shape" }
       end
 
@@ -4776,6 +5320,10 @@ module Rubot
       # at the end. The name is only known once the turn is over, so a page that
       # does not receive this swap shows the prompt's first words until it is
       # reloaded — which is what the reader reported.
+      #
+      # Learning is deferred, so the test waits for the worker instead of
+      # assuming it has won a race with the turn: naming runs after the answer is
+      # delivered, and which of the two finishes first is nothing to rely on.
       def test_the_name_the_model_gives_reaches_the_page_when_the_turn_ends
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
         channel.define_singleton_method(:owner_slug) { |_sid| "kanyaah" }
@@ -4789,12 +5337,16 @@ module Rubot
         res = FakeResponse.new
         channel.send(:create_turn, turn_request("Tolong susun undangan pernikahan"), res, "web_kanyaah")
 
+        # The turn runs on a thread of its own, and the naming job is handed over
+        # as it ends: wait for the turn, then for the worker that names it.
         turn = channel.instance_variable_get(:@turns).values.first
-        payload = nil
-        turn.each_event { |type, data| payload = data if type == :sidebar }
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 5
+        sleep 0.01 until turn.closed? || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+        channel.send(:drain_learning)
+
+        payload = channel.send(:sidebar_markup, "web_kanyaah")
 
         assert_equal 1, provider.naming_calls, "the conversation is named once the answer is delivered"
-        refute_nil payload, "the turn has to tell the page that it has a name now"
         assert_includes payload, "Undangan pernikahan"
         assert_includes payload, %(id="chat-head" hx-swap-oob="true")
         assert_includes payload, %(id="sessions" hx-swap-oob="true")
@@ -5856,6 +6408,53 @@ module Rubot
         assert_equal %i[tool attachments], items.last(2).map { |item| item[:kind] }
         assert_includes items.last[:list].first[:url], "/s/#{sid}/media/#{stored}"
         assert_equal :picture, items.last[:list].first[:kind]
+      end
+
+      # A reply nobody prompted — a finished batch of sub agents, a fired job —
+      # carries a stamp so the transcript starts a block of its own for it. The
+      # neighbours cannot say which it is (an answer after a tool row is the
+      # same turn working on), and glued under the answer before it, the report
+      # read as if nothing had arrived at all.
+      def test_an_answer_that_follows_another_answer_gets_its_own_turn
+        sid = "web_kanyaah"
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: { sid => "Halo" }
+        )
+        write_messages(channel, sid, [
+          { "role" => "user", "content" => "Halo" },
+          { "role" => "assistant", "content" => "Halo juga." },
+          { "role" => "assistant", "content" => "Hasil subagent: puisi jadi.", "background" => true }
+        ])
+
+        entries = channel.send(:history, sid)
+
+        assert_equal %i[prompt turn turn], entries.map { |entry| entry[:kind] }
+        assert_equal "Hasil subagent: puisi jadi.", entries.last[:items].first[:text]
+      end
+
+      # The rounds of one turn still belong together: an answer after a tool row
+      # is the same exchange carrying on.
+      def test_a_tool_round_stays_inside_its_turn
+        sid = "web_kanyaah"
+        channel = channel_with_sessions(
+          personas: { "kanyaah" => { "name" => "Kanyaah" } },
+          sessions: { sid => "Baca file" }
+        )
+        write_messages(channel, sid, [
+          { "role" => "user", "content" => "Baca file" },
+          { "role" => "assistant", "content" => "Siap, saya baca.",
+            "tool_calls" => [ { "id" => "call_1",
+                                "function" => { "name" => "read", "arguments" => "{}" } } ] },
+          { "role" => "tool", "tool_call_id" => "call_1", "content" => "[Exit code: 0] isi" },
+          { "role" => "assistant", "content" => "Isinya begini." }
+        ])
+
+        entries = channel.send(:history, sid)
+
+        assert_equal %i[prompt turn], entries.map { |entry| entry[:kind] }
+        texts = entries.last[:items].select { |item| item[:kind] == :text }.map { |item| item[:text] }
+        assert_equal [ "Siap, saya baca.", "Isinya begini." ], texts
       end
 
       # A refresh draws the same seam the live timeline showed: the event is

@@ -96,6 +96,102 @@ class TestDelegate < Minitest::Test
     assert(events.all? { |e| e[:agent] == "writer" })
   end
 
+  # A channel that can run the run somewhere else asks for it through
+  # `on_delegate`. The turn is answered at once, the run is not started here,
+  # and everything the executor needs travels as plain data.
+  def test_a_handed_off_delegation_returns_before_anything_runs
+    requests = []
+    provider = AnswerProvider.new
+    events = []
+    agent = build_agent(provider: provider)
+    agent.on_subagent = ->(info) { events << info }
+    agent.on_delegate = ->(request) { requests << request }
+
+    result = agent.spawn_subagent(agent_slug: "writer", task: "write a poem", model: "model-a")
+
+    assert_match(/background/, result)
+    assert_equal 1, requests.size
+    request = requests.first
+    assert_equal "writer", request[:agent]
+    assert_equal "write a poem", request[:task]
+    assert_equal "model-a", request[:model]
+    assert_equal "lead", request[:parent_session]
+    refute_empty request[:run_id].to_s
+    assert_empty provider.prompts, "nothing may run inside the parent turn"
+    assert_equal [ :started ], events.map { |event| event[:phase] }
+  end
+
+  # The turn is what installs the callback: the channel passes it in, the agent
+  # keeps it for the length of the turn, and the delegate tool finds it there.
+  def test_process_installs_the_delegate_callback_for_the_turn
+    agent = build_agent
+    seen = ->(_request) {}
+
+    agent.process("halo", on_delegate: seen)
+
+    assert_same seen, agent.on_delegate
+  end
+
+  def test_a_background_answer_is_read_once_and_marked_as_read
+    archive = FakeResultsArchive.new([
+      { run_id: "r1", agent_slug: "writer", result: "a short poem" },
+      { run_id: "r2", agent_slug: "researcher", result: "two sources" }
+    ])
+    agent = Rubot::Agent.new(config: @config, provider: AnswerProvider.new,
+                             session_id: "lead", archive: archive)
+
+    answer = agent.subagent_results
+
+    assert_includes answer, "a short poem"
+    assert_includes answer, "two sources"
+    assert_equal %w[r1 r2], archive.reported
+  end
+
+  def test_reading_one_run_by_id_reports_only_that_run
+    archive = FakeResultsArchive.new([
+      { run_id: "r1", agent_slug: "writer", result: "a short poem" },
+      { run_id: "r2", agent_slug: "researcher", result: "two sources" }
+    ])
+    agent = Rubot::Agent.new(config: @config, provider: AnswerProvider.new,
+                             session_id: "lead", archive: archive)
+
+    answer = agent.subagent_results(run_id: "r2")
+
+    assert_includes answer, "two sources"
+    refute_includes answer, "a short poem"
+    assert_equal %w[r2], archive.reported
+  end
+
+  def test_reading_results_with_nothing_pending_says_so
+    agent = Rubot::Agent.new(config: @config, provider: AnswerProvider.new,
+                             session_id: "lead", archive: FakeResultsArchive.new([]))
+
+    assert_match(/No delegated run/, agent.subagent_results)
+  end
+
+  class FakeResultsArchive
+    attr_reader :reported
+
+    def initialize(rows)
+      @rows = rows
+      @reported = []
+    end
+
+    def pending_subagent_results(_session, limit: 20)
+      @rows
+    end
+
+    def mark_subagent_results_reported(ids)
+      @reported = ids
+      ids.size
+    end
+
+    # Session#load asks the archive first; nil falls back to the JSON file.
+    def load(_id, all: false)
+      nil
+    end
+  end
+
   def test_unknown_agent_is_refused
     agent = build_agent
     result = agent.spawn_subagent(agent_slug: "nobody", task: "do it")
@@ -205,9 +301,42 @@ class TestDelegate < Minitest::Test
     names = sub.send(:tool_definitions).map(&:name)
 
     refute_includes names, "delegate"
+    refute_includes names, "subagent_results"
     refute_includes names, "notify"
     refute_includes names, "cron"
     refute_includes names, "instagram"
+  end
+
+  # A config that lists its tools by hand and enables `delegate` has to get the
+  # tool that reads the answers too, or background runs hand over results
+  # nobody can collect.
+  def test_enabling_delegate_also_enables_reading_its_results
+    File.write(@config_path, {
+      "agents" => { "defaults" => { "workspace" => @workspace, "name" => "model-a" } },
+      "models" => [{ "name" => "model-a", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" }],
+      "tools" => { "shell_exec" => { "enabled" => true }, "delegate" => { "enabled" => true } },
+      "delegation" => { "enabled" => true }
+    }.to_yaml)
+    agent = Rubot::Agent.new(config: Rubot::Config.new(@config_path),
+                             provider: AnswerProvider.new, session_id: "lead")
+    names = agent.send(:tool_definitions).map(&:name)
+
+    assert_includes names, "delegate"
+    assert_includes names, "subagent_results"
+    refute_includes names, "notify"
+  end
+
+  def test_a_config_without_delegation_gets_no_results_tool
+    File.write(@config_path, {
+      "agents" => { "defaults" => { "workspace" => @workspace, "name" => "model-a" } },
+      "models" => [{ "name" => "model-a", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" }],
+      "tools" => { "shell_exec" => { "enabled" => true } }
+    }.to_yaml)
+    agent = Rubot::Agent.new(config: Rubot::Config.new(@config_path),
+                             provider: AnswerProvider.new, session_id: "lead")
+    names = agent.send(:tool_definitions).map(&:name)
+
+    refute_includes names, "subagent_results"
   end
 
   def test_sub_agent_session_id_carries_the_sub_marker

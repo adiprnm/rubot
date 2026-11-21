@@ -1606,6 +1606,11 @@ select:focus-visible { outline: none; }
    animation only ever answers that action — never a page load. */
 .turn { animation: enter 170ms ease-out both; }
 
+/* `.turn.is-report` carries no look: it is a marker for the page's script. A
+   report from the background is not the turn the reader is watching, so the
+   thread must not scroll to it — that moved the answer being read upward every
+   time one arrived (see `isFollowedContent` in app.js). */
+
 @keyframes enter {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: none; }
@@ -2729,26 +2734,9 @@ select:focus-visible { outline: none; }
 
 .working-band .row { margin: 0; }
 
-/* Delegated work, shown live above the composer. One line per sub agent with
-   the persona it is running as and what it last did, plus a count of how many
-   are still going. The strip only appears while a turn has delegated, so it
-   costs no space on an ordinary answer. */
-.subagents {
-  margin-top: 0.35rem;
-  font-size: 0.82rem;
-}
-.subagents-head {
-  color: var(--fg-muted);
-  font-variant-numeric: tabular-nums;
-}
-.subagents-list {
-  list-style: none;
-  margin: 0.2rem 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-}
+/* One delegated run: the persona it runs as, what it last did, and how it
+   ended. The same row is drawn in the footer's sheet and in the transcript,
+   so a delegation reads the same wherever it is found. */
 .subagent {
   display: flex;
   align-items: baseline;
@@ -2794,6 +2782,73 @@ select:focus-visible { outline: none; }
 /* The answer under the last delegation gets the same air as under a tool row:
    the row claims 0.4rem, the paragraph brings the rest of its 1.05rem. */
 .subagent-row + .text { margin-top: calc(1.05rem - 0.4rem); }
+
+/* The footer's subagent sheet: the delegated runs, in the same row as the
+   figures they are spending. It is one more sheet in that row, so it borrows
+   the toggle face and the panel from `.usage-sheet` and only says what is
+   different about it. */
+.usage-sheet-subagents .usage-panel {
+  width: min(22rem, 82vw);
+  /* This sheet is the leftmost control in the row, so a panel anchored to its
+     right edge grew leftwards and off the screen — the panel looked closed
+     because the half that carried the rows was outside the page. Anchored to
+     the left edge instead, it opens to the right, which is where the room is. */
+  left: 0;
+  right: auto;
+}
+
+/* The word beside the glyph. The icon alone said "something with agents"; a
+   figure beside it said nothing at all to a reader who had not opened it yet.
+   A word names it, and the count is inside, where the runs are. */
+.subagent-label {
+  margin-left: 0.28rem;
+  color: var(--fg-faint);
+  font-size: 10px;
+}
+
+/* The mark that says a run is still working. Without it the toggle looked the
+   same before, during and after a delegation, and the only way to find out was
+   to open the panel — which is not something a reader thinks to do. It turns
+   like the thinking mark above the composer, in the same colour, because it
+   means the same thing. */
+.subagent-run {
+  margin-left: 0.22rem;
+  color: var(--yellow);
+  display: inline-block;
+  animation: mark-spin 1.6s linear infinite;
+}
+
+/* The same slot once the run is over. Green is the colour a finished row
+   already wears, and it goes back to nothing three seconds later (see
+   SubagentJobs::DONE_MARK_SECONDS): the tick is a reply to "did it finish?",
+   not a permanent decoration. A failed run keeps the mark but takes the red,
+   because that is the one a reader has to do something about. */
+.subagent-settled { margin-left: 0.22rem; color: var(--green); }
+.subagent-settled-failed { color: var(--red); }
+
+/* That row has to fit a phone: five controls, three figures and a model name
+   on one line is what pushes it over the edge on a PWA. The gaps and the
+   breathing room around each sheet shrink, and the figures keep their own. */
+@media (max-width: 30rem) {
+  .status-line { gap: 0.32rem; }
+  .status-line .metrics { gap: 0.45rem; }
+  .status-line .usage-sheet { margin-left: 0.1rem; }
+  .status-line .compact-toggle { margin-left: 0.1rem; }
+}
+
+/* The rows inside that panel. Same marks as the run's row in the transcript,
+   one per run, so a delegation looks the same wherever it is read. */
+.subagent-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.subagent-rows .subagent { font-size: 12px; }
+.subagent-rows .subagent-name { font-size: 11px; white-space: nowrap; }
+.subagent-rows .subagent-detail { font-size: 11px; }
 
 /* A prompt the server refused: the text stays in the field, so the reason
    belongs on the edge of it rather than up in the thread. Kept to the
@@ -3212,6 +3267,11 @@ body.lightbox-open { overflow: hidden; }
      stay inside is the figures, and they are clipped where they live. */
   overflow: visible;
   white-space: nowrap;
+  /* A floor, so the row is the same height whatever is in it. The subagent
+     toggle is the one control that comes and goes, and the composer sits above
+     this row: with the row free to shrink, the whole page stepped down when it
+     was taken away. */
+  min-height: 0.95rem;
 }
 
 /* The TUI footer, cheap in space: an icon says which figure this is, so the
@@ -3260,6 +3320,13 @@ body.lightbox-open { overflow: hidden; }
   display: flex;
   align-items: center;
   padding: 0.1rem 0.15rem;
+  /* Every control in the row owns the same line box, whatever is drawn inside
+     it: an icon, a word, or a mark that is a character. Left at `normal`, the
+     toggle in front of a text mark was a couple of pixels taller than the ones
+     holding icons — and since that toggle is the one that comes and goes, the
+     whole row changed height with it and the composer moved under the reader's
+     hands. */
+  line-height: 1;
   /* The two sheets use a <summary>, which has no browser chrome. The compact
      button is a <button>, so without this it wears the default border and
      background and reads as a different control beside the same row. */

@@ -812,6 +812,13 @@ module Rubot
         usage: %(<rect x="1.5" y="1.6" width="7" height="6.8" rx="1.1"/>) +
                %(<path d="M3.3 4h3.4"/>) +
                %(<path d="M3.3 6.1h2.1"/>),
+        # Delegated work. Three marks over one line, because a delegation is
+        # several agents answering to one conversation — and it must not read as
+        # the report card or the meter two slots away.
+        subagent: %(<circle cx="2.4" cy="6.6" r="1.1"/>) +
+                  %(<circle cx="5" cy="3.4" r="1.1"/>) +
+                  %(<circle cx="7.6" cy="6.6" r="1.1"/>) +
+                  %(<path d="M2.4 8.4h5.2"/>),
         # The allowance. A dial rather than the card above: an allowance is a
         # share of a limit, so the shape that says "meter" is the one an
         # instrument panel taught everyone to read — an arc with a needle in
@@ -1001,7 +1008,9 @@ module Rubot
 
         # A partial rendered by a test has no sub-agent list to pass; the
         # working band still draws without one.
-        def subagents
+        # The footer's panel is drawn from the background runs the channel
+        # knows about. A page rendered outside the channel has none.
+        def subagent_runs
           []
         end
 
@@ -1046,6 +1055,15 @@ module Rubot
           render("_timeline", items: turn.items, token_query: token_query,
                               ig_accounts: ig_accounts, ig_linkable_accounts: ig_linkable_accounts,
                               ig_persona: ig_persona)
+        end
+
+        # A block of prose, rendered exactly as a turn's text is. The report that
+        # is written while the reader watches replaces this and nothing else: the
+        # entry around it carries the animation that plays when a turn arrives,
+        # and re-creating it on every passage made the answer blink instead of
+        # grow.
+        def prose(text)
+          Format.markdown(text.to_s, quotable: true)
         end
 
         private

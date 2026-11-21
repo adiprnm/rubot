@@ -1,0 +1,20 @@
+<%# One entry of a conversation that has already been read: the reader's own
+    prompt, or a turn that is over.
+
+    Its own partial because the page is not always painted from the whole
+    transcript: a turn that arrives while the reader is looking — a batch of sub
+    agents reporting back — is appended to the page as it stands. What is
+    appended has to be what a reload would draw, or the same conversation would
+    look different depending on how the reader got to it. -%>
+<% if entry[:kind] == :prompt -%>
+<%= View.render("_message", role: "user", text: entry[:text], anchor: "m-#{entry[:idx]}",
+                            landed: landed) %>
+<% else -%>
+<div class="turn is-done<%= " is-landed" if landed %>"<% if entry[:idx] %> id="m-<%= entry[:idx] %>"<% end %>>
+  <div class="turn-body"><%= View.render("_timeline", items: entry[:items],
+                                          token_query: token_query,
+                                          ig_accounts: ig_accounts,
+                                          ig_linkable_accounts: ig_linkable_accounts,
+                                          ig_persona: ig_persona) %></div>
+</div>
+<% end -%>

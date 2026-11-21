@@ -72,15 +72,36 @@ module Rubot
       )
     end
 
-    def finish_subagent_run(run_id:, status:, sub_session: nil, error: nil)
+    def finish_subagent_run(run_id:, status:, sub_session: nil, error: nil, result: nil)
       request(
         :finish_subagent_run,
-        run_id: run_id, status: status, sub_session: sub_session, error: error
+        run_id: run_id, status: status, sub_session: sub_session, error: error, result: result
       )
     end
 
     def subagent_runs(parent_session, limit: 50)
       request(:subagent_runs, parent_session: parent_session, limit: limit)
+    end
+
+    # Index of the newest message stored for a session (see Store#last_index).
+    def last_index(session_id)
+      request(:last_index, session_id: session_id)
+    end
+
+    # Answers waiting for the parent conversation (see
+    # Store#pending_subagent_results). Read from inside the session's actor, so
+    # it goes through the same port every other archive write does.
+    def pending_subagent_results(parent_session, limit: 20, newest_first: false)
+      request(:pending_subagent_results, parent_session: parent_session, limit: limit,
+                                         newest_first: newest_first)
+    end
+
+    def mark_subagent_results_reported(run_ids)
+      request(:mark_subagent_results_reported, run_ids: run_ids)
+    end
+
+    def release_subagent_results(run_ids)
+      request(:release_subagent_results, run_ids: run_ids)
     end
 
     private

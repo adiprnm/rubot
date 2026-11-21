@@ -132,7 +132,7 @@ class TestStoreMigrations < Minitest::Test
     db = SQLite3::Database.new(File.join(@dir, "sessions.db"))
     versions = db.execute("SELECT version FROM schema_migrations ORDER BY version").flatten
 
-    assert_equal [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17 ], versions
+    assert_equal [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18 ], versions
     assert_equal %w[id session_id idx role text created_at payload diff user_text assistant_text tool_text],
                  db.execute("PRAGMA table_info(messages)").map { |r| r[1] }
     assert_equal %w[id title created_at updated_at cwd msg_count bytes meta messages_start pinned_at unread_at],
@@ -158,9 +158,10 @@ class TestStoreMigrations < Minitest::Test
                  db.execute("PRAGMA table_info(request_cache)").map { |r| r[1] },
                  "the per-request cache diagnosis is part of the schema the store expects"
     assert_equal %w[run_id parent_session sub_session agent_slug task model status error
-                    started_at finished_at],
+                    started_at finished_at result reported_at],
                  db.execute("PRAGMA table_info(subagent_runs)").map { |r| r[1] },
-                 "the sub-agent audit trail is part of the schema the store expects"
+                 "the sub-agent audit trail, and the answer a background run leaves, " \
+                 "are part of the schema the store expects"
     assert_match(/fts5/, db.get_first_value("SELECT sql FROM sqlite_master WHERE name = 'fts'"),
                  "the searchable index is part of the schema the store expects")
   ensure

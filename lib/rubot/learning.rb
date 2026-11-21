@@ -24,7 +24,11 @@ module Rubot
       @mutex = Mutex.new
       @queue = Queue.new
       @worker = nil
-      @busy = false
+      # How many jobs have been handed over and not finished yet. A counter
+      # rather than "is the queue empty": the worker pops a job before it starts
+      # it, and a #drain looking at the queue in that gap saw nothing left to do
+      # while the job was still running.
+      @pending = 0
     end
 
     # Hand a job over. The block runs on the worker; nothing here blocks the
@@ -32,13 +36,16 @@ module Rubot
     def submit(session_id = nil, &job)
       raise ArgumentError, "learning needs a job" unless job
 
+      # Counted before it is queued, so the count can never be zero while the
+      # job exists in one of the two places.
+      @mutex.synchronize { @pending += 1 }
       @queue << [ session_id, job ]
       start_worker
       self
     end
 
     def pending?
-      @mutex.synchronize { @busy || !@queue.empty? }
+      @mutex.synchronize { @pending.positive? }
     end
 
     # Wait for the queue to be worked off. For tests, and for a shutdown that
@@ -72,7 +79,6 @@ module Rubot
             break if job.nil?
 
             session_id, work = job
-            @mutex.synchronize { @busy = true }
             begin
               work.call
             rescue StandardError => e
@@ -80,7 +86,7 @@ module Rubot
               # have, so it is a debug line and nothing more.
               warn "[learning] #{e.class}: #{e.message}" if Rubot.debug?
             ensure
-              @mutex.synchronize { @busy = false }
+              @mutex.synchronize { @pending -= 1 }
               notify_done(session_id)
             end
           end

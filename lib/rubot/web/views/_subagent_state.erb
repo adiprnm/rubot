@@ -1,0 +1,25 @@
+<%# Whether anything is running, on the toggle itself.
+    The rows inside the panel already say ✓ or ✗ per run, but a closed panel
+    that looks the same before and after a delegation leaves the reader asking
+    the one question this sheet exists to answer.
+
+    Three states, and the toggle never has to be opened to read them:
+    a mark turning while a run works, then a tick in the colour that means done
+    for the few seconds after the last one ends, then nothing. Without that third
+    state a finished delegation looked exactly like one that never happened,
+    which is the same problem as before, only quieter.
+
+    The tick's clock is the channel's, not this partial's: nothing happens here
+    when it runs out, so the channel schedules the swap that takes the sheet
+    away (see Web#hide_subagents_later). -%>
+<%- running = subagents.count { |s| %w[started thinking tool].include?(s[:phase]) } -%>
+<%- if running.positive? -%><span class="subagent-run" title="<%= running %> subagent berjalan" aria-label="<%= running %> subagent berjalan">⟡</span><%- else -%>
+<%-   last = subagents.find { |s| %w[done failed].include?(s[:phase]) && s[:finished_at] } -%>
+<%-   fresh = last && (Time.now - last[:finished_at]).to_f <= Rubot::Web::SubagentJobs::DONE_MARK_SECONDS -%>
+<%-   if fresh -%>
+<%-     failed = last[:phase] == "failed" -%>
+<span class="subagent-settled<%= " subagent-settled-failed" if failed %>"
+      title="<%= failed ? "subagent gagal" : "subagent selesai" %>"
+      aria-label="<%= failed ? "subagent gagal" : "subagent selesai" %>"><%= failed ? "✗" : "✓" %></span>
+<%-   end -%>
+<%- end -%>

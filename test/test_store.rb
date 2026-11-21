@@ -67,6 +67,48 @@ class TestStore < Minitest::Test
     refute @store.finish_subagent_run(run_id: "nope", status: "done")
   end
 
+  # A background run finishes after the turn that asked for it, so its answer is
+  # read later — once. `reported_at` is what makes "once" true.
+  def test_a_finished_run_answer_is_handed_over_once
+    @store.start_subagent_run(run_id: "r1", parent_session: "web_rubot", agent_slug: "writer",
+                              task: "write a poem")
+    assert_empty @store.pending_subagent_results("web_rubot")
+
+    @store.finish_subagent_run(run_id: "r1", status: "done", result: "a short poem")
+
+    pending = @store.pending_subagent_results("web_rubot")
+    assert_equal 1, pending.size
+    assert_equal "a short poem", pending.first[:result]
+    assert_equal "writer", pending.first[:agent_slug]
+    assert_empty @store.pending_subagent_results("web_other")
+
+    assert_equal 1, @store.mark_subagent_results_reported(%w[r1])
+    assert_empty @store.pending_subagent_results("web_rubot")
+  end
+
+  # The automatic report when a batch ends is about the answers that just
+  # landed, so it can ask for the newest first. A backlog waiting behind them
+  # must not push them into the next report.
+  def test_pending_answers_can_be_read_newest_first
+    @store.start_subagent_run(run_id: "lama", parent_session: "web_rubot", agent_slug: "writer",
+                              started_at: "2026-11-10T08:00:00Z")
+    @store.start_subagent_run(run_id: "baru", parent_session: "web_rubot", agent_slug: "researcher",
+                              started_at: "2026-11-10T09:00:00Z")
+    @store.finish_subagent_run(run_id: "lama", status: "done", result: "jawaban lama")
+    @store.finish_subagent_run(run_id: "baru", status: "done", result: "jawaban baru")
+
+    assert_equal %w[lama baru], @store.pending_subagent_results("web_rubot").map { |run| run[:run_id] }
+    assert_equal %w[baru lama],
+                 @store.pending_subagent_results("web_rubot", newest_first: true).map { |run| run[:run_id] }
+  end
+
+  def test_a_failed_run_leaves_no_answer_to_collect
+    @store.start_subagent_run(run_id: "r1", parent_session: "web_rubot", agent_slug: "writer")
+    @store.finish_subagent_run(run_id: "r1", status: "failed", error: "rate limited")
+
+    assert_empty @store.pending_subagent_results("web_rubot")
+  end
+
   def test_append_and_load_round_trips_a_tool_call
     tool_call = {
       "role" => "assistant",

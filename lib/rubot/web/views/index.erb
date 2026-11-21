@@ -145,6 +145,17 @@
           the page to reload, so the seam is drawn from the saved metadata. -%>
       <span id="compaction-refresh" sse-swap="refresh"></span>
       <span sse-swap="compact-done"></span>
+      <%# Both of these carry a payload that swaps itself out of band, so the
+          slot only has to be somewhere the stream can reach: htmx finds an
+          EventSource in the parentage of a `sse-swap` element and nowhere else,
+          so a slot drawn in the footer — outside this div — is silently
+          orphaned and its events go nowhere. -%>
+      <span sse-swap="compact-note"></span>
+      <span sse-swap="subagent-sheet"></span>
+      <%# A reply that arrives while the page is open — a batch of sub agents
+          reporting back — is appended to the thread here rather than painted by
+          a reload. The payload carries the entry itself, marked out of band. -%>
+      <span sse-swap="append"></span>
     </div>
 
     <div class="sidebar-foot">
@@ -250,7 +261,7 @@
         the one element that owns it. The stream never touches this band again:
         the row is drawn once and the clock inside it counts on its own. -%>
     <% if live_turn %>
-      <%= View.render("_working", since: live_turn.epoch, subagents: live_turn.subagent_list) %>
+      <%= View.render("_working", since: live_turn.epoch) %>
     <% else %>
       <div id="working" class="working-band"></div>
     <% end %>
@@ -279,15 +290,20 @@
         because the allowance is a different question, asked of a different
         party, and it was the one readers had to scroll to reach. -%>
     <div class="status-line">
+      <%= View.render("_subagent_sheet", subagents: subagent_runs) %>
       <%= View.render("_usage", **usage) %>
       <%= View.render("_compact_button", session_id: session_id, token_query: token_query) %>
       <%# The one-line result of a manual compaction lands here, beside the
-          button that was pressed. It is an SSE slot because the answer comes
-          from a background thread, after the button's own request is gone. -%>
-      <div id="compact-note" sse-swap="compact-note"></div>
+          button that was pressed. The answer comes from a background thread,
+          after the button's own request is gone, so it arrives over the idle
+          stream — as an out-of-band payload, which is why this element is a
+          target and not a listener. -%>
+      <div id="compact-note"></div>
       <%= View.render("_usage_sheet", session_id: session_id, token_query: token_query,
                                       facts: usage_facts) %>
       <%= View.render("_quota_sheet", session_id: session_id, token_query: token_query) %>
+      <%# The footer's delegated runs arrive the same way. Their slot is up in
+          the idle stream, where htmx can find it (see the note there). -%>
     </div>
   </main>
 </div>

@@ -1,0 +1,36 @@
+<%# The delegated runs of this conversation, at the same edge as the usage row:
+    both are facts about the conversation, and a reader checking what is being
+    spent is asking the same question as one checking what is being run for
+    them.
+
+    Hidden when there is nothing to say (see SubagentJobs.visible?): a
+    conversation that has never delegated gets no control for it, and one whose
+    runs ended long ago keeps nothing but the tick on the toggle. The element
+    stays in the page so the stream has somewhere to write; `hidden` is what
+    takes it out of the row.
+
+    The toggle says "subagent" in words rather than wearing a count. A number
+    next to an icon is a riddle for anyone who has not opened the panel yet, and
+    the count is where the runs are — one row each, newest first.
+
+    A `<details>` like the two sheets beside it, so it opens without a script
+    and its panel hangs above the row instead of off the bottom of the page.
+    This one opens to the right (see `.usage-sheet-subagents`), because it sits
+    at the left end of the row and a panel anchored to its right edge grew off
+    the screen. What is inside is not drawn once: a run in flight changes every
+    time it reaches for a tool, so the channel swaps the list in place (see
+    Web#subagent_slots_markup). Only those slots are replaced while the sheet
+    stays on screen, or an open panel would close under the reader's cursor. -%>
+<%- hidden = !Rubot::Web::SubagentJobs.visible?(subagents) -%>
+<details class="usage-sheet usage-sheet-subagents" id="subagent-sheet"<%= " hidden" if hidden %>>
+  <summary class="usage-toggle" title="Subagent" aria-label="Subagent">
+    <%= usage_icon(:subagent) %><span class="subagent-label">subagent</span><span class="subagent-state" id="subagent-state"><%= View.render("_subagent_state", subagents: subagents) %></span>
+  </summary>
+
+  <div class="usage-panel" role="group" aria-label="Subagent">
+    <p class="panel-title">Subagent</p>
+    <div id="subagent-sheet-body">
+      <%= View.render("_subagent_rows", subagents: subagents) %>
+    </div>
+  </div>
+</details>

@@ -10,12 +10,16 @@
     Drawn once per turn. A turn started from the page gets this row in the
     answer to the POST that started it; a page opened on a turn already running
     draws it at first paint. A tool call does not re-send it: the row would
-    arrive identical, and the replacement only made the text flash. -%>
+    arrive identical, and the replacement only made the text flash.
+
+    Delegated runs are not drawn here. They outlive the turn that asked for
+    them, so they are read in the footer's sheet (see _subagent_sheet): one
+    place for them, and a page that is idle still shows the run that is
+    working. -%>
 <div class="working-band" id="working">
   <p class="row working" data-since="<%= h(since) %>" data-threshold="0">
     <span class="mark working" aria-hidden="true"><%= mark(:working) %></span>
     <span class="label">Working…</span>
     <span class="live-clock"></span>
   </p>
-  <%= View.render("_subagents", subagents: subagents) %>
 </div>

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "subagent_line"
+
 module Rubot
   module Web
     # One in-flight agent turn plus the event log an SSE reader follows.
@@ -84,54 +86,71 @@ module Rubot
         @confirm_cv = ConditionVariable.new
         @confirm_answer = nil
         # Sub agents this turn delegated to, keyed by run id. Each holds its
-        # latest phase and detail, so the strip above the composer can show how
-        # many are running and what each is doing. Plain data, rendered on the
-        # reader's side from a snapshot.
+        # latest phase and detail: the transcript row a run leaves reads its
+        # count of calls from here. Plain data, rendered on the reader's side
+        # from a snapshot; what is happening live is read in the footer instead.
         @subagents = {}
       end
 
-      # A snapshot of the sub agents, newest first. A copy so the renderer never
-      # shares a Hash the producer thread is still updating.
-      def subagent_list
-        @mutex.synchronize { @subagents.values.reverse.map(&:dup) }
-      end
-
-      # How many sub agents are still running.
-      def running_subagents
-        @mutex.synchronize { @subagents.values.count { |s| RUNNING_PHASES.include?(s[:phase]) } }
-      end
-
-      RUNNING_PHASES = %w[started thinking tool].freeze
+      # A phase after which the run has nothing left to say.
+      TERMINAL_PHASES = %w[done failed].freeze
 
       # Called from the agent's on_subagent callback. Records the latest state
-      # of one run and publishes a dedicated SSE event so the strip updates
-      # without re-rendering the whole timeline.
+      # of one run: the phase it is in, and how many calls it has made.
+      #
+      # Nothing is published here. The live view of a delegated run is the
+      # footer's sheet, which is written by the run itself (see
+      # Web::SubagentJobs); this entry is what the row in the transcript is
+      # built from, and that row arrives through #subagent_item below.
       def subagent(info)
         run_id = info[:run_id].to_s
         return if run_id.empty?
 
+        phase = info[:phase].to_s
+
         @mutex.synchronize do
-          entry = (@subagents[run_id] ||= { run_id: run_id })
+          entry = (@subagents[run_id] ||= { run_id: run_id, calls: 0 })
           entry[:agent] = info[:agent].to_s
-          entry[:phase] = info[:phase].to_s
+          entry[:phase] = phase
           entry[:detail] = info[:detail].to_s
           entry[:depth] = info[:depth].to_i
           entry[:epoch] = epoch_now
-          @events << [ :subagents, nil ]
-          @cond.broadcast
+          entry[:calls] = entry[:calls].to_i + 1 if phase == "tool"
+          entry[:task] = info[:detail].to_s if phase == "started"
+          entry[:line] = subagent_line(entry, phase)
         end
       end
 
       # A sub agent's phase becomes a timeline row too, so the finished turn
       # records that work happened in another persona. Kept as a plain item so
       # the transcript it becomes carries the same rows the live page showed.
+      #
+      # In a compact turn the row is written once, when the run ends. While the
+      # agent is still working the footer's sheet is the view of it, and a row
+      # per tool call would tell the reader the same thing twice. What a
+      # finished turn still has to answer for is how much work it took, so the
+      # row carries the count of calls. A verbose turn keeps every phase.
+      #
+      # A thought is never a row: the footer already shows the agent is
+      # working, and the transcript has nothing to add to that.
       def subagent_item(info)
+        run_id = info[:run_id].to_s
+        return if run_id.empty?
+
+        phase = info[:phase].to_s
+        return if phase == "thinking"
+
         @mutex.synchronize do
+          entry = (@subagents[run_id] ||= { run_id: run_id, calls: 0 })
+
+          return if ToolRows.compact?(@tool_output) && !TERMINAL_PHASES.include?(phase)
+
           @items << {
             kind: :subagent,
             agent: info[:agent].to_s,
-            phase: info[:phase].to_s,
-            detail: info[:detail].to_s,
+            phase: phase,
+            detail: detail_for_row(info, phase, entry),
+            task: entry[:task].to_s,
             epoch: epoch_now
           }
           publish_locked
@@ -156,6 +175,7 @@ module Rubot
             copy[:text] = item[:text].dup if item[:text]
             copy[:html] = item[:html].dup if item[:html]
             copy[:list] = item[:list].dup if item[:list]
+            copy[:task] = item[:task].dup if item[:task]
             copy
           end
           list = ToolRows.collapse(list) if ToolRows.compact?(@tool_output)
@@ -528,6 +548,27 @@ module Rubot
       end
 
       private
+
+      # What a delegated run says about itself, at any moment: the count of
+      # calls it has made plus the phase's own detail (the call it is on while
+      # working, how long it took once done). The footer draws this while the
+      # run is in flight and the transcript row takes the same string when it
+      # ends, so the two can never disagree.
+      #
+      # A failed run says why instead; a count would add nothing to a run that
+      # never got anything done.
+      def subagent_line(entry, phase)
+        SubagentLine.line(calls: entry[:calls], phase: phase, detail: entry[:detail])
+      end
+
+      # A verbose turn keeps every phase in its own row, each with the detail
+      # that phase carried. A compact turn has one row, and it reads the run
+      # the way the footer last read it.
+      def detail_for_row(info, phase, entry)
+        return info[:detail].to_s unless ToolRows.compact?(@tool_output)
+
+        (entry[:line] || subagent_line(entry, phase)).to_s
+      end
 
       def publish_locked
         @events << [ :turn, nil ]

@@ -133,8 +133,13 @@ module Rubot
       is better done in a specialist's voice or context, and you can state the
       whole task in one message and check the result when it returns. Do not
       delegate a task that needs the conversation you are having now. The sub
-      agent cannot delegate further, and its answer comes back to you as a tool
-      result: read it, then answer the user yourself.
+      agent cannot delegate further.
+
+      In a channel where delegation runs in the background, `delegate` returns
+      as soon as the run has started and the run keeps working after your turn
+      ends. Its answer is read with `subagent_results`: call it when you need
+      the answer, or to check whether anything came back before you finish.
+      Each answer is handed over once.
 
       Built-in sub agents (always available, not listed as personas):
       - code_reviewer: review a diff for bugs, security and style
@@ -170,6 +175,13 @@ module Rubot
     # agents. Production leaves it nil so each sub agent builds its own from
     # the target persona's config; tests inject a fake to avoid the network.
     attr_accessor :subagent_provider
+
+    # A channel that can run a delegated agent somewhere other than this turn's
+    # thread — the web channel, which runs each run in its own session actor —
+    # sets this. `spawn_subagent` then hands the request over instead of running
+    # it, and the turn is free to end. Left nil, delegation stays synchronous,
+    # which is what the TUI and Telegram still want.
+    attr_accessor :on_delegate
 
     def initialize(config:, provider: nil, session_id: "default", tools: nil, persona: nil,
                    archive: nil)
@@ -335,6 +347,20 @@ module Rubot
       emit_subagent(run_id, slug, :started, task)
       started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 
+      # A channel that can run the sub agent outside this session asks for it
+      # here and gets its answer back later. The parent turn ends with the run
+      # still going, which is the point: the reader is not held by work they
+      # delegated. The request carries plain data only — the executor builds the
+      # sub agent from the slug, because an object graph cannot leave a Ractor.
+      if (hand_off = @on_delegate)
+        hand_off.call(
+          run_id: run_id, agent: slug, task: task.to_s, model: model.to_s,
+          parent_session: @session.id.to_s
+        )
+        return "Sub agent #{slug} started in the background (run #{run_id}). " \
+               "It keeps working after this turn ends. Call subagent_results to read what it found."
+      end
+
       begin
         sub = build_subagent(persona, slug, run_id, model)
         answer = sub.process(
@@ -354,6 +380,28 @@ module Rubot
         emit_subagent(run_id, slug, :failed, e.message)
         "ERROR: sub agent #{slug} failed: #{e.class}: #{e.message}"
       end
+    end
+
+    # What background runs came back with, for the model to read.
+    #
+    # A delegated run that outlives its turn cannot answer into that turn, so it
+    # writes here instead. Each answer is handed over once: the rows are marked
+    # as reported by the same call that returns them, which is also why an empty
+    # answer is a sentence rather than an error — "nothing new" is a normal
+    # thing to ask and hear.
+    def subagent_results(run_id: nil)
+      return "ERROR: no archive is open, so delegated results cannot be read here." unless @archive
+
+      rows = Array(@archive.pending_subagent_results(@session.id.to_s))
+      wanted = run_id.to_s.strip
+      rows = rows.select { |row| row[:run_id].to_s == wanted } unless wanted.empty?
+
+      if rows.empty?
+        return "No delegated run has finished with an answer you have not already seen."
+      end
+
+      @archive.mark_subagent_results_reported(rows.map { |row| row[:run_id] })
+      rows.map { |row| "== run #{row[:run_id]} · #{row[:agent_slug]} ==\n#{row[:result]}" }.join("\n\n")
     end
 
     # Process a user message and return the final assistant response.
@@ -397,7 +445,7 @@ module Rubot
     def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil,
                 on_assistant_text: nil, on_reasoning: nil, on_steer: nil, on_stopped: nil, on_usage: nil,
                 on_subagent: nil, on_compaction: nil, on_compaction_start: nil, on_compaction_failed: nil, on_retry: nil,
-                stream: true, &on_chunk)
+                on_delegate: nil, stream: true, &on_chunk)
       # Fire any due cron jobs and collect their results
       cron_results = fire_due_cron_jobs
       warn "[cron] fire_due_cron_jobs returned #{cron_results.size} result(s)" if Rubot.debug?
@@ -413,6 +461,7 @@ module Rubot
       inject_tool_delegate
       @subagent_count = 0
       @on_subagent = on_subagent
+      @on_delegate = on_delegate
       @on_compaction = on_compaction
       @on_compaction_start = on_compaction_start
       @on_compaction_failed = on_compaction_failed
@@ -1773,42 +1822,13 @@ module Rubot
     # directory. The session id carries a `~sub-` marker so channels can keep
     # these internal conversations out of the sidebar.
     def build_subagent(persona, slug, run_id, model_override)
-      base_config = @config.respond_to?(:with_persona_workspace) ? @config : Config.from_data(@config.snapshot, config_path: @config.config_path)
-      workspace = PersonaStore.new(
-        dir: File.dirname(base_config.personas_file),
-        legacy_workspace: base_config.workspace
-      ).workspace_for(slug)
-      config = workspace ? base_config.with_persona_workspace(workspace) : base_config
-
-      persona_data = persona.to_h
-
-      # Per-sub-agent settings win over the built-in definition. A bare model
-      # name clears the preset, because resolve_initial_preset checks `preset`
-      # first and would otherwise ignore the model field. The global
-      # `subagent_model` is the fallback for sub agents without their own.
-      settings = config.respond_to?(:subagent_settings) ? config.subagent_settings(slug) : {}
-      model = settings["model"].to_s.strip
-      model = config.subagent_model.to_s.strip if model.empty? && config.respond_to?(:subagent_model)
-      unless model.empty?
-        persona_data["model"] = model
-        persona_data["preset"] = nil
-      end
-      thinking = settings["thinking"].to_s.strip
-      persona_data["thinking"] = thinking unless thinking.empty?
-
-      if model_override && !model_override.to_s.strip.empty?
-        name = model_override.to_s.strip
-        if config.model_entry_by_name(name) || config.model_preset(name)
-          persona_data["model"] = name
-          persona_data["preset"] = nil
-        end
-      end
+      config = delegated_config(slug)
 
       sub = Agent.new(
         config: config,
         provider: resolve_subagent_provider(slug),
         session_id: "#{@session.id}~sub-#{run_id}",
-        persona: persona_data,
+        persona: SubagentSpec.persona_data(config: config, persona: persona, slug: slug, model_override: model_override),
         archive: @archive
       )
       sub.cancellation = @cancellation
@@ -1817,6 +1837,13 @@ module Rubot
       sub.instance_variable_set(:@subagent, true)
       sub.instance_variable_set(:@subagent_depth, @subagent_depth + 1)
       sub
+    end
+
+    # The parent's config, rooted at the persona's workspace when it has one.
+    def delegated_config(slug)
+      base_config = @config.respond_to?(:with_persona_workspace) ? @config : Config.from_data(@config.snapshot, config_path: @config.config_path)
+      workspace = SubagentSpec.workspace_for(config: base_config, slug: slug)
+      workspace ? base_config.with_persona_workspace(workspace) : base_config
     end
 
     # Write the audit rows through the archive port when one is available.
@@ -2116,8 +2143,10 @@ module Rubot
     def inject_tool_delegate
       return unless @tools.respond_to?(:all)
 
-      tool = @tools.get("delegate")
-      tool.agent = self if tool && tool.respond_to?(:agent=)
+      %w[delegate subagent_results].each do |name|
+        tool = @tools.get(name)
+        tool.agent = self if tool && tool.respond_to?(:agent=)
+      end
     end
 
     # Fire any due cron jobs and return their results.
@@ -2307,7 +2336,7 @@ end
     # the user, scheduling jobs or drawing an Instagram card from a background
     # worker would all be surprising. A sub agent does its work and returns a
     # written result; the lead stays the one voice the user hears.
-    SUBAGENT_FORBIDDEN_TOOLS = %w[delegate notify cron instagram].freeze
+    SUBAGENT_FORBIDDEN_TOOLS = %w[delegate subagent_results notify cron instagram].freeze
 
     def tool_definitions
       return nil unless @config.tools_enabled
@@ -2324,6 +2353,16 @@ end
       if @memory.enabled?
         memory_tool = @tools.get("memory")
         tools << memory_tool if memory_tool && !tools.include?(memory_tool)
+      end
+
+      # Reading what a background run came back with is part of delegating, not
+      # a feature of its own: a config that lists its tools by hand and enables
+      # `delegate` would otherwise collect answers with no way to read them. The
+      # sub agent filter below still takes it away from the sub agents
+      # themselves.
+      if tools.any? { |tool| tool.name == "delegate" }
+        results_tool = @tools.get("subagent_results")
+        tools += [ results_tool ] if results_tool && !tools.include?(results_tool)
       end
 
       if @subagent
@@ -2776,11 +2815,26 @@ end
     # not inherit yesterday's subject, and a long-running reminder should not
     # drag the history it was created in behind it.
     def process_cron(message, fresh: false)
+      process_background(message, fresh: fresh, label: "⏰ Scheduled task fired:\n")
+    end
+
+    # A turn the reader did not speak.
+    #
+    # The text reaches the model as context and nothing of it is written to the
+    # transcript: only the answer is. A fired job arrives this way, and so does
+    # the report a finished batch of sub agents leaves behind — the reader asked
+    # for the work, not for a message in their own voice.
+    #
+    # A block given to this method is handed the answer as it is written, one
+    # call per passage. A background turn is exactly the one nobody is watching,
+    # so a channel that can show it arriving does — otherwise the reader waits
+    # through the whole answer in silence and then reads it all at once.
+    def process_background(message, fresh: false, label: "", &on_chunk)
       # Build local messages from session history ONLY (up to the last assistant response)
       # Do NOT include the current user message — this is a separate conversation turn
       @turn_start_index = @session.messages.size
-      local_messages = build_cron_messages(fresh: fresh)
-      local_messages << { "role" => "user", "content" => "⏰ Scheduled task fired:\n#{message}" }
+      local_messages = build_background_messages(fresh: fresh)
+      local_messages << { "role" => "user", "content" => "#{label}#{message}" }
 
       response = ""
       tool_calls = nil
@@ -2795,11 +2849,21 @@ end
       # shared — stamp the scope before the turn reaches any tool.
       inject_tool_persona
 
-      # A cron turn has no channel callback to report retries to, so pass a
+      # A background turn has no channel callback to report retries to, so pass a
         # no-op rather than the `on_retry` local from #process — that variable
         # is not in scope here and used to raise NameError on every fired job.
-        result = @provider.chat(local_messages, tools: tool_definitions, on_retry: nil)
-        # A cron run is a separate, local transcript: count its tokens and cost,
+        result = if block_given?
+          # The answer accumulates here as well as in the provider: what the
+          # reader is shown is the passage so far, not the fragment that just
+          # arrived, so a repaint can never lose a word.
+          @provider.chat_stream(local_messages, tools: tool_definitions, on_retry: nil) do |chunk, _tools, _reasoning|
+            response += chunk if chunk
+            on_chunk.call(response.dup) if chunk && !chunk.empty?
+          end
+        else
+          @provider.chat(local_messages, tools: tool_definitions, on_retry: nil)
+        end
+        # A background run is a separate, local transcript: count its tokens and cost,
         # but never let it become the anchor for /context's context size.
         record_usage(result, auxiliary: true, messages: local_messages)
 
@@ -2821,8 +2885,8 @@ end
           assistant_msg["reasoning_content"] = reasoning_content if reasoning_content
           local_messages << assistant_msg
 
-          # A cron turn has no guard to ask and nobody watching, so the calls
-          # are collected and run together like a normal turn's.
+          # A background turn has no guard to ask and nobody watching, so the
+          # calls are collected and run together like a normal turn's.
           cron_calls = tool_calls.map do |tc|
             tool_name, arguments, = parse_tool_call(tc)
             tool_call_id = tc.is_a?(Hash) ? (tc["id"] || tool_name) : tool_name
@@ -2841,10 +2905,16 @@ end
         end
       end
 
-      # If the LLM returned empty, use the cron message itself as the response
+      # An empty answer falls back to the text that was handed in: something
+      # has to stand in the transcript, and the request says more than "".
       response = message if response.nil? || response.strip.empty?
 
-      @session.add("assistant", response, reasoning_content: reasoning_content) unless response.empty?
+      # The answer carries a stamp so the transcript can give it a block of its
+      # own (see the page's history): nothing prompted it, and glued under the
+      # answer above it read as if it had never arrived.
+      unless response.empty?
+        @session.add("assistant", response, reasoning_content: reasoning_content, background: true)
+      end
       response
     end
 
@@ -2861,13 +2931,13 @@ end
       @session.title
     end
 
-    # Build messages for cron processing — uses conversation history
+    # Build messages for a background turn — uses conversation history
     # but excludes the current user message being processed.
     #
     # With `fresh: true` the history is left out entirely: the system prompt is
     # the whole context, which is what a job that opens its own conversation
     # needs.
-    def build_cron_messages(fresh: false)
+    def build_background_messages(fresh: false)
       messages = []
       messages << { "role" => "system", "content" => build_system_prompt }
       return messages if fresh

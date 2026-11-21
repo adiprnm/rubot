@@ -305,7 +305,8 @@ module Rubot
       end
     end
 
-    def add(role, content, tool_calls: nil, tool_call_id: nil, reasoning_content: nil, ui_diff: nil)
+    def add(role, content, tool_calls: nil, tool_call_id: nil, reasoning_content: nil, ui_diff: nil,
+            background: false)
       msg = {
         "role" => self.class.normalize_utf8(role),
         "content" => self.class.normalize_utf8(content),
@@ -318,6 +319,12 @@ module Rubot
       # redraw the diff. Not sent to the model: conversation_history builds a
       # fresh hash with only role/content/tool_calls/tool_call_id.
       msg["ui_diff"] = self.class.normalize_utf8(ui_diff) if ui_diff
+      # An answer to something the reader never said — a fired job, a batch of
+      # sub agents reporting back. Kept as a stamp so the transcript can start a
+      # block of its own for it: the model's words belong to a turn nobody
+      # prompted, and gluing them under the answer before made the reply read as
+      # if it had never arrived.
+      msg["background"] = true if background
       # The first user message is the task statement. Remember it before the
       # transcript can be trimmed, so a long turn cannot lose its own goal.
       @task = msg["content"].to_s.strip if role.to_s == "user" && @task.nil?

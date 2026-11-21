@@ -4,6 +4,7 @@ require_relative "cron_actor"
 require_relative "session_actor"
 require_relative "../config"
 require_relative "../persona_store"
+require_relative "../subagent_spec"
 require_relative "../session_handle"
 require_relative "../store"
 require_relative "../store_service"
@@ -20,6 +21,7 @@ module Rubot
 
       def initialize(config:, delivery: nil)
         @config_data = config.snapshot
+        @config = config
         @config_path = config.config_path
         @workspace = config.workspace
         # One central sessions directory, plus the launch directory each
@@ -177,6 +179,39 @@ module Rubot
         SessionHandle.new(ractor.ractor, sid, ractor.stop_port)
       end
 
+      # A delegated run, in a Ractor of its own.
+      #
+      # It gets the target persona's workspace and a session id filed under the
+      # parent, so the archive can still piece a chain of delegations together.
+      # Its own Ractor is what makes delegation asynchronous: the parent's actor
+      # is free the moment it hands the request over, and the run keeps working
+      # while the next prompt is answered.
+      #
+      # Built from plain data on purpose — a persona hash and a config snapshot
+      # — because nothing else may be handed to a new Ractor.
+      def delegate(parent_session:, slug:, run_id:, model: nil)
+        persona = @persona_store[slug]
+        return nil unless persona
+
+        config_data = SubagentSpec.config_data(config: @config, slug: slug)
+        data = SubagentSpec.persona_data(config: @config, persona: persona, slug: slug,
+                                        model_override: model)
+        sid = "#{parent_session}~sub-#{run_id}"
+
+        ractor = @mutex.synchronize do
+          @actors[sid] ||= SessionActor.new(
+            config_data: config_data,
+            config_path: @config_path,
+            session_id: sid,
+            cron_actor: nil,
+            persona: data,
+            store_port: @store_service&.port
+          )
+        end
+
+        SessionHandle.new(ractor.ractor, sid, ractor.stop_port)
+      end
+
       def session_ids
         @mutex.synchronize { @actors.keys.dup }
       end
@@ -187,6 +222,7 @@ module Rubot
       def refresh_config(config)
         @mutex.synchronize do
           @config_data = config.snapshot
+          @config = config
           @config_path = config.config_path
           @workspace = config.workspace
           @sessions_dir = config.sessions_dir
@@ -213,7 +249,12 @@ module Rubot
           list
         end
 
-        actors.each(&:shutdown)
+        # In parallel, because each actor waits up to two seconds for the turn it
+        # was running when the shutdown arrived. Waited on one after another that
+        # budget multiplied by the number of conversations open at the time, and
+        # past the restart window the process was killed mid-shutdown instead of
+        # closing: the cost is now the slowest actor, not the sum.
+        actors.map { |actor| Thread.new { actor.shutdown } }.each(&:join)
         @cron&.shutdown
         # After the actors: one of them may still be mid-turn and writing.
         @store_service&.stop

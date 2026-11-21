@@ -78,7 +78,8 @@ module Rubot
 
       def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil,
                   on_assistant_text: nil, on_reasoning: nil, on_steer: nil, on_stopped: nil, on_usage: nil,
-                  on_subagent: nil, on_compaction: nil, on_compaction_start: nil, on_compaction_failed: nil, stream: true, &on_chunk)
+                  on_subagent: nil, on_compaction: nil, on_compaction_start: nil, on_compaction_failed: nil,
+                  on_delegate: nil, stream: true, &on_chunk)
         events = Ractor::Port.new
         control = nil
 
@@ -107,6 +108,10 @@ module Rubot
             on_usage&.call(event[1])
           when :subagent
             on_subagent&.call(event[1])
+          when :delegate
+            # The channel runs this one somewhere else; the actor has already
+            # moved on with the rest of the turn.
+            on_delegate&.call(event[1])
           when :compaction
             on_compaction&.call(event[1])
           when :compaction_start
@@ -163,6 +168,33 @@ module Rubot
 
       def process_cron(text, fresh: false)
         call(:process_cron, text: text, fresh: fresh)
+      end
+
+      # A turn the reader did not speak: the text is context, the answer is what
+      # lands in the transcript. A block is handed the answer as it is written,
+      # so the channel can show it arriving.
+      def process_background(text, label: "", fresh: false, &on_chunk)
+        events = Ractor::Port.new
+        # A background turn waits on a port that only the actor can write to, so
+        # when it never answers there is nothing in this Ractor that can say
+        # where it went: the id here is what a log line on the other side has to
+        # be matched against.
+        warn "[actor] background -> #{@session_id} via #{@ractor.object_id}" if Rubot.debug?
+        @ractor.send({ type: :background, text: text, label: label, fresh: fresh, events: events })
+
+        loop do
+          event = events.receive
+          case event[0]
+          when :chunk
+            on_chunk&.call(event[1])
+          when :done
+            return event[1]
+          when :error
+            raise ActorError, "#{event[1]}: #{event[2]}"
+          end
+        end
+      ensure
+        events&.close
       end
 
       # Name a conversation opened by a job, which has no user message of its

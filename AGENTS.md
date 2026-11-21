@@ -62,15 +62,36 @@ bundle exec rubocop                # lint (RuboCop Rails Omakase, Rails cops off
 - **CronActor** (`actors/cron_actor.rb`) owns the scheduler and job stores;
   a single actor serves every workspace, with a store per directory.
 - Cross-Ractor communication uses message passing over `Ractor::Port`
-  (chunks, tool events, progress, confirm, done, subagent). Procs and mutexes
-  never cross a boundary.
-- **Delegation** (`tools/delegate.rb`) runs a sub agent inside the parent's
-  SessionActor, on the same thread — never through `SessionPool#for`, which
-  lives in the main Ractor. The sub agent gets the target persona's config and
-  a `~sub-` session id. Its progress reaches channels through the `on_subagent`
-  callback (Agent → SessionActor → SessionHandle → Channel). Sub agents have a
-  restricted tool set (no `delegate`, `notify`, `cron`, `instagram`) and write
-  an audit row to `subagent_runs` via `StoreClient`.
+  (chunks, tool events, progress, confirm, done, subagent, delegate). Procs and
+  mutexes never cross a boundary.
+- **Delegation** (`tools/delegate.rb`) has two shapes. A channel that sets
+  `on_delegate` gets the request handed over (`Agent#spawn_subagent` returns
+  "started" at once) and runs it in a session actor of its own, so the
+  conversation is never held by work it delegated. The web channel is the one
+  that does this (`Web#start_delegate` → `SessionPool#delegate`), tracking the
+  runs in `Rubot::Web::SubagentJobs` for the footer and writing the answer to
+  the archive, where the `subagent_results` tool reads it once. The footer's
+  sheet is the only live view of a run (the band above the composer says the
+  turn is working and nothing more), and the idle stream redraws it whole on
+  every (re)connect, so one missed event cannot leave a row stuck on the mark
+  it wore while it worked. Three seconds after the last run lands the row goes,
+  and the channel schedules that itself (`Web#hide_subagents_later`): nothing
+  fires when a finished batch runs out of time, so waiting for the next event
+  would leave the tick there until something unrelated moved. When the last run
+  of a batch lands, the answers are
+  handed back to the conversation as a turn of their own
+  (`Web#report_subagents_when_done`), so nobody has to remember to call
+  `subagent_results`. That turn is delivered as background context
+  (`Agent#process_background`): the answers reach the model, and only its reply
+  joins the transcript, so the reader never sees a message in their own voice
+  that they did not write. The tool stays for pulling an answer early, and the
+  store records what it has already given. A channel that
+  does not set it keeps the original synchronous path: the sub agent runs in the
+  parent's SessionActor and returns its answer as the tool result. Either way
+  the sub agent gets the target persona's config, a `~sub-` session id, a
+  restricted tool set (no `delegate`, `subagent_results`, `notify`, `cron`,
+  `instagram`) and an audit row in `subagent_runs` written through
+  `StoreClient`.
 - File-backed state (`MEMORY.md`, session JSON) is written with `flock`.
 - The SQLite connection is not Ractor-safe: `SQLite3::Database` must live in
   the main Ractor (see `Rubot::Store`) and is reached through a port /
