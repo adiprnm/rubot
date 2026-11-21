@@ -1,0 +1,45 @@
+<%# The two choices a reader makes about their own device — the palette and the
+    reading face — applied before the first paint.
+
+    Both are read from localStorage and written as attributes on <html> before
+    the stylesheet is fetched, because a page that decided either one later
+    would arrive in the default and then swap: a flash of dark across a light
+    reader's screen, or a paragraph that reflows once the real face lands. Every
+    document rubot serves with the stylesheet uses this, including the gate and
+    the settings page, so a reader who prefers the light palette never meets a
+    dark frame on the way in.
+
+    `color-scheme` is set here rather than in the CSS so the browser's own
+    scrollbars and form controls follow the same frame as the page.
+
+    The values are validated against the same lists the pickers offer: a stored
+    string that no longer names a choice (an older install, a hand-edited key)
+    falls back to Everforest and the serif rather than leaving the page with no
+    palette at all. -%>
+<script>
+  (function () {
+    var root = document.documentElement;
+    var theme = null;
+    var font = null;
+    try {
+      theme = localStorage.getItem("rubot-theme");
+      font = localStorage.getItem("rubot-font");
+    } catch (_e) { /* private mode */ }
+
+    if (theme !== "light" && theme !== "dark" && theme !== "everforest") {
+      theme = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
+        ? "light"
+        : "everforest";
+    }
+    root.setAttribute("data-theme", theme);
+    root.style.colorScheme = theme === "light" ? "light" : "dark";
+
+    var fonts = ["serif", "sans", "mono", "georgia", "palatino"];
+    root.setAttribute("data-font", fonts.indexOf(font) >= 0 ? font : "serif");
+
+    // The stylesheet uses this class to tell a scripted page from one whose
+    // script never ran: the settings page hides all but one tab panel, and a
+    // page with no script at all should show every panel rather than none.
+    root.classList.add("js");
+  })();
+</script>

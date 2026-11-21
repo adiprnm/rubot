@@ -3,28 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-  <%# The theme is chosen before the first paint. Left to the stylesheet, the
-      page would arrive in the default palette and then swap, which on a light
-      theme is a flash of dark across the whole screen. This runs in the head,
-      from the same key the picker in the drawer writes to, so the first frame
-      is already in the right colours.
-
-      Until the script has run, `data-theme` is unset and the stylesheet's
-      default — Everforest — applies; `color-scheme` is set here rather than in
-      the CSS so the browser's own scrollbars and form controls follow the
-      choice on the very first frame too. -%>
-  <script>
-    (function () {
-      var saved = null;
-      try { saved = localStorage.getItem("rubot-theme"); } catch (_e) { /* private mode */ }
-      var theme = saved === "light" || saved === "dark" || saved === "everforest"
-        ? saved
-        : (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
-            ? "light" : "everforest");
-      document.documentElement.setAttribute("data-theme", theme);
-      document.documentElement.style.colorScheme = theme === "light" ? "light" : "dark";
-    })();
-  </script>
+  <%# The theme and the reading face are chosen before the first paint: see the
+      partial, which the gate and the settings page use too. -%>
+  <%= View.render("_appearance_head") %>
   <meta name="color-scheme" content="dark light">
   <meta name="theme-color" content="#2b332f">
   <%# Installable as an app: the manifest says what to call it and how to open

@@ -871,6 +871,26 @@ module Rubot
                     %(<path d="M1.5 2.5h3l1 5h3"/><path d="M7 6l1.5 1.5L7 9"/></svg>).freeze
       }.freeze
 
+      # The reading faces the settings page offers, in the order they are drawn.
+      #
+      # `value` is the string <html data-font> carries and the one app.js
+      # validates against; the stack behind each name lives in app.css, so a
+      # name and a block there are the pair that has to stay in step. Two of
+      # these are the device's own fonts — on a phone without Georgia the
+      # button still works, it just sets the text in the serif it falls back to.
+      FONT_CHOICES = [
+        { value: "serif", label: "Serif",
+          title: "Bawaan: Source Serif 4, dengan Charter dan Georgia sebagai cadangan" },
+        { value: "sans", label: "Sans serif",
+          title: "Huruf sistem tanpa kait: Segoe UI, Roboto, atau SF di perangkat Apple" },
+        { value: "mono", label: "Mono",
+          title: "Martian Mono, huruf berjarak tetap yang dipakai nama mesin" },
+        { value: "georgia", label: "Georgia",
+          title: "Georgia milik perangkat, dengan Times sebagai cadangan" },
+        { value: "palatino", label: "Palatino",
+          title: "Palatino milik perangkat, dengan serif sistem sebagai cadangan" }
+      ].freeze
+
       class Scope
         def initialize(locals)
           locals.each { |key, value| define_singleton_method(key) { value } }
@@ -1026,6 +1046,41 @@ module Rubot
         end
 
         def ig_persona
+          ""
+        end
+
+        # The option list every model picker on the settings page shares. It is
+        # here because six pickers repeated the same three cases: the catalogue,
+        # a blank entry for "follow the default", and the current value even
+        # when the catalogue no longer lists it — an install pinned to a model
+        # its provider stopped advertising must not move to whichever name
+        # happens to be first just because the page was opened and saved.
+        def model_option_tags(choices, selected, blank: nil)
+          current = selected.to_s
+          out = +""
+          out << %(<option value="">#{CGI.escapeHTML(blank)}</option>) unless blank.nil?
+          choices.each do |choice|
+            value = choice[:value].to_s
+            out << %(<option value="#{CGI.escapeHTML(value)}"#{value == current ? " selected" : ""}>)
+            out << CGI.escapeHTML(choice[:label].to_s)
+            out << "</option>"
+          end
+          if !current.empty? && choices.none? { |choice| choice[:value].to_s == current }
+            out << %(<option value="#{CGI.escapeHTML(current)}" selected>#{CGI.escapeHTML(current)}</option>)
+          end
+          out
+        end
+
+        # The face list is the view's own, not the channel's: a settings page
+        # drawn by a test still has to offer every choice. The names are also
+        # what app.js accepts, so there is one list rather than two.
+        def font_choices
+          View::FONT_CHOICES
+        end
+
+        # The persona a device-wide control speaks for — the notification test
+        # button is addressed to one. Outside the channel there is none to name.
+        def push_persona
           ""
         end
 

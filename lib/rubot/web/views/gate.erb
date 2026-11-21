@@ -14,18 +14,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <script>
-    (function () {
-      var saved = null;
-      try { saved = localStorage.getItem("rubot-theme"); } catch (_e) { /* private mode */ }
-      var theme = saved === "light" || saved === "dark" || saved === "everforest"
-        ? saved
-        : (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
-            ? "light" : "everforest");
-      document.documentElement.setAttribute("data-theme", theme);
-      document.documentElement.style.colorScheme = theme === "light" ? "light" : "dark";
-    })();
-  </script>
+  <%= View.render("_appearance_head") %>
   <meta name="color-scheme" content="dark light">
   <meta name="theme-color" content="#2b332f">
   <title>rubot · masuk</title>

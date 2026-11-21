@@ -1471,6 +1471,11 @@ module Rubot
 
         res["Content-Type"] = "text/html; charset=utf-8"
         res["Cache-Control"] = "no-store"
+        # The persona the device-wide controls speak for: the notification test
+        # button sends one message to one persona, and the page may have been
+        # opened from any conversation. Same resolution the Instagram card uses
+        # — named in the query, else the owner of `sid`, else the default.
+        persona = ig_persona_for(req)
         res.body = View.render(
           "settings",
           provider: @app_config&.provider.to_s,
@@ -1485,8 +1490,9 @@ module Rubot
           ig_app_id: store&.setting("instagram_app_id").to_s,
           ig_redirect_uri: store&.setting("instagram_redirect_uri").to_s,
           ig_secret_set: !store&.setting("instagram_app_secret").to_s.strip.empty?,
-          ig_persona: ig_persona_for(req),
-          **ig_account_locals(ig_persona_for(req)),
+          ig_persona: persona,
+          **ig_account_locals(persona),
+          push_persona: persona,
           provider_choices: settings_provider_choices,
           model_choices: model_choices,
           saved: saved,

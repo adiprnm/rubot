@@ -26,6 +26,52 @@ module Rubot
         refute_includes res.body, "sk-rahasia", "a credential must not come back in the page"
       end
 
+      # The page is one form with five subjects, one panel at a time: the strip
+      # says which subject, and the panel opens with a line saying what it
+      # currently holds. The panels that are not shown stay in the DOM —
+      # `display: none`, not disabled — so the single Save button posts all of
+      # them, and a reader who saves from the Instagram tab does not drop the
+      # model they changed a minute earlier.
+      def test_the_page_is_five_tab_panels_of_one_form
+        html = settings_page_html
+
+        labels = html.scan(%r{<button[^>]*role="tab"[^>]*>(.*?)</button>}m).flatten.map(&:strip)
+        assert_equal ["Koneksi", "Tampilan", "Preset model", "Subagent", "Instagram"], labels
+
+        assert_equal 5, html.scan(%r{<section class="settings-panel[^"]*" role="tabpanel"}).size
+        assert_equal 1, html.scan(%r{class="settings-panel is-active"}).size,
+                     "exactly one panel is on before anything is pressed"
+
+        # Each tab names its panel and each panel names its tab, or a screen
+        # reader announces a panel with no title.
+        assert_equal 5, html.scan(%r{aria-controls="settings-panel-}).size
+        assert_equal 5, html.scan(%r{aria-labelledby="settings-tab-}).size
+
+        # A hidden panel still contributes its fields.
+        assert_includes html, %(name="api_key" )
+        assert_includes html, %(name="new_preset_name")
+        assert_includes html, %(name="instagram_app_id")
+        assert_includes html, %(name="subagent_slug")
+      end
+
+      # Without a script the strip is hidden and every panel shows: a page that
+      # cannot switch tabs should read as the long page it used to be, not as
+      # one fifth of the form. With a script, one panel at a time.
+      def test_the_panels_hide_only_on_a_page_whose_script_ran
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+
+        assert_includes css, "html.js .settings-panel { display: none; }"
+        assert_includes css, "html.js .settings-panel.is-active { display: block; }"
+        assert_includes css, "html:not(.js) .settings-tabs { display: none; }"
+
+        # The tab is remembered for the sitting, because the reload after Save
+        # is exactly when it would otherwise snap back to the first one.
+        assert_includes js, %(sessionStorage.setItem(SETTINGS_TAB_KEY, target.dataset.settingsTab))
+        assert_includes js, %(ArrowRight), "the strip has to work from the keyboard"
+        assert_includes js, "document.getElementById(tab.getAttribute(\"aria-controls\"))"
+      end
+
       # Saving is the point of the page: the archive holds it, and the process
       # that is already running uses it from the next turn.
       def test_saving_settings_writes_the_archive_and_the_running_config
@@ -3801,6 +3847,16 @@ module Rubot
 
       # --- themes ---------------------------------------------------------
 
+      # The settings page as the reader gets it, for the tests about controls
+      # that live there: the palette, the reading face, the notification toggle.
+      def settings_page_html
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+        res = FakeResponse.new
+        channel.send(:render_settings, res, FakeRequest.new("/settings"))
+        res.body
+      end
+
       # A theme is a list of names. A block that forgets one inherits it from
       # the default, which mixes two palettes: a light page with dark scrims,
       # or a green accent on a blue-grey one.
@@ -3821,35 +3877,90 @@ module Rubot
 
       # The theme is decided in the head, before the stylesheet can paint. Left
       # to a script at the end of the page, a light reader would get a dark
-      # frame first — a flash across the whole screen.
-      def test_the_theme_is_set_before_the_first_paint
+      # frame first — a flash across the whole screen. The reading face is the
+      # same kind of choice and lands in the same place, or the paragraph
+      # reflows once the real font arrives.
+      def test_the_theme_and_the_face_are_set_before_the_first_paint
         html = View.render("layout", title: "x", content: "isi", asset_version: 1)
         script = html.index("rubot-theme")
+        face = html.index("rubot-font")
         stylesheet = html.index("app.css")
 
         refute_nil script, "the head has to choose a theme"
+        refute_nil face, "the head has to choose a face"
         assert script < stylesheet, "the choice must land before the stylesheet paints"
+        assert face < stylesheet, "the face must land before the first paragraph is set"
         assert_includes html, %(setAttribute("data-theme", theme))
+        assert_includes html, %(setAttribute("data-font", fonts.indexOf(font) >= 0 ? font : "serif")),
+                        "an unknown name falls back to the serif, not to nothing"
         assert_includes html, "prefers-color-scheme",
                         "with no choice made, the system decides"
       end
 
       # Three palettes, one press each, each showing its own colours — a select
-      # would hide two thirds of a choice that is meant to be looked at.
+      # would hide two thirds of a choice that is meant to be looked at. The
+      # picker is drawn by the settings page: a palette is chosen once, not
+      # mid-conversation.
       def test_the_picker_offers_every_theme_as_its_own_button
-        html = render_page
+        html = settings_page_html
 
         %w[everforest dark light].each do |name|
           assert_includes html, %(data-theme-choice="#{name}"),
                           "#{name} needs a button of its own"
         end
         assert_equal 3, html.scan("data-theme-choice=").size
-        # The picker only: the drawer's notification toggle is also a pressed
-        # button, and it is not part of this choice.
         picker = html[/<div class="theme-picker".*?<\/div>/m].to_s
         assert_equal 3, picker.scan("aria-pressed=").size,
                      "the state has to be announceable, not just painted"
         assert_includes html, %(role="group")
+      end
+
+      # A face is offered the same way: one button per choice, each set in the
+      # face it names so the control answers "what does this look like" before
+      # it is pressed. The list lives in one place — the view draws the buttons
+      # from it and the script validates against the same names, so a stored
+      # choice cannot name a face nothing applies.
+      def test_every_font_choice_is_a_button_set_in_its_own_face
+        html = settings_page_html
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+
+        offered = html.scan(/data-font-choice="([a-z]+)"/).flatten
+        assert_equal offered.uniq, offered, "one button per face"
+        assert_includes offered, "serif"
+        assert_includes offered, "sans"
+        assert_operator offered.size, :>=, 4, "more than two faces, or there is nothing to choose"
+
+        picker = html[/<div class="font-picker".*?<\/div>/m].to_s
+        assert_equal offered.size, picker.scan("aria-pressed=").size,
+                     "the state has to be announceable, not just painted"
+
+        # The button's own face, and the stack the choice applies.
+        offered.each do |name|
+          assert_match(/\.font-choice\[data-font-choice="#{name}"\] \{ font-family: var\(--/,
+                       css, "#{name} has to be previewed in its own face")
+        end
+
+        # The script's list and the stylesheet's previews are the same set: the
+        # page draws from View::FONT_CHOICES, so this also ties the buttons to
+        # the names the script will accept.
+        scripts = js[/const FONTS = \[(.*?)\];/m, 1].to_s.scan(/"([a-z]+)"/).flatten
+        previews = css.scan(/\.font-choice\[data-font-choice="([a-z]+)"\]/).flatten
+        assert_equal previews.sort, scripts.sort
+        assert_equal offered.sort, scripts.sort
+      end
+
+      # The four stacks that are not the default each need their own block: a
+      # name in `data-font` with no block is a choice that does nothing, and the
+      # page would look untouched when it was pressed.
+      def test_every_stored_face_changes_the_reading_stack
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+
+        %w[sans mono georgia palatino].each do |name|
+          block = css[/:root\[data-font="#{name}"\] \{[^}]*\}/]
+          refute_nil block, "data-font=\"#{name}\" needs a block of its own"
+          assert_includes block, "--reading:", "the block has to move the reading stack"
+        end
       end
 
       # A choice is the reader's, on their own device: stored locally and never
@@ -3861,6 +3972,26 @@ module Rubot
         assert_includes js, %(localStorage.getItem(THEME_KEY))
         refute_match(/fetch\([^)]*theme/i, js, "the choice never goes to the server")
         assert_includes js, %(style.colorScheme), "native controls follow the theme too"
+
+        # The face is stored the same way, for the same reason: it is this
+        # device's, and a reader who moves to a laptop brings the palette too.
+        assert_includes js, %(localStorage.setItem(FONT_KEY, font))
+        assert_includes js, %(setAttribute("data-font", font))
+      end
+
+      # The notification toggle is a settings-page control. It says its own
+      # state in words rather than being an unlabelled switch — "aktifkan",
+      # "aktif", "diblokir" — because the permission may only be asked for on a
+      # press, and a button that has not been pressed has to explain itself.
+      def test_the_settings_page_carries_the_notification_toggle
+        html = settings_page_html
+
+        assert_includes html, "data-push-slug="
+        assert_includes html, "data-push-toggle"
+        assert_includes html, "data-push-label"
+        assert_includes html, "data-push-test"
+        assert_includes html, "/assets/app.js",
+                        "the page has to load the script that wires the toggle"
       end
 
       # The three figures in the row are a glance; the panel is what the glance
@@ -5799,40 +5930,42 @@ module Rubot
         assert_includes figures, "overflow: hidden"
       end
 
-      # The picker lives at the foot of the sidebar, and a phone's sidebar is
-      # the drawer. Hiding that foot hid the only control that changes the
-      # theme, so the palettes were unreachable on the screen where a light
-      # page matters most. Only the facts about the connection go.
-      def test_the_drawer_keeps_the_theme_picker
+      # The palette and the notification toggle used to sit at the foot of the
+      # drawer, then they moved to the settings page — they are settings, chosen
+      # once, and a control that exists in two places can end up disagreeing
+      # with itself. What the drawer's foot keeps is the facts about this
+      # connection; a phone's drawer has no room for more than that.
+      def test_the_device_controls_live_in_the_settings_page_and_nowhere_else
+        html = render_page
+        refute_includes html, "data-theme-choice=",
+                        "the palette is a setting, not part of a conversation"
+        refute_includes html, "data-push-slug=",
+                        "the notification toggle belongs where it can be read once"
+
         css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
         narrow = css[/^@media \(max-width: 860px\) \{.*?\n\}/m]
 
         refute_nil narrow, "the drawer's breakpoint is missing from app.css"
-        refute_match(/\.sidebar-foot \{ display: none/, narrow,
-                     "the phone's sidebar foot holds the theme picker")
         assert_includes narrow, ".sidebar-foot dl { display: none; }",
                         "the connection facts are what the drawer has no room for"
       end
 
-      # "Everforest" is a long word in a 15rem sidebar. Laid out as one wrapped
-      # flex row beside its caption, the three swatches fitted two to the first
-      # line and left "Terang" stranded on a second — a control that looked
-      # broken rather than offered. The caption takes a line of its own and the
-      # swatches share an unwrapped row beneath it, so the break is a decision
-      # and not an accident of how wide the words happen to be.
-      def test_the_theme_swatches_share_one_row_under_their_caption
+      # The three choices are pressed buttons laid out in one row that wraps
+      # rather than overflows: a settings page is narrow on a phone, and a row
+      # that cannot break would push its last choice off the edge. Each swatch
+      # carries its own answer in words, so the mark is never the only signal.
+      def test_the_appearance_choices_are_pressed_buttons_in_a_wrapping_row
         css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
-        picker = css[/^\.theme-picker \{[^}]*\}/]
-        label = css[/^\.theme-label \{[^}]*\}/]
+        rows = css[/^\.theme-picker,\n\.font-picker,\n\.push-picker \{[^}]*\}/]
+        swatch = css[/^\.theme-swatch,\n\.font-choice \{[^}]*\}/]
 
-        refute_nil picker, "the .theme-picker rule is missing from app.css"
-        refute_nil label, "the .theme-label rule is missing from app.css"
-        refute_includes picker, "flex-wrap: wrap",
-                        "a wrapped picker strands the last palette on its own line"
-        assert_includes picker, "repeat(3, max-content)",
-                        "three swatches, each as wide as its own word"
-        assert_includes label, "grid-column: 1 / -1",
-                        "the caption spans the row, so the three swatches share the next"
+        refute_nil rows, "the three choice rows need a shared rule in app.css"
+        refute_nil swatch, "a swatch and a font button are the same kind of control"
+        assert_includes rows, "flex-wrap: wrap",
+                        "a phone's settings page has to be able to break the row"
+        assert_includes swatch, "border: 1px"
+        assert_includes swatch, "font-family: var(--mono)",
+                        "the control's own name is a label, not prose"
       end
 
       # A list is a column of its own, but the column sits inside the

@@ -2,10 +2,18 @@
 
     Not a card over the chat: there is no conversation behind this document, so
     there is nothing to float over. The document scrolls, the save button stays
-    in a strip at the top, and the fields are laid out as a ledger — a label in
-    the left gutter, its control and explanation on the right. That is the same
-    vernacular as the rest of rubot: mono for machine strings, hairlines for
-    structure, no decorative boxes.
+    in a strip at the top, and the five subjects are tabs — one at a time, in a
+    strip of mono labels — so the page never shows forty fields at once. Each
+    panel opens with one faint line saying what it currently holds, which is
+    what the tabs cannot say themselves.
+
+    One form, five panels: the hidden panels are `display: none`, not disabled,
+    so the single Save button still posts all of them. A reader who saves from
+    the Instagram tab does not silently drop the model they changed earlier.
+
+    Without a script the strip is hidden and every panel shows: a page that
+    cannot switch tabs should read as the long page it used to be, not as four
+    fifths of itself.
 
     The key is never sent back into the page — it is a password box with a
     sentence about what is already stored, because a form that echoes a
@@ -16,22 +24,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <script>
-    (function () {
-      var saved = null;
-      try { saved = localStorage.getItem("rubot-theme"); } catch (_e) { /* private mode */ }
-      var theme = saved === "light" || saved === "dark" || saved === "everforest"
-        ? saved
-        : (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
-            ? "light" : "everforest");
-      document.documentElement.setAttribute("data-theme", theme);
-      document.documentElement.style.colorScheme = theme === "light" ? "light" : "dark";
-    })();
-  </script>
+  <%# The theme and the reading face, chosen before the first paint — the same
+      partial the chat and the gate use, so this page cannot drift from them. -%>
+  <%= View.render("_appearance_head") %>
   <meta name="color-scheme" content="dark light">
   <meta name="theme-color" content="#2b332f">
   <title>rubot · pengaturan</title>
   <link rel="stylesheet" href="/assets/app.css?v=<%= h(asset_version) %>">
+  <%# This page holds three controls that belong to the device — the palette,
+      the typeface and the notification toggle — and all three are wired in
+      app.js, so the page loads it. Nothing here is a chat, but the script is
+      written to be absent-tolerant: every handler looks for its own markup
+      first, and the worker it registers is what makes the toggle work at all. -%>
+  <script src="/assets/app.js?v=<%= h(asset_version) %>"></script>
 </head>
 <body>
 <div class="settings-topbar">
@@ -44,10 +49,16 @@
 </div>
 
 <main class="settings-page">
-  <form id="settings-form" class="settings-form" method="post" action="/settings<%= h(token_query) %>">
+  <%# `data-settings-tabs` marks the form as the tab root: the strip and the
+      panels both live inside it, and the script reads one from the other. -%>
+  <form id="settings-form" class="settings-form" method="post"
+        action="/settings<%= h(token_query) %>" data-settings-tabs>
     <header class="settings-intro">
-      <h1>Pengaturan pemasangan</h1>
-      <p class="settings-lead">Nilai di sini dipakai semua persona, bukan satu sesi. Kunci dan rahasia tidak pernah dikirim balik ke halaman ini setelah disimpan.</p>
+      <h1>Pengaturan</h1>
+      <p class="settings-lead">
+        Koneksi dan model berlaku untuk semua persona. Tema, font, dan notifikasi
+        berlaku di perangkat ini, dan tersimpan begitu ditekan.
+      </p>
 
       <% unless archived %>
         <p class="settings-error">
@@ -56,8 +67,21 @@
       <% end %>
     </header>
 
-    <section class="settings-group" aria-labelledby="settings-group-connection">
-      <h2 class="settings-group-title" id="settings-group-connection">Koneksi</h2>
+    <div class="settings-tabs" role="tablist" aria-label="Bagian pengaturan">
+      <% [["koneksi", "Koneksi"], ["tampilan", "Tampilan"], ["preset", "Preset model"],
+          ["subagent", "Subagent"], ["instagram", "Instagram"]].each_with_index do |(name, label), index| -%>
+        <button type="button" role="tab" class="settings-tab"
+                id="settings-tab-<%= name %>" aria-controls="settings-panel-<%= name %>"
+                aria-selected="<%= index.zero? ? "true" : "false" %>"
+                tabindex="<%= index.zero? ? 0 : -1 %>"
+                data-settings-tab="<%= name %>"><%= label %></button>
+      <% end -%>
+    </div>
+
+    <section class="settings-panel is-active" role="tabpanel"
+             id="settings-panel-koneksi" aria-labelledby="settings-tab-koneksi"
+             data-settings-panel="koneksi">
+      <p class="settings-tab-note"><%= h([provider.to_s, default_model.to_s].reject(&:empty?).join(" · ")) %></p>
 
       <div class="settings-field">
         <label for="setting-provider">Provider</label>
@@ -76,20 +100,18 @@
           <input id="setting-api-key" type="password" name="api_key" value=""
                  autocomplete="new-password" autocapitalize="off" autocorrect="off"
                  spellcheck="false"
-                 placeholder="<%= key_set ? "sudah tersimpan — kosongkan untuk tidak mengubah" : "belum ada" %>">
+                 placeholder="<%= key_set ? "sudah tersimpan, kosongkan untuk tidak mengubah" : "belum ada" %>">
           <% if key_from_archive %>
             <p class="settings-note">
-              Disimpan di database pemasangan. Kosongkan kolom di atas kalau tidak ingin
-              mengubahnya, atau centang hapus untuk kembali ke config.yml.
+              Tersimpan di database pemasangan. Centang untuk kembali ke config.yml.
             </p>
             <label class="settings-check">
               <input type="checkbox" name="clear_api_key" value="1">
-              Hapus kunci dari database (kembali ke config.yml)
+              Hapus kunci dari database
             </label>
           <% elsif !key_set %>
             <p class="settings-note">
-              Belum ada kunci. Tanpa kunci, hanya provider lokal seperti ollama yang
-              bisa menjawab.
+              Tanpa kunci, hanya provider lokal seperti ollama yang bisa menjawab.
             </p>
           <% end %>
         </div>
@@ -99,12 +121,7 @@
         <label for="setting-default-model">Model default</label>
         <div class="settings-control">
           <select id="setting-default-model" name="default_model">
-            <% model_choices.each do |choice| %>
-              <option value="<%= h(choice[:value]) %>"<%= " selected" if choice[:value] == default_model %>><%= h(choice[:label]) %></option>
-            <% end %>
-            <% unless default_model.empty? || model_choices.any? { |choice| choice[:value] == default_model } %>
-              <option value="<%= h(default_model) %>" selected><%= h(default_model) %></option>
-            <% end %>
+            <%= model_option_tags(model_choices, default_model) %>
           </select>
         </div>
       </div>
@@ -113,14 +130,9 @@
         <label for="setting-auxiliary-model">Model auxiliary</label>
         <div class="settings-control">
           <select id="setting-auxiliary-model" name="auxiliary_model">
-            <% model_choices.each do |choice| %>
-              <option value="<%= h(choice[:value]) %>"<%= " selected" if choice[:value] == auxiliary_model %>><%= h(choice[:label]) %></option>
-            <% end %>
-            <% unless auxiliary_model.empty? || model_choices.any? { |choice| choice[:value] == auxiliary_model } %>
-              <option value="<%= h(auxiliary_model) %>" selected><%= h(auxiliary_model) %></option>
-            <% end %>
+            <%= model_option_tags(model_choices, auxiliary_model, blank: "Ikut model default") %>
           </select>
-          <p class="settings-note">Model untuk pekerjaan di belakang layar, seperti merangkum dan menamai sesi.</p>
+          <p class="settings-note">Untuk pekerjaan di belakang layar: merangkum dan menamai sesi.</p>
         </div>
       </div>
 
@@ -128,21 +140,77 @@
         <label for="setting-subagent-model">Model subagent</label>
         <div class="settings-control">
           <select id="setting-subagent-model" name="subagent_model">
-            <option value="">Ikuti preset subagent (flash)</option>
-            <% model_choices.each do |choice| %>
-              <option value="<%= h(choice[:value]) %>"<%= " selected" if choice[:value] == subagent_model %>><%= h(choice[:label]) %></option>
-            <% end %>
-            <% unless subagent_model.empty? || model_choices.any? { |choice| choice[:value] == subagent_model } %>
-              <option value="<%= h(subagent_model) %>" selected><%= h(subagent_model) %></option>
-            <% end %>
+            <%= model_option_tags(model_choices, subagent_model, blank: "Ikuti preset subagent (flash)") %>
           </select>
-          <p class="settings-note">Nama model untuk semua subagent. Kosongkan untuk memakai preset bawaan.</p>
+          <p class="settings-note">Untuk semua subagent. Kosongkan untuk memakai preset bawaan.</p>
         </div>
       </div>
     </section>
 
-    <section class="settings-group" aria-labelledby="settings-group-presets">
-      <h2 class="settings-group-title" id="settings-group-presets">Model preset</h2>
+    <%# The three choices that belong to this device rather than to the install:
+       which palette, which reading face, and whether the device may be woken.
+       None of them is a form field — the theme and the face are written to
+       localStorage the moment they are pressed, and the push subscription is a
+       browser object, not a column — which is why the panel says so once at the
+       top instead of under each row. -%>
+    <section class="settings-panel" role="tabpanel"
+             id="settings-panel-tampilan" aria-labelledby="settings-tab-tampilan"
+             data-settings-panel="tampilan">
+      <p class="settings-tab-note">perangkat ini, tersimpan begitu ditekan</p>
+
+      <div class="settings-field">
+        <span class="settings-field-label">Tema</span>
+        <div class="settings-control">
+          <%= View.render("_theme_picker") %>
+        </div>
+      </div>
+
+      <div class="settings-field">
+        <span class="settings-field-label">Font</span>
+        <div class="settings-control">
+          <%# Each button is set in the face it offers: a name written in the
+              font it names answers the question "what does this look like"
+              without a preview pane beside it. -%>
+          <div class="font-picker" role="group" aria-label="Font">
+            <% font_choices.each do |choice| -%>
+              <button type="button" class="font-choice" data-font-choice="<%= h(choice[:value]) %>"
+                      aria-pressed="false" title="<%= h(choice[:title]) %>"><%= h(choice[:label]) %></button>
+            <% end -%>
+          </div>
+          <p class="settings-note">
+            Serif adalah bawaan. Georgia dan Palatino memakai huruf milik
+            perangkat, jadi tampilannya bisa sedikit berbeda. Nama mesin tetap
+            monospace.
+          </p>
+        </div>
+      </div>
+
+      <div class="settings-field">
+        <span class="settings-field-label">Notifikasi</span>
+        <div class="settings-control">
+          <div class="push-picker" data-push-slug="<%= h(push_persona) %>">
+            <button type="button" class="theme-swatch push-toggle" data-push-toggle
+                    aria-pressed="false" title="Notifikasi saat app sedang ditutup">
+              <span class="swatch-dot push-dot" aria-hidden="true"></span><span data-push-label>memuat…</span>
+            </button>
+            <button type="button" class="theme-swatch push-test" data-push-test hidden
+                    title="Kirim satu notifikasi percobaan ke perangkat ini">
+              kirim tes
+            </button>
+          </div>
+          <p class="settings-note">
+            Kabari perangkat ini saat app tertutup: pengingat, balasan yang
+            selesai, atau subagent yang melapor. Izin diminta saat tombolnya
+            ditekan.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="settings-panel" role="tabpanel"
+             id="settings-panel-preset" aria-labelledby="settings-tab-preset"
+             data-settings-panel="preset">
+      <p class="settings-tab-note"><%= preset_rows.empty? ? "belum ada preset" : "#{preset_rows.size} preset" %></p>
 
       <% preset_rows.each do |row| %>
         <div class="settings-field settings-preset-row">
@@ -150,13 +218,7 @@
           <div class="settings-control">
             <input type="hidden" name="preset_name" value="<%= h(row[:name]) %>">
             <select id="preset-model-<%= h(row[:name]) %>" name="preset_model">
-              <option value="">Hapus preset ini</option>
-              <% model_choices.each do |choice| %>
-                <option value="<%= h(choice[:value]) %>"<%= " selected" if choice[:value] == row[:model] %>><%= h(choice[:label]) %></option>
-              <% end %>
-              <% unless row[:model].empty? || model_choices.any? { |choice| choice[:value] == row[:model] } %>
-                <option value="<%= h(row[:model]) %>" selected><%= h(row[:model]) %></option>
-              <% end %>
+              <%= model_option_tags(model_choices, row[:model], blank: "Hapus preset ini") %>
             </select>
             <div class="settings-preset-fields">
               <label>Temperature
@@ -181,6 +243,7 @@
         </div>
       <% end %>
 
+      <%# Three blank rows, so several presets can be added in one save. -%>
       <% 3.times do |i| %>
         <div class="settings-field settings-preset-row">
           <label for="new-preset-name-<%= i %>">Preset baru</label>
@@ -226,13 +289,15 @@
               <option value="<%= h(row[:name]) %>"<%= " selected" if row[:name] == default_preset %>><%= h(row[:name]) %></option>
             <% end %>
           </select>
-          <p class="settings-note">Preset untuk sesi baru. Pilih "Ikut config.yml" untuk memakai nilai dari berkas.</p>
+          <p class="settings-note">Untuk sesi baru. Pilih "Ikut config.yml" untuk memakai nilai dari berkas.</p>
         </div>
       </div>
     </section>
 
-    <section class="settings-group" aria-labelledby="settings-group-subagents">
-      <h2 class="settings-group-title" id="settings-group-subagents">Subagent</h2>
+    <section class="settings-panel" role="tabpanel"
+             id="settings-panel-subagent" aria-labelledby="settings-tab-subagent"
+             data-settings-panel="subagent">
+      <p class="settings-tab-note"><%= subagent_rows.size.positive? ? "#{subagent_rows.size} persona" : "belum ada yang diatur" %></p>
 
       <% subagent_rows.each do |row| %>
         <div class="settings-field settings-preset-row">
@@ -242,13 +307,7 @@
             <div class="settings-preset-fields">
               <label>Model
                 <select id="subagent-model-<%= h(row[:slug]) %>" name="subagent_model_choice">
-                  <option value="">Bawaan</option>
-                  <% model_choices.each do |choice| %>
-                    <option value="<%= h(choice[:value]) %>"<%= " selected" if choice[:value] == row[:model] %>><%= h(choice[:label]) %></option>
-                  <% end %>
-                  <% unless row[:model].empty? || model_choices.any? { |choice| choice[:value] == row[:model] } %>
-                    <option value="<%= h(row[:model]) %>" selected><%= h(row[:model]) %></option>
-                  <% end %>
+                  <%= model_option_tags(model_choices, row[:model], blank: "Bawaan") %>
                 </select>
               </label>
               <label>Thinking
@@ -265,8 +324,10 @@
       <% end %>
     </section>
 
-    <section class="settings-group" aria-labelledby="settings-group-instagram">
-      <h2 class="settings-group-title" id="settings-group-instagram">Instagram</h2>
+    <section class="settings-panel" role="tabpanel"
+             id="settings-panel-instagram" aria-labelledby="settings-tab-instagram"
+             data-settings-panel="instagram">
+      <p class="settings-tab-note"><%= ig_accounts.empty? ? "belum terhubung" : "#{ig_accounts.size} akun terhubung" %></p>
 
       <div class="settings-field">
         <label for="setting-ig-app-id">App ID</label>
@@ -283,7 +344,7 @@
           <input id="setting-ig-secret" type="password" name="instagram_app_secret" value=""
                  autocomplete="new-password" autocapitalize="off" autocorrect="off"
                  spellcheck="false"
-                 placeholder="<%= ig_secret_set ? "sudah tersimpan — kosongkan untuk tidak mengubah" : "belum ada" %>">
+                 placeholder="<%= ig_secret_set ? "sudah tersimpan, kosongkan untuk tidak mengubah" : "belum ada" %>">
           <% if ig_secret_set %>
             <label class="settings-check">
               <input type="checkbox" name="clear_ig_secret" value="1">
@@ -300,7 +361,7 @@
                  autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
                  placeholder="https://nama.ts.net/instagram/callback">
           <p class="settings-note">
-            Daftarkan URI ini di Meta App → Facebook Login → Valid OAuth Redirect URIs.
+            Daftarkan di Meta App, Facebook Login, Valid OAuth Redirect URIs.
             Harus HTTPS (localhost boleh HTTP).
           </p>
         </div>
@@ -310,7 +371,7 @@
         <span class="settings-field-label">Akun terhubung</span>
         <div class="settings-control">
           <p class="settings-note">
-            Persona <strong><%= h(ig_persona) %></strong> punya:
+            Persona <strong><%= h(ig_persona) %></strong>:
           </p>
           <% if ig_accounts.empty? %>
             <p class="settings-note">Belum ada. Ketik "connect ke instagram" di chat untuk mulai.</p>
@@ -331,7 +392,7 @@
             </label>
           <% end %>
           <% unless ig_linkable_accounts.empty? -%>
-            <p class="settings-note">Akun yang sudah terhubung di persona lain — centang untuk link ke persona ini tanpa OAuth:</p>
+            <p class="settings-note">Sudah terhubung di persona lain, centang untuk link ke persona ini tanpa OAuth:</p>
             <% ig_linkable_accounts.each do |acc| -%>
               <label class="settings-check">
                 <input type="checkbox" name="ig_link" value="<%= h(acc["username"]) %>">
