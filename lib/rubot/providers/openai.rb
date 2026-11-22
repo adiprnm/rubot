@@ -222,15 +222,7 @@ module Rubot
         first_byte = nil
 
         with_retry(retryable: -> { accumulated.empty? }, on_retry: on_retry) do
-          http = Net::HTTP.new(uri.host, uri.port)
-          http.use_ssl = uri.scheme == "https"
-          http.open_timeout = 30
-          http.read_timeout = 300
-
-          request = Net::HTTP::Post.new(uri.request_uri)
-          request["Content-Type"] = "application/json"
-          request["Authorization"] = "Bearer #{@config.api_key}"
-          apply_extra_headers(request)
+          http, request = stream_connection(uri)
 
           with_cancellable_http(http) do
             http.request(request, JSON.generate(payload)) do |response|
@@ -266,21 +258,7 @@ module Rubot
                     end
 
                     if delta["tool_calls"]
-                      delta["tool_calls"].each do |tc|
-                        idx = tc["index"]
-                        tool_calls_accum[idx] ||= {
-                          "id" => "",
-                          "type" => "function",
-                          "function" => { "name" => "", "arguments" => "" }
-                        }
-                        tool_calls_accum[idx]["id"] = tc["id"] if tc["id"]
-                        if tc.dig("function", "name")
-                          tool_calls_accum[idx]["function"]["name"] += tc["function"]["name"]
-                        end
-                        if tc.dig("function", "arguments")
-                          tool_calls_accum[idx]["function"]["arguments"] += tc["function"]["arguments"]
-                        end
-                      end
+                      delta["tool_calls"].each { |tc| merge_tool_call_delta(tool_calls_accum, tc) }
                     end
                   rescue JSON::ParserError
                     # skip malformed chunks
@@ -293,17 +271,11 @@ module Rubot
           # A provider that closes the connection mid-frame leaves the last
           # event in the buffer with no trailing newline. Parse it instead of
           # dropping it, so the tail of the answer is not lost.
-          if (last = reader.tail) && last != "[DONE]"
-            begin
-              data = JSON.parse(last)
-              finish_reason = data.dig("choices", 0, "finish_reason") || finish_reason
-              tail = data.dig("choices", 0, "delta", "content")
-              if tail
-                accumulated += tail
-                yield tail, nil if on_chunk
-              end
-            rescue JSON::ParserError
-              # skip malformed trailing frame
+          if (tail = trailing_frame(reader))
+            finish_reason = tail[:finish_reason] || finish_reason
+            if (text = tail[:content])
+              accumulated += text
+              yield text, nil if on_chunk
             end
           end
 
@@ -329,6 +301,56 @@ module Rubot
                                   reasoning_content: reasoning_content,
                                   extra: extra)
         end
+      end
+
+      # The connection and the POST a streaming turn is sent over, kept out of
+      # #make_stream_request so the event loop below reads as the loop it is.
+      def stream_connection(uri)
+        http = Net::HTTP.new(uri.host, uri.port)
+        http.use_ssl = uri.scheme == "https"
+        http.open_timeout = 30
+        http.read_timeout = 300
+
+        request = Net::HTTP::Post.new(uri.request_uri)
+        request["Content-Type"] = "application/json"
+        request["Authorization"] = "Bearer #{@config.api_key}"
+        apply_extra_headers(request)
+        [ http, request ]
+      end
+
+      # One delta of one tool call, folded into what has arrived so far. The
+      # provider sends the name once and then the arguments a fragment at a
+      # time, indexed per call, so the fragments are concatenated in order.
+      def merge_tool_call_delta(accum, tc)
+        idx = tc["index"]
+        accum[idx] ||= {
+          "id" => "",
+          "type" => "function",
+          "function" => { "name" => "", "arguments" => "" }
+        }
+        accum[idx]["id"] = tc["id"] if tc["id"]
+        if tc.dig("function", "name")
+          accum[idx]["function"]["name"] += tc["function"]["name"]
+        end
+        if tc.dig("function", "arguments")
+          accum[idx]["function"]["arguments"] += tc["function"]["arguments"]
+        end
+      end
+
+      # The frame left in the buffer when the connection closed. Returns
+      # { finish_reason:, content: } or nil; a malformed tail is dropped, not
+      # raised, because everything before it already reached the caller.
+      def trailing_frame(reader)
+        last = reader.tail
+        return nil if last.nil? || last == "[DONE]"
+
+        data = JSON.parse(last)
+        {
+          finish_reason: data.dig("choices", 0, "finish_reason"),
+          content: data.dig("choices", 0, "delta", "content")
+        }
+      rescue JSON::ParserError
+        nil
       end
 
       def extract_content(response)
