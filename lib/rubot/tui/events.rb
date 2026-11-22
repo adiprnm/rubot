@@ -28,25 +28,7 @@ module Rubot
         when :status_right then @status.right = event[1]
         when :status_badge then @status.badge = event[1]
         when :status_left then @status.left = event[1]
-        when :stream_start
-          @working.notice = nil
-          @working.clear_subagents
-          @turn_started_at = monotonic_now
-          # The answer's row (and the blank above it) is created when the first
-          # token lands, in #append_live. Reserving it here would leave two
-          # blank rows under the prompt for as long as the model thinks, and a
-          # turn that opens with a tool call would flash them before the tool
-          # row replaced them.
-          @busy = true
-          @stopping = false
-          @live_text = +""
-          @live_entry = nil
-          # A block from the previous turn cannot survive into this one: it was
-          # already closed by :stream_end, this only clears the state.
-          @thinking_entry = nil
-          @thinking_started_at = nil
-          @thinking_shown = nil
-          @thinking_blank = false
+        when :stream_start then start_stream
         when :thinking then append_thinking(event[1])
         when :subagent
           @working.subagent(event[1])
@@ -64,62 +46,11 @@ module Rubot
           close_thinking unless event[1].to_s.empty?
           append_live(event[1])
         # Clearance also resets any tool-line bookkeeping.
-        when :stream_end
-          close_thinking
-          # The turn is over; the next /context asks the agent for the settled
-          # figures instead of rendering this one's last snapshot.
-          @live_report = nil
-          # A call whose result never arrived (cancelled mid-flight) keeps its
-          # row, but stops being clocked: the turn is over, so the counter would
-          # otherwise run on a row nothing is working on.
-          @tool_entries.clear
-          # A stop on an answer that never had a non-blank token drops its row,
-          # so the cancelled turn does not leave a blank line of its own.
-          if event[1] && @live_entry && @live_text.to_s.strip.empty?
-            @log.remove_last
-          end
-          @live_entry = nil
-          if event[1]
-            # A cancelled turn gets no footer: the partial answer is the whole
-            # record. Keep one blank after it as the separator the next prompt
-            # needs, but not the extra one the footer line would have sat above.
-            @log.add_entry([ [ "", nil ] ]) unless @log.last_blank?
-            @working.notice = "Operation canceled by user"
-          else
-            # The separator before the footer, unless the row above already is
-            # one: a kept thinking block brings its own blank, and two in a row
-            # would push the footer away from what it summarises.
-            @log.add_entry([ [ "", nil ] ]) unless @log.last_blank?
-            add_turn_summary
-          end
+        when :stream_end then finish_stream(event[1])
         when :reset_turn_totals then reset_turn_totals
         when :assistant_text
           @log.add_entry([ [ MARK[:note] + " ", :muted ] ] + Markdown.to_segments(event[1]), keep_leading: true, indent: 2)
-        when :tool_call
-          # Thinking is over once the model has decided what to run.
-          close_thinking
-          # The answer never continues inside the entry that preceded the
-          # tool. A phantom continuation live entry (start of the turn's next
-          # call) is dropped outright rather than leaving stray blanks, so
-          # back-to-back tool rows sit adjacent.
-          if @live_entry
-            if @live_text.strip.empty?
-              @log.remove_last
-              @log.remove_last if @log.last_blank?
-            elsif !@log.last_blank?
-              @log.add_entry([ [ "", nil ] ])
-            end
-            @live_entry = nil
-          end
-          skill = skill_load(event[1], event[2])
-          summary = if skill
-            ::TUI::Text.truncate(skill, tool_summary_limit("skill"))
-          else
-            tool_summary(event[1], event[2], max: tool_summary_limit(event[1]))
-          end
-          index = @log.add_entry(tool_call_segments(event[1], summary, skill),
-                                keep_leading: true, indent: 2, nowrap: true)
-          @tool_entries[event[1].to_s] = { index: index, summary: summary, skill: skill, started_at: monotonic_now, shown: nil }
+        when :tool_call then start_tool_call(event[1], event[2])
         when :tool_done
           # The ⚒ line flips to ✓ in place — or to ✗ when the call came back a
           # failure. A file the call wrote gains its diff rows below the row.
@@ -137,6 +68,91 @@ module Rubot
           @busy = false
           @stopping = false
         end
+      end
+
+      # The turn has started but answered nothing yet, so the working badge
+      # takes over and last turn's blocks are cleared.
+      def start_stream
+        @working.notice = nil
+        @working.clear_subagents
+        @turn_started_at = monotonic_now
+        # The answer's row (and the blank above it) is created when the first
+        # token lands, in #append_live. Reserving it here would leave two
+        # blank rows under the prompt for as long as the model thinks, and a
+        # turn that opens with a tool call would flash them before the tool
+        # row replaced them.
+        @busy = true
+        @stopping = false
+        @live_text = +""
+        @live_entry = nil
+        # A block from the previous turn cannot survive into this one: it was
+        # already closed by :stream_end, this only clears the state.
+        @thinking_entry = nil
+        @thinking_started_at = nil
+        @thinking_shown = nil
+        @thinking_blank = false
+      end
+
+      # The turn is over, cancelled or not: close the block that was open, drop
+      # the clocks, and put either the footer or the cancellation note under
+      # the answer.
+      def finish_stream(cancelled)
+        close_thinking
+        # The turn is over; the next /context asks the agent for the settled
+        # figures instead of rendering this one's last snapshot.
+        @live_report = nil
+        # A call whose result never arrived (cancelled mid-flight) keeps its
+        # row, but stops being clocked: the turn is over, so the counter would
+        # otherwise run on a row nothing is working on.
+        @tool_entries.clear
+        # A stop on an answer that never had a non-blank token drops its row,
+        # so the cancelled turn does not leave a blank line of its own.
+        if cancelled && @live_entry && @live_text.to_s.strip.empty?
+          @log.remove_last
+        end
+        @live_entry = nil
+        if cancelled
+          # A cancelled turn gets no footer: the partial answer is the whole
+          # record. Keep one blank after it as the separator the next prompt
+          # needs, but not the extra one the footer line would have sat above.
+          @log.add_entry([ [ "", nil ] ]) unless @log.last_blank?
+          @working.notice = "Operation canceled by user"
+        else
+          # The separator before the footer, unless the row above already is
+          # one: a kept thinking block brings its own blank, and two in a row
+          # would push the footer away from what it summarises.
+          @log.add_entry([ [ "", nil ] ]) unless @log.last_blank?
+          add_turn_summary
+        end
+      end
+
+      # A tool the model decided to run: the thinking is over, any phantom
+      # answer row is cleared, and the tool gets a row that starts its clock.
+      def start_tool_call(name, args)
+        # Thinking is over once the model has decided what to run.
+        close_thinking
+        # The answer never continues inside the entry that preceded the
+        # tool. A phantom continuation live entry (start of the turn's next
+        # call) is dropped outright rather than leaving stray blanks, so
+        # back-to-back tool rows sit adjacent.
+        if @live_entry
+          if @live_text.strip.empty?
+            @log.remove_last
+            @log.remove_last if @log.last_blank?
+          elsif !@log.last_blank?
+            @log.add_entry([ [ "", nil ] ])
+          end
+          @live_entry = nil
+        end
+        skill = skill_load(name, args)
+        summary = if skill
+          ::TUI::Text.truncate(skill, tool_summary_limit("skill"))
+        else
+          tool_summary(name, args, max: tool_summary_limit(name))
+        end
+        index = @log.add_entry(tool_call_segments(name, summary, skill),
+                              keep_leading: true, indent: 2, nowrap: true)
+        @tool_entries[name.to_s] = { index: index, summary: summary, skill: skill, started_at: monotonic_now, shown: nil }
       end
 
       # A delegation as a transcript row: the persona that answered and the
