@@ -5,6 +5,7 @@ require "fileutils"
 require "set"
 require "time"
 require_relative "usage"
+require_relative "session/tokens"
 
 module Rubot
   class Session
@@ -57,6 +58,10 @@ module Rubot
     # (73 sessions, 2026-11-10): three were parked at the cap, the ninetieth
     # percentile was 293 messages and the median 38 — so the ceiling is reached,
     # which is what a file-size guard is for. What the count is *not* is a
+    # Sizing the next request: see session/tokens.rb.
+    include Tokens
+    extend Tokens
+
     attr_reader :id, :messages, :workspace, :usage, :last_usage, :cost
     attr_reader :task, :cwd, :cache_history, :cache_records, :compaction_events, :system_additions, :system_patch
     attr_accessor :summary, :forced_skill, :model_override, :model_preset, :thinking_level, :title
@@ -494,78 +499,11 @@ module Rubot
       @messages.size
     end
 
-    # Pi's `CHARS_PER_TOKEN`. Ruby has no tokenizer, so this is the same
-    # text-length heuristic Pi uses for the parts of the transcript that no
-    # provider usage report covers yet.
-    CHARS_PER_TOKEN = 3.5
-
-    # Approximate token count of the next request: the anchor from the latest
-    # provider usage plus an estimate of the messages added after it (or, when
-    # there is no usable anchor, an estimate of the whole transcript).
-    # `extra_chars` is the system prompt and is only needed for the fallback:
-    # an anchored usage already counted the prompt it was sent with.
-    def context_tokens(extra_chars: 0)
-      # Fallback estimate of the whole transcript, used to keep the number honest
-      # when the provider's usage anchor is stale or never grew.
-      fallback_tokens = extra_chars.to_i / CHARS_PER_TOKEN
-      @messages.each { |msg| fallback_tokens += self.class.message_tokens(msg, reasoning: false) }
-
-      if context_anchored?
-        start = @last_usage_watermark.to_i
-        start += 1 if @messages[start] && @messages[start]["role"] == "assistant"
-        trailing = @messages[start..].to_a.sum { |msg| self.class.message_tokens(msg, reasoning: false) }
-        usage_tokens = @last_usage.prompt_tokens + @last_usage.completion_tokens
-        anchored_tokens = usage_tokens + trailing
-        # Never report less than the transcript we are actually about to send:
-        # a stale anchor must not freeze the context size.
-        tokens = [anchored_tokens, fallback_tokens].max
-        {
-          tokens: tokens.ceil,
-          usage_tokens: usage_tokens,
-          trailing_tokens: trailing.ceil,
-          anchored: true
-        }
-      else
-        { tokens: fallback_tokens.ceil, usage_tokens: 0, trailing_tokens: fallback_tokens.ceil, anchored: false }
-      end
-    end
-
     # True when the last provider request still describes the transcript: it
     # is discarded by compaction and by the hard message trim, which is what
     # Pi does via `context_edit`/`compaction` invalidation.
     def context_anchored?
       @last_usage.requests.positive? && !@last_usage_watermark.nil?
-    end
-
-    # Approximate size of the next request, used to decide when to compact.
-    # Shares its formula with /context so the footer and the compaction
-    # trigger never disagree. Reasoning is deliberately excluded: past
-    # reasoning is never sent (see #conversation_history).
-    def estimated_tokens(extra_chars: 0)
-      context_tokens(extra_chars: extra_chars)[:tokens]
-    end
-
-    # Approximate token cost of one message as it will be sent. The reasoning
-    # block is included by default because the turn being executed sends it.
-    def self.message_tokens(msg, reasoning: true)
-      chars = text_chars(msg["content"])
-      chars += text_chars(msg["reasoning_content"]) if reasoning && msg["reasoning_content"]
-      chars += text_chars(JSON.generate(msg["tool_calls"])) if msg["tool_calls"]
-      (chars / CHARS_PER_TOKEN).ceil
-    rescue StandardError
-      (text_chars(msg["content"]) / CHARS_PER_TOKEN).ceil
-    end
-
-    # Text length of a content payload, which may be a string or a list of
-    # blocks (text/image parts).
-    def self.text_chars(value)
-      case value
-      when String then value.length
-      when Array then value.sum { |item| text_chars(item) }
-      when Hash then text_chars(value["text"] || value["content"])
-      when nil then 0
-      else value.to_s.length
-      end
     end
 
     def add_system_addition(text)
