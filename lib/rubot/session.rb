@@ -134,6 +134,10 @@ module Rubot
       # (see SessionNamer). nil means "not named yet"; readers fall back to the
       # opening prompt.
       @title = nil
+      # Whether this copy has an opinion about the title: false until one is
+      # loaded, named here, or cleared on purpose. A copy that never saw a title
+      # must not write "no title" over one another copy wrote (see #save!).
+      @title_known = false
       @usage = Usage.zero
       @last_usage = Usage.zero
       # Cumulative cost, priced per request with the rates of the model that
@@ -549,6 +553,9 @@ module Rubot
       @summary = nil
       @task = nil
       @title = nil
+      # The clear is deliberate, so the empty title is this copy's decision to
+      # write, not the absence of one.
+      @title_known = true
       @model_override = nil
       @model_preset = nil
       @thinking_level = nil

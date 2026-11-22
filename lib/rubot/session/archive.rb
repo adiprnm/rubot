@@ -30,7 +30,11 @@ module Rubot
         return unless file_path
 
         unless persistable?
-          FileUtils.rm_f(file_path)
+          # Only a file this copy wrote is this copy's to remove. Another copy
+          # of the same session can exist (the prompt pinning path builds one
+          # before it loads anything), and that copy arriving here must not take
+          # a transcript, and the name on it, off the disk.
+          FileUtils.rm_f(file_path) if @wrote_file
           return
         end
 
@@ -43,7 +47,14 @@ module Rubot
         }
         data["cwd"] = @cwd if @cwd
         data["task"] = @task if @task
-        data["title"] = @title if @title
+        # More than one copy of a session can be in flight (the turn's, the
+        # namer's, the one that pins a system prompt), and a copy loaded before
+        # the namer wrote a title holds nothing for that field. The archive
+        # refuses to let an empty title overwrite a real one (see
+        # Store#upsert_session); the export keeps the same rule instead of
+        # erasing a name it never saw.
+        title = @title.to_s.strip.empty? ? (@title_known ? nil : title_on_disk) : @title
+        data["title"] = title unless title.to_s.strip.empty?
         data["summary"] = @summary if @summary
         data["forced_skill"] = @forced_skill if @forced_skill
         data["model_override"] = @model_override if @model_override
@@ -74,9 +85,37 @@ module Rubot
           file.flush
           file.flock(File::LOCK_UN)
         end
+        @wrote_file = true
       end
 
       private
+
+      # The title already on the file, for a copy that never held one. Reads
+      # before the file is truncated, and only parses when the text says a title
+      # is in there at all, so an unnamed session that saves often pays a read
+      # and nothing else.
+      #
+      # The read takes the shared lock the writer takes exclusively: another
+      # copy may be rewriting this very file, and a half-written read would look
+      # like "no title" and cost the name.
+      def title_on_disk
+        return @title_on_disk if @title_on_disk
+
+        return nil unless file_path && File.exist?(file_path)
+
+        content = File.open(file_path, "r") do |file|
+          file.flock(File::LOCK_SH)
+          file.read
+        ensure
+          file.flock(File::LOCK_UN) if file
+        end
+        return nil unless content.include?(%("title"))
+
+        parsed = JSON.parse(content)
+        @title_on_disk = parsed.is_a?(Hash) ? parsed["title"] : nil
+      rescue StandardError
+        nil
+      end
 
       # Write only what is new. The old file path rewrote the whole transcript on
       # every save — up to 3.7 MB per turn on this repo's sessions — and the JSON
@@ -162,6 +201,7 @@ module Rubot
         end
         @summary = data["summary"] if data["summary"]
         @title = data["title"] if data["title"]
+        @title_known = true unless data["title"].to_s.strip.empty?
         @forced_skill = data["forced_skill"] if data["forced_skill"]
         @model_override = data["model_override"] if data["model_override"]
         @model_preset = data["model_preset"] if data["model_preset"]

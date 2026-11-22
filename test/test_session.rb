@@ -612,6 +612,44 @@ class TestSessionSummarization < Minitest::Test
     assert_equal "Perbaikan layout", reloaded.title
   end
 
+  # A conversation has more than one copy in flight: the turn's, the namer's,
+  # and the one an agent builds while pinning a system prompt. A copy that never
+  # held a title still saves, and saving must not take the name off the file.
+  def test_a_copy_that_never_held_the_title_does_not_erase_it
+    named = Rubot::Session.new("title-2", workspace: @workspace)
+    named.add("user", "rapikan layout sidebar met")
+    named.save!
+
+    stale = Rubot::Session.new("title-2", workspace: @workspace)
+
+    named.title = "Perbaikan layout"
+    named.save!
+
+    stale.add("assistant", "Sudah.")
+    stale.save!
+
+    assert_equal "Perbaikan layout", Rubot::Session.new("title-2", workspace: @workspace).title
+  end
+
+  # The same copy, for the whole transcript: an empty session deletes its own
+  # file so a launch nobody typed into leaves nothing behind. That rule belongs
+  # to the copy that wrote the file, not to one that merely opened it.
+  def test_an_empty_copy_does_not_delete_a_session_it_never_wrote
+    dir = File.join(@workspace, "sessions")
+    FileUtils.mkdir_p(dir)
+    path = File.join(dir, "title-3.json")
+    File.write(path, {
+      "id" => "title-3",
+      "title" => "Perbaikan layout",
+      "messages" => []
+    }.to_json)
+
+    Rubot::Session.new("title-3", workspace: @workspace).save!
+
+    assert File.exist?(path), "a copy that never wrote the session must leave it alone"
+    assert_equal "Perbaikan layout", Rubot::Session.new("title-3", workspace: @workspace).title
+  end
+
   def test_a_session_file_without_a_title_falls_back_to_the_first_prompt
     dir = File.join(@workspace, "sessions")
     FileUtils.mkdir_p(dir)
