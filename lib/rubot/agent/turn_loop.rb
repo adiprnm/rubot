@@ -163,31 +163,9 @@ module Rubot
             break
           end
 
-          # Steering: text the user typed while this turn was running. It is
-          # delivered after the previous round's tool calls and before this
-          # round's provider call, so it can redirect work already in flight.
-          steer = take_steering
-          if steer
-            @session.add("user", steer)
-            callbacks.steer&.call(steer)
-          end
-
-          # Stop before starting another round (another provider call or more
-          # tool executions) once the user has asked us to.
-          if @cancellation.cancelled?
-            turn.stopped = true
-            break
-          end
-
-          # Adaptive: compact the transcript when it crosses the configured
-          # share of the model's context window. Compaction calls the provider,
-          # so a stop during it unwinds here like any other provider call.
-          begin
-            run_auto_compaction
-          rescue Cancelled
-            turn.stopped = true
-            break
-          end
+          # Steering, a stop, and the compaction that may call the provider all
+          # happen here, between rounds. Any of them can end the turn.
+          break if round_blocked?(turn, callbacks)
 
           messages = build_messages
           log_debug("Sending #{messages.size} messages to provider")
@@ -217,28 +195,8 @@ module Rubot
           emit_usage(callbacks.usage)
 
           # Parse result — both streaming and non-streaming now return Hash
-          if result.is_a?(Hash)
-            response = result["content"] || ""
-            tool_calls = result["tool_calls"]
-            reasoning_content = result["reasoning_content"]
-            finish_reason = result["finish_reason"]
-            turn.truncated = result["truncated"] == true
-            # Some gateways close the stream without a terminator. The text is a
-            # prefix of the answer even if they never said why.
-            turn.truncated ||= result["stream_incomplete"] == true && !response.to_s.empty?
-          elsif result.is_a?(Array)
-            # Legacy streaming format: [content, tool_calls]
-            response, tool_calls = result
-            reasoning_content = nil
-            finish_reason = nil
-            turn.truncated = false
-          else
-            response = result.to_s
-            tool_calls = nil
-            reasoning_content = nil
-            finish_reason = nil
-            turn.truncated = false
-          end
+          response, tool_calls, reasoning_content, finish_reason =
+            read_result(result, turn, response, finish_reason)
 
           if turn.truncated
             warn "[agent] answer truncated (finish_reason=#{finish_reason.inspect}); " \
@@ -298,6 +256,67 @@ module Rubot
 
         [ response, reasoning_content ]
       end
+
+      # What happens between two rounds, when nothing has been asked of the
+      # provider yet. Returns true when the turn has to stop.
+      #
+      # Steering: text the user typed while this turn was running. It is
+      # delivered after the previous round's tool calls and before this round's
+      # provider call, so it can redirect work already in flight.
+      def round_blocked?(turn, callbacks)
+        steer = take_steering
+        if steer
+          @session.add("user", steer)
+          callbacks.steer&.call(steer)
+        end
+
+        # Stop before starting another round (another provider call or more tool
+        # executions) once the user has asked us to.
+        if @cancellation.cancelled?
+          turn.stopped = true
+          return true
+        end
+
+        # Adaptive: compact the transcript when it crosses the configured share
+        # of the model's context window. Compaction calls the provider, so a
+        # stop during it unwinds here like any other provider call.
+        begin
+          run_auto_compaction
+        rescue Cancelled
+          turn.stopped = true
+          return true
+        end
+        false
+      end
+
+      # One provider result, in whichever of the three shapes a provider
+      # returns it, read into the names the loop works with.
+      def read_result(result, turn, response, finish_reason)
+        tool_calls = nil
+        reasoning_content = nil
+
+        if result.is_a?(Hash)
+          response = result["content"] || ""
+          tool_calls = result["tool_calls"]
+          reasoning_content = result["reasoning_content"]
+          finish_reason = result["finish_reason"]
+          turn.truncated = result["truncated"] == true
+          # Some gateways close the stream without a terminator. The text is a
+          # prefix of the answer even if they never said why.
+          turn.truncated ||= result["stream_incomplete"] == true && !response.to_s.empty?
+        elsif result.is_a?(Array)
+          # Legacy streaming format: [content, tool_calls]
+          response, tool_calls = result
+          finish_reason = nil
+          turn.truncated = false
+        else
+          response = result.to_s
+          finish_reason = nil
+          turn.truncated = false
+        end
+
+        [ response, tool_calls, reasoning_content, finish_reason ]
+      end
       # One round's tool calls: what may run is decided in the order the model
       # asked for it, the approved calls run together, and their results reach the
       # transcript in request order. Returns true when the turn ends here.
@@ -307,12 +326,58 @@ module Rubot
         # Add assistant message with tool calls to session
         @session.add("assistant", response, tool_calls: tool_calls, reasoning_content: reasoning_content)
 
-        # Forward the model's narration before it runs the tools. This is the
-        # assistant text that accompanies the tool calls ("Let me check the
-        # structure first."); without this callback it would be swallowed by
-        # the `response = ""` reset at the end of the round. A tool whose
-        # result is UI (the Instagram connect card) is the exception: its
-        # card is the answer, so a sentence in front of it is noise.
+        narrate_tool_round(callbacks, response, tool_calls)
+
+        # Deciding what may run comes first, in the order the model asked for
+        # it: the guard may ask the reader a question, and a cancelled turn
+        # must stop before more work starts. Running comes after, all at once.
+        pending = pending_tool_calls(turn, callbacks, tool_calls)
+
+        # The calls were already known to the model when it sent them, so
+        # none of them needs another's output: run them together and report
+        # in request order, which keeps the transcript and the UI identical
+        # to a sequential run.
+        turn.silent_answer = false
+        execute_tool_calls(pending).each do |call|
+          tool_result = call[:result]
+          ui_diff = file_ui_diff(call[:snapshot], tool_result)
+          callbacks.tool_result&.call(call[:name], tool_result, ui_diff)
+
+          log_debug("Tool result: #{tool_result[0..200]}")
+
+          # A successful write carries its before/after text so the TUI can
+          # rebuild the diff on /resume.
+          @session.add("tool", tool_result, tool_call_id: call[:id], ui_diff: ui_diff)
+
+          # A tool that answered with UI has nothing for the model to say.
+          # End the turn here instead of asking for a reply that would only
+          # restate the button the reader is already looking at.
+          tool = @tools.get(call[:name])
+          turn.silent_answer ||= tool && tool.respond_to?(:silent_result?) && tool.silent_result?(tool_result)
+        end
+
+        # Continue the loop to get the next response
+        tool_count = tool_calls.size
+        turn.rounds += 1
+        turn.tool_rounds += 1
+
+        # Fire progress callback after each round. The tool count is captured
+        # before `tool_calls` is cleared so consumers get the real number.
+        callbacks.progress&.call(turn.rounds, tool_count)
+        # The tool results just added to the transcript are part of the next
+        # request, so the context figure moves before the provider does.
+        emit_usage(callbacks.usage)
+
+        turn.stopped || turn.silent_answer
+      end
+
+      # Forward the model's narration before it runs the tools. This is the
+      # assistant text that accompanies the tool calls ("Let me check the
+      # structure first."); without this callback it would be swallowed by the
+      # `response = ""` reset at the end of the round. A tool whose result is UI
+      # (the Instagram connect card) is the exception: its card is the answer,
+      # so a sentence in front of it is noise.
+      def narrate_tool_round(callbacks, response, tool_calls)
         narration = response.to_s.strip
         silent_batch = tool_calls.any? do |tc|
           tool_name, args, ok = parse_tool_call(tc)
@@ -320,10 +385,12 @@ module Rubot
             tool.silent_operation?(args)
         end
         callbacks.assistant_text&.call(narration) unless narration.empty? || silent_batch
+      end
 
-        # Deciding what may run comes first, in the order the model asked for
-        # it: the guard may ask the reader a question, and a cancelled turn
-        # must stop before more work starts. Running comes after, all at once.
+      # One round's calls decided in order: refused when the arguments never
+      # arrived, skipped when the turn stopped or the reader said no, and
+      # otherwise queued to run with the file's before-content already taken.
+      def pending_tool_calls(turn, callbacks, tool_calls)
         pending = []
         tool_calls.each do |tc|
           tool_name, arguments, arguments_ok = parse_tool_call(tc)
@@ -390,43 +457,7 @@ module Rubot
             snapshot: ui_snapshot
           }
         end
-
-        # The calls were already known to the model when it sent them, so
-        # none of them needs another's output: run them together and report
-        # in request order, which keeps the transcript and the UI identical
-        # to a sequential run.
-        turn.silent_answer = false
-        execute_tool_calls(pending).each do |call|
-          tool_result = call[:result]
-          ui_diff = file_ui_diff(call[:snapshot], tool_result)
-          callbacks.tool_result&.call(call[:name], tool_result, ui_diff)
-
-          log_debug("Tool result: #{tool_result[0..200]}")
-
-          # A successful write carries its before/after text so the TUI can
-          # rebuild the diff on /resume.
-          @session.add("tool", tool_result, tool_call_id: call[:id], ui_diff: ui_diff)
-
-          # A tool that answered with UI has nothing for the model to say.
-          # End the turn here instead of asking for a reply that would only
-          # restate the button the reader is already looking at.
-          tool = @tools.get(call[:name])
-          turn.silent_answer ||= tool && tool.respond_to?(:silent_result?) && tool.silent_result?(tool_result)
-        end
-
-        # Continue the loop to get the next response
-        tool_count = tool_calls.size
-        turn.rounds += 1
-        turn.tool_rounds += 1
-
-        # Fire progress callback after each round. The tool count is captured
-        # before `tool_calls` is cleared so consumers get the real number.
-        callbacks.progress&.call(turn.rounds, tool_count)
-        # The tool results just added to the transcript are part of the next
-        # request, so the context figure moves before the provider does.
-        emit_usage(callbacks.usage)
-
-        turn.stopped || turn.silent_answer
+        pending
       end
       # One request to the provider, streamed when the channel can take chunks.
       #
