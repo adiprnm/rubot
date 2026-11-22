@@ -129,7 +129,7 @@ module Rubot
     STOP_NOTICE = "⏹️ Stopped by user."
 
     # How a lead agent is told about delegation. Kept in the shipped rules so
-    # the prompt epoch moves when this text changes (see #shipped_rules).
+    # the prompt epoch moves when this text changes (see SystemPrompt#rules).
     DELEGATION_RULE = <<~PROMPT.strip.freeze
       # Delegating to Other Agents
 
@@ -1112,9 +1112,9 @@ module Rubot
     # Pinned for the life of the session rather than rebuilt every time (see
     # Session#system_prompt_for): it sits at the front of every request, so
     # rebuilding it meant a one-line memory edit cost a full uncached re-read
-    # of the whole conversation. #compose_system_prompt does the actual work.
+    # of the whole conversation. SystemPrompt#compose does the actual work.
     def build_system_prompt
-      epoch = system_prompt_epoch
+      epoch = system_prompt.epoch
       pinned = @session&.system_prompt_for(epoch)
       return pinned if pinned
 
@@ -1167,9 +1167,9 @@ module Rubot
     def repin_system_prompt
       return false unless @session
 
-      pinned = @session.system_prompt_for(system_prompt_epoch)
+      pinned = @session.system_prompt_for(system_prompt.epoch)
       if pinned && mid_conversation_system?
-        patch = system_prompt_patch(pinned)
+        patch = system_prompt.patch(pinned, composed: compose_system_prompt)
         # Nothing new is worth a request: a refresh that finds no change is a
         # no-op, not a reason to burn the cache.
         return patch.nil? ? false : @session.set_system_patch(patch)
@@ -1190,36 +1190,10 @@ module Rubot
       system_prompt.compose
     end
 
-    # What a session pinned its prompt under (see SystemPrompt#epoch).
-    def system_prompt_epoch
-      system_prompt.epoch
-    end
-
-    # The instruction text this build ships, digested into the epoch.
-    def shipped_rules
-      system_prompt.rules
-    end
-
-    # The persona parts that reach the prompt, digested into the epoch.
-    def persona_identity
-      system_prompt.identity
-    end
-
-    # Stable identity for a piece of text across restarts.
+    # Stable identity for a piece of text across restarts. Used for the cache
+    # record, which has to name what a request was made of.
     def digest_of(text)
       system_prompt.digest_of(text)
-    end
-
-    # The task statement, once the transcript has lost it.
-    def task_anchor
-      system_prompt.task_anchor
-    end
-
-    # The sections of a freshly composed prompt the model has not seen yet. The
-    # composition is passed in because callers stub it, and because the caller
-    # is the one holding the pin it is compared against.
-    def system_prompt_patch(pinned)
-      system_prompt.patch(pinned, composed: compose_system_prompt)
     end
 
     # Learn from the turn that just finished. Channels call this *after* they

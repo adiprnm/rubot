@@ -676,7 +676,7 @@ class TestAgentProgressNarration < Minitest::Test
   # The model name is quoted in the prompt, so a switch has to rebuild it.
   def test_the_epoch_tracks_the_model_the_summary_and_the_forced_skill
     @agent.session.add("user", "Kerjakan nomor 6 dulu")
-    epoch = @agent.send(:system_prompt_epoch)
+    epoch = @agent.system_prompt.epoch
 
     assert_equal @agent.active_model_name.to_s, epoch["model"]
     assert_equal "", epoch["task"],
@@ -687,7 +687,7 @@ class TestAgentProgressNarration < Minitest::Test
     @agent.session.summary = "Ringkasan"
     @agent.session.forced_skill = "review"
 
-    moved = @agent.send(:system_prompt_epoch)
+    moved = @agent.system_prompt.epoch
     refute_equal epoch["summary"], moved["summary"]
     assert_equal "review", moved["skill"]
   end

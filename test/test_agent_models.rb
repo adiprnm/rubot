@@ -592,12 +592,12 @@ class TestAgentAdaptiveLearning < Minitest::Test
   def test_a_prompt_pinned_by_an_older_build_is_rebuilt
     @agent.process("first message here", stream: false)
 
-    assert_includes @agent.system_prompt_epoch.keys, "rules",
+    assert_includes @agent.system_prompt.epoch.keys, "rules",
                     "the shipped rule text has to move the epoch"
 
     # What an older build left behind: the same prompt, an epoch with no rules.
     @agent.session.store_system_prompt("teks dari build lama",
-                                       @agent.system_prompt_epoch.except("rules"))
+                                       @agent.system_prompt.epoch.except("rules"))
 
     rebuilt = @agent.build_system_prompt
 

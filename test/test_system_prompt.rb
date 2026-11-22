@@ -108,13 +108,13 @@ class TestSystemPrompt < Minitest::Test
   def test_a_plain_install_composes_the_same_prompt
     agent = plain_agent
     assert_prompt(PLAIN_PROMPT, agent)
-    assert_equal PLAIN_EPOCH, agent.system_prompt_epoch.transform_values { |value| sha(value) }
+    assert_equal PLAIN_EPOCH, agent.system_prompt.epoch.transform_values { |value| sha(value) }
   end
 
   def test_a_persona_with_everything_composes_the_same_prompt
     agent = Rubot::Agent.new(config: rich_config, session_id: "rich", persona: persona)
     assert_prompt(RICH_PROMPT, agent)
-    assert_equal RICH_EPOCH, agent.system_prompt_epoch.transform_values { |value| sha(value) }
+    assert_equal RICH_EPOCH, agent.system_prompt.epoch.transform_values { |value| sha(value) }
   end
 
   # The pin is the whole reason the composition has to be stable: the second
@@ -136,7 +136,7 @@ class TestSystemPrompt < Minitest::Test
     pinned = agent.build_system_prompt
 
     write_skill(File.dirname(config.config_path), "extra", "Installed later.")
-    patch = agent.system_prompt_patch(pinned)
+    patch = agent.system_prompt.patch(pinned, composed: agent.compose_system_prompt)
 
     refute_nil patch
     assert_equal CHANGE_PATCH, sha(normalize(patch))
