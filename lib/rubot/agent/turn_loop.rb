@@ -66,6 +66,82 @@ module Rubot
 
         [ turn, cron_results ]
       end
+
+      # Everything that happens once the last round is over: the assistant's
+      # closing text is stored, a truncated answer says it was cut off, cron
+      # output and the stop notice are folded in ahead of the answer, and a turn
+      # that produced nothing at all still gets a summary rather than silence.
+      #
+      # Returns the text the channel delivers.
+      def finish_turn(turn, cron_results:, response:, reasoning_content:, on_stopped: nil)
+        # Add final assistant response to session (only if not already added via tool-call branch).
+        # A silent tool's answer is the UI it produced, so no assistant text is
+        # stored — and no fallback summary is invented for it either.
+        @session.add("assistant", response, reasoning_content: reasoning_content) if !turn.stopped && !response.to_s.empty?
+
+        # Ran out of continuations: say so rather than ending mid-sentence with
+        # no explanation.
+        if turn.truncated && !turn.answer.to_s.strip.empty?
+          turn.answer << "\n\n[the model's answer was cut off at the output limit — " \
+                    "reply \"continue\" to get the rest]"
+        end
+
+        # Prepend cron results to the user's response
+        # Skip inline processing if a callback is registered (Telegram handles it)
+        parts = []
+        cron_tool = @tools.get("cron")
+        has_callback = cron_tool && cron_tool.respond_to?(:has_fire_callback?) && cron_tool.has_fire_callback?
+
+        unless has_callback || turn.stopped
+          cron_results.each do |cr|
+            warn "[cron] Processing job #{cr[:job_id]} mode=#{cr[:mode]}" if Rubot.debug?
+            case cr[:mode]
+            when "agent_turn"
+              cron_response = process_cron(cr[:result][:agent_message])
+              warn "[cron] agent_turn response: #{(cron_response || '(nil)')[0..100]}" if Rubot.debug?
+              parts << cron_response if cron_response && !cron_response.empty?
+            when "deliver"
+              warn "[cron] deliver message: #{(cr[:result][:deliver_message] || '(nil)')[0..100]}" if Rubot.debug?
+              parts << cr[:result][:deliver_message]
+            when "command"
+              output = cr[:result][:output] || "(no output)"
+              warn "[cron] command output: #{output[0..100]}" if Rubot.debug?
+              parts << "⏰ Cron job fired: #{cr[:result][:output]}"
+            end
+          end
+        end
+
+        on_stopped&.call if turn.stopped
+
+        if turn.stopped
+          turn.answer << "\n\n" unless turn.answer.empty?
+          turn.answer << STOP_NOTICE
+        end
+
+        parts << turn.answer if turn.answer && !turn.answer.empty?
+
+        combined = parts.join("\n\n---\n\n")
+
+        # Guard: if the LLM produced only tool calls with no text content
+        # (e.g. read_file → grep → etc.), return the cron/tool summary or
+        # a fallback so the user never gets a silent drop.
+        if combined.empty? && !turn.silent_answer
+          fallback = build_fallback_response(turn.rounds, tool_rounds: turn.tool_rounds)
+          combined = fallback if fallback && !fallback.empty?
+        end
+
+        # Say so when the run was cut short, instead of stopping silently. The
+        # wording matters here: this limit is a net under a runaway loop, so the
+        # reader is told what was done and what is left, not handed homework.
+        if turn.limit_hit
+          notice = "⚠️ Turn stopped after #{turn.limit} rounds without finishing. " \
+                   "Say \"lanjut\" to carry on from here — the work so far is saved."
+          combined = combined.empty? ? notice : "#{combined}\n\n#{notice}"
+        end
+
+        warn "[cron] Combined response (#{parts.size} parts): #{combined[0..200]}" if Rubot.debug?
+        combined
+      end
     end
   end
 end
