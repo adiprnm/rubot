@@ -10,10 +10,7 @@ module Rubot
     # everything in front of the last user turn has to stay byte-identical or
     # the prefix is re-read on the next round.
     #
-    # Moved as it was, comments included. The two redaction helpers below it are
-    # moved too rather than rewritten: they keep the argument bodies of old tool
-    # calls out of the request, and their notice text is part of what the model
-    # sees.
+    # Moved as it was, comments included.
     module MessageBuilder
       private
 
@@ -73,54 +70,6 @@ module Rubot
         return 0 if @turn_start_index.nil?
 
         [ @session.messages.size - @turn_start_index, 0 ].max
-      end
-
-      # Replace oversized top-level string values in an old tool call's
-      # arguments with a notice, on the request copy only (the session transcript
-      # keeps the originals). Values are rebuilt through merge/map because
-      # conversation_history shares the stored tool_calls arrays by reference —
-      # mutating them in place would corrupt the session file.
-      def redact_old_tool_call_args!(messages, tool_call_id, max_chars)
-        return unless tool_call_id
-
-        index = messages.index do |m|
-          m["role"] == "assistant" && m["tool_calls"]&.any? { |tc| tc["id"] == tool_call_id }
-        end
-        return unless index
-
-        message = messages[index]
-        calls = message["tool_calls"].map do |tc|
-          next tc unless tc["id"] == tool_call_id
-
-          args = tc.dig("function", "arguments").to_s
-          redacted = redact_json_args(args, max_chars)
-          next tc if redacted == args
-
-          tc.merge("function" => tc["function"].merge("arguments" => redacted))
-        end
-        messages[index] = message.merge("tool_calls" => calls)
-      end
-
-      # Keep the first `max_chars` of each oversized top-level string value and
-      # note how much was dropped, so the model still sees paths and command
-      # shapes without carrying whole file bodies. Arguments that are not valid
-      # JSON are left alone: a malformed string in history is what the provider
-      # already accepted once, and guessing at its shape risks more.
-      def redact_json_args(args, max_chars)
-        parsed = JSON.parse(args)
-        return args unless parsed.is_a?(Hash)
-
-        changed = false
-        parsed.each do |key, value|
-          next unless value.is_a?(String) && value.length > max_chars
-
-          parsed[key] = value[0...max_chars] +
-            format(REDACTED_TOOL_CALL_ARGS_NOTICE, value.length - max_chars)
-          changed = true
-        end
-        changed ? JSON.generate(parsed) : args
-      rescue JSON::ParserError
-        args
       end
     end
   end

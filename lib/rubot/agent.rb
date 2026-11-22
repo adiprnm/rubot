@@ -59,14 +59,6 @@ module Rubot
     # trimmed, so nothing is lost for a later turn that needs to re-read it.
     TRUNCATED_TOOL_RESULT_NOTICE = "\n... [older tool output truncated; re-run the command if you still need it]"
 
-    # Appended to an oversized argument value of an old tool call after its
-
-    # first `tool_result_max_chars` characters. The count tells the model what
-
-    # it is missing without ever sending the body again.
-
-    REDACTED_TOOL_CALL_ARGS_NOTICE = "\n... [%d chars of this old tool call's argument redacted; re-run the tool if you still need them]"
-
     # What separates one prompt section from the next, and therefore what a
     # patch can be split on when only some sections moved.
     SECTION_SEPARATOR = "\n\n---\n\n"
