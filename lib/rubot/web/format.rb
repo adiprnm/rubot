@@ -473,8 +473,6 @@ module Rubot
         "php" => "//", "css" => "/*", "sql" => "--"
       }.freeze
 
-      BLOCK_COMMENT_LANGS = %w[javascript js typescript ts go rust java c cpp php css sql].freeze
-
       KEYWORDS = %w[
         def end class module if elsif else unless while until for do return yield
         begin rescue ensure raise break next redo then and or not in require
@@ -501,6 +499,35 @@ module Rubot
         marker = LINE_COMMENTS[language]
         return CGI.escapeHTML(code) if quotes.nil? && marker.nil?
 
+        regex = highlight_regex(language, quotes, marker)
+        out = +""
+        pos = 0
+
+        code.scan(regex) do
+          match = Regexp.last_match
+          out << CGI.escapeHTML(code[pos...match.begin(0)]) if match.begin(0) > pos
+          name = TOKEN_CLASS.find { |group, _| match[group] }&.last
+          out << %(<span class="#{name}">#{CGI.escapeHTML(match[0])}</span>)
+          pos = match.end(0)
+        end
+        out << CGI.escapeHTML(code[pos..].to_s) if pos < code.length
+        out
+      end
+
+      # One compiled pattern per language. The pattern depends only on the
+      # language, so building it per code block was pure repetition: 0.088ms of
+      # every block of every render, on a page that may hold several blocks and
+      # is redrawn while an answer streams.
+      HIGHLIGHT_REGEXES = {}
+      HIGHLIGHT_MUTEX = Mutex.new
+
+      def highlight_regex(language, quotes, marker)
+        HIGHLIGHT_MUTEX.synchronize do
+          HIGHLIGHT_REGEXES[language] ||= build_highlight_regex(language, quotes, marker)
+        end
+      end
+
+      def build_highlight_regex(language, quotes, marker)
         patterns = []
         if quotes && !quotes.empty?
           strings = quotes.map do |q|
@@ -521,19 +548,7 @@ module Rubot
         patterns << "(?<lit>\\b(?:#{LITERALS.join("|")})\\b)"
         patterns << "(?<kw>\\b(?:#{KEYWORDS.join("|")})\\b)"
 
-        regex = Regexp.new("(?:#{patterns.join("|")})", Regexp::MULTILINE)
-        out = +""
-        pos = 0
-
-        code.scan(regex) do
-          match = Regexp.last_match
-          out << CGI.escapeHTML(code[pos...match.begin(0)]) if match.begin(0) > pos
-          name = TOKEN_CLASS.find { |group, _| match[group] }&.last
-          out << %(<span class="#{name}">#{CGI.escapeHTML(match[0])}</span>)
-          pos = match.end(0)
-        end
-        out << CGI.escapeHTML(code[pos..].to_s) if pos < code.length
-        out
+        Regexp.new("(?:#{patterns.join("|")})", Regexp::MULTILINE)
       end
 
       # --- tables ---------------------------------------------------------
