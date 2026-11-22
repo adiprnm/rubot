@@ -842,5 +842,16 @@ module Rubot
     rescue StandardError
       nil
     end
+
+    # What a test may drive: the App loop is the only caller of most of these
+    # in production — one tick (pump), one event (apply_event), one command
+    # (handle_command) — and a real terminal is the only other way in. They are
+    # public on purpose so a test does not have to reach for send; everything
+    # not named here stays private.
+    public :add_steer_echo, :apply_event, :build_ui, :confirm_callback, :copy_selection,
+           :edit_prompt, :editor_command, :file_diff, :handle_command, :monotonic_now,
+           :paint_banner, :paste_clipboard, :process_message, :prompt_echo, :pump,
+           :push_status_info, :refresh_slow_tools, :refresh_thinking, :resume_entries,
+           :spawn_command_lane, :start_fresh_session, :stop_command_lane, :tool_summary
   end
 end

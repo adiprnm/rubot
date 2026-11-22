@@ -34,8 +34,8 @@ module Rubot
 
     def build_repl
       repl = TUI.new(stub_agent)
-      repl.send(:build_ui)
-      repl.send(:paint_banner)
+      repl.build_ui
+      repl.paint_banner
       repl
     end
 
@@ -98,8 +98,8 @@ module Rubot
 
     def test_status_row_shows_metrics_before_the_first_turn
       repl = build_repl
-      repl.send(:push_status_info)
-      repl.send(:pump)
+      repl.push_status_info
+      repl.pump
 
       row = plain(repl.instance_variable_get(:@app).render_lines).find { |l| l.include?("cache") }
 
@@ -114,7 +114,7 @@ module Rubot
       ev = repl.instance_variable_get(:@events)
       ev << [ :status_right, "gpt-test" ]
       ev << [ :status_left, "$0.001 · cache 60% · ctx 8.2%" ]
-      repl.send(:pump)
+      repl.pump
 
       line = plain(repl.instance_variable_get(:@app).render_lines)
         .find { |l| l.include?("$0.001") }
@@ -129,8 +129,8 @@ module Rubot
 
     def test_status_line_hides_the_session_name
       repl = build_repl
-      repl.send(:push_status_info)
-      repl.send(:pump)
+      repl.push_status_info
+      repl.pump
 
       status = repl.instance_variable_get(:@status)
       assert_equal "gpt-test", status.instance_variable_get(:@right)
@@ -211,7 +211,7 @@ module Rubot
       line = repl.instance_variable_get(:@workspace_line)
       ev = repl.instance_variable_get(:@events)
       ev << [ :status_left, "$0.001 · cache 60% · ctx 8.2%" ]
-      repl.send(:pump)
+      repl.pump
 
       lines = plain(repl.instance_variable_get(:@app).render_lines)
       workspace_ix = lines.index { |l| l.include?(line.label) }
@@ -292,8 +292,8 @@ module Rubot
           cost: { "total" => 0.001234 } }
       end
 
-      repl.send(:process_message, "hi")
-      repl.send(:pump)
+      repl.process_message("hi")
+      repl.pump
 
       view = plain(repl.instance_variable_get(:@app).render_lines)
       assert view.any? { |l| l.include?("$0.0012 · cache 60% · ctx 8.2%") },
@@ -336,7 +336,7 @@ module Rubot
       end
       agent.define_singleton_method(:flush_learning) { nil }
 
-      repl.send(:process_message, "hi")
+      repl.process_message("hi")
 
       assert_equal [ "$0.0040 · cache 90% · ctx 3.9%", "$0.0090 · cache 80% · ctx 7.0%" ], footers
     end
@@ -351,8 +351,8 @@ def test_repin_command_rebuilds_the_prompt_and_says_what_it_costs
   agent.define_singleton_method(:repin_system_prompt) { asked += 1; true }
   log = repl.instance_variable_get(:@log)
 
-  repl.send(:handle_command, "/repin")
-  repl.send(:pump)
+  repl.handle_command("/repin")
+  repl.pump
 
   assert_equal 1, asked, "the command has to ask the agent, not just describe it"
   texts = log.instance_variable_get(:@entries).map { |segments| segments.map(&:first).join }
@@ -367,8 +367,8 @@ def test_repin_command_reports_nothing_to_rebuild
   agent.define_singleton_method(:repin_system_prompt) { false }
   log = repl.instance_variable_get(:@log)
 
-  repl.send(:handle_command, "/repin")
-  repl.send(:pump)
+  repl.handle_command("/repin")
+  repl.pump
 
   texts = log.instance_variable_get(:@entries).map { |segments| segments.map(&:first).join }
   assert texts.any? { |text| text.include?("not pinned") }
@@ -383,8 +383,8 @@ def test_a_turn_without_streaming_still_shows_its_answer
   agent = repl.instance_variable_get(:@agent)
   agent.define_singleton_method(:process) { |_text, **_callbacks, &_block| "Jawaban tanpa stream." }
 
-  repl.send(:process_message, "halo")
-  repl.send(:pump)
+  repl.process_message("halo")
+  repl.pump
 
   texts = repl.instance_variable_get(:@log).instance_variable_get(:@entries).map { |segments| segments.map(&:first).join }
   assert texts.any? { |text| text.include?("Jawaban tanpa stream.") },
@@ -403,8 +403,8 @@ def test_the_tail_of_a_turn_is_shown_once
     answer + notice
   end
 
-  repl.send(:process_message, "halo")
-  repl.send(:pump)
+  repl.process_message("halo")
+  repl.pump
 
   log = repl.instance_variable_get(:@log).instance_variable_get(:@entries).map { |segments| segments.map(&:first).join }
   joined = log.join
@@ -417,14 +417,14 @@ end
 # the only thing on screen without syntax.
 def test_the_prompt_echo_carries_markdown
   repl = build_repl
-  plain = repl.send(:prompt_echo, "**penting**: lihat `app.rb`")
+  plain = repl.prompt_echo("**penting**: lihat `app.rb`")
   styles = plain.map(&:last)
 
   assert_equal "❯ ", plain.first.first
   assert_includes styles, :md_code, "an inline code span is rendered"
   assert(styles.any? { |s| s.to_s.start_with?("md_bold") }, "bold is rendered")
 
-  fence = repl.send(:prompt_echo, "```ruby
+  fence = repl.prompt_echo("```ruby
 puts 1
 ```")
   assert_includes fence.map(&:last), :md_code_blk, "a fenced block is rendered"
@@ -434,7 +434,7 @@ end
     # entry, not around it.
     def test_the_prompt_echo_keeps_the_marker_on_the_first_row
       repl = build_repl
-      segments = repl.send(:prompt_echo, "- satu\n- dua")
+      segments = repl.prompt_echo("- satu\n- dua")
 
       assert_equal [ "❯ ", :accent ], segments.first, "the marker opens the entry"
       text = segments.map(&:first).join
@@ -448,8 +448,8 @@ end
       agent.define_singleton_method(:clear_session) { nil }
       log = repl.instance_variable_get(:@log)
 
-      repl.send(:handle_command, "/clear")
-      repl.send(:pump)
+      repl.handle_command("/clear")
+      repl.pump
 
       texts = log.instance_variable_get(:@entries).map { |segments| segments.map(&:first).join }
       ix = texts.index { |text| text.include?("Session cleared.") }
@@ -468,9 +468,9 @@ end
       agent.define_singleton_method(:cancel!) { nil }
       log = repl.instance_variable_get(:@log)
 
-      repl.send(:handle_command, "/clear")
-      repl.send(:handle_command, "/stop")
-      repl.send(:pump)
+      repl.handle_command("/clear")
+      repl.handle_command("/stop")
+      repl.pump
 
       texts = log.instance_variable_get(:@entries).map { |segments| segments.map(&:first).join }
       first = texts.index { |text| text.include?("Session cleared.") }
@@ -489,8 +489,8 @@ end
 
         repl = build_repl
         repl.define_singleton_method(:web_restart_command) { [ RbConfig.ruby, script ] }
-        repl.send(:handle_command, "/web-restart")
-        repl.send(:pump)
+        repl.handle_command("/web-restart")
+        repl.pump
 
         texts = log_texts(repl)
         assert_includes texts, "#{TUI::MARK[:ok]} Web server restarted."
@@ -510,8 +510,8 @@ end
 
         repl = build_repl
         repl.define_singleton_method(:web_restart_command) { [ RbConfig.ruby, script ] }
-        repl.send(:handle_command, "/web-restart")
-        repl.send(:pump)
+        repl.handle_command("/web-restart")
+        repl.pump
 
         texts = log_texts(repl)
         assert_includes texts, "#{TUI::MARK[:err]} Web server restart failed."
@@ -524,7 +524,7 @@ end
       Dir.mktmpdir do |dir|
         repl = build_resume_repl(File.join(dir, "workspace"))
         repl.instance_variable_set(:@tui, false)
-        out, _err = capture_io { repl.send(:handle_command, "/resume") }
+        out, _err = capture_io { repl.handle_command("/resume") }
 
         assert_includes out, "\n  · No saved sessions yet.\n"
       end
@@ -540,8 +540,8 @@ end
 
         repl = build_resume_repl(workspace)
 
-        assert_equal %w[mine], repl.send(:resume_entries).map { |entry| entry[:id] }
-        assert_equal %w[theirs mine], repl.send(:resume_entries, all: true).map { |entry| entry[:id] },
+        assert_equal %w[mine], repl.resume_entries.map { |entry| entry[:id] }
+        assert_equal %w[theirs mine], repl.resume_entries(all: true).map { |entry| entry[:id] },
                      "all ignores the directory but still hides sessions with no origin"
       end
     end
@@ -554,12 +554,12 @@ end
 
         repl = build_resume_repl(workspace)
 
-        assert_empty repl.send(:resume_entries)
+        assert_empty repl.resume_entries
 
-        repl.send(:handle_command, "/resume all")
-        assert_equal %w[theirs], repl.send(:resume_entries, all: true).map { |entry| entry[:id] }
+        repl.handle_command("/resume all")
+        assert_equal %w[theirs], repl.resume_entries(all: true).map { |entry| entry[:id] }
 
-        out, _err = capture_io { repl.send(:handle_command, "/resume theirs") }
+        out, _err = capture_io { repl.handle_command("/resume theirs") }
         refute_includes out, "not found"
       end
     end
@@ -572,7 +572,7 @@ end
         repl = build_resume_repl(workspace)
         repl.instance_variable_set(:@tui, false)
 
-        out, _err = capture_io { repl.send(:handle_command, "/resume") }
+        out, _err = capture_io { repl.handle_command("/resume") }
 
         assert_includes out, "1 conversation(s) from other directories · /resume all"
       end
@@ -584,11 +584,11 @@ end
       agent.define_singleton_method(:clear_session) { nil }
       ev = repl.instance_variable_get(:@events)
       ev << [ :status_left, "$0.001 · cache 60% · ctx 8.2%" ]
-      repl.send(:pump)
+      repl.pump
       assert plain(repl.instance_variable_get(:@app).render_lines).any? { |l| l.include?("$0.001") }
 
-      repl.send(:handle_command, "/clear")
-      repl.send(:pump)
+      repl.handle_command("/clear")
+      repl.pump
 
       refute plain(repl.instance_variable_get(:@app).render_lines).any? { |l| l.include?("$0.001") },
              "a cleared session has nothing to price"
@@ -600,7 +600,7 @@ end
       switched = nil
       agent.define_singleton_method(:switch_session) { |name| switched = name }
 
-      repl.send(:start_fresh_session)
+      repl.start_fresh_session
 
       assert switched, "the launch switches to a fresh session"
       refute_equal "default", switched, "the id belongs to this launch only"
@@ -617,8 +617,8 @@ end
       agent = repl.instance_variable_get(:@agent)
       agent.define_singleton_method(:clear_session) { nil }
 
-      repl.send(:handle_command, "/new")
-      repl.send(:pump)
+      repl.handle_command("/new")
+      repl.pump
 
       texts = log.instance_variable_get(:@entries).map { |e| e.map(&:first).join }
       assert_equal banner_count, texts.size, "conversation is dropped, banner is kept"
@@ -644,7 +644,7 @@ end
       ev << [ :entry, [ [ "❯ ", :accent ], [ "Hi met", :text ] ] ]
       ev << [ :stream_start ]
       ev << [ :chunk, "Halo! Ada yang bisa gue bantu?" ]
-      repl.send(:pump)
+      repl.pump
 
       view = plain(repl.instance_variable_get(:@app).render_lines)
       user_line = view.find { |l| l.include?("Hi met") }
@@ -733,11 +733,11 @@ end
       ev << [ :entry, [ [ "❯ ", :accent ], [ "list the files", :text ] ] ]
       base = log.entry_count
       ev << [ :stream_start ]
-      repl.send(:pump)
+      repl.pump
       assert_equal base + 1, log.entry_count, "the model thinking must not open blank rows"
 
       ev << [ :tool_call, "shell_exec", { "command" => "ls" } ]
-      repl.send(:pump)
+      repl.pump
       texts = log.instance_variable_get(:@entries).map { |entry| entry.map(&:first).join }
       assert_equal [ "❯ list the files", "⚒ shell_exec ls" ], texts.last(2),
                    "the tool row sits directly under the prompt"
@@ -751,7 +751,7 @@ end
       ev << [ :entry, [ [ "❯ ", :accent ], [ "halo", :text ] ] ]
       ev << [ :stream_start ]
       ev << [ :chunk, "Halo!" ]
-      repl.send(:pump)
+      repl.pump
 
       texts = log.instance_variable_get(:@entries).map { |entry| entry.map(&:first).join }
       assert_equal [ "❯ halo", "", "Halo!" ], texts.last(3),
@@ -762,13 +762,13 @@ end
       repl = build_repl
       app = repl.instance_variable_get(:@app)
       ev = repl.instance_variable_get(:@events)
-      now = repl.send(:monotonic_now)
+      now = repl.monotonic_now
 
       ev << [ :stream_start ]
-      repl.send(:pump)
+      repl.pump
       repl.instance_variable_set(:@turn_started_at, now - 145)
       ev << [ :stream_end ]
-      repl.send(:pump)
+      repl.pump
 
       line = plain(app.render_lines).find { |l| l.include?("Turn took") }
       assert line, "a turn footer is shown"
@@ -776,10 +776,10 @@ end
       assert_includes line, "(Total time 2m 25s \u00b7 1 turn)"
 
       ev << [ :stream_start ]
-      repl.send(:pump)
+      repl.pump
       repl.instance_variable_set(:@turn_started_at, now - 1755)
       ev << [ :stream_end ]
-      repl.send(:pump)
+      repl.pump
 
       line = plain(app.render_lines).reverse.find { |l| l.include?("Turn took") }
       assert_includes line, "Turn took 29m 15s"
@@ -797,8 +797,8 @@ end
       agent.define_singleton_method(:flush_learning) { nil }
       agent.define_singleton_method(:usage_report) { nil }
 
-      repl.send(:process_message, "stop me")
-      repl.send(:pump)
+      repl.process_message("stop me")
+      repl.pump
 
       entries = repl.instance_variable_get(:@log).instance_variable_get(:@entries)
       texts = entries.map { |segments| segments.map(&:first).join }
@@ -814,7 +814,7 @@ end
 
       ev = repl.instance_variable_get(:@events)
       ev << [ :stream_start ]
-      repl.send(:pump)
+      repl.pump
       repl.instance_variable_get(:@app).send(:run_timers)
       refute plain(app.render_lines).any? { |l| l.include?("Operation canceled by user") },
              "a new turn clears the notice"
@@ -823,7 +823,7 @@ end
     def test_tool_summary_truncates_to_a_cell_budget
       long = { "command" => "x" * 200 }
 
-      summary = build_repl.send(:tool_summary, "shell_exec", long)
+      summary = build_repl.tool_summary("shell_exec", long)
 
       assert summary.end_with?("\u2026"), "ellipsis marks the cut: #{summary.inspect}"
       assert_operator ::TUI::Text.width(summary), :<=, 64
@@ -835,7 +835,7 @@ end
       ev = repl.instance_variable_get(:@events)
       app.render_lines # lay the log out so it knows its width
       ev << [ :tool_call, "shell_exec", { "command" => "y" * 500 } ]
-      repl.send(:pump)
+      repl.pump
 
       row = plain(app.render_lines).find { |l| l.include?("shell_exec") }
       assert row, "tool line must render"
@@ -891,8 +891,7 @@ end
     # hangs by the marker's width, the same way a prompt echo does.
     def test_steer_echo_continuation_rows_hang_under_the_marker
       repl = build_repl
-      repl.send(:add_steer_echo,
-                "first line of the steer\n" + "second line that runs long enough to soft-wrap at any sane width " * 2)
+      repl.add_steer_echo("first line of the steer\n" + "second line that runs long enough to soft-wrap at any sane width " * 2)
 
       log = repl.instance_variable_get(:@log)
       log.layout(::TUI::Rect.new(0, 0, 60, 24))
@@ -920,14 +919,14 @@ end
 
       events << [ :stream_start ]
       events << [ :chunk, "before the steer" ]
-      repl.send(:pump)
+      repl.pump
 
       "use /tmp instead".each_char { |c| prompt.handle_key(::TUI::Key.printable(c)) }
       prompt.handle_key(::TUI::Key.new(:enter))
       app.send(:run_timers)
 
       events << [ :chunk, "after the steer" ]
-      repl.send(:pump)
+      repl.pump
 
       view = plain(app.render_lines)
       before_ix = view.index { |l| l.include?("before the steer") }
@@ -969,14 +968,14 @@ end
       app = repl.instance_variable_get(:@app)
       lane = repl.instance_variable_get(:@command_mailbox)
       repl.instance_variable_set(:@busy, true)
-      repl.send(:spawn_command_lane)
+      repl.spawn_command_lane
 
       begin
         lane << "/help"
         rows = []
         deadline = Time.now + 5
         while Time.now < deadline
-          repl.send(:pump)
+          repl.pump
           app.render_lines
           rows = repl.instance_variable_get(:@log).instance_variable_get(:@lines).map do |line|
             line.map { |(text, _style)| text }.join
@@ -990,7 +989,7 @@ end
                "the lane's output lands mid-turn: #{rows.map(&:strip).first(5).inspect}"
         assert repl.instance_variable_get(:@busy), "the turn is still running"
       ensure
-        repl.send(:stop_command_lane)
+        repl.stop_command_lane
       end
     end
 
@@ -1012,7 +1011,7 @@ end
       prompt.handle_key(::TUI::Key.new(:enter))
       assert_equal "/clear", lane.pop, "the lane takes it, not the busy worker"
 
-      repl.send(:handle_command, "/clear")
+      repl.handle_command("/clear")
       assert cleared, "the command runs straight away"
       refute plain(app.render_lines).any? { |line| line.include?("runs when this turn ends") },
              "nothing is deferred any more"
@@ -1035,7 +1034,7 @@ end
         report
       end
 
-      out, _err = capture_io { repl.send(:handle_command, "/context") }
+      out, _err = capture_io { repl.handle_command("/context") }
 
       refute asked, "the agent is not asked while it is busy"
       assert_includes out, "test-model"
@@ -1366,12 +1365,12 @@ end
       ev = repl.instance_variable_get(:@events)
       app = repl.instance_variable_get(:@app)
       ev << [ :tool_call, "shell_exec", { "command" => "sleep 10" } ]
-      repl.send(:pump)
+      repl.pump
 
       # The call started 4.5 seconds ago and has not come back yet.
       entries = repl.instance_variable_get(:@tool_entries)
       entries["shell_exec"][:started_at] -= 4.5
-      repl.send(:refresh_slow_tools)
+      repl.refresh_slow_tools
 
       line = plain(app.render_lines).find { |l| l.include?("shell_exec") }
       assert_includes line, "\u2692", "the call is still in flight: #{line.inspect}"
@@ -1385,9 +1384,9 @@ end
       ev = repl.instance_variable_get(:@events)
       app = repl.instance_variable_get(:@app)
       ev << [ :tool_call, "shell_exec", { "command" => "true" } ]
-      repl.send(:pump)
+      repl.pump
       ev << [ :tool_done, "shell_exec", nil, "[Exit code: 0]\n" ]
-      repl.send(:pump)
+      repl.pump
 
       line = plain(app.render_lines).find { |l| l.include?("shell_exec") }
       assert_includes line, "\u2713"
@@ -1399,11 +1398,11 @@ end
       ev = repl.instance_variable_get(:@events)
       app = repl.instance_variable_get(:@app)
       ev << [ :tool_call, "shell_exec", { "command" => "sleep 5" } ]
-      repl.send(:pump)
+      repl.pump
       repl.instance_variable_get(:@tool_entries)["shell_exec"][:started_at] -= 12.2
 
       ev << [ :tool_done, "shell_exec", nil, "[Exit code: 0]\n" ]
-      repl.send(:pump)
+      repl.pump
 
       line = plain(app.render_lines).find { |l| l.include?("shell_exec") }
       assert_includes line, "\u2713", "the row still ends a check: #{line.inspect}"
@@ -1417,9 +1416,9 @@ end
       ev = repl.instance_variable_get(:@events)
       app = repl.instance_variable_get(:@app)
       ev << [ :tool_call, "shell_exec", { "command" => "sleep 10" } ]
-      repl.send(:pump)
+      repl.pump
       repl.instance_variable_get(:@tool_entries)["shell_exec"][:started_at] -= 4.5
-      repl.send(:refresh_slow_tools)
+      repl.refresh_slow_tools
 
       log = repl.instance_variable_get(:@log)
       row = plain(app.render_lines).find { |l| l.include?("shell_exec") }
@@ -1439,9 +1438,9 @@ end
       app = repl.instance_variable_get(:@app)
       40.times { |i| ev << [ :entry, [ [ "filler row #{i}", :text ] ], true, 0 ] }
       ev << [ :tool_call, "shell_exec", { "command" => "sleep 10" } ]
-      repl.send(:pump)
+      repl.pump
       repl.instance_variable_get(:@tool_entries)["shell_exec"][:started_at] -= 4.5
-      repl.send(:refresh_slow_tools)
+      repl.refresh_slow_tools
 
       rows = plain(app.render_lines)
       log_row = rows.index { |l| l.include?("shell_exec") }
@@ -1462,9 +1461,9 @@ end
       ev = repl.instance_variable_get(:@events)
       app = repl.instance_variable_get(:@app)
       ev << [ :tool_call, "shell_exec", { "command" => "echo #{'y' * 400}" } ]
-      repl.send(:pump)
+      repl.pump
       repl.instance_variable_get(:@tool_entries)["shell_exec"][:started_at] -= 7.0
-      repl.send(:refresh_slow_tools)
+      repl.refresh_slow_tools
 
       rows = plain(app.render_lines)
       long_rows = rows.select { |l| l.include?("yyy") }
@@ -1627,8 +1626,8 @@ end
       agent.define_singleton_method(:flush_learning) { nil }
       agent.define_singleton_method(:usage_report) { nil }
 
-      repl.send(:process_message, "edit it")
-      repl.send(:pump)
+      repl.process_message("edit it")
+      repl.pump
       repl
     end
 
@@ -1748,9 +1747,9 @@ end
     def test_a_tool_that_changed_no_file_gets_no_diff
       repl = build_repl
 
-      assert_nil repl.send(:file_diff, nil), "no payload, no diff"
-      assert_nil repl.send(:file_diff, {}), "an empty payload has nothing to draw"
-      assert_nil repl.send(:file_diff, { "path" => "x", "before" => nil, "after" => nil }),
+      assert_nil repl.file_diff(nil), "no payload, no diff"
+      assert_nil repl.file_diff({}), "an empty payload has nothing to draw"
+      assert_nil repl.file_diff({ "path" => "x", "before" => nil, "after" => nil }),
                  "a file that never existed did not change"
     end
 
@@ -1911,8 +1910,8 @@ end
       repl = build_repl
       log = repl.instance_variable_get(:@log)
       before = log.entry_count
-      repl.send(:apply_event, [ :subagent, { run_id: "r1", agent: "writer", phase: "started", detail: "write a poem" } ])
-      repl.send(:apply_event, [ :subagent, { run_id: "r1", agent: "writer", phase: "done", detail: "3s" } ])
+      repl.apply_event([ :subagent, { run_id: "r1", agent: "writer", phase: "started", detail: "write a poem" } ])
+      repl.apply_event([ :subagent, { run_id: "r1", agent: "writer", phase: "done", detail: "3s" } ])
 
       assert_equal before + 2, log.entry_count
       texts = (before...(before + 2)).map do |i|
@@ -1930,7 +1929,7 @@ end
     # could give.
     def test_dangerous_action_asks_through_the_prompt_and_allows
       repl = build_repl
-      callback = repl.send(:confirm_callback)
+      callback = repl.confirm_callback
       answer = nil
       worker = Thread.new do
         answer = callback.call("file_ops", { "operation" => "write", "path" => "/tmp/notes.md" })
@@ -1942,7 +1941,7 @@ end
       list = repl.instance_variable_get(:@confirm_prompt)
       log = repl.instance_variable_get(:@log)
       before = log.entry_count
-      repl.send(:apply_event, event)
+      repl.apply_event(event)
 
       texts = log.instance_variable_get(:@entries).map { |entry| entry.map(&:first).join }
       assert texts.any? { |t| t.include?("⚠ write /tmp/notes.md") },
@@ -1969,10 +1968,10 @@ end
       replit = build_repl
       answer = nil
       worker = Thread.new do
-        answer = replit.send(:confirm_callback)
+        answer = replit.confirm_callback
                      .call("file_ops", { "operation" => "write", "path" => "/tmp/a" })
       end
-      replit.send(:apply_event, replit.instance_variable_get(:@events).pop)
+      replit.apply_event(replit.instance_variable_get(:@events).pop)
 
       list = replit.instance_variable_get(:@confirm_prompt)
 
@@ -1985,10 +1984,10 @@ end
       replit = build_repl
       answer = nil
       worker = Thread.new do
-        answer = replit.send(:confirm_callback)
+        answer = replit.confirm_callback
                      .call("shell_exec", { "command" => "rm -rf build" })
       end
-      replit.send(:apply_event, replit.instance_variable_get(:@events).pop)
+      replit.apply_event(replit.instance_variable_get(:@events).pop)
 
       list = replit.instance_variable_get(:@confirm_prompt)
       list.handle_key(::TUI::Key.new(:right))
@@ -1999,11 +1998,11 @@ end
 
     def test_each_confirmation_gets_its_own_answer_queue
       repl = build_repl
-      callback = repl.send(:confirm_callback)
+      callback = repl.confirm_callback
 
       first = Thread.new { callback.call("file_ops", { "operation" => "write", "path" => "/tmp/a" }) }
       first_event = repl.instance_variable_get(:@events).pop
-      repl.send(:apply_event, first_event)
+      repl.apply_event(first_event)
       repl.instance_variable_get(:@confirm_prompt).handle_key(::TUI::Key.new(:left))
       repl.instance_variable_get(:@confirm_prompt).handle_key(::TUI::Key.new(:enter))
       assert first.join(2)
@@ -2011,7 +2010,7 @@ end
       second = Thread.new { callback.call("file_ops", { "operation" => "write", "path" => "/tmp/b" }) }
       second_event = repl.instance_variable_get(:@events).pop
       refute_equal first_event[3], second_event[3], "an old answer cannot leak into the next ask"
-      repl.send(:apply_event, second_event)
+      repl.apply_event(second_event)
       repl.instance_variable_get(:@confirm_prompt).handle_key(::TUI::Key.new(:escape))
       assert second.join(2)
       assert_equal false, second.value
@@ -2309,7 +2308,7 @@ end
       "typed".each_char { |c| prompt.handle_key(::TUI::Key.printable(c)) }
       repl.define_singleton_method(:run_editor) { |_path| nil }
 
-      repl.send(:edit_prompt)
+      repl.edit_prompt
 
       assert_equal "typed", prompt.value
     end
@@ -2320,8 +2319,8 @@ end
       "typed".each_char { |c| prompt.handle_key(::TUI::Key.printable(c)) }
       repl.define_singleton_method(:run_editor) { |_path| raise Errno::ENOENT, "editor" }
 
-      repl.send(:edit_prompt)
-      repl.send(:pump)
+      repl.edit_prompt
+      repl.pump
 
       assert_equal "typed", prompt.value
       view = plain(repl.instance_variable_get(:@app).render_lines)
@@ -2334,13 +2333,13 @@ end
       begin
         ENV.delete("VISUAL")
         ENV.delete("EDITOR")
-        assert_equal "vi", repl.send(:editor_command)
+        assert_equal "vi", repl.editor_command
 
         ENV["EDITOR"] = "nano --wait"
-        assert_equal "nano --wait", repl.send(:editor_command)
+        assert_equal "nano --wait", repl.editor_command
 
         ENV["VISUAL"] = "nvim"
-        assert_equal "nvim", repl.send(:editor_command)
+        assert_equal "nvim", repl.editor_command
       ensure
         saved.each { |key, value| ENV[key] = value }
         ([ "VISUAL", "EDITOR" ] - saved.keys).each { |key| ENV.delete(key) }
@@ -2353,14 +2352,14 @@ end
         Struct.new(:external_editor).new("omarchy-launch-editor --inline")
       end
       repl = TUI.new(agent)
-      repl.send(:build_ui)
-      repl.send(:push_status_info)
+      repl.build_ui
+      repl.push_status_info
 
       saved = ENV.to_h.slice("VISUAL", "EDITOR")
       begin
         ENV["VISUAL"] = "nvim"
         ENV["EDITOR"] = "nano"
-        assert_equal "omarchy-launch-editor --inline", repl.send(:editor_command)
+        assert_equal "omarchy-launch-editor --inline", repl.editor_command
       ensure
         saved.each { |key, value| ENV[key] = value }
         ([ "VISUAL", "EDITOR" ] - saved.keys).each { |key| ENV.delete(key) }
@@ -2373,11 +2372,11 @@ end
     def test_auto_command_turns_auto_mode_on_and_flags_the_status_row
       agent = auto_agent
       repl = TUI.new(agent)
-      repl.send(:build_ui)
-      repl.send(:paint_banner)
+      repl.build_ui
+      repl.paint_banner
 
-      repl.send(:handle_command, "/auto on")
-      repl.send(:pump)
+      repl.handle_command("/auto on")
+      repl.pump
 
       assert agent.auto_approve?, "the agent must be told"
       view = plain(repl.instance_variable_get(:@app).render_lines)
@@ -2392,8 +2391,8 @@ end
       agent = auto_agent
       agent.set_auto_approve(true)
       repl = TUI.new(agent)
-      repl.send(:build_ui)
-      repl.send(:paint_banner)
+      repl.build_ui
+      repl.paint_banner
 
       status = repl.instance_variable_get(:@app).render_lines.last
       warn_sgr = ::TUI::Style.resolve(:warning)
@@ -2408,11 +2407,11 @@ end
       agent = auto_agent
       agent.set_auto_approve(true)
       repl = TUI.new(agent)
-      repl.send(:build_ui)
-      repl.send(:paint_banner)
+      repl.build_ui
+      repl.paint_banner
 
-      repl.send(:handle_command, "/auto")
-      repl.send(:pump)
+      repl.handle_command("/auto")
+      repl.pump
 
       refute agent.auto_approve?
       view = plain(repl.instance_variable_get(:@app).render_lines)
@@ -2422,8 +2421,8 @@ end
 
     def test_help_lists_the_editor_binding
       repl = build_repl
-      repl.send(:handle_command, "/help")
-      repl.send(:pump)
+      repl.handle_command("/help")
+      repl.pump
 
       view = plain(repl.instance_variable_get(:@app).render_lines)
       line = view.find { |l| l.include?("ctrl+g") }
@@ -3090,7 +3089,7 @@ end
 
         log.begin_selection(2, 0)
         log.extend_selection(6, 0)
-        repl.send(:copy_selection)
+        repl.copy_selection
       ensure
         $stdout = original
       end
@@ -3115,7 +3114,7 @@ end
 
         log.begin_selection(2, 0)
         assert log.point_selection?
-        repl.send(:copy_selection)
+        repl.copy_selection
       ensure
         $stdout = original
       end
@@ -3236,8 +3235,8 @@ end
 
     def build_resume_repl(workspace)
       repl = TUI.new(ResumeAgent.new(workspace))
-      repl.send(:build_ui)
-      repl.send(:paint_banner)
+      repl.build_ui
+      repl.paint_banner
       repl
     end
 
@@ -3256,9 +3255,9 @@ end
         # the worker answers with the list.
         prompt.value = "/resume"
         prompt.handle_key(::TUI::Key.new(:enter))
-        repl.send(:pump)
-        repl.send(:handle_command, mailbox.pop)
-        repl.send(:pump)
+        repl.pump
+        repl.handle_command(mailbox.pop)
+        repl.pump
 
         session_list = repl.instance_variable_get(:@session_list)
         assert_equal %w[work], session_list.entries.map { |entry| entry[:id] }
@@ -3293,8 +3292,8 @@ end
         mailbox = repl.instance_variable_get(:@mailbox)
         repl.instance_variable_get(:@app).render_frame
 
-        repl.send(:handle_command, "/resume")
-        repl.send(:pump)
+        repl.handle_command("/resume")
+        repl.pump
         prompt.handle_key(::TUI::Key.new(:enter))
 
         assert_nil prompt.list, "picking hands the keyboard back to the prompt"
@@ -3302,8 +3301,8 @@ end
         assert_equal "/resume work", command
 
         # The worker runs the queued command: the switch stays off the App thread.
-        repl.send(:handle_command, command)
-        repl.send(:pump)
+        repl.handle_command(command)
+        repl.pump
         assert_equal [ "work" ], agent.switched
 
         view = plain(repl.instance_variable_get(:@app).render_lines).join("\n")
@@ -3324,8 +3323,8 @@ end
         app = repl.instance_variable_get(:@app)
         app.render_frame
 
-        repl.send(:handle_command, "/resume")
-        repl.send(:pump)
+        repl.handle_command("/resume")
+        repl.pump
         assert_includes plain(app.render_lines).join("\n"), "fix the parser"
 
         prompt.handle_key(::TUI::Key.new(:escape))
@@ -3349,7 +3348,7 @@ end
 
         repl = build_resume_repl(workspace)
         repl.instance_variable_set(:@tui, false)
-        out, _err = capture_io { repl.send(:handle_command, "/resume") }
+        out, _err = capture_io { repl.handle_command("/resume") }
 
         assert_includes out, "Saved sessions:"
         assert_includes out, "work"
@@ -3367,12 +3366,12 @@ end
         repl = build_resume_repl(workspace)
         agent = repl.instance_variable_get(:@agent)
 
-        repl.send(:handle_command, "/resume work")
-        repl.send(:pump)
+        repl.handle_command("/resume work")
+        repl.pump
         assert_equal [ "work" ], agent.switched
 
-        repl.send(:handle_command, "/resume ../../etc/passwd")
-        repl.send(:pump)
+        repl.handle_command("/resume ../../etc/passwd")
+        repl.pump
 
         assert_equal [ "work" ], agent.switched, "a path never resolves to a session"
         view = plain(repl.instance_variable_get(:@app).render_lines).join("\n")
@@ -3397,8 +3396,8 @@ end
         ])
 
         repl = build_resume_repl(workspace)
-        repl.send(:handle_command, "/resume work")
-        repl.send(:pump)
+        repl.handle_command("/resume work")
+        repl.pump
 
         view = plain(repl.instance_variable_get(:@app).render_lines).join("\n")
 
@@ -3427,7 +3426,7 @@ end
 
         repl = build_resume_repl(workspace)
         repl.instance_variable_set(:@tui, false)
-        out, _err = capture_io { repl.send(:handle_command, "/resume work") }
+        out, _err = capture_io { repl.handle_command("/resume work") }
 
         assert_includes out, "❯ fix the parser"
         assert_includes out, "✓ shell_exec grep -n ruby"
@@ -3473,8 +3472,8 @@ end
     def test_resume_says_when_nothing_is_saved
       Dir.mktmpdir do |dir|
         repl = build_resume_repl(File.join(dir, "workspace"))
-        repl.send(:handle_command, "/resume")
-        repl.send(:pump)
+        repl.handle_command("/resume")
+        repl.pump
 
         view = plain(repl.instance_variable_get(:@app).render_lines).join("\n")
         assert_includes view, "No saved sessions yet."
@@ -3557,8 +3556,8 @@ end
 
     def build_models_repl(models: [], catalog: [], active: "gpt-test")
       repl = TUI.new(ModelsAgent.new(models: models, catalog: catalog, active: active))
-      repl.send(:build_ui)
-      repl.send(:paint_banner)
+      repl.build_ui
+      repl.paint_banner
       repl
     end
 
@@ -3573,8 +3572,8 @@ end
       prompt = repl.instance_variable_get(:@prompt)
       app.render_frame
 
-      repl.send(:handle_command, "/models")
-      repl.send(:pump)
+      repl.handle_command("/models")
+      repl.pump
 
       model_list = repl.instance_variable_get(:@model_list)
       assert_equal %w[gpt-5 gpt-5-mini], model_list.entries.map { |entry| entry[:id] }
@@ -3595,8 +3594,8 @@ end
       app = repl.instance_variable_get(:@app)
       app.render_frame
 
-      repl.send(:handle_command, "/models")
-      repl.send(:pump)
+      repl.handle_command("/models")
+      repl.pump
 
       model_list = repl.instance_variable_get(:@model_list)
       assert_equal %w[gpt-5 fast], model_list.entries.map { |entry| entry[:id] }
@@ -3614,8 +3613,8 @@ end
       app = repl.instance_variable_get(:@app)
       app.render_frame
 
-      repl.send(:handle_command, "/models")
-      repl.send(:pump)
+      repl.handle_command("/models")
+      repl.pump
 
       model_list = repl.instance_variable_get(:@model_list)
       active = model_list.entries.select { |entry| entry[:active] }.map { |entry| entry[:id] }
@@ -3640,8 +3639,8 @@ end
       mailbox = repl.instance_variable_get(:@mailbox)
       app.render_frame
 
-      repl.send(:handle_command, "/models")
-      repl.send(:pump)
+      repl.handle_command("/models")
+      repl.pump
 
       prompt.handle_key(::TUI::Key.new(:down))
       prompt.handle_key(::TUI::Key.new(:enter))
@@ -3651,8 +3650,8 @@ end
       assert_equal "/use-model gpt-5-mini", command
 
       # The worker runs the queued command: the switch stays off the App thread.
-      repl.send(:handle_command, command)
-      repl.send(:pump)
+      repl.handle_command(command)
+      repl.pump
 
       assert_equal [ "gpt-5-mini" ], agent.used
       view = plain(app.render_lines).join("\n")
@@ -3667,8 +3666,8 @@ end
       prompt = repl.instance_variable_get(:@prompt)
       app.render_frame
 
-      repl.send(:handle_command, "/models")
-      repl.send(:pump)
+      repl.handle_command("/models")
+      repl.pump
       assert_includes plain(app.render_lines).join("\n"), "gpt-5"
 
       prompt.handle_key(::TUI::Key.new(:escape))
@@ -3690,12 +3689,12 @@ end
 
       prompt.value = "/models"
       prompt.handle_key(::TUI::Key.new(:enter))
-      repl.send(:pump)
-      repl.send(:handle_command, mailbox.pop)
-      repl.send(:pump)
+      repl.pump
+      repl.handle_command(mailbox.pop)
+      repl.pump
 
       prompt.handle_key(::TUI::Key.new(:escape))
-      repl.send(:pump)
+      repl.pump
 
       entries = log.instance_variable_get(:@entries)
       command_ix = entries.rindex { |entry| entry.map { |text, _| text.to_s }.join.include?("/models") }
@@ -3715,9 +3714,9 @@ end
       prompt = repl.instance_variable_get(:@prompt)
       prompt.value = "/quit"
       prompt.handle_key(::TUI::Key.new(:enter))
-      repl.send(:pump)
-      repl.send(:handle_command, mailbox.pop)
-      repl.send(:pump)
+      repl.pump
+      repl.handle_command(mailbox.pop)
+      repl.pump
 
       entries = log.instance_variable_get(:@entries)
       command_ix = entries.rindex { |entry| entry.map { |text, _| text.to_s }.join.include?("/quit") }
@@ -3736,8 +3735,8 @@ end
       app = repl.instance_variable_get(:@app)
       app.render_frame
 
-      repl.send(:handle_command, "/models claude")
-      repl.send(:pump)
+      repl.handle_command("/models claude")
+      repl.pump
 
       model_list = repl.instance_variable_get(:@model_list)
       assert_equal [ "claude-sonnet" ], model_list.entries.map { |entry| entry[:id] }
@@ -3748,8 +3747,8 @@ end
       app = repl.instance_variable_get(:@app)
       app.render_frame
 
-      repl.send(:handle_command, "/models")
-      repl.send(:pump)
+      repl.handle_command("/models")
+      repl.pump
 
       view = plain(app.render_lines)
       header_ix = view.index { |line| line.include?("Models supported by") }
@@ -3780,8 +3779,8 @@ end
       prompt = repl.instance_variable_get(:@prompt)
       app.render_frame
 
-      repl.send(:handle_command, "/models")
-      repl.send(:pump)
+      repl.handle_command("/models")
+      repl.pump
 
       model_list = repl.instance_variable_get(:@model_list)
       assert_equal 3, model_list.entries.length
@@ -3808,8 +3807,8 @@ end
       prompt = repl.instance_variable_get(:@prompt)
       app.render_frame
 
-      repl.send(:handle_command, "/models")
-      repl.send(:pump)
+      repl.handle_command("/models")
+      repl.pump
 
       model_list = repl.instance_variable_get(:@model_list)
       "claude".each_char { |char| prompt.handle_key(::TUI::Key.printable(char)) }
@@ -3837,8 +3836,8 @@ end
       prompt = repl.instance_variable_get(:@prompt)
       app.render_frame
 
-      repl.send(:handle_command, "/models")
-      repl.send(:pump)
+      repl.handle_command("/models")
+      repl.pump
 
       model_list = repl.instance_variable_get(:@model_list)
       "claude".each_char { |char| prompt.handle_key(::TUI::Key.printable(char)) }
@@ -3861,8 +3860,8 @@ end
       prompt = repl.instance_variable_get(:@prompt)
       app.render_frame
 
-      repl.send(:handle_command, "/models")
-      repl.send(:pump)
+      repl.handle_command("/models")
+      repl.pump
 
       "zzz".each_char { |char| prompt.handle_key(::TUI::Key.printable(char)) }
 
@@ -3881,7 +3880,7 @@ end
         ))
 
         repl = build_resume_repl(workspace)
-        repl.send(:start_fresh_session)
+        repl.start_fresh_session
 
         assert File.exist?(previous), "the earlier conversation keeps its file and id"
         assert_equal [ "keep me" ], JSON.parse(File.read(previous))["messages"].map { |m| m["content"] }
@@ -3941,7 +3940,7 @@ end
         repl = build_repl
         prompt = repl.instance_variable_get(:@prompt)
 
-        stub_clipboard(images: [ first, second, third ]) { repl.send(:paste_clipboard) }
+        stub_clipboard(images: [ first, second, third ]) { repl.paste_clipboard }
 
         assert_equal "[Image 1] [Image 2] [Image 3]", prompt.value
         assert_equal [ first, second, third ], prompt.images
@@ -3955,8 +3954,8 @@ end
         repl = build_repl
         prompt = repl.instance_variable_get(:@prompt)
 
-        stub_clipboard(images: [ first ]) { repl.send(:paste_clipboard) }
-        stub_clipboard(images: [ second ]) { repl.send(:paste_clipboard) }
+        stub_clipboard(images: [ first ]) { repl.paste_clipboard }
+        stub_clipboard(images: [ second ]) { repl.paste_clipboard }
 
         assert_equal "[Image 1] [Image 2]", prompt.value
         assert_equal [ first, second ], prompt.images
@@ -3970,7 +3969,7 @@ end
         prompt = repl.instance_variable_get(:@prompt)
         mailbox = repl.instance_variable_get(:@mailbox)
 
-        stub_clipboard(images: [ path ]) { repl.send(:paste_clipboard) }
+        stub_clipboard(images: [ path ]) { repl.paste_clipboard }
         prompt.insert(" jelaskan ini")
         prompt.handle_key(::TUI::Key.new(:enter))
 
@@ -3988,7 +3987,7 @@ end
         prompt = repl.instance_variable_get(:@prompt)
         prompt.value = "lihat:"
 
-        stub_clipboard(images: [ path ]) { repl.send(:paste_clipboard) }
+        stub_clipboard(images: [ path ]) { repl.paste_clipboard }
 
         assert_equal "lihat: [Image 1]", prompt.value, "a space separates the token from the text"
       end
@@ -3999,7 +3998,7 @@ end
       prompt = repl.instance_variable_get(:@prompt)
       events = repl.instance_variable_get(:@events)
 
-      stub_clipboard { repl.send(:paste_clipboard) }
+      stub_clipboard { repl.paste_clipboard }
 
       assert_equal "", prompt.value
       assert_empty events, "an empty clipboard is not worth a line of output"
@@ -4009,7 +4008,7 @@ end
       repl = build_repl
       prompt = repl.instance_variable_get(:@prompt)
 
-      stub_clipboard(text: "one\ntwo") { repl.send(:paste_clipboard) }
+      stub_clipboard(text: "one\ntwo") { repl.paste_clipboard }
 
       assert_equal "one\ntwo", prompt.value
     end
@@ -4134,15 +4133,15 @@ end
 
     # Pretend the thought has been running for `seconds`.
     def age_thinking(repl, seconds)
-      repl.instance_variable_set(:@thinking_started_at, repl.send(:monotonic_now) - seconds)
+      repl.instance_variable_set(:@thinking_started_at, repl.monotonic_now - seconds)
     end
 
     def test_the_block_shows_the_state_of_the_wait_and_nothing_of_the_thought
       repl = build_repl
 
-      repl.send(:apply_event, [ :thinking, "Let me look at the repo first." ])
+      repl.apply_event([ :thinking, "Let me look at the repo first." ])
       age_thinking(repl, 1.5)
-      repl.send(:refresh_thinking)
+      repl.refresh_thinking
 
       texts = log_texts(repl)
       bar = texts.find { |text| text.include?("Thinking") }
@@ -4155,9 +4154,9 @@ end
     def test_thinking_block_shows_elapsed_time_once_it_has_been_a_while
       repl = build_repl
 
-      repl.send(:apply_event, [ :thinking, "Still going." ])
+      repl.apply_event([ :thinking, "Still going." ])
       age_thinking(repl, 5)
-      repl.send(:refresh_thinking)
+      repl.refresh_thinking
 
       bar = log_texts(repl).find { |text| text.include?("Thinking") }
       assert_includes bar, "Thinking… · 5s", "the clock starts past the threshold"
@@ -4166,9 +4165,9 @@ end
     def test_a_long_thought_collapses_to_one_line_when_the_answer_starts
       repl = build_repl
 
-      repl.send(:apply_event, [ :thinking, "Let me look at the repo first." ])
+      repl.apply_event([ :thinking, "Let me look at the repo first." ])
       age_thinking(repl, 5)
-      repl.send(:apply_event, [ :chunk, "Here it is." ])
+      repl.apply_event([ :chunk, "Here it is." ])
 
       texts = log_texts(repl)
       assert texts.any? { |text| text.include?("Thought for 5s") }, "the wait is recorded: #{texts.inspect}"
@@ -4183,9 +4182,9 @@ end
     def test_the_clock_survives_a_new_fragment
       repl = build_repl
 
-      repl.send(:apply_event, [ :thinking, "Counting. " ])
+      repl.apply_event([ :thinking, "Counting. " ])
       age_thinking(repl, 6)
-      repl.send(:apply_event, [ :thinking, "Still counting." ])
+      repl.apply_event([ :thinking, "Still counting." ])
 
       texts = log_texts(repl)
       bar = texts.find { |text| text.include?("Thinking") }
@@ -4200,10 +4199,10 @@ end
     def test_an_empty_chunk_does_not_close_the_block
       repl = build_repl
 
-      repl.send(:apply_event, [ :thinking, "Let me count." ])
+      repl.apply_event([ :thinking, "Let me count." ])
       age_thinking(repl, 4)
-      repl.send(:apply_event, [ :chunk, "" ])
-      repl.send(:refresh_thinking)
+      repl.apply_event([ :chunk, "" ])
+      repl.refresh_thinking
 
       bar = log_texts(repl).find { |text| text.include?("Thinking") }
       assert bar, "the block survives an empty fragment"
@@ -4218,11 +4217,11 @@ end
     def test_a_fragment_mid_answer_does_not_split_the_answer
       repl = build_repl
 
-      repl.send(:apply_event, [ :stream_start ])
-      repl.send(:apply_event, [ :chunk, "Sem" ])
-      repl.send(:apply_event, [ :thinking, "Wait, the tag should be TUI." ])
-      repl.send(:apply_event, [ :chunk, "ua item itu untuk TUI." ])
-      repl.send(:apply_event, [ :stream_end, false ])
+      repl.apply_event([ :stream_start ])
+      repl.apply_event([ :chunk, "Sem" ])
+      repl.apply_event([ :thinking, "Wait, the tag should be TUI." ])
+      repl.apply_event([ :chunk, "ua item itu untuk TUI." ])
+      repl.apply_event([ :stream_end, false ])
 
       texts = log_texts(repl)
       assert_includes texts, "Semua item itu untuk TUI.",
@@ -4234,9 +4233,9 @@ end
     def test_a_quick_thought_is_removed_without_a_trace
       repl = build_repl
 
-      repl.send(:apply_event, [ :thinking, "Quick." ])
+      repl.apply_event([ :thinking, "Quick." ])
       age_thinking(repl, 1)
-      repl.send(:apply_event, [ :chunk, "Hi." ])
+      repl.apply_event([ :chunk, "Hi." ])
 
       texts = log_texts(repl)
       refute texts.any? { |text| text.include?("Thought for") }, "no footer for a pause nobody felt"
@@ -4252,15 +4251,15 @@ end
     def test_a_quick_thought_leaves_no_orphan_blank_above_a_tool_call
       repl = build_repl
 
-      repl.send(:apply_event, [ :stream_start ])
-      repl.send(:apply_event, [ :chunk, "Let me check." ])
-      repl.send(:apply_event, [ :tool_call, "shell_exec", { "command" => "ls" } ])
-      repl.send(:apply_event, [ :tool_done, "shell_exec", nil, "[Exit code: 0] ok" ])
+      repl.apply_event([ :stream_start ])
+      repl.apply_event([ :chunk, "Let me check." ])
+      repl.apply_event([ :tool_call, "shell_exec", { "command" => "ls" } ])
+      repl.apply_event([ :tool_done, "shell_exec", nil, "[Exit code: 0] ok" ])
 
-      repl.send(:apply_event, [ :stream_start ])
-      repl.send(:apply_event, [ :thinking, "Quick thought." ])
+      repl.apply_event([ :stream_start ])
+      repl.apply_event([ :thinking, "Quick thought." ])
       age_thinking(repl, 1)
-      repl.send(:apply_event, [ :tool_call, "shell_exec", { "command" => "cat x" } ])
+      repl.apply_event([ :tool_call, "shell_exec", { "command" => "cat x" } ])
 
       texts = log_texts(repl)
       refute texts.each_cons(2).any? { |above, below| above.empty? && below.empty? },
@@ -4275,15 +4274,15 @@ end
     def test_a_kept_block_keeps_the_blank_row_above_it
       repl = build_repl
 
-      repl.send(:apply_event, [ :stream_start ])
-      repl.send(:apply_event, [ :chunk, "Let me check." ])
-      repl.send(:apply_event, [ :tool_call, "shell_exec", { "command" => "ls" } ])
-      repl.send(:apply_event, [ :tool_done, "shell_exec", nil, "[Exit code: 0] ok" ])
+      repl.apply_event([ :stream_start ])
+      repl.apply_event([ :chunk, "Let me check." ])
+      repl.apply_event([ :tool_call, "shell_exec", { "command" => "ls" } ])
+      repl.apply_event([ :tool_done, "shell_exec", nil, "[Exit code: 0] ok" ])
 
-      repl.send(:apply_event, [ :stream_start ])
-      repl.send(:apply_event, [ :thinking, "A long thought." ])
+      repl.apply_event([ :stream_start ])
+      repl.apply_event([ :thinking, "A long thought." ])
       age_thinking(repl, 6)
-      repl.send(:apply_event, [ :tool_call, "shell_exec", { "command" => "cat x" } ])
+      repl.apply_event([ :tool_call, "shell_exec", { "command" => "cat x" } ])
 
       texts = log_texts(repl)
       thought = texts.index { |text| text.include?("Thought for 6s") }
@@ -4296,16 +4295,16 @@ end
     def test_a_kept_block_between_two_tool_calls_is_set_off_both_sides
       repl = build_repl
 
-      repl.send(:apply_event, [ :stream_start ])
-      repl.send(:apply_event, [ :chunk, "Let me check." ])
-      repl.send(:apply_event, [ :tool_call, "shell_exec", { "command" => "ls" } ])
-      repl.send(:apply_event, [ :tool_done, "shell_exec", nil, "[Exit code: 0] ok" ])
+      repl.apply_event([ :stream_start ])
+      repl.apply_event([ :chunk, "Let me check." ])
+      repl.apply_event([ :tool_call, "shell_exec", { "command" => "ls" } ])
+      repl.apply_event([ :tool_done, "shell_exec", nil, "[Exit code: 0] ok" ])
 
-      repl.send(:apply_event, [ :stream_start ])
-      repl.send(:apply_event, [ :thinking, "A long thought." ])
+      repl.apply_event([ :stream_start ])
+      repl.apply_event([ :thinking, "A long thought." ])
       age_thinking(repl, 6)
-      repl.send(:apply_event, [ :tool_call, "shell_exec", { "command" => "cat x" } ])
-      repl.send(:apply_event, [ :tool_done, "shell_exec", nil, "[Exit code: 0] ok" ])
+      repl.apply_event([ :tool_call, "shell_exec", { "command" => "cat x" } ])
+      repl.apply_event([ :tool_done, "shell_exec", nil, "[Exit code: 0] ok" ])
 
       texts = log_texts(repl)
       thought = texts.index { |text| text.include?("Thought for 6s") }
@@ -4320,16 +4319,16 @@ end
     def test_a_quick_block_between_two_tool_calls_leaves_the_rows_adjacent
       repl = build_repl
 
-      repl.send(:apply_event, [ :stream_start ])
-      repl.send(:apply_event, [ :chunk, "Let me check." ])
-      repl.send(:apply_event, [ :tool_call, "shell_exec", { "command" => "ls" } ])
-      repl.send(:apply_event, [ :tool_done, "shell_exec", nil, "[Exit code: 0] ok" ])
+      repl.apply_event([ :stream_start ])
+      repl.apply_event([ :chunk, "Let me check." ])
+      repl.apply_event([ :tool_call, "shell_exec", { "command" => "ls" } ])
+      repl.apply_event([ :tool_done, "shell_exec", nil, "[Exit code: 0] ok" ])
 
-      repl.send(:apply_event, [ :stream_start ])
-      repl.send(:apply_event, [ :thinking, "Quick." ])
+      repl.apply_event([ :stream_start ])
+      repl.apply_event([ :thinking, "Quick." ])
       age_thinking(repl, 1)
-      repl.send(:apply_event, [ :tool_call, "shell_exec", { "command" => "cat x" } ])
-      repl.send(:apply_event, [ :tool_done, "shell_exec", nil, "[Exit code: 0] ok" ])
+      repl.apply_event([ :tool_call, "shell_exec", { "command" => "cat x" } ])
+      repl.apply_event([ :tool_done, "shell_exec", nil, "[Exit code: 0] ok" ])
 
       texts = log_texts(repl)
       refute texts.any? { |text| text.include?("Thought for") }, "no block: #{texts.inspect}"
@@ -4343,9 +4342,9 @@ end
     def test_a_kept_block_at_the_end_of_a_turn_does_not_double_the_blank
       repl = build_repl
 
-      repl.send(:apply_event, [ :thinking, "A long thought." ])
+      repl.apply_event([ :thinking, "A long thought." ])
       age_thinking(repl, 6)
-      repl.send(:apply_event, [ :stream_end, false ])
+      repl.apply_event([ :stream_end, false ])
 
       texts = log_texts(repl)
       thought = texts.index { |text| text.include?("Thought for 6s") }
@@ -4357,9 +4356,9 @@ end
     def test_a_tool_call_closes_the_thinking_block
       repl = build_repl
 
-      repl.send(:apply_event, [ :thinking, "I need the directory listing." ])
+      repl.apply_event([ :thinking, "I need the directory listing." ])
       age_thinking(repl, 4)
-      repl.send(:apply_event, [ :tool_call, "shell_exec", { "command" => "ls" } ])
+      repl.apply_event([ :tool_call, "shell_exec", { "command" => "ls" } ])
 
       texts = log_texts(repl)
       assert texts.any? { |text| text.include?("Thought for 4s") }
@@ -4373,7 +4372,7 @@ end
       repl = build_repl
       thought = (1..12).map { |i| "step #{i}\n" }.join
 
-      repl.send(:apply_event, [ :thinking, thought ])
+      repl.apply_event([ :thinking, thought ])
 
       texts = log_texts(repl)
       assert_equal 1, texts.count { |text| text.include?("Thinking") }, "one block for the whole thought"
@@ -4398,7 +4397,7 @@ end
           cost: { "total" => 0.0 } }
       end
 
-      repl.send(:process_message, "hi")
+      repl.process_message("hi")
 
       events = repl.instance_variable_get(:@events)
       queued = []
@@ -4406,7 +4405,7 @@ end
       thought = queued.select { |event| event[0] == :thinking }.map { |event| event[1] }
       assert_equal [ "pondering ", "deeply" ], thought
 
-      queued.each { |event| repl.send(:apply_event, event) }
+      queued.each { |event| repl.apply_event(event) }
       texts = log_texts(repl)
       assert texts.any? { |text| text.include?("Answer.") }, "the answer is on screen"
       refute texts.any? { |text| text.include?("pondering") },
