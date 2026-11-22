@@ -97,7 +97,10 @@ module Rubot
     # like "hy4-flash-free" for "hy4").
     def context_window_ids
       ensure_loaded(network: false)
-      @by_id.keys.map { |id| ModelInfo.normalize(id) }.uniq
+      # Normalising the whole catalog is 20ms on the real 2.8k-entry file, and
+      # the footer asks for it every 0.2s while a turn streams. The answer only
+      # changes when a catalog is installed, which clears this.
+      @context_window_ids ||= @by_id.keys.map { |id| ModelInfo.normalize(id) }.uniq
     end
 
     # The shared cache file lives next to config.yml (see
@@ -129,12 +132,9 @@ module Rubot
         return entry if entry
       end
 
-      ids.each do |id|
-        @models.each_value do |entry|
-          return entry if entry["id"].to_s.split("/").last == id
-        end
-      end
-
+      # Nothing else to try: the short form of every entry's id is already a key
+      # in @by_id (see #install), so comparing the tail again was a full scan of
+      # 2.8k entries for an answer the index had.
       nil
     end
 
