@@ -5,9 +5,14 @@ require "fileutils"
 require "pathname"
 require "digest"
 require_relative "provider"
+require_relative "config/model_presets"
+require_relative "config/providers"
 
 module Rubot
   class Config
+    include ModelPresets
+    include Providers
+
     DEFAULT_CONFIG_DIR  = File.expand_path("~/.rubot")
     DEFAULT_CONFIG_FILE = File.join(DEFAULT_CONFIG_DIR, "config.yml")
     DEFAULT_WORKSPACE   = File.join(DEFAULT_CONFIG_DIR, "workspace")
@@ -106,25 +111,6 @@ module Rubot
 
     alias model_list models
 
-    def providers
-      raw = data["providers"]
-      raw.is_a?(Hash) ? raw : {}
-    end
-
-    def selected_provider
-      name = (data["provider"] || agent_defaults["provider"]).to_s.strip
-      name = "openai" if name.empty?
-      entry = providers[name]
-      entry.is_a?(Hash) ? entry : {}
-    end
-
-    def provider
-      return data["provider"] if data["provider"]
-      return agent_defaults["provider"] if agent_defaults["provider"]
-      model_str = active_model_entry["model"] || "openai/#{name}"
-      model_str.split("/").first
-    end
-
     def name
       agent_defaults["name"] || "gpt-4o-mini"
     end
@@ -147,145 +133,6 @@ module Rubot
     def model_entry_by_name(model_name)
       return nil if models.empty?
       models.find { |m| m["name"] == model_name }
-    end
-
-    def api_key
-      global_api_key || selected_provider["api_key"] || active_model_entry["api_key"] || agent_defaults["api_key"] || ENV["RUBOT_API_KEY"] || ENV["OPENAI_API_KEY"]
-    end
-
-    # A key set for the whole install, in front of the per-model ones.
-    #
-    # This is the field the settings page writes. It is deliberately the last
-    # thing consulted *after* the entry only in the sense that it is one key for
-    # every provider: an install that switched provider would otherwise keep
-    # using the old entry's credential and fail with a 401 nobody could explain
-    # from the form they just saved.
-    def global_api_key
-      text = data["api_key"].to_s.strip
-      text.empty? ? nil : text
-    end
-
-    def api_base
-      selected_provider["api_base"] || active_model_entry["api_base"] || agent_defaults["api_base"] || data["api_base"] || ENV["RUBOT_API_BASE"] || ENV["OPENAI_API_BASE"]
-    end
-
-    # Build an immutable ProviderSettings snapshot for the given model
-    # (or the active model when nil). This replaces the old approach of
-    # temporarily mutating config.data during provider rebuilds.
-    #
-    # A model name that is not a config.yml entry is treated as a raw provider
-    # model id (e.g. a model from the provider's /models catalog), using the
-    # active entry's credentials and base URL.
-    def provider_settings(model_name = nil)
-      entry = model_name ? model_entry_by_name(model_name) : active_model_entry
-      dynamic = !model_name.nil? && entry.nil?
-      base_entry = dynamic ? active_model_entry : entry
-      base_entry ||= {}
-      entry ||= {}
-
-      model_str = entry["model"] || "openai/#{name}"
-      model_id = if dynamic
-        model_name.to_s
-      else
-        data["model"] || model_str.split("/").last
-      end
-      provider_name = if data["provider"]
-        data["provider"]
-      elsif dynamic
-        provider
-      else
-        model_str.split("/").first
-      end
-
-      ProviderSettings.new(
-        provider: provider_name,
-        model: model_id,
-        api_key: global_api_key || base_entry["api_key"] || api_key,
-        api_base: base_entry["api_base"] || api_base,
-        max_tokens: max_tokens,
-        temperature: temperature,
-        debug: debug?,
-        extra_headers: base_entry["extra_headers"].is_a?(Hash) ? base_entry["extra_headers"] : {},
-        reasoning_effort: reasoning_effort
-      )
-    end
-
-    # Global default reasoning effort ("minimal", "low", "medium", "high").
-    # Presets may override it with their own `reasoning_effort`.
-    def reasoning_effort
-      raw = agent_defaults["reasoning_effort"] || agent_defaults["reasoningEffort"]
-      text = raw.to_s.strip.downcase
-      text.empty? ? nil : text
-    end
-
-    def max_tokens
-      agent_defaults["max_tokens"] || 4096
-    end
-
-    def temperature
-      agent_defaults["temperature"] || 0.3
-    end
-
-    # The model for the requests that are not the conversation: naming a
-    # session, extracting memory. They ask for a title or a JSON object, not
-    # for an answer, so the persona's model is waste — a fast, cheap one costs
-    # a fifth as much and answers in a fraction of the time. Unset means "the
-    # same model as the conversation", which is what every build did before.
-    def auxiliary_model
-      raw = data["auxiliary_model"] || agent_defaults["auxiliary_model"] || agent_defaults["auxiliaryModel"]
-      text = raw.to_s.strip
-      text.empty? ? nil : text
-    end
-
-    # Settings for the auxiliary model, or nil when it is not configured. A
-    # name that matches a `model_presets` entry takes that preset whole
-    # (model, credentials, pricing), so one line of config can point at a
-    # preset that already exists; anything else is read as a model name the
-    # provider knows, borrowing the conversation's credentials.
-    def auxiliary_settings
-      name = auxiliary_model
-      return nil if name.nil?
-
-      model_preset(name) ? provider_settings_for_preset(name) : provider_settings(name)
-    end
-
-    # The model for delegated sub agents. A bare model name (a config.yml
-    # entry or a provider catalog id), never a preset: the sub agent builder
-    # writes it straight into the persona's `model` field so the conversation
-    # uses that model instead of the built-in `flash` preset. Unset means the
-    # sub agents keep their preset, which is the behaviour before this setting.
-    def subagent_model
-      raw = data["subagent_model"] || agent_defaults["subagent_model"] || agent_defaults["subagentModel"]
-      text = raw.to_s.strip
-      text.empty? ? nil : text
-    end
-
-    # Per-sub-agent overrides, keyed by slug. Each value is a Hash with
-    # "model" and/or "thinking". A missing key means the sub agent keeps the
-    # model and thinking from its built-in definition.
-    def subagent_settings(slug)
-      raw = data["subagents"]
-      return {} unless raw.is_a?(Hash)
-
-      entry = raw[slug.to_s] || raw[slug.to_sym]
-      entry.is_a?(Hash) ? entry.each_with_object({}) { |(k, v), acc| acc[k.to_s] = v } : {}
-    end
-
-    def set_subagent_settings(slug, attributes)
-      raw = data["subagents"].is_a?(Hash) ? data["subagents"] : {}
-      key = raw.keys.find { |candidate| candidate.to_s.casecmp?(slug.to_s) } || slug.to_s
-      entry = raw[key].is_a?(Hash) ? raw[key] : {}
-      attributes.each do |name, value|
-        text = value.to_s.strip
-        text.empty? ? entry.delete(name.to_s) : entry[name.to_s] = text
-      end
-      if entry.empty?
-        raw.delete(key)
-      else
-        raw[key] = entry
-      end
-      data["subagents"] = raw
-      subagent_settings(slug)
     end
 
     # Command the TUI runs on ctrl+g to edit the prompt before sending it.
@@ -311,202 +158,8 @@ module Rubot
     # `model` may be a provider model id or a config `models` entry name.
     # Credentials and api_base are inherited from that entry (or the active
     # entry) unless the preset overrides them.
-
-    def model_presets
-      raw = data["model_presets"] || data["modelPresets"]
-      raw.is_a?(Hash) ? raw : {}
-    end
-
-    def model_preset_names
-      names = model_presets.keys.map(&:to_s).reject(&:empty?)
-      primary = primary_model_preset_name
-      names = names.sort_by do |name|
-        [ name.casecmp?(primary) ? 0 : 1, name.downcase ]
-      end
-      return names unless primary.casecmp?("default")
-
-      names.unshift("default") unless names.any? { |name| name.casecmp?("default") }
-      names
-    end
-
-    def model_preset(name)
-      return nil if name.nil?
-
-      wanted = name.to_s.strip
-      return nil if wanted.empty?
-
-      key, raw = model_presets.find { |candidate, _| candidate.to_s.casecmp?(wanted) }
-      return normalize_model_preset(key.to_s, raw) if raw.is_a?(Hash)
-      return default_model_preset if wanted.casecmp?("default") || wanted.casecmp?("primary")
-
-      nil
-    end
-
-    def default_model_preset_name
-      value = agent_defaults["model_preset"] || agent_defaults["modelPreset"]
-      value = value.to_s.strip
-      value.empty? ? nil : value
-    end
-
-    def default_model_preset
-      name = default_model_preset_name
-      if name && !name.casecmp?("default")
-        explicit_primary = model_presets.keys.any? { |key| key.to_s.casecmp?("primary") }
-        unless name.casecmp?("primary") && !explicit_primary
-          preset = model_preset(name)
-          return preset if preset
-        end
-      end
-
-      implicit_default_preset
-    end
-
-    # The preset followed by sessions that have no explicit selection. Always
-    # exists: it is either agents.defaults.model_preset or the implicit
-    # `default` built from the direct model fields.
-    def primary_model_preset_name
-      name = default_model_preset_name
-      return name if name && !name.casecmp?("default") && model_preset(name)
-
-      "default"
-    end
-
-    def implicit_default_preset
-      entry = active_model_entry || {}
-      entry_model = entry["model"].to_s
-      {
-        "name" => "default",
-        "model" => model,
-        "provider" => data["provider"] || (entry_model.include?("/") ? entry_model.split("/").first : provider),
-        "api_key" => entry["api_key"] || ENV["RUBOT_API_KEY"] || ENV["OPENAI_API_KEY"],
-        "api_base" => entry["api_base"] || ENV["RUBOT_API_BASE"] || ENV["OPENAI_API_BASE"],
-        "max_tokens" => max_tokens,
-        "temperature" => temperature,
-        "reasoning_effort" => nil,
-        "context_window_tokens" => entry["context_window_tokens"] || entry["contextWindowTokens"],
-        "pricing" => entry["pricing"],
-        "extra_headers" => entry["extra_headers"].is_a?(Hash) ? entry["extra_headers"] : {},
-        "implicit" => true
-      }
-    end
-
-    def provider_settings_for_preset(preset_or_name)
-      preset = if preset_or_name.is_a?(Hash)
-        raw = preset_or_name.each_with_object({}) { |(key, value), acc| acc[key.to_s] = value }
-        normalize_model_preset(raw["name"] || "custom", raw)
-      else
-        model_preset(preset_or_name)
-      end
-
-      return provider_settings if preset.nil?
-
-      ProviderSettings.new(
-        provider: preset["provider"],
-        model: preset["model"],
-        api_key: preset["api_key"] || api_key,
-        api_base: preset["api_base"] || api_base,
-        max_tokens: preset["max_tokens"] || max_tokens,
-        temperature: preset["temperature"] || temperature,
-        debug: debug?,
-        extra_headers: preset["extra_headers"].is_a?(Hash) ? preset["extra_headers"] : {},
-        reasoning_effort: preset["reasoning_effort"]
-      )
-    end
-
-    # Safe, plain-data view for chat commands (never includes credentials).
-    def public_model_preset(preset)
-      return nil unless preset.is_a?(Hash)
-
-      preset.slice(
-        "name", "model", "provider", "max_tokens", "temperature",
-        "reasoning_effort", "context_window_tokens", "pricing", "implicit"
-      )
-    end
-
-    # Create or update a preset. Only explicitly supplied fields are written
-    # to config.yml; inherited credentials are resolved at runtime.
-    def set_model_preset(name, attributes)
-      name = name.to_s.strip
-      raise ArgumentError, "preset name is required" if name.empty?
-      if name.casecmp?("default")
-        raise ArgumentError, "'default' is reserved for the implicit config preset"
-      end
-      unless name.match?(/\A[A-Za-z0-9_.-]+\z/)
-        raise ArgumentError, "preset name may only contain letters, numbers, dot, dash and underscore"
-      end
-
-      allowed = %w[
-        model provider api_base api_key extra_headers max_tokens temperature
-        reasoning_effort context_window_tokens pricing
-      ]
-      attrs = attributes.each_with_object({}) do |(key, value), acc|
-        key = key.to_s
-        next unless allowed.include?(key)
-        next if value.nil? || value.to_s.strip.empty?
-
-        acc[key] = value
-      end
-      attrs["max_tokens"] = attrs["max_tokens"].to_i if attrs.key?("max_tokens")
-      attrs["temperature"] = attrs["temperature"].to_f if attrs.key?("temperature")
-      attrs["context_window_tokens"] = attrs["context_window_tokens"].to_i if attrs.key?("context_window_tokens")
-
-      presets = model_presets.dup
-      existing = presets[name].is_a?(Hash) ? presets[name] : {}
-      merged = existing.merge(attrs)
-
-      preset = normalize_model_preset(name, merged)
-      raise ArgumentError, "preset requires a model" if preset.nil?
-
-      presets[name] = merged
-      data["model_presets"] = presets
-      data.delete("modelPresets")
-      preset
-    end
-
-    def delete_model_preset(name)
-      name = name.to_s.strip
-      presets = model_presets.dup
-      key = presets.keys.find { |candidate| candidate.to_s.casecmp?(name) }
-      return false unless key
-
-      presets.delete(key)
-      data["model_presets"] = presets
-      data.delete("modelPresets")
-
-      if default_model_preset_name.to_s.casecmp?(key.to_s)
-        defaults = data["agents"] && data["agents"]["defaults"]
-        if defaults.is_a?(Hash)
-          defaults.delete("model_preset")
-          defaults.delete("modelPreset")
-        end
-      end
-
-      true
-    end
-
-    def set_default_model_preset(name)
-      defaults = data["agents"] && data["agents"]["defaults"]
-      defaults = data["agents"] = { "defaults" => {} } unless defaults.is_a?(Hash)
-
-      value = name.to_s.strip
-      if value.empty? || value.casecmp?("default")
-        defaults.delete("model_preset")
-        defaults.delete("modelPreset")
-        return nil
-      end
-      if value.casecmp?("primary") && model_presets.keys.none? { |key| key.to_s.casecmp?("primary") }
-        defaults.delete("model_preset")
-        defaults.delete("modelPreset")
-        return nil
-      end
-
-      preset = model_preset(value)
-      raise ArgumentError, "unknown model preset: #{value}" unless preset
-
-      defaults["model_preset"] = preset["name"]
-      defaults.delete("modelPreset")
-      preset["name"]
-    end
+    #
+    # Reading and writing them lives in config/model_presets.rb.
 
     def system_prompt
       agent_defaults["system_prompt"] || default_system_prompt
@@ -940,53 +593,6 @@ module Rubot
       readable = readable[0, 60].sub(/-\z/, "")
       readable = "workspace" if readable.empty?
       "#{readable}-#{Digest::SHA1.hexdigest(path)[0, 8]}"
-    end
-
-    def normalize_model_preset(name, raw)
-      raw = raw.each_with_object({}) { |(key, value), acc| acc[key.to_s] = value }
-      model_value = raw["model"] || raw["model_id"] || raw["modelId"]
-      return nil if model_value.nil? || model_value.to_s.strip.empty?
-
-      model_value = model_value.to_s.strip
-      entry = model_entry_by_name(model_value)
-
-      if entry
-        entry_model = entry["model"].to_s
-        model_id = entry_model.include?("/") ? entry_model.split("/").last : entry_model
-        model_id = model_value if model_id.nil? || model_id.empty?
-        provider_name = raw["provider"] || data["provider"] ||
-                        (entry_model.include?("/") ? entry_model.split("/").first : provider)
-        api_base = raw["api_base"] || entry["api_base"] ||
-                   ENV["RUBOT_API_BASE"] || ENV["OPENAI_API_BASE"]
-        api_key = raw["api_key"] || entry["api_key"] ||
-                  ENV["RUBOT_API_KEY"] || ENV["OPENAI_API_KEY"]
-        extra_headers = raw["extra_headers"] || entry["extra_headers"]
-      else
-        base = active_model_entry || {}
-        model_id = model_value
-        provider_name = raw["provider"] || data["provider"] || provider
-        api_base = raw["api_base"] || base["api_base"] ||
-                   ENV["RUBOT_API_BASE"] || ENV["OPENAI_API_BASE"]
-        api_key = raw["api_key"] || base["api_key"] ||
-                  ENV["RUBOT_API_KEY"] || ENV["OPENAI_API_KEY"]
-        extra_headers = raw["extra_headers"] || base["extra_headers"]
-      end
-
-      {
-        "name" => name.to_s,
-        "model" => model_id,
-        "provider" => provider_name,
-        "api_key" => api_key,
-        "api_base" => api_base,
-        "max_tokens" => (raw["max_tokens"] || max_tokens).to_i,
-        "temperature" => (raw["temperature"] || temperature).to_f,
-        "reasoning_effort" => raw["reasoning_effort"] || raw["reasoningEffort"],
-        "context_window_tokens" => raw["context_window_tokens"] || raw["contextWindowTokens"] ||
-                                   (entry && (entry["context_window_tokens"] || entry["contextWindowTokens"])),
-        "pricing" => normalize_pricing(raw["pricing"] || raw["price"] || (entry && entry["pricing"])),
-        "extra_headers" => extra_headers.is_a?(Hash) ? extra_headers : {},
-        "implicit" => false
-      }
     end
 
     # Keep pricing as a plain string-keyed hash. Field aliases are resolved by
