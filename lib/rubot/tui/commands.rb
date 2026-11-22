@@ -20,168 +20,227 @@ module Rubot
         cmd = parts.first.downcase
 
         case cmd
-        when "/help"
-          blank
-          say("Available commands:", :info)
-          COMMANDS.each do |syntax, desc|
-            say_text(format("  %-20s %s", syntax, desc))
-          end
-          blank
-          say("Keys:", :info)
-          KEYS.each do |keys, desc|
-            say_text(format("  %-20s %s", keys, desc))
-          end
-          blank
-        when "/clear"
-          agent.clear_session
-          @events << [ :reset_turn_totals ]
-          say("Session cleared.", :ok)
-          refresh_usage
-        when "/new"
-          # Silent restart: wipe the screen and start a fresh session.
-          @command_owns_blank = true
-          agent.clear_session
-          @events << [ :clear_log ]
-          refresh_status
-        when "/stop"
-          agent.cancel!
-          say("Stop requested.", :ok)
-        when "/compact"
-          result = agent.compact_session
-          if result
-            say("Compaction complete.", :ok)
-            say_text("Summarized: #{result[:summarized_messages]} messages")
-            say_text("Kept:       #{result[:kept_messages]} messages")
-            say_text("Context:    ~#{result[:context_before]} → ~#{result[:context_after]} tokens (estimated)")
-          else
-            say("Nothing to compact yet (conversation is short or summarization failed).", :info)
-          end
-          refresh_usage
-        when "/repin"
-          # The prompt is pinned so the cached prefix survives a memory write, so
-          # a line added to MEMORY.md mid-session is invisible until the epoch
-          # moves. This is the door, and the price is on the tin: one request paid
-          # in full, because the prefix moves with the prompt.
-          if agent.repin_system_prompt
-            say("System prompt will be rebuilt on the next message.", :ok)
-            say_text("Memory, skills and AGENTS.md changed since this session started are picked up.")
-            say_text("Cost: the next request pays in full — the prefix moved, so the cache is gone once.")
-          else
-            say("The prompt is not pinned; the next message builds it from the latest files anyway.", :info)
-          end
-        when "/session"
-          if parts[1]
-            switch_session(parts[1])
-            say("Session switched to: #{parts[1]}", :ok)
-            refresh_status
-            refresh_usage
-          else
-            say("Current session: #{agent.session.id}", :info)
-            say_text("Model: #{agent.active_model_name}")
-            say_text("Type /resume to browse saved sessions.")
-          end
-        when "/resume"
-          handle_resume(parts[1])
-        when "/search"
-          handle_search(parts[1..].join(" "))
-        when "/info"
-          say("Agent info:", :info)
-          agent.startup_info.each { |k, v| say_text("#{k}: #{v}") }
-        when "/context"
-          blank
-          # Mid-turn the agent is busy with the answer, so the report it last
-          # published is what there is to show — the same numbers the footer
-          # is moving.
-          report = @live_report || agent.usage_report
-          say_text(Rubot::UsageReport.render(report))
-          say_text("live — the request in flight is not in these totals yet") if @live_report
-          blank
-        when "/usage"
-          blank
-          say_text(Rubot::OpencodeUsageReport.render(agent.opencode_usage))
-          blank
-        when "/timing"
-          blank
-          say_text(Rubot::Timing.report)
-          blank
-        when "/models"
-          handle_models_command(parts[1])
-        when "/model"
-          active = agent.active_model_name
-          entry = agent.config.model_entry_by_name(active) || agent.config.active_model_entry
-          say("Current model: #{active} (#{entry["model"]})", :info)
-          say("Session override — cleared on /new.", :warn) if agent.session.model_override
-        when "/use-model"
-          handle_use_model(parts[1])
-        when "/tools"
-          say("Available tools:", :info)
-          agent.tools.all.each do |tool|
-            say_text("  - #{tool.name}: #{tool.description.lines.first.strip}")
-          end
-        when "/soul"
-          if agent.soul.enabled?
-            say("Soul (SOUL.md):", :info)
-            say_text(agent.soul.read, :text)
-          else
-            say("No soul file (SOUL.md) found in workspace.", :warn)
-          end
-        when "/memory"
-          if agent.memory.enabled?
-            memory = agent.memory
-            if memory.respond_to?(:global_path)
-              say("Memory — global: #{memory.global_path}", :info)
-              say("Memory — this workspace: #{memory.workspace_path}", :info)
-            else
-              say("Memory (MEMORY.md):", :info)
-            end
-            say_text(memory.read, :text)
-          else
-            say("Memory not available (no workspace configured).", :warn)
-          end
-        when "/agents"
-          if agent.agents_file.enabled?
-            say("Agent rules (AGENTS.md):", :info)
-            say_text(agent.agents_file.raw, :text)
-          else
-            say("No AGENTS.md found in workspace.", :warn)
-          end
-        when "/delegates"
-          handle_delegates_command
-        when "/cron"
-          cron_tool = agent.tools.get("cron")
-          if cron_tool
-            say_text(cron_tool.execute({ "operation" => "list" }).to_s, :text)
-          else
-            say("Cron tool not available.", :warn)
-          end
-        when "/web-restart"
-          restart_web_channel
-        when "/auto"
-          handle_auto_command(parts[1])
-        when "/stream"
-          @stream = parts[1].downcase == "on" if parts[1]
-          say("Streaming #{@stream ? "on" : "off"}.", :info)
-        when "/use"
-          handle_use_skill(parts[1])
-        when "/unuse"
-          if agent.session.forced_skill
-            agent.session.forced_skill = nil
-            agent.session.save! if agent.session.respond_to?(:save!)
-            say("Forced skill cleared.", :ok)
-          else
-            say("No forced skill is set.", :info)
-          end
-        when "/quit", "/exit"
-          @app ? @app.quit : exit
-        else
-          say("Unknown command: #{cmd}.", :err)
-          say_text("Type /help for available commands.")
+        when "/help" then command_help
+        when "/clear" then command_clear
+        when "/new" then command_new
+        when "/stop" then command_stop
+        when "/compact" then command_compact
+        when "/repin" then command_repin
+        when "/session" then command_session(parts[1])
+        when "/resume" then handle_resume(parts[1])
+        when "/search" then handle_search(parts[1..].join(" "))
+        when "/info" then command_info
+        when "/context" then command_context
+        when "/usage" then command_usage
+        when "/timing" then command_timing
+        when "/models" then handle_models_command(parts[1])
+        when "/model" then command_model
+        when "/use-model" then handle_use_model(parts[1])
+        when "/tools" then command_tools
+        when "/soul" then command_soul
+        when "/memory" then command_memory
+        when "/agents" then command_agents
+        when "/delegates" then handle_delegates_command
+        when "/cron" then command_cron
+        when "/web-restart" then restart_web_channel
+        when "/auto" then handle_auto_command(parts[1])
+        when "/stream" then command_stream(parts[1])
+        when "/use" then handle_use_skill(parts[1])
+        when "/unuse" then command_unuse
+        when "/quit", "/exit" then command_quit
+        else command_unknown(cmd)
         end
       rescue StandardError => e
         say("#{e.class}: #{e.message}", :err)
         raise if Rubot.debug?
       ensure
         flush_command_output
+      end
+
+      # One method per command: the dispatch above is the list, and the body
+      # that runs is one of these. They share what handle_command sets up (the
+      # output buffer, the blank-line flag it owns) and the say/say_text pair
+      # every command answers through.
+      def command_help
+        blank
+        say("Available commands:", :info)
+        COMMANDS.each do |syntax, desc|
+          say_text(format("  %-20s %s", syntax, desc))
+        end
+        blank
+        say("Keys:", :info)
+        KEYS.each do |keys, desc|
+          say_text(format("  %-20s %s", keys, desc))
+        end
+        blank
+      end
+
+      def command_clear
+        agent.clear_session
+        @events << [ :reset_turn_totals ]
+        say("Session cleared.", :ok)
+        refresh_usage
+      end
+
+      def command_new
+        # Silent restart: wipe the screen and start a fresh session.
+        @command_owns_blank = true
+        agent.clear_session
+        @events << [ :clear_log ]
+        refresh_status
+      end
+
+      def command_stop
+        agent.cancel!
+        say("Stop requested.", :ok)
+      end
+
+      def command_compact
+        result = agent.compact_session
+        if result
+          say("Compaction complete.", :ok)
+          say_text("Summarized: #{result[:summarized_messages]} messages")
+          say_text("Kept:       #{result[:kept_messages]} messages")
+          say_text("Context:    ~#{result[:context_before]} → ~#{result[:context_after]} tokens (estimated)")
+        else
+          say("Nothing to compact yet (conversation is short or summarization failed).", :info)
+        end
+        refresh_usage
+      end
+
+      def command_repin
+        # The prompt is pinned so the cached prefix survives a memory write, so
+        # a line added to MEMORY.md mid-session is invisible until the epoch
+        # moves. This is the door, and the price is on the tin: one request paid
+        # in full, because the prefix moves with the prompt.
+        if agent.repin_system_prompt
+          say("System prompt will be rebuilt on the next message.", :ok)
+          say_text("Memory, skills and AGENTS.md changed since this session started are picked up.")
+          say_text("Cost: the next request pays in full — the prefix moved, so the cache is gone once.")
+        else
+          say("The prompt is not pinned; the next message builds it from the latest files anyway.", :info)
+        end
+      end
+
+      def command_session(name)
+        if name
+          switch_session(name)
+          say("Session switched to: #{name}", :ok)
+          refresh_status
+          refresh_usage
+        else
+          say("Current session: #{agent.session.id}", :info)
+          say_text("Model: #{agent.active_model_name}")
+          say_text("Type /resume to browse saved sessions.")
+        end
+      end
+
+      def command_info
+        say("Agent info:", :info)
+        agent.startup_info.each { |k, v| say_text("#{k}: #{v}") }
+      end
+
+      def command_context
+        blank
+        # Mid-turn the agent is busy with the answer, so the report it last
+        # published is what there is to show — the same numbers the footer
+        # is moving.
+        report = @live_report || agent.usage_report
+        say_text(Rubot::UsageReport.render(report))
+        say_text("live — the request in flight is not in these totals yet") if @live_report
+        blank
+      end
+
+      def command_usage
+        blank
+        say_text(Rubot::OpencodeUsageReport.render(agent.opencode_usage))
+        blank
+      end
+
+      def command_timing
+        blank
+        say_text(Rubot::Timing.report)
+        blank
+      end
+
+      def command_model
+        active = agent.active_model_name
+        entry = agent.config.model_entry_by_name(active) || agent.config.active_model_entry
+        say("Current model: #{active} (#{entry["model"]})", :info)
+        say("Session override — cleared on /new.", :warn) if agent.session.model_override
+      end
+
+      def command_tools
+        say("Available tools:", :info)
+        agent.tools.all.each do |tool|
+          say_text("  - #{tool.name}: #{tool.description.lines.first.strip}")
+        end
+      end
+
+      def command_soul
+        if agent.soul.enabled?
+          say("Soul (SOUL.md):", :info)
+          say_text(agent.soul.read, :text)
+        else
+          say("No soul file (SOUL.md) found in workspace.", :warn)
+        end
+      end
+
+      def command_memory
+        if agent.memory.enabled?
+          memory = agent.memory
+          if memory.respond_to?(:global_path)
+            say("Memory — global: #{memory.global_path}", :info)
+            say("Memory — this workspace: #{memory.workspace_path}", :info)
+          else
+            say("Memory (MEMORY.md):", :info)
+          end
+          say_text(memory.read, :text)
+        else
+          say("Memory not available (no workspace configured).", :warn)
+        end
+      end
+
+      def command_agents
+        if agent.agents_file.enabled?
+          say("Agent rules (AGENTS.md):", :info)
+          say_text(agent.agents_file.raw, :text)
+        else
+          say("No AGENTS.md found in workspace.", :warn)
+        end
+      end
+
+      def command_cron
+        cron_tool = agent.tools.get("cron")
+        if cron_tool
+          say_text(cron_tool.execute({ "operation" => "list" }).to_s, :text)
+        else
+          say("Cron tool not available.", :warn)
+        end
+      end
+
+      def command_stream(argument)
+        @stream = argument.downcase == "on" if argument
+        say("Streaming #{@stream ? "on" : "off"}.", :info)
+      end
+
+      def command_unuse
+        if agent.session.forced_skill
+          agent.session.forced_skill = nil
+          agent.session.save! if agent.session.respond_to?(:save!)
+          say("Forced skill cleared.", :ok)
+        else
+          say("No forced skill is set.", :info)
+        end
+      end
+
+      def command_quit
+        @app ? @app.quit : exit
+      end
+
+      def command_unknown(cmd)
+        say("Unknown command: #{cmd}.", :err)
+        say_text("Type /help for available commands.")
       end
 
       # /auto with no argument flips the current mode, so the common case is one
