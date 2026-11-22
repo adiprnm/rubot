@@ -376,6 +376,25 @@ module Rubot
       assert_equal [ [ "", nil ] ], entries[-2]
     end
 
+    # A provider sends many fragments per tick, and each one used to re-parse
+    # the whole answer and re-wrap the block. They are joined first: same text
+    # on screen, one parse.
+    def test_chunks_in_one_tick_are_joined_into_one_block
+      repl = build_repl
+      log = repl.instance_variable_get(:@log)
+      events = repl.instance_variable_get(:@events)
+      events << [ :stream_start ]
+      events << [ :chunk, "Halo" ]
+      events << [ :chunk, " dunia" ]
+      repl.pump
+
+      entries = log.instance_variable_get(:@entries)
+      drawn = entries.count { |segments| segments.flatten.include?("Halo dunia") }
+      assert_equal 1, drawn, "the fragments are one block, not one each"
+      lines = plain(repl.instance_variable_get(:@app).render_lines)
+      assert lines.any? { |line| line.include?("Halo dunia") }
+    end
+
     def test_screen_el_comes_before_row_content
       canvas = ::TUI::Canvas.new(3, 1)
       canvas.put(0, 0, "abc", :text)

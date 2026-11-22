@@ -136,7 +136,6 @@ module Rubot
       "ctrl-c"      => "Quit rubot"
     }.freeze
 
-    SPIN = %w[⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏].freeze
     MARK = { ok: "✓", warn: "!", err: "✗", info: "·", tool: "⚒", skill: "✦", cron: "⏰", note: "◆",
              think: "◌" }.freeze
     TURN_MARK = "✻"
@@ -513,6 +512,20 @@ module Rubot
     # ------------------------------------------------------------------
 
     def pump
+      # Consecutive answer fragments are joined before they reach the log: each
+      # one re-parsed the whole answer so far and re-wrapped the block, and a
+      # provider sends many per frame. One parse per tick instead of one per
+      # chunk is the same text on screen — 40 chunks of a 7KB answer measured
+      # 89ms of parsing for 40 identical redraws of a block that had grown by
+      # one sentence.
+      queued = nil
+      flush = lambda do
+        next if queued.nil?
+
+        apply_event([ :chunk, queued ])
+        queued = nil
+      end
+
       loop do
         event = begin
           @events.pop(true)
@@ -520,8 +533,15 @@ module Rubot
           break
         end
 
+        if event[0] == :chunk
+          (queued ||= +"") << event[1].to_s
+          next
+        end
+
+        flush.call
         apply_event(event)
       end
+      flush.call
     end
 
     # ------------------------------------------------------------------

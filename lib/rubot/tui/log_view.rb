@@ -420,15 +420,20 @@ module Rubot
       # remember which row carries a pinned tail (the last row of an entry
       # that has one). One pass keeps the two arrays in step; the tail is
       # aligned at render time, so a resize needs no bookkeeping here.
+      #
+      # `flatten(1)` and a walk over the entries, not over the rows: this runs
+      # on every streamed chunk of an answer, and pushing each row in Ruby made
+      # a 40-chunk answer cost 85ms for work that changes one entry. The tail
+      # index is the only thing that has to be computed per entry, and an entry
+      # count is small next to a transcript's row count.
       def refresh_lines
-        @lines = []
-        @line_tails = []
+        @lines = @entry_lines.flatten(1)
+        @line_tails = Array.new(@lines.size)
+        offset = 0
         @entry_lines.each_with_index do |rows, index|
           tail = @tails[index]
-          rows.each_with_index do |row, row_index|
-            @lines << row
-            @line_tails << (tail && row_index == rows.length - 1 ? tail : nil)
-          end
+          @line_tails[offset + rows.length - 1] = tail if tail && !rows.empty?
+          offset += rows.length
         end
       end
 
