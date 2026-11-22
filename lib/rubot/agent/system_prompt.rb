@@ -119,7 +119,17 @@ module Rubot
     def compose
       skill_registry.reload!
       parts = []
+      stable_sections(parts)
+      volatile_sections(parts)
+      parts.join(SECTION_SEPARATOR)
+    end
 
+    private
+
+    # The sections that cannot change while a session runs: rules, soul,
+    # persona, skills, model, config. They come first because they are what a
+    # provider can cache; see #compose.
+    def stable_sections(parts)
       # 1. AGENTS.md rules (behavior guidelines). The file's own "# Agent
       # Rules" heading is stripped so it is not sent twice.
       if agents_file.enabled? && !agents_file.rules.empty?
@@ -185,7 +195,12 @@ module Rubot
       # 2e. Default/config system prompt. A persona prompt replaces it.
       config_prompt = persona_prompt.empty? ? config.system_prompt : ""
       parts << config_prompt unless config_prompt.empty?
+    end
 
+    # Everything that moves while a session runs: the task anchor, loaded
+    # skills, a forced skill, the summary, memory, and the batching reminder.
+    # Last so a refresh costs the tail; see #compose.
+    def volatile_sections(parts)
       # --- Everything below is volatile: it changes while a session runs. ---
 
       # 3. The instruction that started this session, but only once the
@@ -240,11 +255,7 @@ module Rubot
       # prompt produced 1–2 calls per message, repeated here it produced 4 of
       # 4 on the same task. Costs ~30 tokens and buys back seconds per turn.
       parts << BATCH_REMINDER
-
-      parts.join(SECTION_SEPARATOR)
     end
-
-      private
 
     # Only name the tool when it is actually enabled: an instruction pointing
     # at a tool the model cannot call is how files stopped being sent at all.
