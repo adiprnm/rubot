@@ -38,7 +38,7 @@ module Rubot
       def search_groups(query)
         return {} if query.empty?
 
-        store = Session.store
+        store = Rubot::Archive.current
         return {} unless store
 
         # The archive is shared by every channel, so the prefix keeps the answer

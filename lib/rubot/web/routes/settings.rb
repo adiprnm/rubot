@@ -37,7 +37,7 @@ module Rubot
             nil
           end
         end
-        store = Session.store
+        store = Rubot::Archive.current
 
         # The back button returns the reader to wherever they came from, not to
         # a fixed page: the settings page is reachable from any conversation,
@@ -107,7 +107,7 @@ module Rubot
       end
 
       def save_settings(res, req)
-        store = Session.store
+        store = Rubot::Archive.current
         return redirect_to(res, settings_url) unless store
 
         values = {
@@ -279,7 +279,7 @@ module Rubot
       # mid-answer would lose the answer to save a form — and it picks the
       # setting up on the turn after that.
       def apply_saved_settings
-        store = Session.store
+        store = Rubot::Archive.current
         return unless store && @app_config
 
         @app_config.apply_settings(store.settings)
@@ -516,7 +516,7 @@ module Rubot
       end
 
       def session_meta(sid)
-        store = Session.store
+        store = Rubot::Archive.current
         return {} unless store
 
         store.session_meta(sid)

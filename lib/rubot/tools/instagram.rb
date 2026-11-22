@@ -154,7 +154,7 @@ module Rubot
         if @store_port
           Rubot::Instagram.new(store_port: @store_port, persona: @persona)
         else
-          Rubot::Instagram.new(store: Session.store, persona: @persona)
+          Rubot::Instagram.new(store: Rubot::Archive.current, persona: @persona)
         end
       end
 

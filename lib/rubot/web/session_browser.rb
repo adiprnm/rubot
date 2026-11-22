@@ -47,7 +47,7 @@ module Rubot
       def taken_session_id?(sid)
         # The archive is the live store: a session it holds is in use even
         # though no file exists for it any more.
-        return true if (store = Session.store) && store.session?(sid)
+        return true if (store = Rubot::Archive.current) && store.session?(sid)
 
         dir = @app_config&.sessions_dir
         return true if dir && File.exist?(File.join(dir, "#{sid}.json"))
@@ -70,7 +70,7 @@ module Rubot
       def sessions_for(slug)
         base = session_id(slug)
         prefix = "#{base}#{SESSION_SEPARATOR}"
-        rows = if (store = Session.store)
+        rows = if (store = Rubot::Archive.current)
           # Straight from the archive: six short columns, no file parsing. A
           # session that was opened but never used has no row, so it does not
           # appear. Every row is read because the list is paginated and the
@@ -257,7 +257,7 @@ module Rubot
       # `PersonaStore.key_for_session`'s answer — the same rule every other
       # screen uses — so a Telegram topic's id is not silently counted twice.
       def unread_counts
-        store = Session.store
+        store = Rubot::Archive.current
         return {} unless store
 
         store.unread_sessions.each_with_object(Hash.new(0)) do |row, counts|
@@ -350,7 +350,7 @@ module Rubot
       # something the reader already saw. Returns whether it marked anything,
       # which is what decides the broadcast.
       def mark_unread_unless_watched(sid)
-        store = Session.store
+        store = Rubot::Archive.current
         return false unless store
         return false if watched?(sid)
 

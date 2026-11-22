@@ -15,7 +15,7 @@ module Rubot
         private
 
         def instagram_client(persona: "")
-          Rubot::Instagram.new(store: Session.store, persona: persona)
+          Rubot::Instagram.new(store: Rubot::Archive.current, persona: persona)
         end
 
         # Which persona's account set a request is about. The card posts the
@@ -37,7 +37,7 @@ module Rubot
         def instagram_connect(req, res)
           persona = ig_persona_for(req)
           ig = instagram_client(persona: persona)
-          unless Session.store
+          unless Rubot::Archive.current
             return redirect_to(res, "/settings#{token_query}")
           end
           begin
@@ -102,7 +102,7 @@ module Rubot
           state = form(req, "state")
           persona = instagram_client.state_persona(state)
           ig = instagram_client(persona: persona)
-          unless Session.store
+          unless Rubot::Archive.current
             res.status = 500
             return res.body = instagram_result_page("Gagal", "Arsip sesi belum terbuka.")
           end
@@ -192,7 +192,7 @@ module Rubot
         # schedule is a promise to publish at 07:00 whether or not anyone is
         # talking to the bot then.
         def start_instagram_ticker
-          return unless Session.store
+          return unless Rubot::Archive.current
 
           @instagram_thread = Thread.new do
             loop do

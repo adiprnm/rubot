@@ -155,7 +155,7 @@ module Rubot
       # The audit row the parent actor opened is closed here, because the run
       # outlived the actor that started it.
       def finish_delegate_run(run_id, status:, sub_session: nil, result: nil, error: nil)
-        store = Session.store
+        store = Rubot::Archive.current
         return unless store
 
         store.finish_subagent_run(run_id: run_id, status: status, sub_session: sub_session,
@@ -220,7 +220,7 @@ module Rubot
       # Best effort, and never a second failure: the pile is for the next
       # attempt, not for this one.
       def release_report(sid, claim)
-        store = Session.store
+        store = Rubot::Archive.current
         return unless store
 
         store.release_subagent_results(Array(claim[:results]).map { |run| run[:run_id] })
@@ -332,7 +332,7 @@ module Rubot
       # with it so that the block the page is given and the block a later load
       # draws share one anchor.
       def next_entry_index(sid)
-        store = Session.store
+        store = Rubot::Archive.current
         return nil unless store
 
         store.last_index(sid).to_i + 1
@@ -371,7 +371,7 @@ module Rubot
           next nil if live_turn(sid)
           next nil if @subagent_jobs.running_count(sid).positive?
 
-          store = Session.store
+          store = Rubot::Archive.current
           next nil unless store
 
           pending = store.pending_subagent_results(sid, limit: SUBAGENT_REPORT_LIMIT + 1,

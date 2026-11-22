@@ -425,7 +425,7 @@ module Rubot
           return
         end
 
-        store = Rubot::Session.store
+        store = Rubot::Archive.current
         if store.nil?
           say("The archive is not open, so there is nothing to search.", :warn)
           say_text("Search reads the SQLite archive; without it, conversations are files and /resume lists them.")

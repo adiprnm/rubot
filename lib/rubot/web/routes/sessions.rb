@@ -52,7 +52,7 @@ module Rubot
         File.delete(path) if path && File.exist?(path)
         # The archive is the live store now; a file that is not there any more
         # is not enough to make the conversation go away.
-        Session.store&.delete_session(sid)
+        Rubot::Archive.current&.delete_session(sid)
 
         # Land on what is left: the persona's next newest conversation, or the
         # persona itself when this was the last one. Either way the browser is
@@ -144,7 +144,7 @@ module Rubot
         slug = owner_slug(sid)
         return not_found(res) unless slug
 
-        if (store = Session.store)
+        if (store = Rubot::Archive.current)
           if form(req, "pin") == "1"
             drop_oldest_pin(slug, sid, store)
             store.pin_session(sid)
@@ -407,7 +407,7 @@ module Rubot
         # the other open pages are told, so their roster, their rows and the
         # drawer's count lose it without a reload. Only when something was
         # really waiting: an ordinary visit changes no other page.
-        broadcast_sessions if Session.store&.clear_unread(sid)
+        broadcast_sessions if Rubot::Archive.current&.clear_unread(sid)
 
         live = live_turn(sid)
         persona = persona_store&.[](slug)

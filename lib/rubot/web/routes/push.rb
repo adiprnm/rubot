@@ -51,7 +51,7 @@ module Rubot
           auth = form(req, "auth")
           return bad_request(res) if endpoint.empty? || p256dh.empty? || auth.empty?
 
-          unless store = Session.store
+          unless store = Rubot::Archive.current
             json(res, 503, { "error" => "archive unavailable" })
             return
           end
@@ -66,7 +66,7 @@ module Rubot
           endpoint = form(req, "endpoint")
           return bad_request(res) if endpoint.empty?
 
-          Session.store&.drop_push_subscription(endpoint)
+          Rubot::Archive.current&.drop_push_subscription(endpoint)
           json(res, 200, { "ok" => true })
         end
 
@@ -115,7 +115,7 @@ module Rubot
         # is a setting tests swap between one call and the next, and a notifier
         # holding the old one would answer from a stale list of devices.
         def push_notifier
-          store = Session.store
+          store = Rubot::Archive.current
           store && Notifier.new(store: store, vapid: vapid, subject: @vapid_subject,
                                 urgency: @push_urgency)
         end

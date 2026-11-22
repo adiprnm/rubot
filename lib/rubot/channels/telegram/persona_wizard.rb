@@ -93,7 +93,7 @@ module Rubot
 
         def topic_session_exists?(chat_id, thread_id)
           sid = topic_session_id(chat_id, thread_id)
-          return true if (store = Session.store) && store.session?(sid)
+          return true if (store = Rubot::Archive.current) && store.session?(sid)
 
           path = File.join(sessions_dir, "#{sid}.json")
           File.exist?(path)

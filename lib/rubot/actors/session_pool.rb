@@ -39,7 +39,7 @@ module Rubot
         # SQLite is allowed. Actors reach it through `store_port`; readers
         # through Session.store. A failure to open it falls back to JSON.
         @store, @store_service = open_store(@sessions_dir)
-        Session.store = @store
+        Rubot::Archive.current = @store
 
         @cron = if config.tools_enabled
           CronActor.new(
@@ -258,7 +258,7 @@ module Rubot
         @cron&.shutdown
         # After the actors: one of them may still be mid-turn and writing.
         @store_service&.stop
-        Session.store = nil if Session.store.equal?(@store)
+        Rubot::Archive.current = nil if Rubot::Archive.current.equal?(@store)
       end
 
       # Where an existing session id is rooted, or nil when it owns no
