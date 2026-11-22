@@ -16,15 +16,12 @@ module Rubot
         private
 
         def persona_store
-          @persona_store ||= begin
-            config = persona_config
-            PersonaStore.new(
-              dir: persona_dir,
-              legacy_workspace: persona_workspace,
-              available_models: persona_models.map { |model| model["name"] },
-              available_presets: config ? config.model_preset_names : [ "default" ]
-            )
-          end
+          @persona_store ||= PersonaStore.from_config(
+            persona_config,
+            dir: persona_dir,
+            legacy_workspace: persona_workspace,
+            available_models: persona_models.map { |model| model["name"] }
+          )
         end
 
         # Personas live next to config.yml so the web channel and this one read

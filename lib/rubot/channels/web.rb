@@ -267,12 +267,7 @@ module Rubot
         return @personas if @personas
         return nil unless @app_config
 
-        @personas = PersonaStore.new(
-          dir: File.dirname(@app_config.config_path),
-          legacy_workspace: @app_config.workspace,
-          available_models: Array(@app_config.models).filter_map { |model| model["name"] if model.is_a?(Hash) },
-          available_presets: @app_config.model_preset_names
-        )
+        @personas = PersonaStore.from_config(@app_config)
       end
 
       def personas

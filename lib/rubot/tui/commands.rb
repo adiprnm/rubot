@@ -277,10 +277,7 @@ module Rubot
           return
         end
 
-        store = Rubot::PersonaStore.new(
-          dir: File.dirname(config.personas_file),
-          legacy_workspace: config.workspace
-        )
+        store = Rubot::PersonaStore.from_config(config, dir: File.dirname(config.personas_file))
         specialists = store.specialists
         if specialists.empty?
           say("No personas to delegate to yet.", :warn)

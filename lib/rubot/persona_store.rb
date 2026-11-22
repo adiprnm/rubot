@@ -58,6 +58,28 @@ module Rubot
       File.join(dir, FILENAME)
     end
 
+    # The store a channel reads, built from the config it already holds.
+    #
+    # Every channel used to spell these four arguments out itself, in four
+    # slightly different ways; the differences were accidents except where a
+    # channel passes one of the overrides below. `dir` defaults to the config's
+    # own directory, so a persona registry lives next to config.yml rather than
+    # in a workspace, and `legacy_workspace` to its workspace.
+    #
+    # A nil config is allowed: the command line reads a store before any config
+    # is loaded, and then the install-wide defaults are the answer.
+    def self.from_config(config, dir: nil, legacy_workspace: nil,
+                         available_models: nil, available_presets: nil)
+      home = File.join(Dir.home, ".rubot")
+      new(
+        dir: dir || (config&.config_path ? File.dirname(config.config_path) : home),
+        legacy_workspace: legacy_workspace || config&.workspace || File.join(home, "workspace"),
+        available_models: available_models ||
+          Array(config&.models).filter_map { |model| model["name"] if model.is_a?(Hash) },
+        available_presets: available_presets || (config ? config.model_preset_names : [ "default" ])
+      )
+    end
+
     # Where a persona's agent files (SOUL.md, MEMORY.md, working files) live,
     # or nil for a key that owns none.
     #

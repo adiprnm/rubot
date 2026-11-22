@@ -303,12 +303,7 @@ module Rubot
       end
 
       def build_persona_store(config)
-        PersonaStore.new(
-          dir: File.dirname(config.config_path),
-          legacy_workspace: config.workspace,
-          available_models: Array(config.models).filter_map { |model| model["name"] if model.is_a?(Hash) },
-          available_presets: config.model_preset_names
-        )
+        PersonaStore.from_config(config)
       end
 
       # Plain-data persona for a session, read fresh from disk so a topic

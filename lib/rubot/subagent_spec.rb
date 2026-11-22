@@ -48,10 +48,7 @@ module Rubot
     # config rooted there, so its SOUL.md, AGENTS.md, skills and memory are its
     # own instead of the main workspace's.
     def self.workspace_for(config:, slug:)
-      PersonaStore.new(
-        dir: File.dirname(config.personas_file),
-        legacy_workspace: config.workspace
-      ).workspace_for(slug)
+      PersonaStore.from_config(config, dir: File.dirname(config.personas_file)).workspace_for(slug)
     rescue StandardError
       nil
     end

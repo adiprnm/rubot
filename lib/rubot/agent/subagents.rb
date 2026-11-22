@@ -81,7 +81,8 @@ module Rubot
             on_assistant_text: ->(text) { emit_subagent(run_id, slug, :thinking, text) }
           )
           audit_finish(run_id, "done", sub_session: sub.session.id)
-          emit_subagent(run_id, slug, :done, elapsed_label(started))
+          emit_subagent(run_id, slug, :done,
+                        Formatting.duration(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started))
           answer.to_s
         rescue StandardError => e
           audit_finish(run_id, "failed", error: "#{e.class}: #{e.message}")
@@ -118,10 +119,9 @@ module Rubot
       # pool started can still be delegated to. Only specialists (slug keys) are
       # valid targets: a Telegram topic key is a conversation, not an agent.
       def load_subagent_persona(slug)
-        store = PersonaStore.new(
-          dir: @config.respond_to?(:personas_dir) ? File.dirname(@config.personas_file) : nil,
-          legacy_workspace: @config.workspace,
-          available_models: Array(@config.models).filter_map { |m| m["name"] if m.is_a?(Hash) },
+        store = PersonaStore.from_config(
+          @config,
+          dir: @config.respond_to?(:personas_dir) ? File.dirname(@config.personas_file) : File.join(Dir.home, ".rubot"),
           available_presets: @config.respond_to?(:model_preset_names) ? @config.model_preset_names : []
         )
         persona = store[slug]
@@ -214,11 +214,6 @@ module Rubot
         text = args.values.find { |v| v.is_a?(String) && v.length > 24 }
         text ||= args.values.first
         text.to_s.tr("\n", " ")[0, 60]
-      end
-
-      def elapsed_label(started)
-        seconds = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
-        "#{seconds.round}s"
       end
     end
   end
