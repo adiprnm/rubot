@@ -1,0 +1,115 @@
+{
+  "id": "export-shape",
+  "created_at": "TIMESTAMP",
+  "updated_at": "TIMESTAMP",
+  "messages": [
+    {
+      "role": "user",
+      "content": "halo, tolong lihat berkasnya",
+      "timestamp": "TIMESTAMP"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "timestamp": "TIMESTAMP",
+      "tool_calls": [
+        {
+          "id": "call_1",
+          "type": "function",
+          "function": {
+            "name": "file_ops",
+            "arguments": "{\"operation\":\"read\"}"
+          }
+        }
+      ],
+      "reasoning_content": "saya baca dulu"
+    },
+    {
+      "role": "tool",
+      "content": "isi berkas",
+      "timestamp": "TIMESTAMP",
+      "tool_call_id": "call_1",
+      "ui_diff": {
+        "path": "a.txt",
+        "before": null,
+        "after": "isi berkas"
+      }
+    },
+    {
+      "role": "assistant",
+      "content": "sudah saya baca",
+      "timestamp": "TIMESTAMP",
+      "background": true
+    }
+  ],
+  "cwd": "/tmp/project",
+  "task": "halo, tolong lihat berkasnya",
+  "title": "Berkas",
+  "summary": "ringkasan percakapan",
+  "forced_skill": "file_ops",
+  "model_override": "openai/gpt-4o-mini",
+  "model_preset": "cepat",
+  "thinking_level": "low",
+  "usage": {
+    "prompt_tokens": 1050,
+    "completion_tokens": 105,
+    "cached_tokens": 500,
+    "cache_creation_tokens": 0,
+    "cache_write_1h_tokens": 0,
+    "reasoning_tokens": 0,
+    "requests": 2
+  },
+  "last_usage": {
+    "prompt_tokens": 1000,
+    "completion_tokens": 100,
+    "cached_tokens": 500,
+    "cache_creation_tokens": 0,
+    "cache_write_1h_tokens": 0,
+    "reasoning_tokens": 0,
+    "requests": 1
+  },
+  "cost": {
+    "input": 0.00165,
+    "cached_input": 0.00015,
+    "cache_creation": 0.0,
+    "output": 0.001575,
+    "total": 0.003375,
+    "saved": 0.00135
+  },
+  "last_usage_watermark": 4,
+  "cache_history": [
+    0.5
+  ],
+  "cache_records": [
+    {
+      "at": "TIMESTAMP",
+      "prompt_tokens": 1000,
+      "cached_tokens": 500,
+      "cache_creation_tokens": 0,
+      "prompt_digest": "ab12",
+      "tool_digest": "cd34",
+      "blocks": 7
+    }
+  ],
+  "compaction_events": [
+    {
+      "index": 3,
+      "summarized": 2,
+      "before": 900,
+      "after": 300,
+      "elapsed": 0.25
+    }
+  ],
+  "system_prompt": "PROMPT TERPIN",
+  "system_prompt_epoch": {
+    "model": "openai/gpt-4o-mini",
+    "summary": "d1"
+  },
+  "memory_backlog": [
+    "sesuatu yang perlu diingat"
+  ],
+  "system_additions": [
+    "tambahan untuk prompt"
+  ],
+  "system_patch": "# Prompt Update\n\nbagian yang lebih baru"
+}
