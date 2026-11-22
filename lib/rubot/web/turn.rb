@@ -644,8 +644,14 @@ module Rubot
         tail = @items.reverse.find { |item| item[:kind] == :text }
         if tail
           # The stream may have stopped short of the full answer; the complete
-          # text is the truth, and it is never a second block.
-          tail[:text] = answer if !tail[:text].empty? && answer.start_with?(tail[:text])
+          # text is the truth, and it is never a second block. The two are also
+          # the same answer when they differ only by the trailing whitespace a
+          # provider put in its last chunk and the closing response dropped —
+          # compared apart, that difference appended the whole answer below the
+          # answer, which reads as the model having said it twice.
+          streamed = tail[:text]
+          same = answer.start_with?(streamed) || streamed.strip == answer.strip
+          tail[:text] = answer if !streamed.empty? && same
           return if tail[:text] == answer
         end
 

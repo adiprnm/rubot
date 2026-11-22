@@ -476,6 +476,20 @@ module Rubot
         turn.items.select { |item| item[:kind] == :text && item[:live] }
       end
 
+      # The closing response and the streamed text are the same answer, but a
+      # provider's last chunk can carry a trailing newline the final response
+      # dropped. Compared apart, that difference appended the whole answer under
+      # the answer.
+      def test_a_trailing_newline_does_not_open_a_second_answer
+        turn = Rubot::Web::Turn.new(id: "t-tail", session_id: "web_rubot")
+        turn.append_chunk("Selesai.\n")
+        turn.finish("Selesai.")
+
+        texts = turn.items.select { |item| item[:kind] == :text }
+        assert_equal 1, texts.length, "one answer, not two"
+        assert_equal "Selesai.", texts.first[:text]
+      end
+
       # A row the turn takes back has to leave the page too: a thought too
       # quick to mention is dropped from the timeline, and an incremental page
       # would otherwise keep a "Thinking…" row that never happened.
