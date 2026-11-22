@@ -278,133 +278,11 @@ module Rubot
 
           # Handle tool calls
           if tool_calls && !tool_calls.empty?
-            log_debug("Got #{tool_calls.size} tool call(s)")
-
-            # Add assistant message with tool calls to session
-            @session.add("assistant", response, tool_calls: tool_calls, reasoning_content: reasoning_content)
-
-            # Forward the model's narration before it runs the tools. This is the
-            # assistant text that accompanies the tool calls ("Let me check the
-            # structure first."); without this callback it would be swallowed by
-            # the `response = ""` reset at the end of the round. A tool whose
-            # result is UI (the Instagram connect card) is the exception: its
-            # card is the answer, so a sentence in front of it is noise.
-            narration = response.to_s.strip
-            silent_batch = tool_calls.any? do |tc|
-              tool_name, args, ok = parse_tool_call(tc)
-              ok && (tool = @tools.get(tool_name)) && tool.respond_to?(:silent_operation?) &&
-                tool.silent_operation?(args)
-            end
-            callbacks.assistant_text&.call(narration) unless narration.empty? || silent_batch
-
-            # Deciding what may run comes first, in the order the model asked for
-            # it: the guard may ask the reader a question, and a cancelled turn
-            # must stop before more work starts. Running comes after, all at once.
-            pending = []
-            tool_calls.each do |tc|
-              tool_name, arguments, arguments_ok = parse_tool_call(tc)
-              log_debug("Executing tool: #{tool_name}")
-
-              # Use the tool call ID for tracking
-              tool_call_id = tc.is_a?(Hash) ? (tc["id"] || tool_name) : tool_name
-
-              # Invalid arguments would run the tool on a half-read path or
-              # command (a truncated answer ends mid-JSON), so the model is told
-              # to re-issue the call instead of executing an empty hash.
-              unless arguments_ok
-                tool_error = if turn.truncated
-                  "ERROR: this tool call was cut off before its arguments " \
-                    "finished (the answer hit the output limit). Re-issue it " \
-                    "with complete arguments."
-                else
-                  "ERROR: the arguments for #{tool_name} were not a valid JSON " \
-                    "object. Re-issue the call with one complete JSON object."
-                end
-                # Kept in the pending list so its result reaches the transcript in
-                # request order, next to the calls that do run.
-                pending << skipped_call(tool_call_id, tool_name, tool_error)
-                next
-              end
-
-              # Check for dangerous action that could cause data loss
-              if @cancellation.cancelled?
-                turn.stopped = true
-                pending << skipped_call(tool_call_id, tool_name, CANCELLED_TOOL_RESULT)
-                next
-              end
-
-              tool = @tools.get(tool_name)
-              if tool && tool.respond_to?(:dangerous_action?) && tool.dangerous_action?(arguments)
-                if auto_approve?
-                  # Auto mode: the prompt is skipped, not the guard. Destructive
-                  # patterns are refused inside the tool itself, so this branch
-                  # can only ever run something the guard already allowed.
-                  log_debug("Auto mode, allowing #{tool_name}: #{arguments.inspect}")
-                else
-                  # Asking costs a second look at the file, so the reason is only
-                  # worked out when a question is actually going to be shown.
-                  reason = tool.respond_to?(:dangerous_action_reason) ? tool.dangerous_action_reason(arguments) : nil
-                  if callbacks.confirm && !callbacks.confirm.call(tool_name, arguments, reason)
-                    log_debug("Action cancelled by user: #{tool_name}")
-                    pending << skipped_call(tool_call_id, tool_name, "Action cancelled by user.")
-                    next
-                  end
-                end
-              end
-
-              # Fire pre-execution callback. The before-content travels with it:
-              # whoever renders the diff must not read the file afterwards, or a
-              # fast operation (delete is one syscall) wins the race and the diff
-              # has nothing to show.
-              ui_snapshot = file_ui_snapshot(tool_name, arguments)
-              callbacks.tool_call&.call(tool_name, arguments, ui_snapshot)
-
-              pending << {
-                name: tool_name,
-                arguments: arguments,
-                id: tool_call_id,
-                snapshot: ui_snapshot
-              }
-            end
-
-            # The calls were already known to the model when it sent them, so
-            # none of them needs another's output: run them together and report
-            # in request order, which keeps the transcript and the UI identical
-            # to a sequential run.
-            turn.silent_answer = false
-            execute_tool_calls(pending).each do |call|
-              tool_result = call[:result]
-              ui_diff = file_ui_diff(call[:snapshot], tool_result)
-              callbacks.tool_result&.call(call[:name], tool_result, ui_diff)
-
-              log_debug("Tool result: #{tool_result[0..200]}")
-
-              # A successful write carries its before/after text so the TUI can
-              # rebuild the diff on /resume.
-              @session.add("tool", tool_result, tool_call_id: call[:id], ui_diff: ui_diff)
-
-              # A tool that answered with UI has nothing for the model to say.
-              # End the turn here instead of asking for a reply that would only
-              # restate the button the reader is already looking at.
-              tool = @tools.get(call[:name])
-              turn.silent_answer ||= tool && tool.respond_to?(:silent_result?) && tool.silent_result?(tool_result)
-            end
-
-            # Continue the loop to get the next response
-            tool_count = tool_calls.size
+            stop = run_tools(turn, callbacks, tool_calls: tool_calls, response: response,
+                             reasoning_content: reasoning_content)
             response = ""
             tool_calls = nil
-            turn.rounds += 1
-            turn.tool_rounds += 1
-
-            # Fire progress callback after each round. The tool count is captured
-            # before `tool_calls` is cleared so consumers get the real number.
-            callbacks.progress&.call(turn.rounds, tool_count)
-            # The tool results just added to the transcript are part of the next
-            # request, so the context figure moves before the provider does.
-            emit_usage(callbacks.usage)
-
-            break if turn.stopped || turn.silent_answer
+            break if stop
           elsif response.to_s.strip.empty? && !turn.reasked
             # Nothing the user can read came back. With tools in play that means
             # the model stopped without reporting; with none it means the output
@@ -443,6 +321,136 @@ module Rubot
         end
 
         [ response, reasoning_content ]
+      end
+      # One round's tool calls: what may run is decided in the order the model
+      # asked for it, the approved calls run together, and their results reach the
+      # transcript in request order. Returns true when the turn ends here.
+      def run_tools(turn, callbacks, tool_calls:, response:, reasoning_content:)
+        log_debug("Got #{tool_calls.size} tool call(s)")
+
+        # Add assistant message with tool calls to session
+        @session.add("assistant", response, tool_calls: tool_calls, reasoning_content: reasoning_content)
+
+        # Forward the model's narration before it runs the tools. This is the
+        # assistant text that accompanies the tool calls ("Let me check the
+        # structure first."); without this callback it would be swallowed by
+        # the `response = ""` reset at the end of the round. A tool whose
+        # result is UI (the Instagram connect card) is the exception: its
+        # card is the answer, so a sentence in front of it is noise.
+        narration = response.to_s.strip
+        silent_batch = tool_calls.any? do |tc|
+          tool_name, args, ok = parse_tool_call(tc)
+          ok && (tool = @tools.get(tool_name)) && tool.respond_to?(:silent_operation?) &&
+            tool.silent_operation?(args)
+        end
+        callbacks.assistant_text&.call(narration) unless narration.empty? || silent_batch
+
+        # Deciding what may run comes first, in the order the model asked for
+        # it: the guard may ask the reader a question, and a cancelled turn
+        # must stop before more work starts. Running comes after, all at once.
+        pending = []
+        tool_calls.each do |tc|
+          tool_name, arguments, arguments_ok = parse_tool_call(tc)
+          log_debug("Executing tool: #{tool_name}")
+
+          # Use the tool call ID for tracking
+          tool_call_id = tc.is_a?(Hash) ? (tc["id"] || tool_name) : tool_name
+
+          # Invalid arguments would run the tool on a half-read path or
+          # command (a truncated answer ends mid-JSON), so the model is told
+          # to re-issue the call instead of executing an empty hash.
+          unless arguments_ok
+            tool_error = if turn.truncated
+              "ERROR: this tool call was cut off before its arguments " \
+                "finished (the answer hit the output limit). Re-issue it " \
+                "with complete arguments."
+            else
+              "ERROR: the arguments for #{tool_name} were not a valid JSON " \
+                "object. Re-issue the call with one complete JSON object."
+            end
+            # Kept in the pending list so its result reaches the transcript in
+            # request order, next to the calls that do run.
+            pending << skipped_call(tool_call_id, tool_name, tool_error)
+            next
+          end
+
+          # Check for dangerous action that could cause data loss
+          if @cancellation.cancelled?
+            turn.stopped = true
+            pending << skipped_call(tool_call_id, tool_name, CANCELLED_TOOL_RESULT)
+            next
+          end
+
+          tool = @tools.get(tool_name)
+          if tool && tool.respond_to?(:dangerous_action?) && tool.dangerous_action?(arguments)
+            if auto_approve?
+              # Auto mode: the prompt is skipped, not the guard. Destructive
+              # patterns are refused inside the tool itself, so this branch
+              # can only ever run something the guard already allowed.
+              log_debug("Auto mode, allowing #{tool_name}: #{arguments.inspect}")
+            else
+              # Asking costs a second look at the file, so the reason is only
+              # worked out when a question is actually going to be shown.
+              reason = tool.respond_to?(:dangerous_action_reason) ? tool.dangerous_action_reason(arguments) : nil
+              if callbacks.confirm && !callbacks.confirm.call(tool_name, arguments, reason)
+                log_debug("Action cancelled by user: #{tool_name}")
+                pending << skipped_call(tool_call_id, tool_name, "Action cancelled by user.")
+                next
+              end
+            end
+          end
+
+          # Fire pre-execution callback. The before-content travels with it:
+          # whoever renders the diff must not read the file afterwards, or a
+          # fast operation (delete is one syscall) wins the race and the diff
+          # has nothing to show.
+          ui_snapshot = file_ui_snapshot(tool_name, arguments)
+          callbacks.tool_call&.call(tool_name, arguments, ui_snapshot)
+
+          pending << {
+            name: tool_name,
+            arguments: arguments,
+            id: tool_call_id,
+            snapshot: ui_snapshot
+          }
+        end
+
+        # The calls were already known to the model when it sent them, so
+        # none of them needs another's output: run them together and report
+        # in request order, which keeps the transcript and the UI identical
+        # to a sequential run.
+        turn.silent_answer = false
+        execute_tool_calls(pending).each do |call|
+          tool_result = call[:result]
+          ui_diff = file_ui_diff(call[:snapshot], tool_result)
+          callbacks.tool_result&.call(call[:name], tool_result, ui_diff)
+
+          log_debug("Tool result: #{tool_result[0..200]}")
+
+          # A successful write carries its before/after text so the TUI can
+          # rebuild the diff on /resume.
+          @session.add("tool", tool_result, tool_call_id: call[:id], ui_diff: ui_diff)
+
+          # A tool that answered with UI has nothing for the model to say.
+          # End the turn here instead of asking for a reply that would only
+          # restate the button the reader is already looking at.
+          tool = @tools.get(call[:name])
+          turn.silent_answer ||= tool && tool.respond_to?(:silent_result?) && tool.silent_result?(tool_result)
+        end
+
+        # Continue the loop to get the next response
+        tool_count = tool_calls.size
+        turn.rounds += 1
+        turn.tool_rounds += 1
+
+        # Fire progress callback after each round. The tool count is captured
+        # before `tool_calls` is cleared so consumers get the real number.
+        callbacks.progress&.call(turn.rounds, tool_count)
+        # The tool results just added to the transcript are part of the next
+        # request, so the context figure moves before the provider does.
+        emit_usage(callbacks.usage)
+
+        turn.stopped || turn.silent_answer
       end
     end
   end
