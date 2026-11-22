@@ -13,6 +13,12 @@ module Rubot
       module Transport
         private
 
+        # Monotonic seconds: the clock the flood gate and the status card both
+        # read, and the only one that cannot jump when the host clock does.
+        def monotonic_now
+          Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        end
+
         def http_get(uri)
           Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == "https") do |http|
             http.read_timeout = 120
