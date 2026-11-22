@@ -709,6 +709,19 @@ module Rubot
         Rubot::Formatting.truncate(str, max_len)
       end
 
+      # What a test may drive: the update loop and the pieces each update goes
+      # through (the persona store, the status card, the transport, the
+      # attachments, the wizard). A Telegram connection is the only other way
+      # in, so these are public on purpose; anything not named here stays
+      # private.
+      public :attachment_filename, :attachments_root, :bind_delivery_context,
+             :cancel_pending_confirmations, :clear_status_message, :deliver,
+             :extract_attachments, :flood_remaining, :format_elapsed,
+             :handle_stop_command, :maybe_start_persona_wizard_for_new_topic,
+             :notify_progress, :notify_subagent, :notify_tool_started, :persona_store,
+             :post_edit, :process_update, :register_bot_commands, :reply_context,
+             :send_narration, :status_key, :track_running_session,
+             :untrack_running_session, :update_or_send_status, :wizard_for_topic
     end
   end
 end

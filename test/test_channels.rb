@@ -449,7 +449,7 @@ module Rubot
         { "ok" => true }
       end
 
-      @tg.send(:register_bot_commands)
+      @tg.register_bot_commands
 
       assert_includes scopes, "default"
       assert_includes scopes, "all_private_chats"
@@ -461,7 +461,7 @@ module Rubot
       sent = []
       @tg.define_singleton_method(:send_message) { |_chat, text, _thread| sent << text }
 
-      @tg.send(:handle_stop_command, 42, nil)
+      @tg.handle_stop_command(42, nil)
 
       assert_includes sent.last, "Tidak ada tugas"
     end
@@ -476,9 +476,9 @@ module Rubot
           @cancelled = true
         end
       end.new
-      @tg.send(:track_running_session, "tg_42", handle)
+      @tg.track_running_session("tg_42", handle)
 
-      @tg.send(:handle_stop_command, 42, nil)
+      @tg.handle_stop_command(42, nil)
 
       assert handle.cancelled
       assert_includes sent.last, "Menghentikan"
@@ -499,7 +499,7 @@ module Rubot
       end
       sleep 0.1
 
-      @tg.send(:cancel_pending_confirmations, 42, nil)
+      @tg.cancel_pending_confirmations(42, nil)
 
       assert waiter.join(2), "the confirmation wait must be woken"
       assert woken
@@ -629,7 +629,7 @@ module Rubot
         true
       end
 
-      @tg.send(:send_narration, 42, 7, "  Let me check the structure first.  ")
+      @tg.send_narration(42, 7, "  Let me check the structure first.  ")
 
       assert_equal [ [ 42, "Let me check the structure first.", 7 ] ], sent
     end
@@ -638,7 +638,7 @@ module Rubot
       sent = []
       @tg.define_singleton_method(:send_message) { |*_args| sent << :sent }
 
-      @tg.send(:send_narration, 42, nil, "   ")
+      @tg.send_narration(42, nil, "   ")
 
       assert_empty sent
     end
@@ -651,7 +651,7 @@ module Rubot
       sent = []
       tg.define_singleton_method(:send_message) { |*_args| sent << :sent }
 
-      tg.send(:send_narration, 42, nil, "hello")
+      tg.send_narration(42, nil, "hello")
 
       assert_empty sent
     end
@@ -672,7 +672,7 @@ module Rubot
         true
       end
 
-      @tg.send(:send_narration, 42, 7, "Perintah tadi kena guard, gue pecah jadi yang aman.")
+      @tg.send_narration(42, 7, "Perintah tadi kena guard, gue pecah jadi yang aman.")
 
       assert_equal [
         [ :delete, 42, "sent-1" ],
@@ -682,23 +682,23 @@ module Rubot
 
     def test_narration_keeps_the_tool_step_count_so_the_next_card_continues
       seed_status_message(42, 7, "sent-1")
-      status_key = @tg.send(:status_key, 42, 7)
+      status_key = @tg.status_key(42, 7)
       @tg.instance_variable_get(:@tool_counts)[status_key] = 3
       @tg.define_singleton_method(:delete_message) { |*_args| true }
       @tg.define_singleton_method(:send_message) { |*_args| true }
 
-      @tg.send(:send_narration, 42, 7, "Checking the next file.")
+      @tg.send_narration(42, 7, "Checking the next file.")
 
       assert_equal 3, @tg.instance_variable_get(:@tool_counts)[status_key]
     end
 
     def test_clear_status_message_resets_the_step_count_for_the_next_request
       seed_status_message(42, 7, "sent-1")
-      status_key = @tg.send(:status_key, 42, 7)
+      status_key = @tg.status_key(42, 7)
       @tg.instance_variable_get(:@tool_counts)[status_key] = 3
       @tg.define_singleton_method(:delete_message) { |*_args| true }
 
-      @tg.send(:clear_status_message, 42, 7)
+      @tg.clear_status_message(42, 7)
 
       assert_nil @tg.instance_variable_get(:@tool_counts)[status_key]
     end
@@ -710,7 +710,7 @@ module Rubot
     def test_status_card_shows_literal_state_without_prose
       texts = capture_status_texts
 
-      @tg.send(:notify_tool_started, 42, 7, "shell_exec", { "command" => "bundle exec rspec" })
+      @tg.notify_tool_started(42, 7, "shell_exec", { "command" => "bundle exec rspec" })
 
       assert_equal 1, texts.size
       assert_includes texts[0], "💻 `shell_exec` · step 1 · 0s"
@@ -724,15 +724,15 @@ module Rubot
     def test_finished_round_marks_the_step_done_and_hints_stop_once
       texts = capture_status_texts
 
-      @tg.send(:notify_tool_started, 42, 7, "file_ops", { "operation" => "read", "path" => "lib/rubot/agent.rb" })
-      @tg.send(:notify_progress, 42, 7, 2)
+      @tg.notify_tool_started(42, 7, "file_ops", { "operation" => "read", "path" => "lib/rubot/agent.rb" })
+      @tg.notify_progress(42, 7, 2)
       refute_includes texts.last, "/stop", "two rounds is not yet worth a stop hint"
 
-      @tg.send(:notify_progress, 42, 7, 3)
+      @tg.notify_progress(42, 7, 3)
       assert_includes texts.last, "✓"
       assert_equal 1, texts.last.scan("/stop").size
 
-      @tg.send(:notify_progress, 42, 7, 9)
+      @tg.notify_progress(42, 7, 9)
       assert_equal 1, texts.last.scan("/stop").size, "the hint must not repeat"
       refute_includes texts.last, "round", "the round counter stays internal"
     end
@@ -740,9 +740,9 @@ module Rubot
     def test_status_card_shows_running_subagents
       texts = capture_status_texts
 
-      @tg.send(:notify_tool_started, 42, 7, "shell_exec", { "command" => "ls" })
-      @tg.send(:notify_subagent, 42, 7, { run_id: "r1", agent: "writer", phase: "started", detail: "write a poem" })
-      @tg.send(:notify_subagent, 42, 7, { run_id: "r2", agent: "researcher", phase: "tool", detail: "search docs" })
+      @tg.notify_tool_started(42, 7, "shell_exec", { "command" => "ls" })
+      @tg.notify_subagent(42, 7, { run_id: "r1", agent: "writer", phase: "started", detail: "write a poem" })
+      @tg.notify_subagent(42, 7, { run_id: "r2", agent: "researcher", phase: "tool", detail: "search docs" })
 
       card = texts.last
       assert_includes card, "2 subagent aktif"
@@ -750,7 +750,7 @@ module Rubot
       assert_includes card, "researcher"
       assert_includes card, "search docs"
 
-      @tg.send(:notify_subagent, 42, 7, { run_id: "r1", agent: "writer", phase: "done", detail: "3s" })
+      @tg.notify_subagent(42, 7, { run_id: "r1", agent: "writer", phase: "done", detail: "3s" })
       assert_includes texts.last, "1 subagent aktif"
       assert_includes texts.last, "✓ writer"
     end
@@ -758,7 +758,7 @@ module Rubot
     def test_progress_without_a_tool_card_does_nothing
       texts = capture_status_texts
 
-      @tg.send(:notify_progress, 42, 7, 5)
+      @tg.notify_progress(42, 7, 5)
 
       assert_empty texts
     end
@@ -775,12 +775,12 @@ module Rubot
       end
       @tg.define_singleton_method(:edit_message) { |*_args| events << :edited }
 
-      @tg.send(:update_or_send_status, 42, 7, "step 1")
-      @tg.send(:update_or_send_status, 42, 7, "step 2")
+      @tg.update_or_send_status(42, 7, "step 1")
+      @tg.update_or_send_status(42, 7, "step 2")
       assert_equal [ :sent ], events, "an edit inside the interval is dropped"
 
       clock = 1.5
-      @tg.send(:update_or_send_status, 42, 7, "step 2")
+      @tg.update_or_send_status(42, 7, "step 2")
       assert_equal [ :sent, :edited ], events
     end
 
@@ -793,9 +793,9 @@ module Rubot
         "sent-1"
       end
 
-      @tg.send(:update_or_send_status, 42, 7, "step 1")
+      @tg.update_or_send_status(42, 7, "step 1")
       clock = 10.0
-      @tg.send(:update_or_send_status, 42, 7, "step 1")
+      @tg.update_or_send_status(42, 7, "step 1")
 
       assert_equal [ :sent ], events
     end
@@ -811,9 +811,9 @@ module Rubot
           "parameters" => { "retry_after" => 17 } }
       end
 
-      assert_equal :error, @tg.send(:post_edit, 42, "sent-1", "hi", "HTML")
+      assert_equal :error, @tg.post_edit(42, "sent-1", "hi", "HTML")
       assert_equal 1, calls
-      assert_operator @tg.send(:flood_remaining, 42), :>, 0
+      assert_operator @tg.flood_remaining(42), :>, 0
     end
 
     def test_a_flood_window_silences_sends_and_edits_for_that_chat
@@ -824,26 +824,26 @@ module Rubot
           "parameters" => { "retry_after" => 17 } }
       end
 
-      @tg.send(:post_edit, 42, "sent-1", "hi", "HTML")
-      assert_equal :error, @tg.send(:deliver, 42, "hello", nil, parse_mode: nil)
-      assert_equal :error, @tg.send(:post_edit, 42, "sent-1", "again", "HTML")
+      @tg.post_edit(42, "sent-1", "hi", "HTML")
+      assert_equal :error, @tg.deliver(42, "hello", nil, parse_mode: nil)
+      assert_equal :error, @tg.post_edit(42, "sent-1", "again", "HTML")
       assert_equal 1, sends, "nothing reaches the API while the gate is closed"
 
       # A different chat is unaffected: the limit is per chat.
-      refute_operator @tg.send(:flood_remaining, 99), :>, 0
+      refute_operator @tg.flood_remaining(99), :>, 0
     end
 
     def test_format_elapsed
-      assert_equal "0s", @tg.send(:format_elapsed, 0)
-      assert_equal "59s", @tg.send(:format_elapsed, 59.9)
-      assert_equal "1m 05s", @tg.send(:format_elapsed, 65)
-      assert_equal "1h 02m", @tg.send(:format_elapsed, 3720)
+      assert_equal "0s", @tg.format_elapsed(0)
+      assert_equal "59s", @tg.format_elapsed(59.9)
+      assert_equal "1m 05s", @tg.format_elapsed(65)
+      assert_equal "1h 02m", @tg.format_elapsed(3720)
     end
 
     # Register a status message the way update_or_send_status would, without
     # touching the Telegram API.
     def seed_status_message(chat_id, thread_id, message_id)
-      key = @tg.send(:status_key, chat_id, thread_id)
+      key = @tg.status_key(chat_id, thread_id)
       @tg.instance_variable_get(:@status_messages)[key] = {
         chat_id: chat_id, thread_id: thread_id, message_id: message_id
       }
@@ -944,9 +944,9 @@ module Rubot
 
     def test_a_message_while_the_session_runs_steers_the_turn
       handle = SteeringHandle.new
-      @tg.send(:track_running_session, "tg_42", handle)
+      @tg.track_running_session("tg_42", handle)
 
-      @tg.send(:process_update, text_update("pakai folder lain"))
+      @tg.process_update(text_update("pakai folder lain"))
 
       assert_equal [ "pakai folder lain" ], handle.steered
       assert_empty @tg.prompts, "a steered message does not start its own turn"
@@ -955,9 +955,9 @@ module Rubot
 
     def test_a_steered_message_in_a_topic_uses_the_topic_session
       handle = SteeringHandle.new
-      @tg.send(:track_running_session, "tg_42_7", handle)
+      @tg.track_running_session("tg_42_7", handle)
 
-      @tg.send(:process_update, text_update("pakai folder lain", thread_id: 7))
+      @tg.process_update(text_update("pakai folder lain", thread_id: 7))
 
       assert_equal [ "pakai folder lain" ], handle.steered
       assert_empty @tg.prompts
@@ -965,9 +965,9 @@ module Rubot
 
     def test_a_command_while_the_session_runs_is_not_steered
       handle = SteeringHandle.new
-      @tg.send(:track_running_session, "tg_42", handle)
+      @tg.track_running_session("tg_42", handle)
 
-      @tg.send(:process_update, text_update("/help"))
+      @tg.process_update(text_update("/help"))
 
       assert_empty handle.steered
       assert_equal [ [ "/help", "tg_42" ] ], @tg.prompts
@@ -975,7 +975,7 @@ module Rubot
 
     def test_a_reply_quote_rides_along_with_the_steer
       handle = SteeringHandle.new
-      @tg.send(:track_running_session, "tg_42", handle)
+      @tg.track_running_session("tg_42", handle)
 
       update = text_update("yang ini maksudnya?")
       update["message"]["reply_to_message"] = {
@@ -983,7 +983,7 @@ module Rubot
         "from" => { "id" => 7, "username" => "alice" },
         "text" => "harga naik 12% bulan ini"
       }
-      @tg.send(:process_update, update)
+      @tg.process_update(update)
 
       steer = handle.steered.first
       assert steer.start_with?("yang ini maksudnya?"), steer
@@ -992,7 +992,7 @@ module Rubot
 
     def test_a_media_message_while_the_session_runs_queues_its_own_turn
       handle = SteeringHandle.new
-      @tg.send(:track_running_session, "tg_42", handle)
+      @tg.track_running_session("tg_42", handle)
       image = File.join(@config.workspace, "attachments", "tg_42", "shot.png")
       FileUtils.mkdir_p(File.dirname(image))
       File.binwrite(image, png_bytes(1200, 800))
@@ -1005,7 +1005,7 @@ module Rubot
         { "file_id" => "small", "file_unique_id" => "u1", "file_size" => 1_000 },
         { "file_id" => "large", "file_unique_id" => "u2", "file_size" => 90_000 }
       ]
-      @tg.send(:process_update, update)
+      @tg.process_update(update)
 
       assert_empty handle.steered, "media is not steered"
       assert_equal 1, @tg.prompts.size, "it queues as its own turn instead"
@@ -1061,7 +1061,7 @@ module Rubot
 
     def test_photo_with_caption_reaches_the_agent
       tg = build_telegram
-      tg.send(:process_update, photo_update(caption: "ini bagian amplop"))
+      tg.process_update(photo_update(caption: "ini bagian amplop"))
 
       assert_equal 1, tg.prompts.size
       prompt, session_id = tg.prompts.first
@@ -1073,7 +1073,7 @@ module Rubot
 
     def test_photo_without_caption_is_no_longer_dropped
       tg = build_telegram
-      tg.send(:process_update, photo_update)
+      tg.process_update(photo_update)
 
       assert_equal 1, tg.prompts.size
       assert_includes tg.prompts.first[0], @image
@@ -1085,7 +1085,7 @@ module Rubot
       update = { "update_id" => 2, "message" => {
         "chat" => { "id" => 42 }, "from" => { "id" => 42 }, "text" => "halo"
       } }
-      tg.send(:process_update, update)
+      tg.process_update(update)
 
       assert_equal [ [ "halo", "tg_42" ] ], tg.prompts
     end
@@ -1096,7 +1096,7 @@ module Rubot
         "chat" => { "id" => 42 }, "from" => { "id" => 42 },
         "sticker" => { "file_id" => "s1", "emoji" => "🙂" }
       } }
-      tg.send(:process_update, update)
+      tg.process_update(update)
 
       assert_empty tg.prompts
       assert_equal 1, tg.sent.size
@@ -1107,7 +1107,7 @@ module Rubot
       tg = build_telegram
       tg.define_singleton_method(:download_attachment) { |*_args| nil }
 
-      tg.send(:process_update, photo_update(caption: "lihat ini"))
+      tg.process_update(photo_update(caption: "lihat ini"))
 
       assert_equal 1, tg.prompts.size
       assert_includes tg.prompts.first[0], "lihat ini"
@@ -1122,20 +1122,20 @@ module Rubot
       called = false
       tg.define_singleton_method(:download_attachment) { |*_args| called = true and nil }
 
-      tg.send(:process_update, photo_update(caption: "hi"))
+      tg.process_update(photo_update(caption: "hi"))
 
       refute called
     end
 
     def test_attachments_live_inside_the_workspace
       tg = build_telegram
-      root = tg.send(:attachments_root)
+      root = tg.attachments_root
       assert root.start_with?(@config.workspace), "#{root} must stay inside #{@config.workspace}"
     end
 
     def test_extract_attachments_picks_the_largest_photo
       tg = build_telegram
-      attachments, unsupported = tg.send(:extract_attachments, photo_update["message"])
+      attachments, unsupported = tg.extract_attachments(photo_update["message"])
 
       assert_nil unsupported
       assert_equal 1, attachments.size
@@ -1145,7 +1145,7 @@ module Rubot
 
     def test_extract_attachments_marks_documents_by_mime_type
       tg = build_telegram
-      attachments, = tg.send(:extract_attachments, {
+      attachments, = tg.extract_attachments({
         "document" => { "file_id" => "d1", "file_unique_id" => "u", "file_name" => "a.pdf",
                         "mime_type" => "application/pdf" }
       })
@@ -1155,7 +1155,7 @@ module Rubot
 
     def test_attachment_filename_cannot_escape_the_directory
       tg = build_telegram
-      name = tg.send(:attachment_filename, { name: "../../etc/passwd", unique_id: "u1" }, "photos/file_1.jpg")
+      name = tg.attachment_filename({ name: "../../etc/passwd", unique_id: "u1" }, "photos/file_1.jpg")
 
       refute_includes name, "/"
       refute name.start_with?(".")
@@ -1163,7 +1163,7 @@ module Rubot
 
     def test_attachment_filename_keeps_the_original_extension
       tg = build_telegram
-      name = tg.send(:attachment_filename, { name: "capture.png", unique_id: "u1" }, "documents/file_1")
+      name = tg.attachment_filename({ name: "capture.png", unique_id: "u1" }, "documents/file_1")
 
       assert name.end_with?(".png"), name
       assert_includes name, "capture-"
@@ -1174,7 +1174,7 @@ module Rubot
         agent: @agent,
         channel_config: { "token" => "fake", "attachments" => false, "typing_indicator" => false }
       )
-      attachments, = tg.send(:extract_attachments, photo_update["message"])
+      attachments, = tg.extract_attachments(photo_update["message"])
 
       assert_empty attachments
     end
@@ -1219,7 +1219,7 @@ module Rubot
 
     def test_the_quoted_message_reaches_the_agent
       tg = build_telegram
-      tg.send(:process_update, reply_update)
+      tg.process_update(reply_update)
 
       assert_equal 1, tg.prompts.size
       prompt = tg.prompts.first[0]
@@ -1230,7 +1230,7 @@ module Rubot
 
     def test_the_users_own_text_stays_first
       tg = build_telegram
-      tg.send(:process_update, reply_update)
+      tg.process_update(reply_update)
 
       prompt = tg.prompts.first[0]
       assert prompt.start_with?("ini artinya apa?"), prompt
@@ -1241,7 +1241,7 @@ module Rubot
       update = reply_update(extra: { "quote" => { "text" => "harga naik 12%" } })
       update["message"]["reply_to_message"]["text"] = "harga naik 12% bulan ini, sisanya stabil"
 
-      tg.send(:process_update, update)
+      tg.process_update(update)
 
       prompt = tg.prompts.first[0]
       assert_includes prompt, "harga naik 12%"
@@ -1254,7 +1254,7 @@ module Rubot
       update = reply_update(quoted: "Berikut ringkasannya.",
                             author: { "id" => 1, "username" => "MyBot", "is_bot" => true })
 
-      tg.send(:process_update, update)
+      tg.process_update(update)
 
       assert_includes tg.prompts.first[0], "your earlier message"
     end
@@ -1263,14 +1263,14 @@ module Rubot
       tg = build_telegram
       update = reply_update(author: { "id" => 7, "first_name" => "Budi" })
 
-      tg.send(:process_update, update)
+      tg.process_update(update)
 
       assert_includes tg.prompts.first[0], "Budi"
     end
 
     def test_the_quote_survives_a_reply_that_crosses_topics
       tg = build_telegram
-      tg.send(:process_update, reply_update(thread_id: 7))
+      tg.process_update(reply_update(thread_id: 7))
 
       prompt, session_id = tg.prompts.first
       assert_equal "tg_42_7", session_id
@@ -1288,7 +1288,7 @@ module Rubot
         { "file_id" => "p1", "file_unique_id" => "u9", "file_size" => 90_000 }
       ]
 
-      tg.send(:process_update, update)
+      tg.process_update(update)
 
       prompt = tg.prompts.first[0]
       assert_includes prompt, shot
@@ -1300,14 +1300,14 @@ module Rubot
       update = reply_update(quoted: nil, body: "halo")
       update["message"]["reply_to_message"] = { "message_id" => 99, "forum_topic_created" => { "name" => "x" } }
 
-      tg.send(:process_update, update)
+      tg.process_update(update)
 
       assert_equal [ [ "halo", "tg_42" ] ], tg.prompts
     end
 
     def test_a_long_quote_is_truncated
       tg = build_telegram
-      tg.send(:process_update, reply_update(quoted: "x" * 10_000))
+      tg.process_update(reply_update(quoted: "x" * 10_000))
 
       prompt = tg.prompts.first[0]
       assert_includes prompt, "(truncated)"
@@ -1316,9 +1316,9 @@ module Rubot
 
     def test_reply_context_can_be_skipped_when_the_update_has_no_reply
       tg = build_telegram
-      tg.send(:reply_context, { "text" => "halo" }, "tg_42", 42)
+      tg.reply_context({ "text" => "halo" }, "tg_42", 42)
 
-      assert_nil tg.send(:reply_context, { "text" => "halo" }, "tg_42", 42)
+      assert_nil tg.reply_context({ "text" => "halo" }, "tg_42", 42)
     end
   end
 
@@ -1467,12 +1467,12 @@ module Rubot
     def click(action)
       data = keyboard_data(last_keyboard).find { |value| value.end_with?(":#{action}") }
       refute_nil data, "expected a #{action} button in #{keyboard_data(last_keyboard).inspect}"
-      @tg.send(:process_update, callback_update(data))
+      @tg.process_update(callback_update(data))
       data
     end
 
     def test_forum_topic_created_opens_the_preset_step
-      @tg.send(:process_update, topic_message(created: true))
+      @tg.process_update(topic_message(created: true))
 
       assert_equal 1, @tg.keyboards.size
       _chat_id, text, thread_id, = @tg.keyboards.last
@@ -1487,30 +1487,30 @@ module Rubot
     end
 
     def test_forum_topic_created_is_ignored_when_a_persona_exists
-      @tg.send(:persona_store).set(
+      @tg.persona_store.set(
         "42:7",
         Rubot::Persona.new(name: "trading", preset: "fast", system_prompt: "Halo")
       )
 
-      @tg.send(:process_update, topic_message(created: true))
+      @tg.process_update(topic_message(created: true))
 
       assert_empty @tg.keyboards
     end
 
     def test_persona_wizard_happy_path_saves_and_applies_the_persona
-      @tg.send(:process_update, topic_message(created: true))
+      @tg.process_update(topic_message(created: true))
       click("preset:0")
 
       assert_includes @tg.keyboards.last[1], "Langkah 2/3"
 
-      @tg.send(:process_update, topic_message(text: "Kamu adalah asisten trading. Jawab singkat."))
+      @tg.process_update(topic_message(text: "Kamu adalah asisten trading. Jawab singkat."))
 
       assert_includes @tg.keyboards.last[1], "Langkah 3/3"
       assert_includes @tg.keyboards.last[1], "Kamu adalah asisten trading."
 
       click("save")
 
-      stored = @tg.send(:persona_store).get(42, 7)
+      stored = @tg.persona_store.get(42, 7)
       assert_equal "fast", stored.preset
       assert_nil stored.model
       assert_equal "Kamu adalah asisten trading. Jawab singkat.", stored.system_prompt
@@ -1519,18 +1519,18 @@ module Rubot
       session = @tg.sessions["tg_42_7"]
       assert_equal "Kamu adalah asisten trading. Jawab singkat.", session.personas.last["system_prompt"]
       assert @tg.sent.any? { |_chat, text, _thread| text.include?("Persona disimpan") }
-      assert_nil @tg.send(:wizard_for_topic, 42, 7)
+      assert_nil @tg.wizard_for_topic(42, 7)
     end
 
     # The usual setup once a specialist exists: point the topic at it instead
     # of retyping a prompt. The topic keeps its own session; the persona — and
     # so its memory — is shared.
     def test_a_topic_can_be_pointed_at_an_existing_persona
-      @tg.send(:persona_store).set("trainer", Rubot::Persona.new(
+      @tg.persona_store.set("trainer", Rubot::Persona.new(
         slug: "trainer", name: "Trainer", emoji: "🧪", system_prompt: "Kamu personal trainer."
       ))
 
-      @tg.send(:process_update, topic_message(created: true))
+      @tg.process_update(topic_message(created: true))
 
       assert_includes @tg.keyboards.last[1], "Pakai persona yang sudah ada"
       assert keyboard_data(last_keyboard).any? { |value| value.end_with?(":use:0") }
@@ -1538,9 +1538,9 @@ module Rubot
 
       click("use:0")
 
-      stored = @tg.send(:persona_store).all["42:7"]
+      stored = @tg.persona_store.all["42:7"]
       assert_equal "trainer", stored.ref
-      assert_equal "Trainer", @tg.send(:persona_store).get(42, 7).name
+      assert_equal "Trainer", @tg.persona_store.get(42, 7).name
 
       session = @tg.sessions["tg_42_7"]
       assert_equal "Kamu personal trainer.", session.personas.last["system_prompt"]
@@ -1548,9 +1548,9 @@ module Rubot
     end
 
     def test_a_topic_can_still_build_its_own_persona
-      @tg.send(:persona_store).set("trainer", Rubot::Persona.new(slug: "trainer", name: "Trainer"))
+      @tg.persona_store.set("trainer", Rubot::Persona.new(slug: "trainer", name: "Trainer"))
 
-      @tg.send(:process_update, topic_message(created: true))
+      @tg.process_update(topic_message(created: true))
       click("new")
 
       assert_includes @tg.keyboards.last[1], "Langkah 1/3"
@@ -1558,12 +1558,12 @@ module Rubot
     end
 
     def test_persona_show_names_the_borrowed_persona
-      @tg.send(:persona_store).set("trainer", Rubot::Persona.new(
+      @tg.persona_store.set("trainer", Rubot::Persona.new(
         slug: "trainer", name: "Trainer", emoji: "🧪"
       ))
-      @tg.send(:persona_store).set("42:7", Rubot::Persona.new(ref: "trainer"))
+      @tg.persona_store.set("42:7", Rubot::Persona.new(ref: "trainer"))
 
-      @tg.send(:process_update, topic_message(text: "/persona show"))
+      @tg.process_update(topic_message(text: "/persona show"))
 
       text = @tg.sent.last[1]
       assert_includes text, "Memakai : Trainer (trainer)"
@@ -1576,18 +1576,18 @@ module Rubot
     def test_reset_drops_the_topics_reminders
       pool = PersonaTelegram::FakeCronPool.new(dropped: 2)
       @tg.instance_variable_set(:@pool, pool)
-      @tg.send(:persona_store).set("42:7", Rubot::Persona.new(name: "trading"))
+      @tg.persona_store.set("42:7", Rubot::Persona.new(name: "trading"))
 
-      @tg.send(:process_update, topic_message(text: "/persona reset"))
+      @tg.process_update(topic_message(text: "/persona reset"))
 
       assert_equal [ [ 42, 7 ] ], pool.removals
       assert_includes @tg.sent.last[1], "2 reminder"
     end
 
     def test_reset_without_reminders_says_nothing_extra
-      @tg.send(:persona_store).set("42:7", Rubot::Persona.new(name: "trading"))
+      @tg.persona_store.set("42:7", Rubot::Persona.new(name: "trading"))
 
-      @tg.send(:process_update, topic_message(text: "/persona reset"))
+      @tg.process_update(topic_message(text: "/persona reset"))
 
       refute_includes @tg.sent.last[1], "reminder"
     end
@@ -1605,7 +1605,7 @@ module Rubot
       cron_tool = @agent.tools.get("cron")
       refute_nil cron_tool, "the agent needs a cron tool for this test"
 
-      @tg.send(:bind_delivery_context, "tg_42_7", 42, 7)
+      @tg.bind_delivery_context("tg_42_7", 42, 7)
 
       assert_equal persona_dir, cron_tool.delivery_context[:workspace]
       assert_equal 42, cron_tool.delivery_context[:chat_id]
@@ -1618,31 +1618,31 @@ module Rubot
       @tg.define_singleton_method(:session_for) { |_session_id| @agent }
 
       cron_tool = @agent.tools.get("cron")
-      @tg.send(:bind_delivery_context, "tg_42_7", 42, 7)
+      @tg.bind_delivery_context("tg_42_7", 42, 7)
 
       assert_equal @config.workspace, cron_tool.delivery_context[:workspace]
     end
 
     def test_prompt_can_be_skipped_to_use_the_default
-      @tg.send(:process_update, topic_message(created: true))
+      @tg.process_update(topic_message(created: true))
       click("preset:0")
       click("prompt_default")
 
       assert_includes @tg.keyboards.last[1], "Prompt: (default)"
       click("save")
 
-      stored = @tg.send(:persona_store).get(42, 7)
+      stored = @tg.persona_store.get(42, 7)
       assert_equal "fast", stored.preset
       assert_nil stored.system_prompt
     end
 
     def test_persona_show_lists_the_active_persona
-      @tg.send(:persona_store).set(
+      @tg.persona_store.set(
         "42:7",
         Rubot::Persona.new(name: "trading", preset: "fast", system_prompt: "Jawab singkat.")
       )
 
-      @tg.send(:process_update, topic_message(text: "/persona show"))
+      @tg.process_update(topic_message(text: "/persona show"))
 
       text = @tg.sent.last[1]
       assert_includes text, "Persona topic ini"
@@ -1652,50 +1652,50 @@ module Rubot
     end
 
     def test_persona_reset_removes_it_and_clears_the_session
-      @tg.send(:persona_store).set(
+      @tg.persona_store.set(
         "42:7",
         Rubot::Persona.new(name: "trading", preset: "fast", system_prompt: "Jawab singkat.")
       )
 
-      @tg.send(:process_update, topic_message(text: "/persona reset"))
+      @tg.process_update(topic_message(text: "/persona reset"))
 
-      assert_nil @tg.send(:persona_store).get(42, 7)
+      assert_nil @tg.persona_store.get(42, 7)
       assert_equal [ nil ], @tg.sessions["tg_42_7"].personas
       assert_includes @tg.sent.last[1], "dihapus"
     end
 
     def test_cancel_stops_an_active_wizard
-      @tg.send(:process_update, topic_message(created: true))
-      refute_nil @tg.send(:wizard_for_topic, 42, 7)
+      @tg.process_update(topic_message(created: true))
+      refute_nil @tg.wizard_for_topic(42, 7)
 
-      @tg.send(:process_update, topic_message(text: "/cancel"))
+      @tg.process_update(topic_message(text: "/cancel"))
 
-      assert_nil @tg.send(:wizard_for_topic, 42, 7)
+      assert_nil @tg.wizard_for_topic(42, 7)
       assert_includes @tg.sent.last[1], "dibatalkan"
       refute_empty @tg.deleted
     end
 
     def test_cancel_without_a_wizard_is_harmless
-      @tg.send(:process_update, topic_message(text: "/cancel"))
+      @tg.process_update(topic_message(text: "/cancel"))
 
       assert_includes @tg.sent.last[1], "Tidak ada setup"
     end
 
     def test_persona_in_the_general_topic_uses_the_default
-      @tg.send(:process_update, topic_message(text: "/persona", thread_id: nil))
+      @tg.process_update(topic_message(text: "/persona", thread_id: nil))
 
       assert_empty @tg.keyboards
       assert_includes @tg.sent.last[1], "General"
     end
 
     def test_persona_command_with_bot_suffix_is_recognized
-      @tg.send(:process_update, topic_message(text: "/persona@MyBot"))
+      @tg.process_update(topic_message(text: "/persona@MyBot"))
 
       assert_equal 1, @tg.keyboards.size
     end
 
     def test_first_message_in_a_new_topic_opens_the_wizard_as_fallback
-      @tg.send(:maybe_start_persona_wizard_for_new_topic, 42, 7)
+      @tg.maybe_start_persona_wizard_for_new_topic(42, 7)
 
       assert_equal 1, @tg.keyboards.size
       assert_includes @tg.keyboards.last[1], "Langkah 1/3"
@@ -1708,7 +1708,7 @@ module Rubot
       FileUtils.mkdir_p(File.dirname(path))
       File.write(path, "{}")
 
-      @tg.send(:maybe_start_persona_wizard_for_new_topic, 42, 7)
+      @tg.maybe_start_persona_wizard_for_new_topic(42, 7)
 
       assert_empty @tg.keyboards
     end
@@ -1733,7 +1733,7 @@ module Rubot
     end
 
     def test_preset_picker_lists_the_configured_presets
-      @tg.send(:process_update, topic_message(created: true))
+      @tg.process_update(topic_message(created: true))
 
       labels = @tg.keyboards.last[3].flatten.map { |button| button["text"] }
       assert_includes labels, "fast ★"
@@ -1743,15 +1743,15 @@ module Rubot
     end
 
     def test_selecting_a_preset_stores_the_preset_name
-      @tg.send(:process_update, topic_message(created: true))
+      @tg.process_update(topic_message(created: true))
       click("preset:1")
-      @tg.send(:process_update, topic_message(text: "Kamu adalah asisten trading."))
+      @tg.process_update(topic_message(text: "Kamu adalah asisten trading."))
 
       assert_includes @tg.keyboards.last[1], "deep (`deepseek-v4-pro`)"
 
       click("save")
 
-      stored = @tg.send(:persona_store).get(42, 7)
+      stored = @tg.persona_store.get(42, 7)
       assert_equal "deep", stored.preset
       assert_equal "deep", @tg.sessions["tg_42_7"].personas.last["preset"]
     end
