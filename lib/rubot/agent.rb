@@ -23,10 +23,12 @@ require_relative "agents_file"
 require_relative "tools/memory_tool"
 require_relative "memory_extractor"
 require_relative "agent/background"
+require_relative "agent/message_builder"
 require_relative "agent/model_selection"
 require_relative "agent/subagents"
 require_relative "agent/system_prompt"
 require_relative "agent/tool_execution"
+require_relative "agent/tool_wiring"
 require_relative "agent/turn"
 require_relative "agent/turn_callbacks"
 require_relative "agent/turn_loop"
@@ -198,6 +200,13 @@ module Rubot
     # Which model answers, and which preset put it there. See
     # agent/model_selection.rb.
     include ModelSelection
+
+    # Stamping this turn's identity on the shared tool registry, and the tool
+    # definitions the model is shown. See agent/tool_wiring.rb.
+    include ToolWiring
+
+    # The messages one request is made of. See agent/message_builder.rb.
+    include MessageBuilder
 
     attr_reader :config, :provider, :session, :tools, :soul, :memory, :agents_file, :skill_registry, :safety_guard, :session_model, :persona, :active_preset_name
 
@@ -919,307 +928,11 @@ module Rubot
       end
     end
 
-    # Set the workspace on the cron tool so jobs persist to disk
-    def configure_cron_tool
-      cron_tool = @tools.get("cron")
-      return unless cron_tool && cron_tool.respond_to?(:workspace=)
-      cron_tool.workspace = @config.workspace
-      # The install's own jobs live next to config.yml (~/.rubot/cron), not
-      # inside the workspace the agent works in.
-      cron_tool.store_root = @config.catalog_dir if cron_tool.respond_to?(:store_root=)
-    end
-
-    # Inject the safety guard into all tools that support it.
-    # Called after @tools is assigned, ensuring the guard is applied
-    # regardless of whether tools came from the Agent's constructor
-    # or were passed in externally (e.g. from bin/rubot or REPL).
-    def inject_safety_guard
-      return unless @tools.respond_to?(:all)
-      @tools.all.each do |tool|
-        next unless tool.respond_to?(:safety_guard=)
-        tool.safety_guard = @safety_guard
-      end
-    end
-
-    # Tell tools where relative paths belong. The web channel roots the config
-    # at the persona's directory and the TUI at the configured workspace, so
-    # this is the one place that knows the right answer for both.
-    def inject_tool_workspace
-      return unless @tools.respond_to?(:all)
-      @tools.all.each do |tool|
-        tool.workspace = @config.workspace if tool.respond_to?(:workspace=)
-      end
-    end
-
-    # Give tools the context they need to reach the archive and to scope what
-    # they find there. A session actor runs on a non-main Ractor, where SQLite
-    # cannot be opened; the Instagram tool uses the port to reach StoreService
-    # on the main Ractor, and the persona slug to see only its own accounts.
-    #
-    # The registry is shared by every session actor, so the persona cannot be
-    # stamped once at boot: two personas answering at the same time would keep
-    # overwriting each other's slug. It is set at the start of every turn from
-    # this agent's own persona instead (see #inject_tool_persona).
-    def inject_tool_context
-      return unless @tools.respond_to?(:all)
-      port = @archive&.instance_variable_get(:@port)
-      @tools.all.each do |tool|
-        tool.store_port = port if port && tool.respond_to?(:store_port=)
-      end
-      inject_tool_persona
-    end
-
-    def inject_tool_persona
-      return unless @tools.respond_to?(:all)
-
-      slug = @persona&.slug.to_s
-      @tools.all.each do |tool|
-        tool.persona = slug if tool.respond_to?(:persona=)
-      end
-    end
-
-    # The delegate tool needs a handle back to this agent to do the spawning.
-    # Set at the start of every turn, like the persona stamp, because the tool
-    # registry is shared between agents in the same Ractor.
-    def inject_tool_delegate
-      return unless @tools.respond_to?(:all)
-
-      %w[delegate subagent_results].each do |name|
-        tool = @tools.get(name)
-        tool.agent = self if tool && tool.respond_to?(:agent=)
-      end
-    end
-
-    # Fire any due cron jobs and return their results.
-    def fire_due_cron_jobs
-      return [] if @cron_ractor
-      cron_tool = @tools.get("cron")
-      return [] unless cron_tool && cron_tool.respond_to?(:scheduler)
-      scheduler = cron_tool.scheduler
-      scheduler.fire_due_jobs
-    rescue StandardError => e
-      warn "[cron] Error firing due jobs: #{e.class}: #{e.message}"
-      []
-    end
-
-    def build_messages
-      messages = []
-
-      # Add system prompt (composed from all sources)
-      messages << { "role" => "system", "content" => build_system_prompt }
-
-      # Add conversation history (limited by messages and, optionally, tokens).
-      # `reasoning_tail` keeps reasoning only for the turn being executed.
-      recent_messages = @session.safe_history(
-        reasoning_tail: current_turn_message_count
-      )
-
-      recent_messages.each do |msg|
-        formatted = { "role" => msg["role"], "content" => msg["content"] }
-
-        # Handle tool calls for assistant messages
-        if msg["role"] == "assistant" && msg["tool_calls"]
-          formatted["tool_calls"] = msg["tool_calls"]
-        end
-
-        # Include reasoning_content for DeepSeek and other reasoning models
-        if msg["role"] == "assistant" && msg["reasoning_content"]
-          formatted["reasoning_content"] = msg["reasoning_content"]
-        end
-
-        # Handle tool_call_id for tool results
-        if msg["role"] == "tool"
-          formatted["tool_call_id"] = msg["tool_call_id"]
-        end
-
-        messages << formatted
-      end
-
-      # Append system additions without rewriting the cached prefix.
-      if @session.respond_to?(:system_additions)
-        @session.system_additions.each do |addition|
-          messages << { "role" => "system", "content" => addition }
-        end
-      end
-
-      # Newer text for sections the model was pinned with. Last on purpose: it
-      # has to read closer to the question than what it supersedes, and it sits
-      # behind the transcript, so a change here costs the block and nothing in
-      # front of it.
-      patch = @session.respond_to?(:system_patch) ? @session.system_patch : nil
-      messages << { "role" => "system", "content" => patch } if patch
-
-      messages
-    end
-
-    # Number of messages that belong to the turn currently running. Used to
-    # decide which reasoning blocks are still worth sending.
-    def current_turn_message_count
-      return 0 if @turn_start_index.nil?
-
-      [ @session.messages.size - @turn_start_index, 0 ].max
-    end
-
-
-# Replace oversized top-level string values in an old tool call's
-# arguments with a notice, on the request copy only (the session transcript
-# keeps the originals). Values are rebuilt through merge/map because
-# conversation_history shares the stored tool_calls arrays by reference —
-# mutating them in place would corrupt the session file.
-def redact_old_tool_call_args!(messages, tool_call_id, max_chars)
-  return unless tool_call_id
-
-  index = messages.index do |m|
-    m["role"] == "assistant" && m["tool_calls"]&.any? { |tc| tc["id"] == tool_call_id }
-  end
-  return unless index
-
-  message = messages[index]
-  calls = message["tool_calls"].map do |tc|
-    next tc unless tc["id"] == tool_call_id
-
-    args = tc.dig("function", "arguments").to_s
-    redacted = redact_json_args(args, max_chars)
-    next tc if redacted == args
-
-    tc.merge("function" => tc["function"].merge("arguments" => redacted))
-  end
-  messages[index] = message.merge("tool_calls" => calls)
-end
-
-# Keep the first `max_chars` of each oversized top-level string value and
-# note how much was dropped, so the model still sees paths and command
-# shapes without carrying whole file bodies. Arguments that are not valid
-# JSON are left alone: a malformed string in history is what the provider
-# already accepted once, and guessing at its shape risks more.
-def redact_json_args(args, max_chars)
-  parsed = JSON.parse(args)
-  return args unless parsed.is_a?(Hash)
-
-  changed = false
-  parsed.each do |key, value|
-    next unless value.is_a?(String) && value.length > max_chars
-
-    parsed[key] = value[0...max_chars] +
-      format(REDACTED_TOOL_CALL_ARGS_NOTICE, value.length - max_chars)
-    changed = true
-  end
-  changed ? JSON.generate(parsed) : args
-rescue JSON::ParserError
-  args
-end
-
-    # The names a request may call, which is what a prompt sentence can safely
-    # name: `tools_enabled` can switch the whole set off, and a config can trim
-    # it further.
-    def tool_names
-      (tool_definitions || []).map(&:name)
-    end
-
     # Tools a sub agent must never call: delegating again (recursion), ringing
     # the user, scheduling jobs or drawing an Instagram card from a background
     # worker would all be surprising. A sub agent does its work and returns a
     # written result; the lead stays the one voice the user hears.
     SUBAGENT_FORBIDDEN_TOOLS = %w[delegate subagent_results notify cron instagram].freeze
-
-    def tool_definitions
-      return nil unless @config.tools_enabled
-      enabled_list = @config.enabled_tools
-
-      # If no explicit tool configuration, use all registered tools
-      tools = if enabled_list.nil? || enabled_list.empty?
-        @tools.all
-      else
-        @tools.all.select { |t| enabled_list.include?(t.name) }
-      end
-
-      # Always include memory tool if memory is enabled, regardless of config
-      if @memory.enabled?
-        memory_tool = @tools.get("memory")
-        tools << memory_tool if memory_tool && !tools.include?(memory_tool)
-      end
-
-      # Reading what a background run came back with is part of delegating, not
-      # a feature of its own: a config that lists its tools by hand and enables
-      # `delegate` would otherwise collect answers with no way to read them. The
-      # sub agent filter below still takes it away from the sub agents
-      # themselves.
-      if tools.any? { |tool| tool.name == "delegate" }
-        results_tool = @tools.get("subagent_results")
-        tools += [ results_tool ] if results_tool && !tools.include?(results_tool)
-      end
-
-      if @subagent
-        tools = tools.reject { |t| SUBAGENT_FORBIDDEN_TOOLS.include?(t.name) }
-        if @persona&.internal
-          allowed = SubagentRegistry.allowed_tools(@persona.slug)
-          tools = tools.select { |t| allowed.include?(t.name) } if allowed
-        end
-      end
-      tools
-    end
-
-    # A call that will not run (bad arguments, a cancelled turn, a refused
-    # guard question) but still owes the transcript one result per tool call.
-    def skipped_call(id, name, result)
-      { name: name, arguments: {}, id: id, snapshot: nil, result: result }
-    end
-
-    # Returns [name, arguments, parsed_ok]. `parsed_ok` is false when the
-    # arguments were not valid JSON — which is what a tool call cut off at the
-    # output limit looks like — so the caller can refuse to run it on a
-    # half-read argument instead of silently executing with an empty hash.
-    # Before-content of a file a file_ops write/append/edit/delete is about to
-    # touch. nil for reads and every other tool.
-    def file_ui_snapshot(tool_name, arguments)
-      return nil unless tool_name == "file_ops" && arguments.is_a?(Hash)
-      return nil unless %w[write append edit delete].include?(arguments["operation"].to_s)
-
-      path = arguments["path"].to_s
-      return nil if path.empty?
-
-      expanded = File.expand_path(path)
-      before = File.exist?(expanded) ? File.read(expanded, encoding: "UTF-8") : nil
-      { path: path, expanded: expanded, before: before }
-    rescue StandardError
-      nil
-    end
-
-    # After-content for the TUI diff, or nil when the tool did not write.
-    # A delete leaves no file behind: its after-content is nil, so every line
-    # the file had replays as a removal instead of disappearing from view.
-    def file_ui_diff(snapshot, result)
-      return nil unless snapshot
-      return nil unless result.to_s.match?(/\A(?:Written|Appended|Edited|Deleted) /)
-
-      after = File.exist?(snapshot[:expanded]) ? File.read(snapshot[:expanded], encoding: "UTF-8") : nil
-      before = snapshot[:before]
-      return nil if before == after
-      return nil if before.to_s.length + after.to_s.length > MAX_UI_DIFF_CHARS
-
-      { "path" => snapshot[:path], "before" => before, "after" => after }
-    rescue StandardError
-      nil
-    end
-
-    def parse_tool_call(tc)
-      if tc.is_a?(Hash)
-        fn = tc["function"]
-        name = fn["name"]
-        args_str = fn["arguments"]
-      else
-        fn = tc.function
-        name = fn.name
-        args_str = fn.arguments
-      end
-
-      arguments = args_str.is_a?(String) ? JSON.parse(args_str) : args_str
-      return [ name, {}, false ] unless arguments.is_a?(Hash)
-
-      [ name, arguments, true ]
-    rescue JSON::ParserError, TypeError
-      [ name, {}, false ]
-    end
 
     def log_debug(msg)
       warn "[debug] #{msg}" if @config.debug?
