@@ -8,6 +8,10 @@ require "zlib"
 require "sqlite3"
 require_relative "session"
 require_relative "store/migrator"
+require_relative "store/push_subscriptions"
+require_relative "store/search"
+require_relative "store/settings"
+require_relative "store/subagent_runs"
 
 module Rubot
   # SQLite archive of every conversation.
@@ -35,6 +39,14 @@ module Rubot
   # assumed). A Store is therefore opened in the main Ractor and reached from a
   # SessionActor through a port, never instantiated inside one.
   class Store
+    # The four groups of rows the archive holds beyond messages: delegated runs,
+    # push subscriptions, the web channel's settings, and the search index.
+    # Each is a module in store/, included here so a caller still sees one object.
+    include SubagentRuns
+    include PushSubscriptions
+    include Settings
+    include Search
+
     DB_FILENAME = "sessions.db"
     # The schema is the numbered .sql files in store/migrations/, applied by
     # Migrator. Nothing here knows what version 3 will add.
@@ -83,6 +95,9 @@ module Rubot
     # creating) it. The command line applies these before the session pool
     # exists, and an install that has never opened the settings page must not
     # gain a database just because it started.
+    #
+    # It stays a class method here rather than in Store::Settings: it is the one
+    # reader that works with no Store instance at all.
     def self.saved_settings(sessions_dir)
       path = path_for(sessions_dir.to_s)
       return {} unless File.exist?(path)
@@ -309,166 +324,6 @@ module Rubot
 
     # --- sub-agent runs ------------------------------------------------
 
-    # Open a run when a delegation starts. INSERT OR IGNORE so a retried call
-    # with the same run id cannot create a second audit row.
-    def start_subagent_run(run_id:, parent_session:, agent_slug:, task: nil, model: nil,
-                           started_at: Time.now.utc.iso8601)
-      @db.execute(
-        <<~SQL,
-          INSERT OR IGNORE INTO subagent_runs(
-            run_id, parent_session, agent_slug, task, model, status, started_at
-          ) VALUES(?, ?, ?, ?, ?, 'running', ?)
-        SQL
-        [ text_id(run_id), text_id(parent_session), text_id(agent_slug), task, model, started_at ]
-      )
-      @db.changes.positive?
-    end
-
-    # Close a run. `sub_session` is filled in once the sub agent's session id is
-    # known; `result` is what the run answered with, `error` why it failed. A
-    # run that was never opened is a no-op rather than an error, so a channel
-    # that audits optionally cannot break the turn.
-    def finish_subagent_run(run_id:, status:, sub_session: nil, error: nil, result: nil,
-                            finished_at: Time.now.utc.iso8601)
-      @db.execute(
-        <<~SQL,
-          UPDATE subagent_runs
-          SET status = ?, sub_session = ?, error = ?, result = ?, finished_at = ?
-          WHERE run_id = ?
-        SQL
-        [ status.to_s, sub_session, error, result, finished_at, text_id(run_id) ]
-      )
-      @db.changes.positive?
-    end
-
-    # Answers of finished runs the parent has not been told about yet, oldest
-    # first: a background run reports into a conversation that has moved on, so
-    # the model reads them when it asks, and each one is handed over once.
-    #
-    # `newest_first` is for the automatic report the channel sends when a batch
-    # ends: the answers that just landed are the news, so a backlog waiting
-    # behind them must not push them to the next report.
-    def pending_subagent_results(parent_session, limit: 20, newest_first: false)
-      @db.execute(
-        <<~SQL,
-          SELECT run_id, agent_slug, task, result, started_at, finished_at
-          FROM subagent_runs
-          WHERE parent_session = ? AND status = 'done' AND reported_at IS NULL AND result IS NOT NULL
-          ORDER BY started_at #{newest_first ? "DESC" : "ASC"}
-          LIMIT ?
-        SQL
-        [ text_id(parent_session), limit.to_i ]
-      ).map do |row|
-        {
-          run_id: row[0], agent_slug: row[1], task: row[2], result: row[3],
-          started_at: row[4], finished_at: row[5]
-        }
-      end
-    end
-
-    # Mark answers as handed over. Called with the ids that were actually
-    # returned, so a run that finished in between is not swallowed unread.
-    def mark_subagent_results_reported(run_ids, at: Time.now.utc.iso8601)
-      ids = Array(run_ids).map { |id| text_id(id) }.reject(&:empty?)
-      return 0 if ids.empty?
-
-      marks = (["?"] * ids.size).join(", ")
-      @db.execute(
-        "UPDATE subagent_runs SET reported_at = ? WHERE run_id IN (#{marks})",
-        [ at.to_s ] + ids
-      )
-      @db.changes
-    end
-
-    # Give answers back to the unread pile, for a report that could not be
-    # delivered. Marked read and then lost is the one outcome a background run
-    # cannot come back from: the model never saw the answer and the store will
-    # not offer it again.
-    def release_subagent_results(run_ids)
-      ids = Array(run_ids).map { |id| text_id(id) }.reject(&:empty?)
-      return 0 if ids.empty?
-
-      marks = (["?"] * ids.size).join(", ")
-      @db.execute(
-        "UPDATE subagent_runs SET reported_at = NULL WHERE run_id IN (#{marks})",
-        ids
-      )
-      @db.changes
-    end
-
-    # Runs of one parent conversation, newest first. `limit: nil` reads all.
-    def subagent_runs(parent_session, limit: 50)
-      sql = +"SELECT run_id, parent_session, sub_session, agent_slug, task, model, " \
-             "status, error, started_at, finished_at FROM subagent_runs WHERE parent_session = ? " \
-             "ORDER BY started_at DESC"
-      params = [ text_id(parent_session) ]
-      if limit
-        sql << " LIMIT ?"
-        params << limit.to_i
-      end
-      @db.execute(sql, params).map do |row|
-        {
-          run_id: row[0], parent_session: row[1], sub_session: row[2], agent_slug: row[3],
-          task: row[4], model: row[5], status: row[6], error: row[7],
-          started_at: row[8], finished_at: row[9]
-        }
-      end
-    end
-
-    # --- push subscriptions -------------------------------------------
-    #
-    # A device that agreed to be woken. `persona` nil means every persona: the
-    # toggle lives in the device's drawer, not in a conversation.
-    #
-    # Subscribing twice on the same browser is normal — the permission is
-    # granted once, and the page asks again on every load to refresh keys a
-    # browser may have rotated. The endpoint is the key, so that is an update
-    # rather than a second row that would deliver the notification twice.
-    def add_push_subscription(endpoint:, p256dh:, auth:, persona: nil)
-      url = text_id(endpoint)
-      return false if url.empty? || p256dh.to_s.empty? || auth.to_s.empty?
-
-      now = Time.now.utc.iso8601
-      @db.execute(<<~SQL, [ url, p256dh.to_s, auth.to_s, persona&.to_s, now, now ])
-        INSERT INTO push_subscriptions(endpoint, p256dh, auth, persona, created_at, last_seen_at)
-        VALUES(?, ?, ?, ?, ?, ?)
-        ON CONFLICT(endpoint) DO UPDATE SET
-          p256dh = excluded.p256dh,
-          auth = excluded.auth,
-          persona = excluded.persona,
-          last_seen_at = excluded.last_seen_at
-      SQL
-      true
-    end
-
-    # Every device worth trying for this persona: its own subscriptions plus
-    # the ones that never chose a persona.
-    def push_subscriptions(persona = nil)
-      rows = if persona.to_s.empty?
-        @db.execute("SELECT endpoint, p256dh, auth, persona FROM push_subscriptions")
-      else
-        @db.execute(
-          "SELECT endpoint, p256dh, auth, persona FROM push_subscriptions WHERE persona IS NULL OR persona = ?",
-          [ persona.to_s ]
-        )
-      end
-
-      rows.map do |(endpoint, p256dh, auth, who)|
-        { "endpoint" => text_id(endpoint), "p256dh" => p256dh.to_s, "auth" => auth.to_s, "persona" => who }
-      end
-    end
-
-    # A push service that answered 404/410 will never accept this endpoint
-    # again: the browser uninstalled the app or dropped the permission. Keeping
-    # the row would mean a dead request on every notification.
-    def drop_push_subscription(endpoint)
-      url = text_id(endpoint)
-      return false if url.empty?
-
-      @db.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", [ url ])
-      @db.changes.positive?
-    end
-
     # Whether an id is already in use. Cheaper than loading the transcript: the
     # web client asks this before handing out a fresh id.
     def session?(session_id)
@@ -541,50 +396,6 @@ module Rubot
     def unread_sessions
       @db.execute("SELECT id, unread_at FROM sessions WHERE unread_at IS NOT NULL")
          .map { |(id, at)| { id: text_id(id), unread_at: at } }
-    end
-
-    # Settings that belong to the install, not to a file.
-    #
-    # Read as a plain hash of strings, because that is what a form posts and
-    # what config.yml already holds: one shape for both sides of the fallback.
-    # A key that was never written is simply absent — the caller decides what
-    # stands in for it.
-    def settings
-      @db.execute("SELECT key, value FROM settings ORDER BY key").to_h do |(key, value)|
-        [ key.to_s, value ]
-      end
-    end
-
-    def setting(key)
-      row = @db.execute("SELECT value FROM settings WHERE key = ?", [key.to_s]).first
-      row && row[0]
-    end
-
-    # Nil or an empty string clears the key, which is how a value goes back to
-    # whatever config.yml says: "set to nothing" and "never set" must not be two
-    # different states on a form with an empty text field.
-    def set_setting(key, value)
-      name = key.to_s
-      text = value.nil? ? nil : value.to_s
-      if text.nil? || text.strip.empty?
-        @db.execute("DELETE FROM settings WHERE key = ?", [name])
-      else
-        @db.execute(<<~SQL, [name, text, Time.now.utc.iso8601])
-          INSERT INTO settings(key, value, updated_at) VALUES(?, ?, ?)
-          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-        SQL
-      end
-      text
-    end
-
-    # The whole hash at once, in one transaction: a half-saved form is a
-    # provider with the previous key, which fails on the next turn in a way
-    # nobody attributes to the form.
-    def update_settings(values)
-      @db.transaction do
-        values.each { |key, value| set_setting(key, value) }
-      end
-      settings
     end
 
     # The transcript, in order, with every message reconstructed as it was.
@@ -661,87 +472,6 @@ module Rubot
       }
     end
 
-    # Full-text search over every message ever stored — including the turns a
-    # compacted session no longer shows the model, which is the whole point of
-    # keeping the archive.
-    #
-    # The weights are the ranking, and they are the reason the index has three
-    # columns: search for "cache hit" and the conversation where the person
-    # asked about it comes before the twenty where the phrase appeared inside a
-    # grep result.
-    #
-    # Returns [{ session_id:, idx:, role:, created_at:, title:, snippet:, html:,
-    # score: }, ...], best first.
-    #
-    # `prefix` narrows the search to sessions whose id starts with it, so a
-    # channel can ask for the conversations it can actually open. The archive is
-    # shared by every channel — a Telegram chat is in here too — and a hit in a
-    # conversation the asker has no page for is a dead link, not a result. It is
-    # an SQL filter rather than a slice in Ruby so the limit stays a limit:
-    # filtering twenty rows down to two would answer with two.
-    def search(text, limit: 20, prefix: nil)
-      expression = search_expression(text)
-      return [] if expression.nil? || fts_table.nil?
-
-      weights = SEARCH_WEIGHTS.join(", ")
-      scope = prefix.to_s.empty? ? [ "", [] ] : [ " AND substr(m.session_id, 1, ?) = ?",
-                                                  [ prefix.to_s.length, prefix.to_s ] ]
-      @db.execute(<<~SQL, [ expression, *scope[1], limit.to_i ]).map do |row|
-        SELECT m.session_id, m.idx, m.role, m.created_at, s.title,
-               snippet(fts, -1, '#{SNIPPET_OPEN}', '#{SNIPPET_CLOSE}', '…', 24),
-               bm25(fts, #{weights})
-        FROM fts
-        JOIN messages m ON m.id = fts.rowid
-        LEFT JOIN sessions s ON s.id = m.session_id
-        WHERE fts MATCH ?#{scope[0]}
-        ORDER BY bm25(fts, #{weights})
-        LIMIT ?
-      SQL
-        raw = row[5].to_s
-        {
-          session_id: text_id(row[0]),
-          idx: row[1].to_i,
-          role: row[2].to_s,
-          created_at: row[3],
-          title: row[4].to_s,
-          snippet: raw.delete(SNIPPET_OPEN).delete(SNIPPET_CLOSE),
-          html: snippet_html(raw),
-          score: row[6].to_f
-        }
-      end
-    end
-
-    # Rebuilds the searchable projection of the whole archive. Reset first and
-    # then rebuilt, so a run always leaves the index agreeing with the
-    # transcript.
-    #
-    # Runs once by itself on an archive that predates the index (see
-    # rebuild_index_if_stale), and is safe to run again at any time.
-    def rebuild_index!
-      table = fts_table
-      return 0 unless table
-
-      rewrite = @db.prepare(<<~SQL)
-        UPDATE messages SET user_text = ?, assistant_text = ?, tool_text = ? WHERE id = ?
-      SQL
-      rows = @db.execute("SELECT id, session_id, role, text FROM messages ORDER BY session_id, idx")
-      seen = Hash.new { |hash, key| hash[key] = Set.new }
-      in_transaction do
-        rows.each do |(id, session_id, role, text)|
-          columns = index_columns({ "role" => role, "content" => text }, seen[text_id(session_id)])
-          rewrite.execute(columns[:user_text], columns[:assistant_text], columns[:tool_text], id)
-        end
-        rewrite.close
-        # The update trigger kept the index in step row by row, but a row whose
-        # projection was wrong before this run cannot be repaired by deleting
-        # what the index thinks it holds: only a rebuild rereads every row from
-        # the content table, which is what makes this function's promise —
-        # "leaves the index agreeing with the transcript" — true.
-        @db.execute(%(INSERT INTO #{table}(#{table}) VALUES('rebuild')))
-      end
-      rows.size
-    end
-
     def close
       return if @db.nil? || @db.closed?
 
@@ -780,25 +510,6 @@ module Rubot
         ran << :fts
       end
       ran
-    end
-
-    # The name of the full-text table if the schema has one. Asked once rather
-    # than assumed: the archive works without search, and the index arrived in a
-    # later migration. `migrate!` has already run by the time anyone asks, so the
-    # answer cannot go stale inside one process.
-    def fts_table
-      return @fts_table if @fts_checked
-
-      @fts_checked = true
-      @fts_table = if @db.nil? || @db.closed?
-        nil
-      else
-        @db.get_first_value(<<~SQL)
-          SELECT name FROM sqlite_master
-          WHERE type = 'table' AND name IN ('fts', 'messages_fts')
-          LIMIT 1
-        SQL
-      end
     end
 
     # A copy that is consistent while the archive is open.
@@ -969,91 +680,6 @@ module Rubot
 
     def migrate!
       Migrator.new(@db, dir: @migrations_dir).run!
-    end
-
-    # Merging the index costs a write of its own, so it waits for a batch of
-    # appends instead of running inside every turn. A schema without the index
-    # has nothing to merge, and a merge that fails must not fail the append that
-    # triggered it: the messages are already stored.
-    def optimize_fts_when_due(inserted)
-      @appended_since_optimize = (@appended_since_optimize || 0) + inserted.to_i
-      return if @appended_since_optimize < FTS_OPTIMIZE_EVERY
-
-      @appended_since_optimize = 0
-      table = fts_table
-      return unless table
-
-      @db.execute(%(INSERT INTO #{table}(#{table}) VALUES('optimize')))
-    rescue StandardError => e
-      warn "[store] fts optimize: #{e.class}: #{e.message}"
-    end
-
-    # The searchable projection of one message: exactly one of the three columns
-    # is filled, chosen by who said it. A tool result is clipped and, if this
-    # session already indexes the same text, dropped — a second identical grep
-    # adds nothing to a search but its own weight.
-    def index_columns(message, seen_tool)
-      text = Session.text_content(message["content"]).to_s
-      case message["role"].to_s
-      when "user"
-        { user_text: text, assistant_text: "", tool_text: "" }
-      when "assistant"
-        { user_text: "", assistant_text: text, tool_text: "" }
-      when "tool"
-        clipped = text[0, TOOL_INDEX_LIMIT].to_s
-        digest = Digest::SHA256.hexdigest(clipped)
-        return { user_text: "", assistant_text: "", tool_text: "" } if clipped.empty? || seen_tool.include?(digest)
-
-        seen_tool << digest
-        { user_text: "", assistant_text: "", tool_text: clipped }
-      else
-        { user_text: "", assistant_text: "", tool_text: "" }
-      end
-    end
-
-    # The tool outputs this session already has in the index, as digests. Bounded
-    # by TOOL_DEDUPE_WINDOW so a long session does not turn every append into a
-    # scan of its whole history.
-    def recent_tool_digests(session_id)
-      rows = @db.execute(<<~SQL, [ text_id(session_id), TOOL_DEDUPE_WINDOW ])
-        SELECT tool_text FROM messages
-        WHERE session_id = ? AND tool_text <> ''
-        ORDER BY idx DESC
-        LIMIT ?
-      SQL
-      rows.each_with_object(Set.new) { |(text), set| set << Digest::SHA256.hexdigest(text.to_s) }
-    end
-
-    # What the person typed, turned into an FTS5 expression that cannot be a
-    # syntax error: the words are found in it, quoted, and made prefix matches,
-    # so "cach" still finds "cache". A query with no words in it matches nothing
-    # rather than everything.
-    def search_expression(text)
-      terms = text.to_s.downcase.scan(/[[:alnum:]_]+/).first(SEARCH_TERMS)
-      return nil if terms.empty?
-
-      terms.map { |term| %("#{term}"*) }.join(" AND ")
-    end
-
-    # Escape first, mark up second: the snippet is a piece of a message the model
-    # wrote or a tool printed, and it reaches the page as text.
-    def snippet_html(raw)
-      CGI.escapeHTML(raw.to_s)
-         .gsub(SNIPPET_OPEN, "<mark>")
-         .gsub(SNIPPET_CLOSE, "</mark>")
-    end
-
-    # An archive that predates the index has three empty columns and an empty
-    # index. Rebuilding is the only expensive thing this class does, so it
-    # happens once — on the first open that finds the work undone — and never
-    # again.
-    def rebuild_index_if_stale
-      table = fts_table
-      return if table.nil?
-      return if @db.get_first_value("SELECT COUNT(*) FROM #{table}").to_i.positive?
-      return if @db.get_first_value("SELECT COUNT(*) FROM messages").to_i.zero?
-
-      rebuild_index!
     end
 
     def decode_payload(payload)
