@@ -196,8 +196,21 @@ module Rubot
           end
           list = ToolRows.collapse(list) if ToolRows.compact?(@tool_output)
           note_entering_locked(list)
+          mark_live_block(list)
           list
         end
+      end
+
+      # The cursor belongs to the block still being written, which is the last
+      # row and only while the turn is open. Derived here rather than carried on
+      # the row: sealing used to clear the flag on the tail alone, so a narration
+      # a tool row had pushed out of the tail kept a blinking caret for the rest
+      # of the turn — the stylesheet is explicit that only the live block gets
+      # one ("an earlier narration stays still above the tool row").
+      def mark_live_block(list)
+        last = list.last
+        list.each { |item| item[:live] = false if item[:kind] == :text }
+        last[:live] = true if last && last[:kind] == :text && !@closed
       end
 
       # --- producer side (agent callbacks) --------------------------------

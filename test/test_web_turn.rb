@@ -450,6 +450,32 @@ module Rubot
         assert_includes page, 'hx-swap="beforeend"', "and that they go at the end"
       end
 
+      # The cursor belongs to the block being written. A narration that a tool
+      # row pushed out of the tail kept its blinking caret for the rest of the
+      # turn, though the stylesheet says only the live block gets one. The flag
+      # is derived when the rows are read, so it cannot go stale.
+      def test_only_the_block_being_written_is_live
+        turn = Rubot::Web::Turn.new(id: "t-live", session_id: "web_rubot")
+        turn.append_chunk("narasi dulu ")
+        assert_equal 1, live_blocks(turn).length, "the answer is being written"
+
+        turn.tool_started("file", "lib/a.rb")
+        assert_empty live_blocks(turn), "the narration stopped being the tail"
+
+        turn.tool_finished("file", true)
+        turn.append_chunk("jawaban ")
+        blocks = live_blocks(turn)
+        assert_equal 1, blocks.length, "one block, not two"
+        assert_equal "jawaban ", blocks.first[:text]
+
+        turn.finish("jawaban ")
+        assert_empty live_blocks(turn), "a finished turn has no caret"
+      end
+
+      def live_blocks(turn)
+        turn.items.select { |item| item[:kind] == :text && item[:live] }
+      end
+
       # A row the turn takes back has to leave the page too: a thought too
       # quick to mention is dropped from the timeline, and an incremental page
       # would otherwise keep a "Thinking…" row that never happened.
