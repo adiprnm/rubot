@@ -23,8 +23,7 @@ module Rubot
       #
       # Returns [turn, cron_results]: the turn being opened, and the cron output
       # that is folded into the answer once the turn ends.
-      def prepare_turn(message, on_subagent: nil, on_delegate: nil, on_compaction: nil,
-                       on_compaction_start: nil, on_compaction_failed: nil)
+      def prepare_turn(message, callbacks)
         # Fire any due cron jobs and collect their results
         cron_results = fire_due_cron_jobs
         warn "[cron] fire_due_cron_jobs returned #{cron_results.size} result(s)" if Rubot.debug?
@@ -39,11 +38,11 @@ module Rubot
         inject_tool_persona
         inject_tool_delegate
         @subagent_count = 0
-        @on_subagent = on_subagent
-        @on_delegate = on_delegate
-        @on_compaction = on_compaction
-        @on_compaction_start = on_compaction_start
-        @on_compaction_failed = on_compaction_failed
+        @on_subagent = callbacks.subagent
+        @on_delegate = callbacks.delegate
+        @on_compaction = callbacks.compaction
+        @on_compaction_start = callbacks.compaction_start
+        @on_compaction_failed = callbacks.compaction_failed
 
         # Reasoning from earlier turns is dropped from the request; only what is
         # produced inside this turn is kept, because a tool loop needs it.
@@ -73,7 +72,7 @@ module Rubot
       # that produced nothing at all still gets a summary rather than silence.
       #
       # Returns the text the channel delivers.
-      def finish_turn(turn, cron_results:, response:, reasoning_content:, on_stopped: nil)
+      def finish_turn(turn, callbacks, cron_results:, response:, reasoning_content:)
         # Add final assistant response to session (only if not already added via tool-call branch).
         # A silent tool's answer is the UI it produced, so no assistant text is
         # stored — and no fallback summary is invented for it either.
@@ -111,7 +110,7 @@ module Rubot
           end
         end
 
-        on_stopped&.call if turn.stopped
+        callbacks.stopped&.call if turn.stopped
 
         if turn.stopped
           turn.answer << "\n\n" unless turn.answer.empty?
@@ -151,9 +150,7 @@ module Rubot
       #
       # Returns [response, reasoning_content] as the last round left them, so the
       # finish phase can store the closing text.
-      def run_rounds(turn, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil,
-                     on_assistant_text: nil, on_reasoning: nil, on_steer: nil, on_usage: nil, on_retry: nil,
-                     stream: true, &on_chunk)
+      def run_rounds(turn, callbacks, stream: true, &on_chunk)
         response = ""
         tool_calls = nil
         reasoning_content = nil
@@ -172,7 +169,7 @@ module Rubot
           steer = take_steering
           if steer
             @session.add("user", steer)
-            on_steer&.call(steer)
+            callbacks.steer&.call(steer)
           end
 
           # Stop before starting another round (another provider call or more
@@ -200,16 +197,16 @@ module Rubot
           # figure /context shows — so the context number starts from an anchor
           # instead of a guess that would jump backwards when usage lands.
           live = { prompt_tokens: context_usage[:tokens], output_tokens: 0 }
-          emit_usage(on_usage, live: live)
+          emit_usage(callbacks.usage, live: live)
 
           result = begin
             if block_given? && stream
               live_chars = 0
               live_emitted_at = 0.0
-              @provider.chat_stream(messages, tools: tool_definitions, on_retry: on_retry) do |chunk, tool_data, reasoning|
+              @provider.chat_stream(messages, tools: tool_definitions, on_retry: callbacks.retry_callback) do |chunk, tool_data, reasoning|
                 # Thinking arrives before (and between) answer chunks; the answer
                 # itself is never delayed by it.
-                on_reasoning&.call(reasoning) if reasoning && !reasoning.empty?
+                callbacks.reasoning&.call(reasoning) if reasoning && !reasoning.empty?
                 response += chunk if chunk
                 if chunk && !chunk.empty?
                   # The answer is arriving, so the output side of the cost and
@@ -221,13 +218,13 @@ module Rubot
                   now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
                   if now - live_emitted_at >= LIVE_USAGE_INTERVAL
                     live_emitted_at = now
-                    emit_usage(on_usage, live: live)
+                    emit_usage(callbacks.usage, live: live)
                   end
                 end
                 yield chunk if chunk && block_given?
               end
             else
-              @provider.chat(messages, tools: tool_definitions, on_retry: on_retry)
+              @provider.chat(messages, tools: tool_definitions, on_retry: callbacks.retry_callback)
             end
           rescue Cancelled
             # The user stopped the turn while the provider was answering. The
@@ -241,7 +238,7 @@ module Rubot
           # The moment this request's tokens land, cost, cache and context have
           # moved. Publishing here, not at the end of the turn, is what lets a
           # channel show live figures while the turn is still running.
-          emit_usage(on_usage)
+          emit_usage(callbacks.usage)
 
           # Parse result — both streaming and non-streaming now return Hash
           if result.is_a?(Hash)
@@ -298,7 +295,7 @@ module Rubot
               ok && (tool = @tools.get(tool_name)) && tool.respond_to?(:silent_operation?) &&
                 tool.silent_operation?(args)
             end
-            on_assistant_text&.call(narration) unless narration.empty? || silent_batch
+            callbacks.assistant_text&.call(narration) unless narration.empty? || silent_batch
 
             # Deciding what may run comes first, in the order the model asked for
             # it: the guard may ask the reader a question, and a cancelled turn
@@ -347,7 +344,7 @@ module Rubot
                   # Asking costs a second look at the file, so the reason is only
                   # worked out when a question is actually going to be shown.
                   reason = tool.respond_to?(:dangerous_action_reason) ? tool.dangerous_action_reason(arguments) : nil
-                  if on_confirm && !on_confirm.call(tool_name, arguments, reason)
+                  if callbacks.confirm && !callbacks.confirm.call(tool_name, arguments, reason)
                     log_debug("Action cancelled by user: #{tool_name}")
                     pending << skipped_call(tool_call_id, tool_name, "Action cancelled by user.")
                     next
@@ -360,7 +357,7 @@ module Rubot
               # fast operation (delete is one syscall) wins the race and the diff
               # has nothing to show.
               ui_snapshot = file_ui_snapshot(tool_name, arguments)
-              on_tool_call&.call(tool_name, arguments, ui_snapshot)
+              callbacks.tool_call&.call(tool_name, arguments, ui_snapshot)
 
               pending << {
                 name: tool_name,
@@ -378,7 +375,7 @@ module Rubot
             execute_tool_calls(pending).each do |call|
               tool_result = call[:result]
               ui_diff = file_ui_diff(call[:snapshot], tool_result)
-              on_tool_result&.call(call[:name], tool_result, ui_diff)
+              callbacks.tool_result&.call(call[:name], tool_result, ui_diff)
 
               log_debug("Tool result: #{tool_result[0..200]}")
 
@@ -402,10 +399,10 @@ module Rubot
 
             # Fire progress callback after each round. The tool count is captured
             # before `tool_calls` is cleared so consumers get the real number.
-            on_progress&.call(turn.rounds, tool_count)
+            callbacks.progress&.call(turn.rounds, tool_count)
             # The tool results just added to the transcript are part of the next
             # request, so the context figure moves before the provider does.
-            emit_usage(on_usage)
+            emit_usage(callbacks.usage)
 
             break if turn.stopped || turn.silent_answer
           elsif response.to_s.strip.empty? && !turn.reasked

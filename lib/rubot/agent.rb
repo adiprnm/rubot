@@ -25,6 +25,7 @@ require_relative "memory_extractor"
 require_relative "agent/system_prompt"
 require_relative "agent/tool_execution"
 require_relative "agent/turn"
+require_relative "agent/turn_callbacks"
 require_relative "agent/turn_loop"
 require_relative "tools/feedback_learner"
 
@@ -472,27 +473,20 @@ module Rubot
                 on_assistant_text: nil, on_reasoning: nil, on_steer: nil, on_stopped: nil, on_usage: nil,
                 on_subagent: nil, on_compaction: nil, on_compaction_start: nil, on_compaction_failed: nil, on_retry: nil,
                 on_delegate: nil, stream: true, &on_chunk)
-      turn, cron_results = prepare_turn(message,
-                                        on_subagent: on_subagent,
-                                        on_delegate: on_delegate,
-                                        on_compaction: on_compaction,
-                                        on_compaction_start: on_compaction_start,
-                                        on_compaction_failed: on_compaction_failed)
-
-      response, reasoning_content = run_rounds(turn,
-                                               on_tool_call: on_tool_call,
-                                               on_tool_result: on_tool_result,
-                                               on_progress: on_progress,
-                                               on_confirm: on_confirm,
-                                               on_assistant_text: on_assistant_text,
-                                               on_reasoning: on_reasoning,
-                                               on_steer: on_steer,
-                                               on_usage: on_usage,
-                                               on_retry: on_retry,
-                                               stream: stream, &on_chunk)
-
-      finish_turn(turn, cron_results: cron_results, response: response,
-                  reasoning_content: reasoning_content, on_stopped: on_stopped)
+      # One object for what this turn reports back, so the phases below name the
+      # callback they use instead of carrying fifteen keywords each.
+      callbacks = TurnCallbacks.new(tool_call: on_tool_call, tool_result: on_tool_result,
+                                    progress: on_progress, confirm: on_confirm,
+                                    assistant_text: on_assistant_text, reasoning: on_reasoning,
+                                    steer: on_steer, stopped: on_stopped, usage: on_usage,
+                                    subagent: on_subagent, delegate: on_delegate,
+                                    compaction: on_compaction, compaction_start: on_compaction_start,
+                                    compaction_failed: on_compaction_failed,
+                                    retry_callback: on_retry)
+      turn, cron_results = prepare_turn(message, callbacks)
+      response, reasoning_content = run_rounds(turn, callbacks, stream: stream, &on_chunk)
+      finish_turn(turn, callbacks, cron_results: cron_results, response: response,
+                  reasoning_content: reasoning_content)
     ensure
       @cancellation.finish!
       Thread.current[:rubot_cancellation] = nil
