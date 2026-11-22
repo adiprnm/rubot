@@ -437,32 +437,44 @@ module Rubot
 
         # Persona commands need the chat/topic context, which is only known
         # here (before_process receives just the text).
-        if text && !text.strip.empty?
-          command = persona_command(text)
-          case command&.fetch(:name)
-          when "/cancel"
-            handle_cancel_command(chat_id, thread_id)
-            return
-          when "/stop"
-            handle_stop_command(chat_id, thread_id)
-            return
-          when "/persona"
-            handle_persona_command(chat_id, thread_id, command[:args])
-            return
-          end
-
-          # While the wizard waits for a system prompt, the next plain text
-          # belongs to the wizard, not to the agent.
-          if intercept_persona_prompt(chat_id, thread_id, text)
-            return
-          end
-        end
+        return if handle_persona_prompt(chat_id, thread_id, text)
 
         # Fallback for bots that cannot see forum_topic_created (privacy mode
         # on, or not an admin): the first message in a brand-new topic opens
         # the wizard. The message itself is still processed below.
         maybe_start_persona_wizard_for_new_topic(chat_id, thread_id)
 
+        run_turn(message, chat_id, thread_id, text, caption)
+      end
+
+      # The three commands that answer from the topic rather than from a turn,
+      # plus the reply the wizard is waiting for. Returns true when the text was
+      # answered here and must not reach the agent.
+      def handle_persona_prompt(chat_id, thread_id, text)
+        return false if text.nil? || text.strip.empty?
+
+        command = persona_command(text)
+        case command&.fetch(:name)
+        when "/cancel"
+          handle_cancel_command(chat_id, thread_id)
+          return true
+        when "/stop"
+          handle_stop_command(chat_id, thread_id)
+          return true
+        when "/persona"
+          handle_persona_command(chat_id, thread_id, command[:args])
+          return true
+        end
+
+        # While the wizard waits for a system prompt, the next plain text
+        # belongs to the wizard, not to the agent.
+        intercept_persona_prompt(chat_id, thread_id, text)
+      end
+
+      # What a readable message costs: who it is from, the files that came with
+      # it, and whether it steers the turn already running instead of starting
+      # one of its own.
+      def run_turn(message, chat_id, thread_id, text, caption)
         user_id = message["from"] ? message["from"]["id"] : chat_id
         username = message.dig("from", "username") || "User##{user_id}"
 
@@ -513,6 +525,12 @@ module Rubot
 
         warn "[telegram] #{username} (#{user_id})#{thread_id ? " [topic:#{thread_id}]" : ""}: #{prompt[0..120]}" if Rubot.debug?
 
+        start_turn(message, chat_id, thread_id, session_id, prompt)
+      end
+
+      # Run the turn with the typing indicator on, then put the answer back in
+      # the topic the question came from.
+      def start_turn(message, chat_id, thread_id, session_id, prompt)
         # Show typing indicator
         # Note: Telegram API has a known bug where typing indicators don't display
         # in the General topic of forum-enabled groups. See:
@@ -544,6 +562,12 @@ module Rubot
         # Clear any lingering status message before sending the real response
         clear_status_message(chat_id, thread_id)
 
+        deliver_response(response, chat_id, thread_id)
+      end
+
+      # Say what happened: the answer, or the fact that there was no text to
+      # send, which otherwise looks like the bot ignored the message.
+      def deliver_response(response, chat_id, thread_id)
         if response && !response.empty?
           warn "[telegram] Sending response (#{response.length} chars)" if Rubot.debug?
           # send_message already falls back to plain text per chunk, so there is
