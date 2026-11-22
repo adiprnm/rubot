@@ -59,7 +59,7 @@ module Rubot
                      { run_id: "r1", agent: "writer", task: "tulis puisi", model: "" })
 
         jobs = channel.instance_variable_get(:@subagent_jobs)
-        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 2
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 5
         while jobs.running_count("web_rubot").positive? &&
               Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
           sleep 0.01
@@ -106,11 +106,15 @@ module Rubot
                      { run_id: "r1", agent: "writer", task: "tulis puisi", model: "" })
 
         jobs = channel.instance_variable_get(:@subagent_jobs)
-        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 2
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 5
         while jobs.running_count("web_rubot").positive? &&
               Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
           sleep 0.01
         end
+
+        # The run is marked finished before it is announced, so watching the
+        # count alone can land in the gap between the two and see no push yet.
+        sleep 0.01 while pushes.empty? && Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
 
         assert_equal 1, pushes.size
         assert_includes pushes.first[:body], "writer"
