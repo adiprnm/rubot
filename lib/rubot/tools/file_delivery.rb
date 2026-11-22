@@ -90,12 +90,6 @@ module Rubot
         name
       end
 
-      # Whether the page draws this file as a picture rather than handing it
-      # over as a document card.
-      def web_picture?(extension)
-        WEB_IMAGE_EXTENSIONS.include?(extension.to_s.downcase)
-      end
-
       # An id this process generated, the reader's own file name reduced to a
       # slug, and the extension: a download still reads like a file, while a
       # hand-typed path cannot name one. `.markdown` is stored as `.md`, the

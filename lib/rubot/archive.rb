@@ -27,11 +27,5 @@ module Rubot
     def current=(store)
       Session.store = store
     end
-
-    # True when an archive is open. Reads better than a nil check at the call
-    # sites that only want to know whether the database exists.
-    def open?
-      !current.nil?
-    end
   end
 end

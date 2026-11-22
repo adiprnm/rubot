@@ -41,7 +41,6 @@ module Rubot
       def initialize(history, commands, files: nil)
         super(max_rows: 6)
         @history = history
-        @history_limit = history.length
         @hist_idx = nil
         @draft = nil
         @commands = commands
@@ -66,13 +65,6 @@ module Rubot
         # completion does not immediately pop the list back up. The next
         # edit clears it.
         @menu_suppressed = false
-      end
-
-      def set_history(lines)
-        @history = lines
-        @history_limit = lines.length
-        @hist_idx = nil
-        self
       end
 
       def value=(text)

@@ -121,7 +121,7 @@ module Rubot
       def load_subagent_persona(slug)
         store = PersonaStore.from_config(
           @config,
-          dir: @config.respond_to?(:personas_dir) ? File.dirname(@config.personas_file) : File.join(Dir.home, ".rubot"),
+          dir: File.dirname(@config.personas_file),
           available_presets: @config.respond_to?(:model_preset_names) ? @config.model_preset_names : []
         )
         persona = store[slug]

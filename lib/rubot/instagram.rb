@@ -61,14 +61,6 @@ module Rubot
       end
     end
 
-    def db_first_value(sql, params = [])
-      if @store_port
-        StoreService.request(@store_port, operation: :ig_first_value, arguments: { sql: sql, params: params })
-      else
-        @store.db.get_first_value(sql, params)
-      end
-    end
-
     def db_last_insert_row_id
       @store_port ? StoreService.request(@store_port, operation: :ig_last_insert_row_id) : @store.db.last_insert_row_id
     end
@@ -571,12 +563,6 @@ module Rubot
       body
     rescue JSON::ParserError
       raise Error, "Respons Meta bukan JSON (HTTP #{res&.code})"
-    end
-
-    def secure_compare(a, b)
-      return false unless a.bytesize == b.bytesize
-
-      a.bytes.zip(b.bytes).reduce(0) { |acc, (x, y)| acc | (x ^ y) }.zero?
     end
   end
 end

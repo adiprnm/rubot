@@ -31,30 +31,6 @@ module Rubot
         prompt
       end
 
-      # Drop the pinned prompt so the next request builds it again.
-      #
-      # This is the way out of the pin, and the only one a reader has: memory
-      # written since the session started, an edited skill file, a changed
-      # AGENTS.md — none of them reach a running session until the epoch moves
-      # (compaction, a model switch, a persona change). Asking for it costs one
-      # uncached request: the prefix changes, so nothing in front of the change is
-      # reusable. That is the trade, and it is why this is a deliberate request
-      # rather than something that happens on every memory write.
-      # Append a system-level addition without rewriting the cached prefix.
-      # Skeleton: only supported providers/models opt in; otherwise fall back to
-      # repin. The delta computation is intentionally left to a follow-up.
-      def append_system_addition(text)
-        return repin_system_prompt unless mid_conversation_system?
-
-        return false if text.to_s.strip.empty?
-        if @session.respond_to?(:add_system_addition)
-          @session.add_system_addition(text.to_s)
-        else
-          @session.add("system", text.to_s) if @session.respond_to?(:add)
-        end
-        true
-      end
-
       # True when this provider takes a `role: "system"` message in the middle of
       # a conversation without losing the cached prefix in front of it. Measured
       # on the OpenCode Go gateway: a system message inserted before the last

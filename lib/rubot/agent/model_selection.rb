@@ -284,14 +284,6 @@ module Rubot
         Provider.build(settings)
       end
 
-      # Rebuild the provider using the session-level model override.
-      def rebuild_provider
-        return if @session_model.nil?
-        return if @config.model_entry_by_name(@session_model).nil? && !provider_model_id?(@session_model)
-
-        @provider = build_provider(@session_model, effort: thinking_level)
-      end
-
       # A model from the provider's /models catalog rather than config.yml.
       def provider_model_id?(name)
         id = name.to_s

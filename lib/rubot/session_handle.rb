@@ -34,10 +34,6 @@ module Rubot
         @views = {}
       end
 
-      def actor?
-        true
-      end
-
       # Stop the turn running in this session. This must not be a normal
       # request: the actor is busy running the turn, so the request would only
       # be read after it finished. The signal goes straight to the watcher

@@ -23,7 +23,6 @@ module Rubot
   class MemoryBank
     SCOPE_GLOBAL = "global"
     SCOPE_WORKSPACE = "workspace"
-    SCOPE_PERSONA = "persona"
 
     attr_reader :global, :workspace, :workspace_label
 
@@ -94,14 +93,6 @@ module Rubot
       "# Memory\n\n#{preamble}\n#{body.join("\n")}"
     end
 
-    # Bullets of one section, tagged with the layer they came from.
-    def read_section(section)
-      {
-        SCOPE_GLOBAL => bullets_of(@global.read, section),
-        SCOPE_WORKSPACE => bullets_of(@workspace.read, section)
-      }
-    end
-
     def append(section, line, scope: SCOPE_WORKSPACE, max_items: nil)
       layer(scope).append(section, line, max_items: max_items)
     end
@@ -153,10 +144,6 @@ module Rubot
         end
       end
       [ sections, order ]
-    end
-
-    def bullets_of(content, section)
-      parse(content).first[section] || []
     end
 
     def dedupe(bullets)

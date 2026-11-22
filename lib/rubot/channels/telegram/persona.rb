@@ -129,11 +129,6 @@ module Rubot
           end
         end
 
-        def preset_choice(name)
-          wanted = name.to_s
-          preset_choices.find { |choice| choice["name"].casecmp?(wanted) }
-        end
-
         def persona_preset_label(name)
           return "(default)" if name.nil? || name.to_s.empty?
 

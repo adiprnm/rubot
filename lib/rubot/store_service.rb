@@ -162,8 +162,6 @@ module Rubot
         @store.db.execute(arguments.fetch(:sql), arguments.fetch(:params, []))
       when :ig_first_row
         @store.db.get_first_row(arguments.fetch(:sql), arguments.fetch(:params, []))
-      when :ig_first_value
-        @store.db.get_first_value(arguments.fetch(:sql), arguments.fetch(:params, []))
       when :ig_last_insert_row_id
         @store.db.last_insert_row_id
       when :ig_changes

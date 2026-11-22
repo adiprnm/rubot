@@ -76,13 +76,6 @@ module Rubot
         { "queued" => count }
       end
 
-      # The conversation a notification should open when nobody named one: the
-      # persona's newest, which is the one being written in.
-      def newest_session(slug)
-        row = @store.sidebar(limit: 20).find { |entry| entry[:id].to_s.start_with?("web_#{slug}") }
-        row && row[:id]
-      end
-
       private
 
       # The push service, not the endpoint: the endpoint is a capability — it

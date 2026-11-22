@@ -71,10 +71,6 @@ module Rubot
         self
       end
 
-      def notice?
-        !@notice.nil?
-      end
-
       def spin
         SPINS[@frame % SPINS.length]
       end

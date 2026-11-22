@@ -233,10 +233,6 @@ module Rubot
       @learning.drain(timeout: timeout)
     end
 
-    def learning_pending?
-      !@learning.nil? && @learning.pending?
-    end
-
     def run_learning(handle, session_id)
       handle.flush_learning
     rescue StandardError => e

@@ -28,8 +28,6 @@ module Rubot
     # Stop button and by the turn's cost figure; this number only exists to
     # catch a model that would otherwise loop forever with nobody watching.
     DEFAULT_MAX_ROUNDS = 1000
-    # Old constant name, kept so existing callers keep working.
-    DEFAULT_MAX_TOOL_ITERATIONS = DEFAULT_MAX_ROUNDS
     DEFAULT_AUTO_COMPACT = true
     DEFAULT_COMPACT_THRESHOLD_PERCENT = 60.0
     # Messages kept verbatim next to the summary. Six was a caption's worth: a
@@ -40,8 +38,6 @@ module Rubot
     # transcript it replaces).
     DEFAULT_COMPACT_KEEP_RECENT = 40
     DEFAULT_COMPACT_KEEP_RECENT_TOKENS = 20_000
-    DEFAULT_TOOL_RESULT_KEEP = 3
-    DEFAULT_TOOL_RESULT_MAX_CHARS = 2_000
     # Used for the compaction threshold when the model's real window cannot be
     # resolved, so an unknown model still gets a bound instead of no compaction.
     DEFAULT_CONTEXT_WINDOW = 128_000
@@ -225,14 +221,6 @@ module Rubot
       defaults["legacy_skills_workspaces"] = previous unless previous.empty?
       defaults["memory_in_workspace"] = true
       copy
-    end
-
-    # Where persona metadata and per-persona workspaces live. Next to
-    # config.yml, never inside `workspace`: a persona's files must not be
-    # mistaken for the main agent's, and a custom config directory should take
-    # its personas along.
-    def personas_dir
-      File.join(File.dirname(config_path), "personas")
     end
 
     def personas_file

@@ -542,11 +542,6 @@ module Rubot
       end
     end
 
-    # Reset the per-instance rate limiter (used by tests).
-    def reset_rate_limit!
-      @exec_mutex.synchronize { @exec_timestamps.clear }
-    end
-
     def path_within_workspace?(resolved)
       return false unless @workspace
 
