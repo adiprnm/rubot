@@ -23,6 +23,7 @@ require_relative "agents_file"
 require_relative "tools/memory_tool"
 require_relative "memory_extractor"
 require_relative "agent/system_prompt"
+require_relative "agent/turn"
 require_relative "tools/feedback_learner"
 
 module Rubot
@@ -468,7 +469,7 @@ module Rubot
       # This turn can now be stopped with /stop (or Ctrl+C in the REPL).
       @cancellation.start!
       Thread.current[:rubot_cancellation] = @cancellation
-      stopped = false
+      turn = Turn.new(limit: max_rounds)
       # The tool registry is shared across sessions, so the persona that owns
       # this turn has to be stamped on it now — not at boot, where a second
       # persona's actor would silently overwrite the first one's scope.
@@ -503,23 +504,12 @@ module Rubot
       response = ""
       tool_calls = nil
       reasoning_content = nil
-      rounds = 0
-      limit = max_rounds
-      limit_hit = false
 
-      # The turn's answer, assembled across continuations. `response` only ever
-      # holds the newest fragment; this holds all of them.
-      answer = +""
-      tool_rounds = 0
-      silent_answer = false
-      continuations = 0
-      reasked = false
-      truncated = false
       finish_reason = nil
 
       loop do
-        if rounds >= limit
-          limit_hit = true
+        if turn.exhausted?
+          turn.limit_hit = true
           break
         end
 
@@ -535,7 +525,7 @@ module Rubot
         # Stop before starting another round (another provider call or more
         # tool executions) once the user has asked us to.
         if @cancellation.cancelled?
-          stopped = true
+          turn.stopped = true
           break
         end
 
@@ -545,7 +535,7 @@ module Rubot
         begin
           run_auto_compaction
         rescue Cancelled
-          stopped = true
+          turn.stopped = true
           break
         end
 
@@ -590,7 +580,7 @@ module Rubot
           # The user stopped the turn while the provider was answering. The
           # partial answer is discarded, exactly as when the stop lands after
           # the response arrived.
-          stopped = true
+          turn.stopped = true
           break
         end
 
@@ -606,33 +596,33 @@ module Rubot
           tool_calls = result["tool_calls"]
           reasoning_content = result["reasoning_content"]
           finish_reason = result["finish_reason"]
-          truncated = result["truncated"] == true
+          turn.truncated = result["truncated"] == true
           # Some gateways close the stream without a terminator. The text is a
           # prefix of the answer even if they never said why.
-          truncated ||= result["stream_incomplete"] == true && !response.to_s.empty?
+          turn.truncated ||= result["stream_incomplete"] == true && !response.to_s.empty?
         elsif result.is_a?(Array)
           # Legacy streaming format: [content, tool_calls]
           response, tool_calls = result
           reasoning_content = nil
           finish_reason = nil
-          truncated = false
+          turn.truncated = false
         else
           response = result.to_s
           tool_calls = nil
           reasoning_content = nil
           finish_reason = nil
-          truncated = false
+          turn.truncated = false
         end
 
-        if truncated
+        if turn.truncated
           warn "[agent] answer truncated (finish_reason=#{finish_reason.inspect}); " \
-               "#{continuations}/#{MAX_CONTINUATIONS} continuations used"
+               "#{turn.continuations}/#{MAX_CONTINUATIONS} continuations used"
         end
 
         # The user may have stopped the turn while the provider was thinking.
         # The late answer is discarded so the channel reports the stop instead.
         if @cancellation.cancelled?
-          stopped = true
+          turn.stopped = true
           break
         end
 
@@ -672,7 +662,7 @@ module Rubot
             # command (a truncated answer ends mid-JSON), so the model is told
             # to re-issue the call instead of executing an empty hash.
             unless arguments_ok
-              tool_error = if truncated
+              tool_error = if turn.truncated
                 "ERROR: this tool call was cut off before its arguments " \
                   "finished (the answer hit the output limit). Re-issue it " \
                   "with complete arguments."
@@ -688,7 +678,7 @@ module Rubot
 
             # Check for dangerous action that could cause data loss
             if @cancellation.cancelled?
-              stopped = true
+              turn.stopped = true
               pending << skipped_call(tool_call_id, tool_name, CANCELLED_TOOL_RESULT)
               next
             end
@@ -731,7 +721,7 @@ module Rubot
           # none of them needs another's output: run them together and report
           # in request order, which keeps the transcript and the UI identical
           # to a sequential run.
-          silent_answer = false
+          turn.silent_answer = false
           execute_tool_calls(pending).each do |call|
             tool_result = call[:result]
             ui_diff = file_ui_diff(call[:snapshot], tool_result)
@@ -747,57 +737,57 @@ module Rubot
             # End the turn here instead of asking for a reply that would only
             # restate the button the reader is already looking at.
             tool = @tools.get(call[:name])
-            silent_answer ||= tool && tool.respond_to?(:silent_result?) && tool.silent_result?(tool_result)
+            turn.silent_answer ||= tool && tool.respond_to?(:silent_result?) && tool.silent_result?(tool_result)
           end
 
           # Continue the loop to get the next response
           tool_count = tool_calls.size
           response = ""
           tool_calls = nil
-          rounds += 1
-          tool_rounds += 1
+          turn.rounds += 1
+          turn.tool_rounds += 1
 
           # Fire progress callback after each round. The tool count is captured
           # before `tool_calls` is cleared so consumers get the real number.
-          on_progress&.call(rounds, tool_count)
+          on_progress&.call(turn.rounds, tool_count)
           # The tool results just added to the transcript are part of the next
           # request, so the context figure moves before the provider does.
           emit_usage(on_usage)
 
-          break if stopped || silent_answer
-        elsif response.to_s.strip.empty? && !reasked
+          break if turn.stopped || turn.silent_answer
+        elsif response.to_s.strip.empty? && !turn.reasked
           # Nothing the user can read came back. With tools in play that means
           # the model stopped without reporting; with none it means the output
           # budget went to hidden reasoning. Either way, ask once for the
           # answer instead of substituting a summary of tool output.
-          reasked = true
-          warn "[agent] empty answer after #{rounds} round(s); asking again"
-          @session.add("user", rounds.positive? ? ANSWER_NOW_PROMPT : EMPTY_ANSWER_PROMPT)
-          rounds += 1
-        elsif truncated && !response.to_s.strip.empty? && continuations < MAX_CONTINUATIONS
+          turn.reasked = true
+          warn "[agent] empty answer after #{turn.rounds} round(s); asking again"
+          @session.add("user", turn.rounds.positive? ? ANSWER_NOW_PROMPT : EMPTY_ANSWER_PROMPT)
+          turn.rounds += 1
+        elsif turn.truncated && !response.to_s.strip.empty? && turn.continuations < MAX_CONTINUATIONS
           # The answer is a fragment. Keep it, ask for the rest, and rejoin.
-          answer << response
+          turn.answer << response
           @session.add("assistant", response, reasoning_content: reasoning_content)
           @session.add("user", CONTINUE_PROMPT)
-          continuations += 1
-          rounds += 1
+          turn.continuations += 1
+          turn.rounds += 1
           finish_reason = nil
         else
           # No tool calls — but the user may have steered the turn while this
           # answer was streaming. The answer stands as its own message and
           # the steer gets the next round.
           if steering_pending?
-            answer << response
-            answer << "\n\n" unless response.to_s.strip.empty?
+            turn.answer << response
+            turn.answer << "\n\n" unless response.to_s.strip.empty?
             @session.add("assistant", response, reasoning_content: reasoning_content)
             response = ""
             reasoning_content = nil
-            rounds += 1
+            turn.rounds += 1
             next
           end
 
           # No tool calls, we're done
-          answer << response
+          turn.answer << response
           break
         end
       end
@@ -805,12 +795,12 @@ module Rubot
       # Add final assistant response to session (only if not already added via tool-call branch).
       # A silent tool's answer is the UI it produced, so no assistant text is
       # stored — and no fallback summary is invented for it either.
-      @session.add("assistant", response, reasoning_content: reasoning_content) if !stopped && !response.to_s.empty?
+      @session.add("assistant", response, reasoning_content: reasoning_content) if !turn.stopped && !response.to_s.empty?
 
       # Ran out of continuations: say so rather than ending mid-sentence with
       # no explanation.
-      if truncated && !answer.to_s.strip.empty?
-        answer << "\n\n[the model's answer was cut off at the output limit — " \
+      if turn.truncated && !turn.answer.to_s.strip.empty?
+        turn.answer << "\n\n[the model's answer was cut off at the output limit — " \
                   "reply \"continue\" to get the rest]"
       end
 
@@ -820,7 +810,7 @@ module Rubot
       cron_tool = @tools.get("cron")
       has_callback = cron_tool && cron_tool.respond_to?(:has_fire_callback?) && cron_tool.has_fire_callback?
 
-      unless has_callback || stopped
+      unless has_callback || turn.stopped
         cron_results.each do |cr|
           warn "[cron] Processing job #{cr[:job_id]} mode=#{cr[:mode]}" if Rubot.debug?
           case cr[:mode]
@@ -839,30 +829,30 @@ module Rubot
         end
       end
 
-      on_stopped&.call if stopped
+      on_stopped&.call if turn.stopped
 
-      if stopped
-        answer << "\n\n" unless answer.empty?
-        answer << STOP_NOTICE
+      if turn.stopped
+        turn.answer << "\n\n" unless turn.answer.empty?
+        turn.answer << STOP_NOTICE
       end
 
-      parts << answer if answer && !answer.empty?
+      parts << turn.answer if turn.answer && !turn.answer.empty?
 
       combined = parts.join("\n\n---\n\n")
 
       # Guard: if the LLM produced only tool calls with no text content
       # (e.g. read_file → grep → etc.), return the cron/tool summary or
       # a fallback so the user never gets a silent drop.
-      if combined.empty? && !silent_answer
-        fallback = build_fallback_response(rounds, tool_rounds: tool_rounds)
+      if combined.empty? && !turn.silent_answer
+        fallback = build_fallback_response(turn.rounds, tool_rounds: turn.tool_rounds)
         combined = fallback if fallback && !fallback.empty?
       end
 
       # Say so when the run was cut short, instead of stopping silently. The
       # wording matters here: this limit is a net under a runaway loop, so the
       # reader is told what was done and what is left, not handed homework.
-      if limit_hit
-        notice = "⚠️ Turn stopped after #{limit} rounds without finishing. " \
+      if turn.limit_hit
+        notice = "⚠️ Turn stopped after #{turn.limit} rounds without finishing. " \
                  "Say \"lanjut\" to carry on from here — the work so far is saved."
         combined = combined.empty? ? notice : "#{combined}\n\n#{notice}"
       end
