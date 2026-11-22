@@ -38,56 +38,84 @@ module Rubot
         # time cannot number each other's notes.
         state = { numbers: numbers, seen: Hash.new(0) }
 
-        paragraphs = []
-        paragraph = []
-        list = nil
+        flow = Flow.new(blocks: blocks, state: state, quotable: quotable)
+        lines = source.lines(chomp: true)
+        i = 0
+        i = flow.step(lines, i) while i < lines.length
+        flow.finish
 
-        flush_paragraph = lambda do
-          next if paragraph.empty?
+        notes_html = render_footnotes(notes, state)
+        flow.paragraphs << notes_html unless notes_html.empty?
 
-          # A paragraph is a <p>, not a bare run of text: without the element
-          # there is no block for a margin to sit on, so the heading above it
-          # collapsed to nothing and read as glued to the line before.
-          body = paragraph.map { |line| inline(line, state) }.join("<br>")
-          paragraphs << (quotable ? quotable_paragraph(body, paragraph) : "<p>#{body}</p>")
-          paragraph.clear
+        flow.paragraphs.join("\n")
+      end
+
+      # One block flow while it is being written: the paragraph gathered so
+      # far, the list being nested, the fenced blocks already cut out, and the
+      # footnotes already cited.
+      #
+      # It used to be six locals and four lambdas inside #markdown. A
+      # block-level line closes whatever was open before it, and that closing is
+      # a method per block here, which is easier to follow than a lambda whose
+      # only name is the variable it is assigned to.
+      class Flow
+        attr_reader :paragraphs
+
+        def initialize(blocks:, state:, quotable:)
+          @blocks = blocks
+          @state = state
+          @quotable = quotable
+          @paragraphs = []
+          @paragraph = []
+          @list = nil
+        end
+
+        # A paragraph is a <p>, not a bare run of text: without the element
+        # there is no block for a margin to sit on, so the heading above it
+        # collapsed to nothing and read as glued to the line before.
+        def flush_paragraph
+          return if @paragraph.empty?
+
+          body = @paragraph.map { |line| Format.inline(line, @state) }.join("<br>")
+          @paragraphs << (@quotable ? Format.quotable_paragraph(body, @paragraph) : "<p>#{body}</p>")
+          @paragraph.clear
         end
 
         # Closing a level emits the open item and the list together, which is
         # why a parent's <li> is still open when a nested list starts inside
         # it — and why the nested list's close writes "</li></ul>" before the
         # parent's "</li>" follows.
-        close_level = lambda do |html, stack|
+        def close_level(html, stack)
           level = stack.pop
           html << "</li>" if level[:open]
           html << "</#{level[:tag]}>"
         end
 
-        flush_list = lambda do
-          next if list.nil?
+        def flush_list
+          return if @list.nil?
 
-          close_level.call(list[:html], list[:stack]) while list[:stack].any?
+          close_level(@list[:html], @list[:stack]) while @list[:stack].any?
           # Every item is counted, nested ones included: the chip says how much
           # context the list carries, and a nested item is quoted with it.
-          items = list[:html].scan("<li").length
-          paragraphs << (quotable ? quotable_block("div", "para-list", list[:html], list[:source],
-                                                    label: LIST_QUOTE_LABEL,
-                                                    kind: "Daftar · #{items} butir") : list[:html])
-          list = nil
+          items = @list[:html].scan("<li").length
+          @paragraphs << (@quotable ? Format.quotable_block("div", "para-list", @list[:html], @list[:source],
+                                                            label: LIST_QUOTE_LABEL,
+                                                            kind: "Daftar · #{items} butir") : @list[:html])
+          @list = nil
         end
 
         # Lists nest by indentation, so the open lists are kept on a stack: a
         # deeper item opens a list inside the item above it, and a shallower
         # one closes levels until it has a home.
         #
-        # `line` is the source as it was written, kept in `source` so a list can
-        # be quoted as the Markdown it came from rather than as its rendered
-        # items.
-        add_item = lambda do |tag, indent, body, task, line|
-          list ||= { stack: [], html: +"", source: [] }
-          list[:source] << line
-          html = list[:html]
-          stack = list[:stack]
+        # `line` is the source as it was written, kept in the list's `source` so
+        # a list can be quoted as the Markdown it came from rather than as its
+        # rendered items.
+        def add_item(tag, indent, body, task, line)
+          @list ||= { stack: [], html: +"", source: [] }
+          @list[:source] << line
+          html = @list[:html]
+          stack = @list[:stack]
 
           until stack.empty?
             top = stack.last
@@ -98,7 +126,7 @@ module Rubot
             elsif indent == top[:indent] && tag == top[:tag]
               break
             else
-              close_level.call(html, stack)
+              close_level(html, stack)
             end
           end
 
@@ -118,26 +146,27 @@ module Rubot
           # the line it was written as is the only honest copy of it.
           item_attrs = +""
           item_attrs << %( class="task#{task == :done ? " is-done" : ""}") if task
-          item_attrs << quotable_attribute(line.strip) if quotable
+          item_attrs << Format.quotable_attribute(line.strip) if @quotable
           html << "<li#{item_attrs}>"
           if task
             done = task == :done
             html << %(<span class="task-box" aria-hidden="true"></span>)
             html << %(<span class="sr-only">#{done ? "selesai" : "belum"}: </span>)
           end
-          html << inline(body, state)
+          html << Format.inline(body, @state)
           top[:open] = true
         end
 
-        lines = source.lines(chomp: true)
-        i = 0
-        while i < lines.length
+        # One line of the flow. Returns the line to read next, which is the one
+        # after it unless a block consumed more (a table's rows, a run of quote
+        # lines).
+        def step(lines, i)
           line = lines[i]
           stripped = line.strip
           indent = line[/\A[ \t]*/].length
 
           if stripped.empty?
-            flush_paragraph.call
+            flush_paragraph
             next_is_item = false
             j = i + 1
             while j < lines.length
@@ -146,68 +175,63 @@ module Rubot
                 j += 1
                 next
               end
-              next_is_item = !list_item(candidate).nil?
+              next_is_item = !Format.list_item(candidate).nil?
               break
             end
-            flush_list.call unless next_is_item
+            flush_list unless next_is_item
           elsif (block = stripped[/\A#{PLACEHOLDER}(\d+)#{PLACEHOLDER}\z/, 1])
-            flush_paragraph.call
-            flush_list.call
-            paragraphs << blocks[block.to_i]
-          elsif (heading = heading_at(stripped))
+            flush_paragraph
+            flush_list
+            @paragraphs << @blocks[block.to_i]
+          elsif (heading = Format.heading_at(stripped))
             # A heading is its own block: it ends the paragraph above it and
             # the list, the way any other block-level line does.
-            flush_paragraph.call
-            flush_list.call
-            paragraphs << "<h#{heading[:level]}>#{inline(heading[:text], state)}</h#{heading[:level]}>"
+            flush_paragraph
+            flush_list
+            @paragraphs << "<h#{heading[:level]}>#{Format.inline(heading[:text], @state)}</h#{heading[:level]}>"
           elsif stripped.match?(/\A([-*_])(?:[ \t]*\1){2,}\z/)
-            flush_paragraph.call
-            flush_list.call
-            paragraphs << %(<hr class="rule">)
-          elsif (table = table_at(lines, i, state))
+            flush_paragraph
+            flush_list
+            @paragraphs << %(<hr class="rule">)
+          elsif (table = Format.table_at(lines, i, @state))
             # A table is its own block: the paragraph and the list before it
             # are finished by it, exactly as a fenced code block would.
-            flush_paragraph.call
-            flush_list.call
-            paragraphs << table[:html]
-            i = table[:next]
-            next
-          elsif (item = list_item(stripped))
+            flush_paragraph
+            flush_list
+            @paragraphs << table[:html]
+            return table[:next]
+          elsif (item = Format.list_item(stripped))
             # A list is a block of its own, so the text above it is closed as a
             # paragraph first: without this the paragraph stayed buffered and
             # the list was emitted ahead of the line that introduced it, then
             # glued the following line onto that same paragraph.
-            flush_paragraph.call
-            add_item.call(item[:tag], indent, item[:body], item[:task], line)
+            flush_paragraph
+            add_item(item[:tag], indent, item[:body], item[:task], line)
           elsif (quote = stripped[/\A&gt;[ \t]?(.*)\z/, 1])
             # One blockquote for the whole run, not one per line: a border per
             # line is a stack of separate rules with a gap between each, which
             # reads as several quotes rather than one. A line that starts with
             # a further "&gt;" is the same run nested one level deeper, so the
             # depth is read per line and the tree is built from it.
-            flush_paragraph.call
-            flush_list.call
+            flush_paragraph
+            flush_list
             start = i
             cursor = i
             cursor += 1 while cursor < lines.length && lines[cursor].strip.match?(/\A&gt;/)
-            paragraphs << render_quote(lines[start...cursor], state)
-            i = cursor
-            next
+            @paragraphs << Format.render_quote(lines[start...cursor], @state)
+            return cursor
           else
-            flush_list.call
-            paragraph << line
+            flush_list
+            @paragraph << line
           end
 
-          i += 1
+          i + 1
         end
 
-        flush_paragraph.call
-        flush_list.call
-
-        notes_html = render_footnotes(notes, state)
-        paragraphs << notes_html unless notes_html.empty?
-
-        paragraphs.join("\n")
+        def finish
+          flush_paragraph
+          flush_list
+        end
       end
 
       # A run of quote lines becomes one blockquote per level, nested inside
