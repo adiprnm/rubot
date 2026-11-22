@@ -416,6 +416,10 @@ module Rubot
         page = history_page(sid, at: at_index(req))
         page = drop_running_tail(page, live) if live && at_index(req).nil?
         live_prompt_shown = live ? prompt_in_tail?(page[:entries], live) : false
+        # One report for the whole page. The status row and the panel are the
+        # same numbers, so asking the session twice was two round trips into the
+        # actor and two scans of the transcript for one glance.
+        report = session_report(sid)
         body = View.render(
           "index",
           personas: persona_rows(slug),
@@ -443,8 +447,8 @@ module Rubot
           older_url: older_url(sid, page[:before]),
           live_turn: live,
           live_prompt_shown: live_prompt_shown,
-          usage: usage_locals(sid),
-          usage_facts: index_usage_facts(sid),
+          usage: metrics_locals(report ? Rubot::UsageReport.metrics(report) : nil),
+          usage_facts: usage_facts(report || {}),
           subagent_runs: subagent_runs_for_page(sid),
           token_query: token_query,
           ig_persona: slug,

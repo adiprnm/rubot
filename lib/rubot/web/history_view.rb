@@ -290,15 +290,6 @@ module Rubot
         nil
       end
 
-      # The facts for the panel on first paint. The report is asked for once and
-      # used twice — by the row and by the panel — so the page never shows two
-      # different numbers side by side.
-      def index_usage_facts(sid)
-        usage_facts(session_report(sid) || {})
-      rescue StandardError
-        usage_facts({})
-      end
-
       # The panel's copy of the same report: the row is a glance, this is what
       # the glance is made of. Every figure is a string already — the template
       # fills a two-column list, not a calculator.
@@ -401,8 +392,15 @@ module Rubot
       def usage_markup_from(report)
         return nil if report.nil?
 
-        usage_markup_with(metrics_locals(Rubot::UsageReport.metrics(report)),
-                          facts: usage_facts(report))
+        # A report pushed while a request is still in flight carries the panel
+        # as well, and the panel is 47% of the payload — a breakdown nobody is
+        # reading while the answer is still arriving, re-sent several times a
+        # second. Only the row's three figures move during a stream; the panel
+        # follows with the report that lands at the end of each round, and with
+        # the final one, so an open panel still moves — once per request
+        # instead of four times a second.
+        facts = report[:provisional] ? nil : usage_facts(report)
+        usage_markup_with(metrics_locals(Rubot::UsageReport.metrics(report)), facts: facts)
       rescue StandardError
         nil
       end

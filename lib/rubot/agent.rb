@@ -48,16 +48,11 @@ module Rubot
     MAX_CONTINUATIONS = 4
 
     # How often a turn in flight may publish provisional cost/context figures.
-    # Five times a second keeps the footer moving without turning every
-    # streamed chunk into an event the UI has to drain.
-    LIVE_USAGE_INTERVAL = 0.2
-
-    # Tool results kept verbatim in the request. Everything older is shortened:
-    # a tool-heavy turn re-sends its entire stdout on every round, and the
-    # model rarely needs the full log of a command it already acted on.
-    # The session file still keeps the complete output; only the request is
-    # trimmed, so nothing is lost for a later turn that needs to re-read it.
-    TRUNCATED_TOOL_RESULT_NOTICE = "\n... [older tool output truncated; re-run the command if you still need it]"
+    # The number is read by a human, and the three figures move by a tenth at a
+    # time: twice a second still reads as live, and it is half the events a
+    # channel has to render and send (the web footer re-sends its row on each
+    # one, and those events also break up a burst of streamed chunks).
+    LIVE_USAGE_INTERVAL = 0.5
 
     # What separates one prompt section from the next, and therefore what a
     # patch can be split on when only some sections moved.

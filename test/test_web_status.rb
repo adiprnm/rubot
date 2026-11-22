@@ -514,6 +514,34 @@ module Rubot
                         "it lands on #usage from outside the turn"
       end
 
+      # The panel is 47% of the payload and nobody reads a breakdown that moves
+      # four times a second, so a report for a request still in flight carries
+      # the row alone. It follows with the report that lands at the end of the
+      # round, which is why an open panel still moves — once per request.
+      def test_a_live_report_carries_the_row_without_the_panel
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        live = { cost: { "total" => 0.0004 }, requests: 1, prompt_tokens: 1000,
+                 cache_hit_rate: 0.6, context_percent: 8.2, context_window: 200_000,
+                 provisional: true }
+
+        markup = channel.usage_markup_from(live)
+
+        assert_includes markup, "8.2%", "the row still moves"
+        refute_includes markup, "usage-facts", "the breakdown waits for a measured report"
+      end
+
+      def test_a_measured_report_carries_the_panel
+        channel = Rubot::Channels::Web.new(channel_config: {})
+        measured = { cost: { "total" => 0.0004 }, requests: 1, prompt_tokens: 1000,
+                     cache_hit_rate: 0.6, context_percent: 8.2, context_window: 200_000,
+                     provisional: false }
+
+        markup = channel.usage_markup_from(measured)
+
+        assert_includes markup, "usage-facts", "a measured report brings the breakdown with it"
+        assert_includes markup, %(hx-swap-oob="true")
+      end
+
       # Nothing to draw must not become an empty swap: that would blank the
       # row and lose the last figure the reader had.
       def test_an_empty_live_report_draws_nothing
