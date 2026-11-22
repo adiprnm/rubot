@@ -199,33 +199,9 @@ module Rubot
           live = { prompt_tokens: context_usage[:tokens], output_tokens: 0 }
           emit_usage(callbacks.usage, live: live)
 
-          result = begin
-            if block_given? && stream
-              live_chars = 0
-              live_emitted_at = 0.0
-              @provider.chat_stream(messages, tools: tool_definitions, on_retry: callbacks.retry_callback) do |chunk, tool_data, reasoning|
-                # Thinking arrives before (and between) answer chunks; the answer
-                # itself is never delayed by it.
-                callbacks.reasoning&.call(reasoning) if reasoning && !reasoning.empty?
-                response += chunk if chunk
-                if chunk && !chunk.empty?
-                  # The answer is arriving, so the output side of the cost and
-                  # the answer the next request will carry both grow now. Rate
-                  # limited: repainting faster than the eye (or the event pump)
-                  # can follow would be noise, not freshness.
-                  live_chars += chunk.length
-                  live[:output_tokens] = (live_chars / Session::CHARS_PER_TOKEN).ceil
-                  now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-                  if now - live_emitted_at >= LIVE_USAGE_INTERVAL
-                    live_emitted_at = now
-                    emit_usage(callbacks.usage, live: live)
-                  end
-                end
-                yield chunk if chunk && block_given?
-              end
-            else
-              @provider.chat(messages, tools: tool_definitions, on_retry: callbacks.retry_callback)
-            end
+          response, result = begin
+            ask_provider(messages, callbacks, response: response, live: live,
+                         stream: stream, &on_chunk)
           rescue Cancelled
             # The user stopped the turn while the provider was answering. The
             # partial answer is discarded, exactly as when the stop lands after
@@ -451,6 +427,45 @@ module Rubot
         emit_usage(callbacks.usage)
 
         turn.stopped || turn.silent_answer
+      end
+      # One request to the provider, streamed when the channel can take chunks.
+      #
+      # Thinking fragments and answer chunks go out while the request is still
+      # open, and the live cost figures are repainted on the way, because the
+      # answer the next request will carry grows with every chunk.
+      #
+      # Returns [response, result]: the answer as far as it has arrived (a
+      # truncated answer keeps appending across continuations) and whatever the
+      # provider returned for the caller to parse.
+      def ask_provider(messages, callbacks, response:, live:, stream:, &on_chunk)
+        result = if block_given? && stream
+          live_chars = 0
+          live_emitted_at = 0.0
+          @provider.chat_stream(messages, tools: tool_definitions, on_retry: callbacks.retry_callback) do |chunk, tool_data, reasoning|
+            # Thinking arrives before (and between) answer chunks; the answer
+            # itself is never delayed by it.
+            callbacks.reasoning&.call(reasoning) if reasoning && !reasoning.empty?
+            response += chunk if chunk
+            if chunk && !chunk.empty?
+              # The answer is arriving, so the output side of the cost and
+              # the answer the next request will carry both grow now. Rate
+              # limited: repainting faster than the eye (or the event pump)
+              # can follow would be noise, not freshness.
+              live_chars += chunk.length
+              live[:output_tokens] = (live_chars / Session::CHARS_PER_TOKEN).ceil
+              now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+              if now - live_emitted_at >= LIVE_USAGE_INTERVAL
+                live_emitted_at = now
+                emit_usage(callbacks.usage, live: live)
+              end
+            end
+            yield chunk if chunk && block_given?
+          end
+        else
+          @provider.chat(messages, tools: tool_definitions, on_retry: callbacks.retry_callback)
+        end
+
+        [ response, result ]
       end
     end
   end
