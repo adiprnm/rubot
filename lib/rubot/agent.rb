@@ -25,6 +25,7 @@ require_relative "memory_extractor"
 require_relative "agent/system_prompt"
 require_relative "agent/tool_execution"
 require_relative "agent/turn"
+require_relative "agent/turn_loop"
 require_relative "tools/feedback_learner"
 
 module Rubot
@@ -172,6 +173,10 @@ module Rubot
     # Running the calls of one tool round lives beside #process, not inside it:
     # see agent/tool_execution.rb.
     include ToolExecution
+
+    # The phases of a turn: prepare, finish, and the round loop. See
+    # agent/turn_loop.rb.
+    include TurnLoop
 
     attr_reader :config, :provider, :session, :tools, :soul, :memory, :agents_file, :skill_registry, :safety_guard, :session_model, :persona, :active_preset_name
 
@@ -467,44 +472,12 @@ module Rubot
                 on_assistant_text: nil, on_reasoning: nil, on_steer: nil, on_stopped: nil, on_usage: nil,
                 on_subagent: nil, on_compaction: nil, on_compaction_start: nil, on_compaction_failed: nil, on_retry: nil,
                 on_delegate: nil, stream: true, &on_chunk)
-      # Fire any due cron jobs and collect their results
-      cron_results = fire_due_cron_jobs
-      warn "[cron] fire_due_cron_jobs returned #{cron_results.size} result(s)" if Rubot.debug?
-
-      # This turn can now be stopped with /stop (or Ctrl+C in the REPL).
-      @cancellation.start!
-      Thread.current[:rubot_cancellation] = @cancellation
-      turn = Turn.new(limit: max_rounds)
-      # The tool registry is shared across sessions, so the persona that owns
-      # this turn has to be stamped on it now — not at boot, where a second
-      # persona's actor would silently overwrite the first one's scope.
-      inject_tool_persona
-      inject_tool_delegate
-      @subagent_count = 0
-      @on_subagent = on_subagent
-      @on_delegate = on_delegate
-      @on_compaction = on_compaction
-      @on_compaction_start = on_compaction_start
-      @on_compaction_failed = on_compaction_failed
-
-      # Reasoning from earlier turns is dropped from the request; only what is
-      # produced inside this turn is kept, because a tool loop needs it.
-      @turn_start_index = @session.messages.size
-
-      # A steer that arrived just as the previous turn was ending still
-      # belongs to the user: it enters ahead of this message instead of
-      # being replayed in the middle of the new turn.
-      stray = take_steering
-      while stray
-        @session.add("user", stray)
-        stray = take_steering
-      end
-
-      # Add user message to session
-      @session.add("user", message)
-      # Queue it for extraction; the provider call happens in #flush_learning,
-      # after the channel has delivered the answer.
-      @session.push_memory_backlog(message) if @memory_extractor && @memory.enabled?
+      turn, cron_results = prepare_turn(message,
+                                        on_subagent: on_subagent,
+                                        on_delegate: on_delegate,
+                                        on_compaction: on_compaction,
+                                        on_compaction_start: on_compaction_start,
+                                        on_compaction_failed: on_compaction_failed)
 
       response = ""
       tool_calls = nil
