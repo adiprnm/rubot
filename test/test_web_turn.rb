@@ -55,7 +55,7 @@ module Rubot
         pool.define_singleton_method(:delegate) { |**_kwargs| handle }
         channel.instance_variable_set(:@pool, pool)
 
-        channel.send(:start_delegate, "web_rubot",
+        channel.start_delegate("web_rubot",
                      { run_id: "r1", agent: "writer", task: "tulis puisi", model: "" })
 
         jobs = channel.instance_variable_get(:@subagent_jobs)
@@ -78,7 +78,7 @@ module Rubot
         pool.define_singleton_method(:delegate) { |**_kwargs| nil }
         channel.instance_variable_set(:@pool, pool)
 
-        channel.send(:start_delegate, "web_rubot",
+        channel.start_delegate("web_rubot",
                      { run_id: "r1", agent: "nobody", task: "tulis puisi", model: "" })
 
         run = channel.instance_variable_get(:@subagent_jobs).runs("web_rubot").first
@@ -102,7 +102,7 @@ module Rubot
           pushes << { slug: slug, title: title, body: body, url: url }
         end
 
-        channel.send(:start_delegate, "web_rubot",
+        channel.start_delegate("web_rubot",
                      { run_id: "r1", agent: "writer", task: "tulis puisi", model: "" })
 
         jobs = channel.instance_variable_get(:@subagent_jobs)
@@ -133,7 +133,7 @@ module Rubot
         end
 
         # What the page was just told: nothing to show.
-        channel.send(:subagent_runs_for_page, "web_rubot")
+        channel.subagent_runs_for_page("web_rubot")
 
         jobs = channel.instance_variable_get(:@subagent_jobs)
         jobs.start(session_id: "web_rubot", run_id: "r1", agent: "writer", task: "tulis puisi")
@@ -172,11 +172,11 @@ module Rubot
         jobs.start(session_id: "web_rubot", run_id: "r2", agent: "researcher", task: "cari docs")
         jobs.finish(session_id: "web_rubot", run_id: "r1", status: "done", result: "puisi jadi")
 
-        channel.send(:report_subagents_when_done, "web_rubot")
+        channel.report_subagents_when_done("web_rubot")
         assert_empty said, "one run is still working, so there is nothing to report yet"
 
         jobs.finish(session_id: "web_rubot", run_id: "r2", status: "done", result: "docs ketemu")
-        channel.send(:report_subagents_when_done, "web_rubot")
+        channel.report_subagents_when_done("web_rubot")
 
         assert_equal 1, said.size, "one batch, one report"
         payload = said.first
@@ -191,7 +191,7 @@ module Rubot
                      "the reply is put on the page as its own block"
         assert_equal "web_rubot", appended.last[0]
 
-        channel.send(:report_subagents_when_done, "web_rubot")
+        channel.report_subagents_when_done("web_rubot")
         assert_equal 1, said.size, "an answer is handed over once"
       end
 
@@ -213,7 +213,7 @@ module Rubot
         end
 
         said = record_reports(channel)
-        channel.send(:report_subagents_when_done, "web_rubot")
+        channel.report_subagents_when_done("web_rubot")
 
         assert_equal 1, said.size
         text = said.first[:text]
@@ -244,9 +244,9 @@ module Rubot
 
         said = record_reports(channel)
         queue = Queue.new
-        channel.send(:listen_for_events, "web_rubot", queue)
+        channel.listen_for_events("web_rubot", queue)
 
-        channel.send(:report_subagents_when_done, "web_rubot")
+        channel.report_subagents_when_done("web_rubot")
 
         assert_equal 1, said.size
         sent = []
@@ -291,7 +291,7 @@ module Rubot
           fake
         end
 
-        channel.send(:report_subagents_when_done, "web_rubot")
+        channel.report_subagents_when_done("web_rubot")
 
         assert_equal 1, store.pending_subagent_results("web_rubot").size,
                      "an answer that was not delivered is still waiting to be read"
@@ -318,7 +318,7 @@ module Rubot
         channel.instance_variable_get(:@active)["web_rubot"] = "t-live"
 
         said = record_reports(channel)
-        channel.send(:report_subagents_when_done, "web_rubot")
+        channel.report_subagents_when_done("web_rubot")
 
         assert_empty said, "nothing is reported over a turn that is still running"
         assert_equal 1, store.pending_subagent_results("web_rubot").size,

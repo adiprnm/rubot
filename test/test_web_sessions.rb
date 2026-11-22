@@ -19,7 +19,7 @@ module Rubot
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
         write_long_session(channel, "web_kanyaah", 15)
 
-        page = channel.send(:history_page, "web_kanyaah")
+        page = channel.history_page("web_kanyaah")
         prompts = page[:entries].select { |entry| entry[:kind] == :prompt }.map { |entry| entry[:text] }
 
         assert_equal Rubot::Channels::Web::HISTORY_PAGE, page[:entries].size
@@ -32,7 +32,7 @@ module Rubot
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
         write_long_session(channel, "web_kanyaah", 3)
 
-        page = channel.send(:history_page, "web_kanyaah")
+        page = channel.history_page("web_kanyaah")
 
         assert_equal 6, page[:entries].size
         refute page[:more]
@@ -45,8 +45,8 @@ module Rubot
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
         write_long_session(channel, "web_kanyaah", 25)
 
-        page = channel.send(:history_page, "web_kanyaah")
-        older = channel.send(:history_page, "web_kanyaah", before: page[:before])
+        page = channel.history_page("web_kanyaah")
+        older = channel.history_page("web_kanyaah", before: page[:before])
 
         assert older[:entries].any?, "there is a page above the first one"
         assert older[:more], "and one above that"
@@ -62,7 +62,7 @@ module Rubot
         write_long_session(channel, "web_kanyaah", 25)
         res = FakeResponse.new
 
-        channel.send(:render_history, res, "web_kanyaah", Struct.new(:query).new({ "before" => "22" }))
+        channel.render_history(res, "web_kanyaah", Struct.new(:query).new({ "before" => "22" }))
 
         assert_includes res.body, "pesan 2", "the page ends where the marker was"
         refute_includes res.body, "pesan 25", "and stops there rather than running on"
@@ -77,7 +77,7 @@ module Rubot
         write_long_session(channel, "web_kanyaah", 3)
         res = FakeResponse.new
 
-        channel.send(:render_history, res, "web_kanyaah", Struct.new(:query).new({ "before" => "2" }))
+        channel.render_history(res, "web_kanyaah", Struct.new(:query).new({ "before" => "2" }))
 
         assert_includes res.body, "pesan 1"
         refute_includes res.body, "history-more"
@@ -100,7 +100,7 @@ module Rubot
         channel = Rubot::Channels::Web.new(channel_config: { "token" => "t0k" })
 
         assert_equal "/s/web_kanyaah/history?token=t0k&before=40",
-                     channel.send(:older_url, "web_kanyaah", 40)
+                     channel.older_url("web_kanyaah", 40)
       end
 
       # Prepending a page moves everything below it down by its own height, and
@@ -171,11 +171,11 @@ module Rubot
       def test_a_later_session_still_belongs_to_its_persona
         channel = Rubot::Channels::Web.new(channel_config: {})
 
-        sid = channel.send(:new_session_id, "kanyaah")
+        sid = channel.new_session_id("kanyaah")
 
         assert sid.start_with?("web_kanyaah~"), sid
         assert_equal "kanyaah", Rubot::PersonaStore.key_for_session(sid)
-        refute_equal channel.send(:session_id, "kanyaah"), sid,
+        refute_equal channel.session_id("kanyaah"), sid,
                      "a new session must not reuse the persona's first session"
       end
 
@@ -191,7 +191,7 @@ module Rubot
           }
         )
 
-        ids = channel.send(:sessions_for, "kanyaah").map { |entry| entry[:id] }
+        ids = channel.sessions_for("kanyaah").map { |entry| entry[:id] }
 
         assert_includes ids, "web_kanyaah"
         assert_includes ids, "web_kanyaah~20261108-101010"
@@ -207,7 +207,7 @@ module Rubot
           }
         )
 
-        ids = channel.send(:sessions_for, "kanyaah").map { |entry| entry[:id] }
+        ids = channel.sessions_for("kanyaah").map { |entry| entry[:id] }
 
         assert_includes ids, "web_kanyaah"
         refute_includes ids, "web_kanyaah~sub-abc123", "a sub agent's log is not a chat"
@@ -219,7 +219,7 @@ module Rubot
           sessions: { "web_kanyaah" => "Riset harga template signature" }
         )
 
-        row = channel.send(:session_rows, "kanyaah", "web_kanyaah").first
+        row = channel.session_rows("kanyaah", "web_kanyaah").first
 
         assert_equal "Riset harga template signature", row[:label]
         assert row[:active]
@@ -235,7 +235,7 @@ module Rubot
           titles: { "web_kanyaah" => "Build gagal di CI" }
         )
 
-        row = channel.send(:session_rows, "kanyaah", "web_kanyaah").first
+        row = channel.session_rows("kanyaah", "web_kanyaah").first
 
         assert_equal "Build gagal di CI", row[:label]
       end
@@ -247,7 +247,7 @@ module Rubot
           titles: { "web_kanyaah" => "Build gagal di CI" }
         )
 
-        markup = channel.send(:sidebar_markup, "web_kanyaah")
+        markup = channel.sidebar_markup("web_kanyaah")
 
         assert_includes markup, %(data-title="Kanyaah · Build gagal di CI")
         assert_includes markup, ">Build gagal di CI</button>"
@@ -260,7 +260,7 @@ module Rubot
       def test_a_conversation_with_no_messages_is_listed_while_it_is_open
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
 
-        rows = channel.send(:session_rows, "kanyaah", "web_kanyaah~20261108-090000")
+        rows = channel.session_rows("kanyaah", "web_kanyaah~20261108-090000")
 
         assert_equal 1, rows.size
         assert_equal "Sesi baru", rows.first[:label]
@@ -277,7 +277,7 @@ module Rubot
           personas: { "kanyaah" => { "name" => "Kanyaah" } },
           sessions: { "web_kanyaah" => "Halo" }
         )
-        row = channel.send(:session_rows, "kanyaah", "web_kanyaah").first
+        row = channel.session_rows("kanyaah", "web_kanyaah").first
 
         refute row.key?(:meta), "there is no age to draw"
         html = View.render("_session_row", row: row, token_query: "", page: 1,
@@ -292,7 +292,7 @@ module Rubot
           personas: { "kanyaah" => { "name" => "Kanyaah" } },
           sessions: { "web_kanyaah" => "Halo" }
         )
-        groups = channel.send(:session_groups, "kanyaah", "web_kanyaah")
+        groups = channel.session_groups("kanyaah", "web_kanyaah")
 
         html = View.render("_sessions", groups: groups, token_query: "")
 
@@ -314,7 +314,7 @@ module Rubot
         )
         Rubot::Session.store.pin_session("web_kanyaah~pinned", at: "2026-11-10T09:00:00Z")
 
-        groups = channel.send(:session_groups, "kanyaah", "web_kanyaah~baru")
+        groups = channel.session_groups("kanyaah", "web_kanyaah~baru")
 
         assert_equal [ "yang di-pin" ], groups[:pinned].map { |row| row[:label] }
         assert groups[:pinned].first[:pinned]
@@ -337,7 +337,7 @@ module Rubot
         )
         Rubot::Session.store.pin_session("web_kanyaah~pinned", at: "2026-11-10T09:00:00Z")
 
-        groups = channel.send(:session_groups, "kanyaah", "web_kanyaah~pinned")
+        groups = channel.session_groups("kanyaah", "web_kanyaah~pinned")
         rows = groups[:pinned] + groups[:recent]
 
         assert_equal rows.map { |row| row[:id] }.uniq, rows.map { |row| row[:id] },
@@ -355,7 +355,7 @@ module Rubot
         )
         Rubot::Session.store.pin_session("web_kanyaah", at: "2026-11-10T09:00:00Z")
 
-        groups = channel.send(:session_groups, "kanyaah", "web_kanyaah")
+        groups = channel.session_groups("kanyaah", "web_kanyaah")
         rows = groups[:pinned] + groups[:recent]
 
         assert_equal 1, rows.count { |row| row[:id] == "web_kanyaah" }
@@ -376,7 +376,7 @@ module Rubot
         stub_title_writer(channel)
 
         res = FakeResponse.new
-        channel.send(:rename_session, res, "web_kanyaah", form_post("name" => "  Proyek   Templete  "))
+        channel.rename_session(res, "web_kanyaah", form_post("name" => "  Proyek   Templete  "))
 
         assert_equal "Proyek Templete", stored_title("web_kanyaah"),
                      "the name is flattened and trimmed on the way in"
@@ -398,12 +398,12 @@ module Rubot
         stub_title_writer(channel)
 
         long = "kata " * 40
-        channel.send(:rename_session, FakeResponse.new, "web_kanyaah",
+        channel.rename_session(FakeResponse.new, "web_kanyaah",
                      form_post("name" => "baris satu\nbaris dua"))
 
         assert_equal "baris satu baris dua", stored_title("web_kanyaah")
 
-        channel.send(:rename_session, FakeResponse.new, "web_kanyaah", form_post("name" => long))
+        channel.rename_session(FakeResponse.new, "web_kanyaah", form_post("name" => long))
         clipped = stored_title("web_kanyaah")
 
         assert_operator clipped.length, :<=, Rubot::SessionNamer::MAX_TITLE_CHARS
@@ -423,7 +423,7 @@ module Rubot
         channel.define_singleton_method(:session_running?) { |_sid| true }
 
         res = FakeResponse.new
-        channel.send(:rename_session, res, "web_kanyaah", form_post("name" => "Nama Baru"))
+        channel.rename_session(res, "web_kanyaah", form_post("name" => "Nama Baru"))
 
         assert_equal 409, res.status
         assert_empty res.body
@@ -452,7 +452,7 @@ module Rubot
         req = request.new({ "pin" => "1", "page" => "1", "current" => "web_kanyaah" })
         res = FakeResponse.new
 
-        channel.send(:toggle_pin, res, "web_kanyaah~other", req)
+        channel.toggle_pin(res, "web_kanyaah~other", req)
 
         assert_equal 200, res.status
         assert_includes res.body, %(<nav class="sessions" id="sessions">)
@@ -469,7 +469,7 @@ module Rubot
         Rubot::Session.store.pin_session("web_kanyaah", at: "2026-11-10T09:00:00Z")
 
         html = View.render("_sessions",
-                           groups: channel.send(:session_groups, "kanyaah", "web_kanyaah"),
+                           groups: channel.session_groups("kanyaah", "web_kanyaah"),
                            token_query: "")
 
         assert_includes html, %(class="session-pin")
@@ -491,9 +491,9 @@ module Rubot
         end
 
         req = Struct.new(:query) { def [](_key) = nil }.new({ "pin" => "1", "page" => "1" })
-        channel.send(:toggle_pin, FakeResponse.new, ids.last, req)
+        channel.toggle_pin(FakeResponse.new, ids.last, req)
 
-        pinned = channel.send(:session_groups, "kanyaah", ids.last)[:pinned].map { |row| row[:id] }
+        pinned = channel.session_groups("kanyaah", ids.last)[:pinned].map { |row| row[:id] }
 
         assert_equal 10, pinned.size
         refute_includes pinned, ids.first, "the oldest pin is the one that goes"
@@ -509,8 +509,8 @@ module Rubot
         channel = channel_with_archive(personas: { "kanyaah" => { "name" => "Kanyaah" } },
                                        messages: messages)
 
-        first = channel.send(:session_groups, "kanyaah", "web_kanyaah~01")
-        loaded = channel.send(:session_groups, "kanyaah", "web_kanyaah~01", page: 2)
+        first = channel.session_groups("kanyaah", "web_kanyaah~01")
+        loaded = channel.session_groups("kanyaah", "web_kanyaah~01", page: 2)
 
         assert_equal 20, first[:recent].size
         assert_equal 21, first[:recent_total]
@@ -531,8 +531,8 @@ module Rubot
         channel = channel_with_archive(personas: { "kanyaah" => { "name" => "Kanyaah" } },
                                        messages: messages)
 
-        first = channel.send(:session_groups, "kanyaah", "web_kanyaah~01")
-        block = channel.send(:recent_block, "kanyaah", "web_kanyaah~01", 2)
+        first = channel.session_groups("kanyaah", "web_kanyaah~01")
+        block = channel.recent_block("kanyaah", "web_kanyaah~01", 2)
 
         assert_equal 5, block[:rows].size
         assert_equal 20, first[:recent].size
@@ -546,7 +546,7 @@ module Rubot
                                        messages: messages)
 
         html = View.render("_sessions",
-                           groups: channel.send(:session_groups, "kanyaah", "web_kanyaah~01"),
+                           groups: channel.session_groups("kanyaah", "web_kanyaah~01"),
                            token_query: "?token=t0k")
 
         assert_includes html, %(class="recent-more" id="recent-more")
@@ -569,7 +569,7 @@ module Rubot
         last = Struct.new(:query).new({ "page" => "3" })
         res = FakeResponse.new
 
-        channel.send(:render_recent, res, "web_kanyaah~01", second)
+        channel.render_recent(res, "web_kanyaah~01", second)
 
         assert_equal 200, res.status
         assert_equal 20, res.body.scan(%(class="session-link")).size
@@ -577,7 +577,7 @@ module Rubot
         assert_includes res.body, "page=3", "the control points at the block after this one"
 
         res = FakeResponse.new
-        channel.send(:render_recent, res, "web_kanyaah~01", last)
+        channel.render_recent(res, "web_kanyaah~01", last)
 
         assert_equal 1, res.body.scan(%(class="session-link")).size
         refute_includes res.body, %(id="recent-more"), "the list ends without a control"
@@ -589,7 +589,7 @@ module Rubot
           sessions: { "web_kanyaah" => "Halo" }
         )
 
-        markup = channel.send(:sidebar_markup, "web_kanyaah")
+        markup = channel.sidebar_markup("web_kanyaah")
 
         assert_includes markup, %(id="sessions" hx-swap-oob="true")
         assert_includes markup, "Halo"
@@ -604,7 +604,7 @@ module Rubot
           sessions: { "web_kanyaah" => "Riset harga template signature" }
         )
 
-        markup = channel.send(:sidebar_markup, "web_kanyaah")
+        markup = channel.sidebar_markup("web_kanyaah")
 
         assert_includes markup, %(id="chat-head" hx-swap-oob="true")
         assert_includes markup, "Riset harga template signature"
@@ -630,16 +630,16 @@ module Rubot
         end
 
         res = FakeResponse.new
-        channel.send(:create_turn, turn_request("Tolong susun undangan pernikahan"), res, "web_kanyaah")
+        channel.create_turn(turn_request("Tolong susun undangan pernikahan"), res, "web_kanyaah")
 
         # The turn runs on a thread of its own, and the naming job is handed over
         # as it ends: wait for the turn, then for the worker that names it.
         turn = channel.instance_variable_get(:@turns).values.first
         deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 5
         sleep 0.01 until turn.closed? || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
-        channel.send(:drain_learning)
+        channel.drain_learning
 
-        payload = channel.send(:sidebar_markup, "web_kanyaah")
+        payload = channel.sidebar_markup("web_kanyaah")
 
         assert_equal 1, provider.naming_calls, "the conversation is named once the answer is delivered"
         assert_includes payload, "Undangan pernikahan"
@@ -654,18 +654,18 @@ module Rubot
       def test_an_unnamed_session_adds_nothing_to_the_header
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
 
-        assert_nil channel.send(:named_session_label, "kanyaah", "web_kanyaah~20261108-090000")
+        assert_nil channel.named_session_label("kanyaah", "web_kanyaah~20261108-090000")
         assert_equal "Kanyaah",
-                     channel.send(:document_title, "Kanyaah",
-                                  channel.send(:named_session_label, "kanyaah", "web_kanyaah~x"))
+                     channel.document_title("Kanyaah",
+                                  channel.named_session_label("kanyaah", "web_kanyaah~x"))
       end
 
       def test_the_document_title_names_the_session
         channel = Rubot::Channels::Web.new(channel_config: {})
 
         assert_equal "Kanyaah · Riset harga",
-                     channel.send(:document_title, "Kanyaah", "Riset harga")
-        assert_equal "Kanyaah", channel.send(:document_title, "Kanyaah", nil)
+                     channel.document_title("Kanyaah", "Riset harga")
+        assert_equal "Kanyaah", channel.document_title("Kanyaah", nil)
       end
 
       # A conversation is a file: deleting the row deletes the file, and the
@@ -681,7 +681,7 @@ module Rubot
         res = FakeResponse.new
         dir = channel.instance_variable_get(:@app_config).sessions_dir
 
-        channel.send(:delete_session, res, "web_kanyaah~20261108-101010", nil)
+        channel.delete_session(res, "web_kanyaah~20261108-101010", nil)
 
         refute File.exist?(File.join(dir, "web_kanyaah~20261108-101010.json"))
         assert File.exist?(File.join(dir, "web_kanyaah.json"))
@@ -698,7 +698,7 @@ module Rubot
         )
         res = FakeResponse.new
 
-        channel.send(:delete_session, res, "web_kanyaah", nil)
+        channel.delete_session(res, "web_kanyaah", nil)
 
         assert_equal 303, res.status
         assert_equal "/p/kanyaah", res.headers["Location"]
@@ -710,7 +710,7 @@ module Rubot
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
         res = FakeResponse.new
 
-        channel.send(:delete_session, res, "web_ghost", nil)
+        channel.delete_session(res, "web_ghost", nil)
 
         assert_equal 404, res.status
       end
@@ -820,7 +820,7 @@ module Rubot
                      mode: "agent_turn", slug: "ghost", new_session: false,
                      result: { agent_message: "Halo" })
 
-        assert_equal [ channel.send(:session_id) ], opened
+        assert_equal [ channel.session_id ], opened
       end
 
       # The page sits idle while a job fires, so nothing is asking: the sidebar
@@ -833,7 +833,7 @@ module Rubot
         )
         res = FakeResponse.new
 
-        channel.send(:render_session, res, "web_english-tutor")
+        channel.render_session(res, "web_english-tutor")
 
         assert_includes res.body, %(sse-connect="/events?sid=web_english-tutor"),
                         "an idle page has no turn stream, so it needs one of its own"
@@ -850,10 +850,10 @@ module Rubot
         })
         listening = Queue.new
         elsewhere = Queue.new
-        channel.send(:listen_for_events, "web_english-tutor", listening)
-        channel.send(:listen_for_events, "web_kanyaah", elsewhere)
+        channel.listen_for_events("web_english-tutor", listening)
+        channel.listen_for_events("web_kanyaah", elsewhere)
 
-        channel.send(:broadcast_sessions)
+        channel.broadcast_sessions
 
         refute listening.empty?, "the persona's page has a sidebar to redraw"
         refute elsewhere.empty?, "the other page wears the same count on its handle"
@@ -864,10 +864,10 @@ module Rubot
       def test_a_page_that_went_away_stops_being_written_to
         channel = channel_with_sessions(personas: { "english-tutor" => { "name" => "English Tutor" } })
         queue = Queue.new
-        channel.send(:listen_for_events, "web_english-tutor", queue)
-        channel.send(:stop_listening_for_events, queue)
+        channel.listen_for_events("web_english-tutor", queue)
+        channel.stop_listening_for_events(queue)
 
-        channel.send(:broadcast_sessions)
+        channel.broadcast_sessions
 
         assert queue.empty?, "a stream that has gone away must not be written to"
       end
@@ -882,7 +882,7 @@ module Rubot
           sessions: { "web_english-tutor" => "Halo" }
         )
         queue = Queue.new
-        channel.send(:listen_for_events, "web_english-tutor", queue)
+        channel.listen_for_events("web_english-tutor", queue)
 
         assert channel.send(:defer_learning?), "the turn must not wait for naming"
         channel.send(:after_learning, "web_english-tutor")
@@ -1019,7 +1019,7 @@ module Rubot
           personas: { "kanyaah" => { "name" => "Kanyaah" } },
           sessions: { "web_kanyaah" => "Halo" }
         )
-        groups = channel.send(:session_groups, "kanyaah", "web_kanyaah")
+        groups = channel.session_groups("kanyaah", "web_kanyaah")
 
         html = View.render("_sessions", groups: groups, token_query: "?token=t0k")
 
@@ -1034,7 +1034,7 @@ module Rubot
         )
         res = FakeResponse.new
 
-        channel.send(:open_persona, res, "kanyaah", nil)
+        channel.open_persona(res, "kanyaah", nil)
 
         assert_equal 303, res.status
         assert_equal "/s/web_kanyaah", res.headers["Location"]
@@ -1045,7 +1045,7 @@ module Rubot
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
         res = FakeResponse.new
 
-        channel.send(:render_session, res, "web_ghost")
+        channel.render_session(res, "web_ghost")
 
         assert_equal 404, res.status
       end

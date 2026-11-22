@@ -69,7 +69,7 @@ module Rubot
                                          [ "assistant", "Karena prefix-nya bergeser." ] ] }
         )
 
-        groups = channel.send(:search_groups, "cache")
+        groups = channel.search_groups("cache")
         hit = groups.values.flatten.first
 
         assert_equal [ "web_kanyaah" ], groups.keys
@@ -91,7 +91,7 @@ module Rubot
                       "tg_12345" => [ [ "user", "cache hit juga di sini" ] ] }
         )
 
-        assert_equal [ "web_kanyaah" ], channel.send(:search_groups, "cache").keys
+        assert_equal [ "web_kanyaah" ], channel.search_groups("cache").keys
       end
 
       def test_an_empty_query_asks_nothing_of_the_archive
@@ -100,7 +100,7 @@ module Rubot
           messages: { "web_kanyaah" => [ [ "user", "halo" ] ] }
         )
 
-        assert_empty channel.send(:search_groups, "   ")
+        assert_empty channel.search_groups("   ")
       end
 
       # Opening a hit is a page that ends at the message, not the tail of the
@@ -114,7 +114,7 @@ module Rubot
           end }
         )
 
-        page = channel.send(:history_page, "web_kanyaah", at: 41)
+        page = channel.history_page("web_kanyaah", at: 41)
 
         # Message 41 is the answer to "pesan 21", so the turn drawn last is the
         # one the hit belongs to.
@@ -144,7 +144,7 @@ module Rubot
           { "role" => "assistant", "content" => "Ketemu." }
         ])
 
-        page = channel.send(:history_page, "web_kanyaah", at: 2)
+        page = channel.history_page("web_kanyaah", at: 2)
 
         assert_equal 1, page[:landed][:idx], "the turn opens at the call"
         assert_equal 3, page[:landed][:last], "and reaches the answer"
@@ -164,7 +164,7 @@ module Rubot
           end }
         )
 
-        page = channel.send(:history_page, "web_kanyaah", at: 40)
+        page = channel.history_page("web_kanyaah", at: 40)
 
         assert_equal 40, page[:entries].last[:idx]
         assert_equal :prompt, page[:entries].last[:kind]
@@ -183,7 +183,7 @@ module Rubot
           messages: { "web_kanyaah" => [ [ "user", "satu" ], [ "assistant", "dua" ] ] }
         )
 
-        page = channel.send(:history_page, "web_kanyaah", at: 500)
+        page = channel.history_page("web_kanyaah", at: 500)
 
         assert_equal 1, page[:entries].last[:idx], "the last entry, not nothing"
         assert_same page[:entries].last, page[:landed]
@@ -200,7 +200,7 @@ module Rubot
           end }
         )
 
-        page = channel.send(:history_page, "web_kanyaah")
+        page = channel.history_page("web_kanyaah")
 
         assert_equal 59, page[:entries].last[:idx]
         assert_nil page[:landed]
@@ -305,7 +305,7 @@ module Rubot
         end
 
         res = FakeResponse.new
-        channel.send(:update_session_settings, res, "web_kanyaah",
+        channel.update_session_settings(res, "web_kanyaah",
                      form_post({ "model" => "model-a", "thinking" => "low" }))
 
         assert_equal 200, res.status
@@ -337,7 +337,7 @@ module Rubot
         channel.define_singleton_method(:session_meta) { |_sid| {} }
 
         res = FakeResponse.new
-        channel.send(:update_session_settings, res, "web_kanyaah",
+        channel.update_session_settings(res, "web_kanyaah",
                      form_post({ "model" => "made-up-model", "thinking" => "" }))
 
         assert_equal 200, res.status
@@ -360,7 +360,7 @@ module Rubot
             { "name" => "model-b", "model" => "openai/gpt-4o", "api_key" => "sk-test" } ]
 
         res = FakeResponse.new
-        channel.send(:render_session, res, "web_kanyaah", FakeRequest.new("/s/web_kanyaah"))
+        channel.render_session(res, "web_kanyaah", FakeRequest.new("/s/web_kanyaah"))
 
         assert_equal 200, res.status
         assert_includes res.body, 'value="model-a" selected'
@@ -377,7 +377,7 @@ module Rubot
         channel.define_singleton_method(:session_running?) { |_sid| true }
 
         res = FakeResponse.new
-        channel.send(:update_session_settings, res, "web_kanyaah",
+        channel.update_session_settings(res, "web_kanyaah",
                      form_post({ "model" => "model-a", "thinking" => "low" }))
 
         assert_equal 409, res.status
@@ -396,7 +396,7 @@ module Rubot
         )
         Rubot::Session.store.mark_unread("web_kanyaah~20261110-090000")
 
-        markup = channel.send(:sidebar_markup, "web_kanyaah")
+        markup = channel.sidebar_markup("web_kanyaah")
 
         assert_includes markup, %(<ul class="rail-list" id="rail-list" hx-swap-oob="true">)
         assert_includes markup, %(<span class="rail-badge" aria-hidden="true">1</span>),
@@ -410,7 +410,7 @@ module Rubot
           messages: { "web_kanyaah" => [ %w[user halo] ] }
         )
 
-        markup = channel.send(:sidebar_markup, "web_kanyaah")
+        markup = channel.sidebar_markup("web_kanyaah")
 
         refute_includes markup, "rail-badge"
       end
@@ -450,7 +450,7 @@ module Rubot
         Rubot::Session.store.mark_unread("web_kanyaah~20261110-090000")
         res = FakeResponse.new
 
-        channel.send(:render_session, res, "web_kanyaah")
+        channel.render_session(res, "web_kanyaah")
 
         assert_includes res.body, %(data-total="1"),
                         "the drawer's handle is drawn from the same fact as the roster"
@@ -470,7 +470,7 @@ module Rubot
         Rubot::Session.store.mark_unread("web_kanyaah~20261110-090000")
         Rubot::Session.store.mark_unread("web_english-tutor")
 
-        markup = channel.send(:sidebar_markup, "web_kanyaah")
+        markup = channel.sidebar_markup("web_kanyaah")
 
         assert_includes markup, %(<span class="nav-badge" id="nav-badge" data-total="2">),
                         "one waiting conversation here and one in the other persona"

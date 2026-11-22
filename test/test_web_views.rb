@@ -333,7 +333,7 @@ module Rubot
         channel.define_singleton_method(:run_turn) { |turn, _text| turn.finish("ok") }
 
         res = FakeResponse.new
-        channel.send(:create_turn, turn_request("halo"), res, "web_kanyaah")
+        channel.create_turn(turn_request("halo"), res, "web_kanyaah")
 
         band = res.body[/<div class="working-band" id="working"[^>]*>.*?<\/div>/m]
 
@@ -355,7 +355,7 @@ module Rubot
         channel.instance_variable_get(:@compacting)["web_kanyaah"] = true
 
         res = FakeResponse.new
-        channel.send(:create_turn, turn_request("halo"), res, "web_kanyaah")
+        channel.create_turn(turn_request("halo"), res, "web_kanyaah")
 
         assert_equal 409, res.status
         assert_includes res.body, "Sedang meringkas percakapan"
@@ -374,12 +374,12 @@ module Rubot
         )
         channel.instance_variable_get(:@compacting)["web_kanyaah"] = true
 
-        types = channel.send(:event_stream_opening, "web_kanyaah").map(&:first)
+        types = channel.event_stream_opening("web_kanyaah").map(&:first)
         refute_includes types, :"compact-done",
                         "a compaction still running must not be unlocked"
 
         channel.instance_variable_get(:@compacting).delete("web_kanyaah")
-        types = channel.send(:event_stream_opening, "web_kanyaah").map(&:first)
+        types = channel.event_stream_opening("web_kanyaah").map(&:first)
         assert_includes types, :"compact-done",
                         "an idle stream has to let a reconnecting page type again"
       end
@@ -414,7 +414,7 @@ module Rubot
         end
         channel.instance_variable_set(:@turn_notify_after, 3600)
 
-        channel.send(:run_turn, Turn.new(id: "t1", session_id: "web_kanyaah", prompt: "kerjain ya"), "kerjain ya")
+        channel.run_turn(Turn.new(id: "t1", session_id: "web_kanyaah", prompt: "kerjain ya"), "kerjain ya")
 
         assert_equal 1, calls.length, "the request outranks the threshold"
         slug, options = calls[0]
@@ -446,9 +446,9 @@ module Rubot
         end
 
         queue = Queue.new
-        channel.send(:listen_for_events, "web_kanyaah", queue)
+        channel.listen_for_events("web_kanyaah", queue)
 
-        channel.send(:run_turn, Turn.new(id: "t1", session_id: "web_kanyaah", prompt: "halo"), "halo")
+        channel.run_turn(Turn.new(id: "t1", session_id: "web_kanyaah", prompt: "halo"), "halo")
 
         events = []
         events << queue.pop until queue.empty?
@@ -471,9 +471,9 @@ module Rubot
         channel.define_singleton_method(:process_message) { |_text, **| "jawaban siap" }
 
         queue = Queue.new
-        channel.send(:listen_for_events, "web_kanyaah", queue)
+        channel.listen_for_events("web_kanyaah", queue)
 
-        channel.send(:run_turn, Turn.new(id: "t1", session_id: "web_kanyaah", prompt: "halo"), "halo")
+        channel.run_turn(Turn.new(id: "t1", session_id: "web_kanyaah", prompt: "halo"), "halo")
 
         events = []
         events << queue.pop until queue.empty?
@@ -507,7 +507,7 @@ module Rubot
 
         channel.instance_variable_set(:@turn_notify_after, 1)
         slow = Turn.new(id: "t1", session_id: "web_kanyaah", prompt: "halo")
-        channel.send(:run_turn, slow, "halo")
+        channel.run_turn(slow, "halo")
 
         assert_equal 1, calls.length, "a turn past the threshold announces itself"
         assert_equal "kanyaah", calls[0][:slug]
@@ -519,7 +519,7 @@ module Rubot
         calls.clear
         channel.define_singleton_method(:process_message) { |_text, **| "cepat" }
         channel.instance_variable_set(:@turn_notify_after, 60)
-        channel.send(:run_turn, Turn.new(id: "t2", session_id: "web_kanyaah", prompt: "halo"), "halo")
+        channel.run_turn(Turn.new(id: "t2", session_id: "web_kanyaah", prompt: "halo"), "halo")
 
         assert_empty calls, "a quick reply belongs to the page that asked for it"
       end
@@ -539,7 +539,7 @@ module Rubot
         channel.instance_variable_get(:@active)["web_kanyaah"] = "tabc"
 
         res = FakeResponse.new
-        channel.send(:render_session, res, "web_kanyaah")
+        channel.render_session(res, "web_kanyaah")
         html = res.body
 
         assert_includes html, "Berapa harga template?",
@@ -565,7 +565,7 @@ module Rubot
         channel.instance_variable_get(:@active)["web_kanyaah"] = "tabc"
 
         res = FakeResponse.new
-        channel.send(:render_session, res, "web_kanyaah")
+        channel.render_session(res, "web_kanyaah")
         html = res.body
 
         assert_equal 1, html.scan(%(class="msg user")).size,
@@ -604,7 +604,7 @@ module Rubot
         channel.instance_variable_get(:@active)["web_kanyaah"] = "tabc"
 
         res = FakeResponse.new
-        channel.send(:render_session, res, "web_kanyaah")
+        channel.render_session(res, "web_kanyaah")
         html = res.body
 
         assert_equal 1, html.scan(%(data-tool-key="shell_exec·ls")).size,
@@ -626,7 +626,7 @@ module Rubot
         channel.define_singleton_method(:steer_session) { |_sid, _text| true }
 
         res = FakeResponse.new
-        channel.send(:control_turn, Struct.new(:query).new({ "text" => "Pakai template Grey" }),
+        channel.control_turn(Struct.new(:query).new({ "text" => "Pakai template Grey" }),
                      res, "tabc", "steer")
 
         assert_equal 204, res.status
@@ -650,7 +650,7 @@ module Rubot
         channel.define_singleton_method(:steer_session) { |_sid, _text| false }
 
         res = FakeResponse.new
-        channel.send(:control_turn, Struct.new(:query).new({ "text" => "Halo?" }),
+        channel.control_turn(Struct.new(:query).new({ "text" => "Halo?" }),
                      res, "tabc", "steer")
 
         assert_equal 409, res.status
@@ -666,10 +666,10 @@ module Rubot
         channel.instance_variable_get(:@turns)["tabc"] = turn
         channel.instance_variable_get(:@active)["web_kanyaah"] = "tabc"
 
-        assert_nil channel.send(:live_turn, "web_kanyaah")
+        assert_nil channel.live_turn("web_kanyaah")
 
         res = FakeResponse.new
-        channel.send(:render_session, res, "web_kanyaah")
+        channel.render_session(res, "web_kanyaah")
 
         refute_includes res.body, %(sse-connect="/turns/tabc/stream")
       end
@@ -904,8 +904,8 @@ module Rubot
           { "role" => "assistant", "content" => "Sudah, ini hasilnya." }
         ]
 
-        results = channel.send(:tool_results, messages)
-        item = channel.send(:history_tool_items, messages[1]["tool_calls"].first, results, {}, "web_rubot").first
+        results = channel.tool_results(messages)
+        item = channel.history_tool_items(messages[1]["tool_calls"].first, results, {}, "web_rubot").first
 
         assert_equal :tool, item[:kind]
         assert_equal "shell_exec", item[:name]
@@ -919,7 +919,7 @@ module Rubot
         call = { "id" => "c1",
                  "function" => { "name" => "file_ops", "arguments" => %({"path":"x"}) } }
 
-        assert_equal :failed, channel.send(:history_tool_items, call, results, {}, "web_rubot").first[:state]
+        assert_equal :failed, channel.history_tool_items(call, results, {}, "web_rubot").first[:state]
       end
 
       # A call whose result never arrived is neither a success nor a failure:
@@ -928,14 +928,14 @@ module Rubot
         channel = Rubot::Channels::Web.new(channel_config: {})
         call = { "id" => "c1", "function" => { "name" => "shell_exec", "arguments" => "{}" } }
 
-        assert_equal :unknown, channel.send(:history_tool_items, call, {}, {}, "web_rubot").first[:state]
+        assert_equal :unknown, channel.history_tool_items(call, {}, {}, "web_rubot").first[:state]
       end
 
       def test_history_tolerates_arguments_that_are_not_json
         channel = Rubot::Channels::Web.new(channel_config: {})
         call = { "id" => "c1", "function" => { "name" => "shell_exec", "arguments" => "bukan json" } }
 
-        assert_equal "", channel.send(:history_tool_items, call, {}, {}, "web_rubot").first[:detail]
+        assert_equal "", channel.history_tool_items(call, {}, {}, "web_rubot").first[:detail]
       end
 
       # --- diff -----------------------------------------------------------
@@ -1027,7 +1027,7 @@ module Rubot
         channel = Rubot::Channels::Web.new(channel_config: {})
         turn = build
 
-        channel.send(:tool_finished, turn, "file_ops", "[Exit code: 0] Written 8 characters",
+        channel.tool_finished(turn, "file_ops", "[Exit code: 0] Written 8 characters",
                      { "path" => "x.rb", "before" => "a\nb\n", "after" => "a\nB\n" })
 
         diff = turn.items.find { |item| item[:kind] == :diff }
@@ -1042,7 +1042,7 @@ module Rubot
                  "function" => { "name" => "file_ops", "arguments" => %({"path":"x.rb"}) } }
         diffs = { "c1" => { "path" => "x.rb", "before" => "a\n", "after" => "a\nb\n" } }
 
-        items = channel.send(:history_tool_items, call, { "c1" => "[Exit code: 0]" }, diffs, "web_rubot")
+        items = channel.history_tool_items(call, { "c1" => "[Exit code: 0]" }, diffs, "web_rubot")
 
         assert_equal [ :tool, :diff ], items.map { |item| item[:kind] }
         assert_includes items.last[:html], %(class="diff-row is-add")
@@ -1056,7 +1056,7 @@ module Rubot
                  "function" => { "name" => "send_files", "arguments" => %({"path":"shot.png"}) } }
         diffs = { "c1" => { "path" => "shot.png", "before" => nil, "after" => "a\n" } }
 
-        items = channel.send(:history_tool_items, call, { "c1" => "Sent" }, diffs, "web_rubot")
+        items = channel.history_tool_items(call, { "c1" => "Sent" }, diffs, "web_rubot")
 
         assert_equal [ :tool, :diff ], items.map { |item| item[:kind] },
                      "a picture needs an attachment folder; the diff does not"

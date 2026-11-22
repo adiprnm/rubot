@@ -157,7 +157,7 @@ module Rubot
       # panel answers nothing.
       def test_the_panel_spells_out_the_report_behind_the_row
         channel = Rubot::Channels::Web.new(channel_config: {})
-        facts = channel.send(:usage_facts, {
+        facts = channel.usage_facts({
           model: "claude-sonnet-4", provider: "anthropic", messages: 42, requests: 17,
           prompt_tokens: 128_400, completion_tokens: 9_120, cached_tokens: 96_000,
           cache_hit_rate: 0.7477, cache_hit_rate_session: 0.9531,
@@ -184,7 +184,7 @@ module Rubot
       # run of zeros can, and that is what turns "cache 4%?" into an answer.
       def test_the_panel_shows_the_cache_share_of_each_recent_request
         channel = Rubot::Channels::Web.new(channel_config: {})
-        facts = channel.send(:usage_facts, {
+        facts = channel.usage_facts({
           model: "m", provider: "openai", messages: 4, requests: 4,
           prompt_tokens: 4_000, completion_tokens: 40, cached_tokens: 90,
           cache_hit_rate: 0.0, cache_hit_rate_session: 0.0225,
@@ -204,7 +204,7 @@ module Rubot
       # would repeat the line above it.
       def test_the_panel_omits_the_history_row_until_there_is_one
         channel = Rubot::Channels::Web.new(channel_config: {})
-        facts = channel.send(:usage_facts, {
+        facts = channel.usage_facts({
           model: "m", provider: "openai", messages: 1, requests: 1,
           prompt_tokens: 100, completion_tokens: 10, cached_tokens: 0,
           cache_hit_rate: 0.0, cache_hit_rate_session: 0.0, cache_history: [ 0.0 ],
@@ -221,7 +221,7 @@ module Rubot
       # touched.
       def test_the_panel_admits_an_empty_report
         channel = Rubot::Channels::Web.new(channel_config: {})
-        html = View.render("_usage_facts", **channel.send(:usage_facts, {}))
+        html = View.render("_usage_facts", **channel.usage_facts({}))
 
         assert_includes html, "belum diketahui"
         assert_includes html, %(id="usage-facts")
@@ -233,7 +233,7 @@ module Rubot
       # figures reads as an error even when nothing is wrong.
       def test_the_panel_never_names_the_cause_of_a_miss
         channel = Rubot::Channels::Web.new(channel_config: {})
-        facts = channel.send(:usage_facts, {
+        facts = channel.usage_facts({
           model: "m", provider: "anthropic", messages: 4, requests: 4,
           prompt_tokens: 4_000, completion_tokens: 40, cached_tokens: 0,
           cache_hit_rate: 0.0, cache_hit_rate_session: 0.0,
@@ -251,7 +251,7 @@ module Rubot
       # in full, and what the cache kept from being spent.
       def test_the_panel_says_what_was_re_read_and_what_the_cache_saved
         channel = Rubot::Channels::Web.new(channel_config: {})
-        facts = channel.send(:usage_facts, {
+        facts = channel.usage_facts({
           model: "m", provider: "openai", messages: 4, requests: 4,
           prompt_tokens: 100_000, completion_tokens: 400, cached_tokens: 87_600,
           cache_hit_rate: 0.876, cache_hit_rate_session: 0.9,
@@ -272,7 +272,7 @@ module Rubot
       # an upper bound. The panel says so rather than rounding the doubt away.
       def test_the_panel_marks_a_cost_that_is_only_an_upper_bound
         channel = Rubot::Channels::Web.new(channel_config: {})
-        facts = channel.send(:usage_facts, {
+        facts = channel.usage_facts({
           model: "m", provider: "google", messages: 1, requests: 1,
           prompt_tokens: 1_000, completion_tokens: 10, cached_tokens: 0,
           context_used: 900, context_window: 128_000, context_percent: 0.7,
@@ -331,8 +331,7 @@ module Rubot
       # A provider that already cut the account off says that too.
       def test_the_quota_draws_one_meter_per_allowance
         channel = Rubot::Channels::Web.new(channel_config: {})
-        meters = channel.send(:quota_meters,
-                              { "rolling" => { "percent" => 12.5,
+        meters = channel.quota_meters({ "rolling" => { "percent" => 12.5,
                                                "resets_at" => (Time.now + 3600).utc.iso8601 },
                                 "monthly" => { "percent" => 100.0, "limited" => true } })
         html = View.render("_quota", meters: meters, note: "")
@@ -350,7 +349,7 @@ module Rubot
       # it must not show up as a meter here.
       def test_the_quota_shows_only_the_provider_allowances
         channel = Rubot::Channels::Web.new(channel_config: {})
-        meters = channel.send(:quota_meters, { "rolling" => { "percent" => 12.5 } })
+        meters = channel.quota_meters({ "rolling" => { "percent" => 12.5 } })
 
         assert_equal 1, meters.size
         refute_equal "Konteks", meters.first[:name]
@@ -363,8 +362,7 @@ module Rubot
       def test_the_quota_counts_what_is_spent_not_what_is_left
         channel = Rubot::Channels::Web.new(channel_config: {})
         html = View.render("_quota",
-                           meters: channel.send(:quota_meters,
-                                                { "rolling" => { "percent" => 25.0 } }),
+                           meters: channel.quota_meters({ "rolling" => { "percent" => 25.0 } }),
                            note: "")
 
         assert_includes html, "25.0% terpakai"
@@ -376,7 +374,7 @@ module Rubot
       # exact either way — the colour is the second reading, not the only one.
       def test_the_quota_colours_the_bar_by_how_much_is_spent
         channel = Rubot::Channels::Web.new(channel_config: {})
-        bands = ->(percent) { channel.send(:quota_meters, { "rolling" => { "percent" => percent } }).first[:band] }
+        bands = ->(percent) { channel.quota_meters({ "rolling" => { "percent" => percent } }).first[:band] }
 
         assert_equal "calm", bands.call(12.5)
         assert_equal "calm", bands.call(49.9)
@@ -385,8 +383,7 @@ module Rubot
         assert_equal "hot", bands.call(80.0)
         assert_equal "hot", bands.call(100.0)
 
-        html = View.render("_quota", meters: channel.send(:quota_meters,
-                                                         { "weekly" => { "percent" => 62.0 } }), note: "")
+        html = View.render("_quota", meters: channel.quota_meters({ "weekly" => { "percent" => 62.0 } }), note: "")
         assert_includes html, "usage-meter is-warm", "the class the colour hangs on"
         assert_includes html, "62.0% terpakai", "the number is still there to be read"
       end
@@ -396,13 +393,13 @@ module Rubot
       def test_a_provider_without_an_allowance_says_so_in_one_sentence
         channel = Rubot::Channels::Web.new(channel_config: {})
 
-        html = View.render("_quota", meters: channel.send(:quota_meters, { unavailable: true }),
-                                              note: channel.send(:quota_note, { unavailable: true }))
+        html = View.render("_quota", meters: channel.quota_meters({ unavailable: true }),
+                                              note: channel.quota_note({ unavailable: true }))
 
         refute_includes html, "usage-meters"
         assert_includes html, "tidak punya kuota langganan"
 
-        error = View.render("_quota", meters: [], note: channel.send(:quota_note, { error: "HTTP 500" }))
+        error = View.render("_quota", meters: [], note: channel.quota_note({ error: "HTTP 500" }))
         assert_includes error, "HTTP 500"
       end
 
@@ -415,7 +412,7 @@ module Rubot
                    completion_tokens: 900, cached_tokens: 4000, cache_hit_rate: 0.8,
                    context_percent: 12.0, context_window: 100_000, context_used: 12_000 }
 
-        markup = channel.send(:usage_markup_from, report)
+        markup = channel.usage_markup_from(report)
 
         assert_equal 2, markup.scan(%(hx-swap-oob="true")).size,
                      "the row and the facts both swap out of band"
@@ -481,7 +478,7 @@ module Rubot
         )
 
         res = FakeResponse.new
-        channel.send(:edit_persona, edit_request(
+        channel.edit_persona(edit_request(
                                       "name" => "Kanyaah ID", "emoji" => "✍️",
                                       "system_prompt" => "Baru", "session_id" => "web_kanyaah"
                                     ), res, "kanyaah")
@@ -506,7 +503,7 @@ module Rubot
                                      "system_prompt" => "Lama" } }
         )
 
-        channel.send(:edit_persona, edit_request("name" => "", "emoji" => "",
+        channel.edit_persona(edit_request("name" => "", "emoji" => "",
                                                  "system_prompt" => ""),
                      FakeResponse.new, "kanyaah")
 
@@ -526,7 +523,7 @@ module Rubot
         )
 
         res = FakeResponse.new
-        channel.send(:edit_persona, edit_request("name" => "Kanyaah", "session_id" => "web_rubot"),
+        channel.edit_persona(edit_request("name" => "Kanyaah", "session_id" => "web_rubot"),
                      res, "kanyaah")
 
         assert_equal "/p/kanyaah", res.headers["Location"]
@@ -536,7 +533,7 @@ module Rubot
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
 
         res = FakeResponse.new
-        channel.send(:edit_persona, edit_request("name" => "Hilang"), res, "hilang")
+        channel.edit_persona(edit_request("name" => "Hilang"), res, "hilang")
 
         assert_equal 404, res.status
       end
@@ -549,7 +546,7 @@ module Rubot
           skills: { "writing" => "Menulis rapi", "opencode-usage" => "Cek kuota" }
         )
 
-        choices = channel.send(:persona_skill_choices, channel.send(:persona_store)["kanyaah"])
+        choices = channel.persona_skill_choices(channel.send(:persona_store)["kanyaah"])
 
         assert_equal %w[opencode-usage writing], choices.map { |choice| choice[:name] }.sort
         assert choices.all? { |choice| choice[:enabled] }, "a new persona starts with every skill on"
@@ -567,7 +564,7 @@ module Rubot
           skills: { "writing" => "Menulis rapi", "opencode-usage" => "Cek kuota" }
         )
 
-        choices = channel.send(:persona_skill_choices, channel.send(:persona_store)["kanyaah"]).to_h do |choice|
+        choices = channel.persona_skill_choices(channel.send(:persona_store)["kanyaah"]).to_h do |choice|
           [ choice[:name], choice ]
         end
 
@@ -613,7 +610,7 @@ module Rubot
           skills: { "writing" => "Menulis rapi", "opencode-usage" => "Cek kuota" }
         )
 
-        channel.send(:edit_persona, edit_request("name" => "Kanyaah"), FakeResponse.new, "kanyaah")
+        channel.edit_persona(edit_request("name" => "Kanyaah"), FakeResponse.new, "kanyaah")
 
         assert_equal %w[opencode-usage], channel.send(:persona_store)["kanyaah"].disabled_skills
       end
@@ -624,7 +621,7 @@ module Rubot
           skills: { "writing" => "Menulis rapi", "opencode-usage" => "Cek kuota" }
         )
 
-        channel.send(:edit_persona, persona_form_request("/p/kanyaah/edit",
+        channel.edit_persona(persona_form_request("/p/kanyaah/edit",
                                                         "name" => "Kanyaah",
                                                         "skills_present" => "1",
                                                         "skill" => "writing"),
@@ -641,7 +638,7 @@ module Rubot
           skills: { "writing" => "Menulis rapi", "opencode-usage" => "Cek kuota" }
         )
 
-        channel.send(:edit_persona, persona_form_request("/p/kanyaah/edit",
+        channel.edit_persona(persona_form_request("/p/kanyaah/edit",
                                                         "name" => "Kanyaah",
                                                         "skills_present" => "1"),
                      FakeResponse.new, "kanyaah")
@@ -657,7 +654,7 @@ module Rubot
           skills: { "writing" => "Menulis rapi", "opencode-usage" => "Cek kuota" }
         )
 
-        channel.send(:edit_persona, persona_form_request("/p/kanyaah/edit",
+        channel.edit_persona(persona_form_request("/p/kanyaah/edit",
                                                         "name" => "Kanyaah",
                                                         "skills_present" => "1",
                                                         "skill" => "opencode-usage"),
@@ -690,7 +687,7 @@ module Rubot
       def test_the_persona_form_saves_the_tool_output_mode
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
 
-        channel.send(:edit_persona, edit_request("name" => "Kanyaah", "tool_output" => "compact"),
+        channel.edit_persona(edit_request("name" => "Kanyaah", "tool_output" => "compact"),
                      FakeResponse.new, "kanyaah")
 
         assert_equal "compact", channel.send(:persona_store)["kanyaah"].tool_output
@@ -703,7 +700,7 @@ module Rubot
           personas: { "kanyaah" => { "name" => "Kanyaah", "tool_output" => "compact" } }
         )
 
-        channel.send(:edit_persona, edit_request("name" => "Kanyaah"), FakeResponse.new, "kanyaah")
+        channel.edit_persona(edit_request("name" => "Kanyaah"), FakeResponse.new, "kanyaah")
 
         assert_equal "compact", channel.send(:persona_store)["kanyaah"].tool_output
       end
@@ -711,7 +708,7 @@ module Rubot
       def test_a_mode_no_picker_can_produce_is_not_a_third_mode
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
 
-        channel.send(:edit_persona, edit_request("name" => "Kanyaah", "tool_output" => "ringkas"),
+        channel.edit_persona(edit_request("name" => "Kanyaah", "tool_output" => "ringkas"),
                      FakeResponse.new, "kanyaah")
 
         assert_equal "verbose", channel.send(:persona_store)["kanyaah"].tool_output
@@ -722,7 +719,7 @@ module Rubot
         channel = channel_with_sessions(personas: {})
 
         res = FakeResponse.new
-        channel.send(:create_persona, persona_form_request("/personas", "slug" => "kanyaah",
+        channel.create_persona(persona_form_request("/personas", "slug" => "kanyaah",
                                                                          "name" => "Kanyaah",
                                                                          "tool_output" => "compact"), res)
 
@@ -735,7 +732,7 @@ module Rubot
                                                 "opencode-usage" => "Cek kuota" })
 
         res = FakeResponse.new
-        channel.send(:create_persona, persona_form_request("/personas",
+        channel.create_persona(persona_form_request("/personas",
                                                            "slug" => "kanyaah",
                                                            "name" => "Kanyaah",
                                                            "skills_present" => "1",

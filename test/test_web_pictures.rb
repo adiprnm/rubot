@@ -544,7 +544,7 @@ module Rubot
             "content" => "Sent desain.png (12 bytes) as a picture. [web-attachment #{stored}]" }
         ])
 
-        items = channel.send(:history, sid).last[:items]
+        items = channel.history(sid).last[:items]
 
         assert_equal %i[tool attachments], items.last(2).map { |item| item[:kind] }
         assert_includes items.last[:list].first[:url], "/s/#{sid}/media/#{stored}"
@@ -568,7 +568,7 @@ module Rubot
           { "role" => "assistant", "content" => "Hasil subagent: puisi jadi.", "background" => true }
         ])
 
-        entries = channel.send(:history, sid)
+        entries = channel.history(sid)
 
         assert_equal %i[prompt turn turn], entries.map { |entry| entry[:kind] }
         assert_equal "Hasil subagent: puisi jadi.", entries.last[:items].first[:text]
@@ -591,7 +591,7 @@ module Rubot
           { "role" => "assistant", "content" => "Isinya begini." }
         ])
 
-        entries = channel.send(:history, sid)
+        entries = channel.history(sid)
 
         assert_equal %i[prompt turn], entries.map { |entry| entry[:kind] }
         texts = entries.last[:items].select { |item| item[:kind] == :text }.map { |item| item[:text] }
@@ -619,7 +619,7 @@ module Rubot
           ]
         }))
 
-        items = channel.send(:history, sid).last[:items]
+        items = channel.history(sid).last[:items]
 
         seam = items.find { |item| item[:kind] == :compaction }
         refute_nil seam, "the seam has to survive a refresh, not vanish with the cut"
@@ -647,7 +647,7 @@ module Rubot
             "content" => "Sent laporan.pdf (12 bytes) as a document. [web-attachment #{stored}]" }
         ])
 
-        document = channel.send(:history, sid).last[:items].last[:list].first
+        document = channel.history(sid).last[:items].last[:list].first
 
         assert_equal :document, document[:kind]
         assert_equal "PDF", document[:label]
@@ -663,7 +663,7 @@ module Rubot
         )
         write_two_reads(channel)
 
-        items = channel.send(:history, "web_rubot").last[:items]
+        items = channel.history("web_rubot").last[:items]
 
         assert_equal %w[b.rb], items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
         assert_includes items.map { |item| item[:kind] }, :text, "the answer is not part of the log"
@@ -679,7 +679,7 @@ module Rubot
         )
         write_two_rounds(channel)
 
-        items = channel.send(:history, "web_rubot").last[:items]
+        items = channel.history("web_rubot").last[:items]
 
         assert_equal %w[b.rb], items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
       end
@@ -709,7 +709,7 @@ module Rubot
                          { "role" => "assistant", "content" => "Dua-duanya oke." }
                        ])
 
-        items = channel.send(:history, sid).last[:items]
+        items = channel.history(sid).last[:items]
 
         assert_equal %w[a.rb b.rb], items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
         assert_equal %i[tool text tool text], items.map { |item| item[:kind] }
@@ -723,7 +723,7 @@ module Rubot
                                         sessions: { "web_rubot" => "Cek dua file" })
         write_two_rounds(channel)
 
-        items = channel.send(:history, "web_rubot").last[:items]
+        items = channel.history("web_rubot").last[:items]
 
         assert(items.none? { |item| item[:kind] == :step }, "no marker rows")
         assert(items.none? { |item| item.key?(:round) }, "no pass numbers")
@@ -737,7 +737,7 @@ module Rubot
         )
         write_two_reads(channel)
 
-        items = channel.send(:history, "web_rubot").last[:items]
+        items = channel.history("web_rubot").last[:items]
 
         assert_equal %w[a.rb b.rb], items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
       end
@@ -820,7 +820,7 @@ module Rubot
         channel.define_singleton_method(:owner_slug) { |_sid| "kanyaah" }
 
         res = FakeResponse.new
-        channel.send(:create_turn, turn_request("   "), res, "web_kanyaah")
+        channel.create_turn(turn_request("   "), res, "web_kanyaah")
 
         assert_equal 400, res.status
         assert_includes res.body, "Pesan kosong"

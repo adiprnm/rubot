@@ -22,7 +22,7 @@ module Rubot
         )
 
         res = FakeResponse.new
-        channel.send(:render_settings, res, FakeRequest.new("/settings"))
+        channel.render_settings(res, FakeRequest.new("/settings"))
 
         assert_includes res.body, %(value="claude-sonnet")
         assert_includes res.body, %(<option value="anthropic" selected>)
@@ -83,7 +83,7 @@ module Rubot
                                        messages: { "web_rubot" => [ %w[user halo] ] })
 
         res = FakeResponse.new
-        channel.send(:save_settings, res, form_post(
+        channel.save_settings(res, form_post(
           { "provider" => "ollama", "default_model" => "llama3", "api_key" => "sk-baru" }
         ))
 
@@ -108,7 +108,7 @@ module Rubot
         config.set_default_model_preset("cepat")
 
         res = FakeResponse.new
-        channel.send(:render_settings, res, FakeRequest.new("/settings"))
+        channel.render_settings(res, FakeRequest.new("/settings"))
 
         assert_includes res.body, %(name="preset_name" value="cepat")
         assert_includes res.body, %(value="mimo-v2.6-flash" selected)
@@ -126,7 +126,7 @@ module Rubot
         config.set_subagent_settings("planner", "model" => "mimo-v2.6-flash", "thinking" => "high")
 
         res = FakeResponse.new
-        channel.send(:render_settings, res, FakeRequest.new("/settings"))
+        channel.render_settings(res, FakeRequest.new("/settings"))
 
         assert_includes res.body, %(name="subagent_slug" value="planner")
         assert_includes res.body, %(value="mimo-v2.6-flash" selected)
@@ -139,7 +139,7 @@ module Rubot
                                        messages: { "web_rubot" => [ %w[user halo] ] })
         config = channel.instance_variable_get(:@app_config)
 
-        channel.send(:save_settings, FakeResponse.new, form_post(
+        channel.save_settings(FakeResponse.new, form_post(
           { "provider" => "opencode",
             "subagent_slug" => [ "planner", "researcher" ],
             "subagent_model_choice" => [ "mimo-v2.6-flash", "deepseek-v4.1-flash" ],
@@ -158,7 +158,7 @@ module Rubot
                                        messages: { "web_rubot" => [ %w[user halo] ] })
         config = channel.instance_variable_get(:@app_config)
 
-        channel.send(:save_settings, FakeResponse.new, form_post(
+        channel.save_settings(FakeResponse.new, form_post(
           { "provider" => "opencode",
             "new_preset_name" => [ "cepat", "lama", "" ],
             "new_preset_model" => [ "mimo-v2.6-flash", "deepseek-v4.1-flash", "" ],
@@ -182,7 +182,7 @@ module Rubot
                                        messages: { "web_rubot" => [ %w[user halo] ] })
         config = channel.instance_variable_get(:@app_config)
 
-        channel.send(:save_settings, FakeResponse.new, form_post(
+        channel.save_settings(FakeResponse.new, form_post(
           { "provider" => "opencode", "preset_name" => [ "cepat", "lama" ],
             "preset_model" => [ "mimo-v2.6-flash", "deepseek-v4.1-flash" ],
             "preset_temperature" => [ "0.2", "" ],
@@ -196,7 +196,7 @@ module Rubot
         assert_equal "cepat", config.primary_model_preset_name
         assert_equal "mimo-v2.6-flash", YAML.load_file(config.config_path).dig("model_presets", "cepat", "model")
 
-        channel.send(:save_settings, FakeResponse.new, form_post(
+        channel.save_settings(FakeResponse.new, form_post(
           { "provider" => "opencode", "preset_name" => [ "lama" ], "preset_model" => [ "" ] }
         ))
         refute_includes config.model_preset_names, "lama"
@@ -208,14 +208,14 @@ module Rubot
       def test_a_blank_key_field_keeps_the_stored_key_until_it_is_cleared
         channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
                                        messages: { "web_rubot" => [ %w[user halo] ] })
-        channel.send(:save_settings, FakeResponse.new,
+        channel.save_settings(FakeResponse.new,
                      form_post({ "provider" => "openai", "api_key" => "sk-lama" }))
 
-        channel.send(:save_settings, FakeResponse.new,
+        channel.save_settings(FakeResponse.new,
                      form_post({ "provider" => "openai", "api_key" => "" }))
         assert_equal "sk-lama", Rubot::Session.store.setting("api_key")
 
-        channel.send(:save_settings, FakeResponse.new,
+        channel.save_settings(FakeResponse.new,
                      form_post({ "provider" => "openai", "api_key" => "", "clear_api_key" => "1" }))
         assert_nil Rubot::Session.store.setting("api_key"), "the checkbox hands the key back to config.yml"
       end
@@ -231,7 +231,7 @@ module Rubot
           access_token: "token-rahasia", ig_user_id: "ig-1", username: "adipurnm"
         )
 
-        channel.send(:save_settings, FakeResponse.new,
+        channel.save_settings(FakeResponse.new,
                      form_post({ "provider" => "openai", "instagram_app_id" => "app-baru",
                                  "instagram_redirect_uri" => "https://rubot.ts.net/instagram/callback" }))
 
@@ -247,7 +247,7 @@ module Rubot
         Rubot::Session.store.set_setting("instagram_app_secret", "secret-rahasia")
 
         res = FakeResponse.new
-        channel.send(:render_settings, res, FakeRequest.new("/settings"))
+        channel.render_settings(res, FakeRequest.new("/settings"))
         refute_includes res.body, "secret-rahasia"
         assert_includes res.body, "sudah tersimpan"
       end
@@ -371,7 +371,7 @@ module Rubot
         jobs.finish(session_id: "web_rubot", run_id: "r1", status: "done", result: "puisi")
         jobs.finish(session_id: "web_rubot", run_id: "r2", status: "done", result: "docs")
 
-        sheet = channel.send(:event_stream_opening, "web_rubot").to_h[:"subagent-sheet"]
+        sheet = channel.event_stream_opening("web_rubot").to_h[:"subagent-sheet"]
 
         assert_includes sheet, %(id="subagent-sheet" hx-swap-oob="true")
         assert_equal 2, sheet.scan("subagent-done").size, "both runs read as finished"
@@ -394,14 +394,14 @@ module Rubot
         jobs.finish(session_id: "web_rubot", run_id: "r1", status: "done", result: "puisi")
         sent.clear
 
-        channel.send(:hide_finished_subagents, "web_rubot")
+        channel.hide_finished_subagents("web_rubot")
         assert_empty sent, "the tick is still inside its three seconds"
 
         # The same call, three seconds later, is what takes the row away. Time is
         # moved on the run rather than waited out.
         jobs.instance_variable_get(:@runs)["web_rubot"]["r1"][:finished_at] =
           Time.now - (Rubot::Web::SubagentJobs::DONE_MARK_SECONDS + 1)
-        channel.send(:hide_finished_subagents, "web_rubot")
+        channel.hide_finished_subagents("web_rubot")
 
         assert_match(/id="subagent-sheet"[^>]*\shidden/, sent.last[1])
       end
@@ -586,7 +586,7 @@ module Rubot
                                        messages: { "web_rubot" => [ %w[user halo] ] })
         call = { "function" => { "name" => "instagram",
                                  "arguments" => JSON.generate("operation" => "connect") } }
-        items = channel.send(:history_tool_items, call, {}, {}, "web_rubot")
+        items = channel.history_tool_items(call, {}, {}, "web_rubot")
         row = items.first
 
         assert_equal "instagram", row[:name]

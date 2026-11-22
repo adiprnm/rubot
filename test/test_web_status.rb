@@ -93,7 +93,7 @@ module Rubot
         channel.define_singleton_method(:session_for) { |_sid| handle }
 
         res = FakeResponse.new
-        channel.send(:repin_prompt, res, "web_kanyaah")
+        channel.repin_prompt(res, "web_kanyaah")
 
         assert_equal 1, asked, "the button has to ask, not just describe"
         assert_includes res.body, "dibangun ulang"
@@ -108,7 +108,7 @@ module Rubot
         channel.define_singleton_method(:session_running?) { |_sid| true }
 
         res = FakeResponse.new
-        channel.send(:repin_prompt, res, "web_kanyaah")
+        channel.repin_prompt(res, "web_kanyaah")
 
         assert_includes res.body, "Turn masih berjalan"
         refute_includes res.body, "akan dibangun ulang"
@@ -159,7 +159,7 @@ module Rubot
         channel.define_singleton_method(:session_for) { |_sid| handle }
 
         first = FakeResponse.new
-        channel.send(:compact_session_now, first, "web_kanyaah", form_post({}))
+        channel.compact_session_now(first, "web_kanyaah", form_post({}))
         assert_equal 204, first.status
         assert_equal :asked, asked.pop
 
@@ -167,7 +167,7 @@ module Rubot
         # refused instead of starting a second summarizer against the same
         # transcript.
         second = FakeResponse.new
-        channel.send(:compact_session_now, second, "web_kanyaah", form_post({}))
+        channel.compact_session_now(second, "web_kanyaah", form_post({}))
         assert_includes second.body, "Turn masih berjalan"
         assert asked.empty?, "only the first press may reach the summarizer"
 
@@ -182,7 +182,7 @@ module Rubot
         channel.define_singleton_method(:session_running?) { |_sid| true }
 
         res = FakeResponse.new
-        channel.send(:compact_session_now, res, "web_kanyaah", form_post({}))
+        channel.compact_session_now(res, "web_kanyaah", form_post({}))
 
         assert_includes res.body, "Turn masih berjalan"
         refute_includes res.body, "berhasil diringkas"
@@ -198,10 +198,10 @@ module Rubot
         channel.define_singleton_method(:session_for) { |_sid| handle }
 
         queue = Queue.new
-        channel.send(:listen_for_events, "web_kanyaah", queue)
+        channel.listen_for_events("web_kanyaah", queue)
 
         res = FakeResponse.new
-        channel.send(:compact_session_now, res, "web_kanyaah", form_post({}))
+        channel.compact_session_now(res, "web_kanyaah", form_post({}))
 
         assert_equal 204, res.status
         assert_nil res.headers["HX-Refresh"]
@@ -271,10 +271,10 @@ module Rubot
         channel.define_singleton_method(:session_for) { |_sid| handle }
 
         queue = Queue.new
-        channel.send(:listen_for_events, "web_kanyaah", queue)
+        channel.listen_for_events("web_kanyaah", queue)
 
         res = FakeResponse.new
-        channel.send(:compact_session_now, res, "web_kanyaah", form_post({}))
+        channel.compact_session_now(res, "web_kanyaah", form_post({}))
 
         # The handler answered before the summarizer was released: the page is
         # free to refresh while the work continues in the background.
@@ -315,10 +315,10 @@ module Rubot
         channel.define_singleton_method(:session_for) { |_sid| handle }
 
         queue = Queue.new
-        channel.send(:listen_for_events, "web_kanyaah", queue)
+        channel.listen_for_events("web_kanyaah", queue)
 
         res = FakeResponse.new
-        channel.send(:compact_session_now, res, "web_kanyaah", form_post({}))
+        channel.compact_session_now(res, "web_kanyaah", form_post({}))
 
         running = queue.pop
         assert_includes running[1], "Compaction sedang berlangsung"
@@ -423,10 +423,10 @@ module Rubot
                                         sessions: { "web_kanyaah" => "Halo" })
         mine = Queue.new
         elsewhere = Queue.new
-        channel.send(:listen_for_events, "web_kanyaah", mine)
-        channel.send(:listen_for_events, "web_english-tutor", elsewhere)
+        channel.listen_for_events("web_kanyaah", mine)
+        channel.listen_for_events("web_english-tutor", elsewhere)
 
-        channel.send(:broadcast_refresh, "web_kanyaah")
+        channel.broadcast_refresh("web_kanyaah")
 
         assert_equal 1, mine.size
         item = mine.pop
@@ -440,10 +440,10 @@ module Rubot
                                         sessions: { "web_kanyaah" => "Halo" })
         mine = Queue.new
         elsewhere = Queue.new
-        channel.send(:listen_for_events, "web_kanyaah", mine)
-        channel.send(:listen_for_events, "web_english-tutor", elsewhere)
+        channel.listen_for_events("web_kanyaah", mine)
+        channel.listen_for_events("web_english-tutor", elsewhere)
 
-        channel.send(:compaction_broadcast, "web_kanyaah", nil)
+        channel.compaction_broadcast("web_kanyaah", nil)
 
         refute mine.empty?
         assert elsewhere.empty?, "another session's thread must not be touched"
@@ -459,7 +459,7 @@ module Rubot
         channel.define_singleton_method(:session_for) { |_sid| handle }
 
         res = FakeResponse.new
-        channel.send(:repin_prompt, res, "web_kanyaah")
+        channel.repin_prompt(res, "web_kanyaah")
 
         assert_includes res.body, "belum di-pin"
       end
@@ -490,7 +490,7 @@ module Rubot
       # must not — otherwise the first swap would try to swap twice.
       def test_usage_markup_marks_the_fragment_as_out_of_band
         channel = Rubot::Channels::Web.new(channel_config: {})
-        markup = channel.send(:usage_markup_with, { cost: "$0.1", cache: "50%", ctx: "1%" })
+        markup = channel.usage_markup_with({ cost: "$0.1", cache: "50%", ctx: "1%" })
 
         assert_includes markup, %(hx-swap-oob="true")
         refute_includes View.render("_usage", cost: "$0.1", cache: "50%", ctx: "1%"), "hx-swap-oob"
@@ -505,7 +505,7 @@ module Rubot
                    cache_hit_rate: 0.6, context_percent: 8.2, context_window: 200_000,
                    provisional: true }
 
-        markup = channel.send(:usage_markup_from, report)
+        markup = channel.usage_markup_from(report)
 
         assert_includes markup, "~$0.0004", "an estimate is marked as one"
         assert_includes markup, "60%"
@@ -519,8 +519,8 @@ module Rubot
       def test_an_empty_live_report_draws_nothing
         channel = Rubot::Channels::Web.new(channel_config: {})
 
-        assert_nil channel.send(:usage_markup_from, nil)
-        assert_nil channel.send(:usage_markup_from, "bukan report")
+        assert_nil channel.usage_markup_from(nil)
+        assert_nil channel.usage_markup_from("bukan report")
       end
     end
   end
