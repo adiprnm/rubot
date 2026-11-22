@@ -203,7 +203,8 @@ module Rubot
         tools = tool_definitions || []
         system_prompt = build_system_prompt
         sent = messages || @session.messages
-        fingerprint = CacheProbe.fingerprint(system: system_prompt, tools: tools, messages: sent)
+        fingerprint = CacheProbe.fingerprint(system: system_prompt, tools: tools, messages: sent,
+                                             cache: fingerprint_cache)
         previous = @session.cache_records.last
         diverged_at = CacheProbe.first_divergence(previous && previous["fingerprint"], fingerprint)
         kind, role = diverged_block(diverged_at, tools: tools, messages: sent)
@@ -222,6 +223,14 @@ module Rubot
           "effort" => thinking_level.to_s,
           "auxiliary" => auxiliary
         }
+      end
+
+      # Message digests kept across the rounds of a session. See
+      # CacheProbe.fingerprint: a round that appended one tool result was
+      # re-digesting the whole transcript, which for a 300-message window is
+      # 4ms of CPU between every pair of provider calls.
+      def fingerprint_cache
+        @fingerprint_cache ||= {}
       end
 
       # What sits at the block the fingerprint broke on: the system prompt, one
