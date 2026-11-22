@@ -23,6 +23,7 @@ require_relative "agents_file"
 require_relative "tools/memory_tool"
 require_relative "memory_extractor"
 require_relative "agent/system_prompt"
+require_relative "agent/tool_execution"
 require_relative "agent/turn"
 require_relative "tools/feedback_learner"
 
@@ -167,6 +168,10 @@ module Rubot
 
       You may also delegate to any of the user's own personas by slug.
     PROMPT
+
+    # Running the calls of one tool round lives beside #process, not inside it:
+    # see agent/tool_execution.rb.
+    include ToolExecution
 
     attr_reader :config, :provider, :session, :tools, :soul, :memory, :agents_file, :skill_registry, :safety_guard, :session_model, :persona, :active_preset_name
 
@@ -2193,47 +2198,6 @@ end
     # guard question) but still owes the transcript one result per tool call.
     def skipped_call(id, name, result)
       { name: name, arguments: {}, id: id, snapshot: nil, result: result }
-    end
-
-    # Run the approved tool calls, several at a time, and return them in the
-    # order they were asked for — a caller walking the result sees a transcript
-    # exactly like the sequential one, with the wall time of the slowest call
-    # instead of the sum. Calls already carrying a result are passed through.
-    def execute_tool_calls(calls)
-      todo = calls.reject { |call| call.key?(:result) }
-      if todo.size < 2
-        return calls.map { |call| call.key?(:result) ? call : call.merge(result: run_one_tool(call)) }
-      end
-
-      queue = Queue.new
-      todo.each { |call| queue << call }
-      results = {}
-      lock = Mutex.new
-
-      [ todo.size, MAX_PARALLEL_TOOLS ].min.times.map do
-        Thread.new do
-          while (call = begin
-            queue.pop(true)
-          rescue ThreadError
-            nil
-          end)
-            result = run_one_tool(call)
-            lock.synchronize { results[call.object_id] = result }
-          end
-        end
-      end.each(&:join)
-
-      calls.map { |call| call.key?(:result) ? call : call.merge(result: results[call.object_id]) }
-    end
-
-    # One tool call, with its output made safe for the transcript and the
-    # request: a read can return a PNG, and an error is reported to the model
-    # rather than raised, because a failed tool is a thing to answer about.
-    def run_one_tool(call)
-      result = @tools.execute(call[:name], call[:arguments])
-      Session.normalize_utf8(result.to_s)
-    rescue StandardError => e
-      "ERROR: #{e.class}: #{e.message}"
     end
 
     # Returns [name, arguments, parsed_ok]. `parsed_ok` is false when the
