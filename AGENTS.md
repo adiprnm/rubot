@@ -30,11 +30,17 @@ bundle exec rubocop                # lint (RuboCop Rails Omakase, Rails cops off
 - `rake test` splits tests by method into shards and runs them in parallel;
   each shard has a 120-second default timeout. If a shard TIMEOUTs, run that
   file with `test_serial` or `-n` to isolate it.
+- A shard carries up to 20 tests (`TESTS_PER_SHARD`, default 20). Every shard
+  is a process, so more shards means more startup: with 68 test files this is
+  what keeps the suite near 22s. If the suite creeps past 25s, raise it.
 - `test/test_helper.rb` points `HOME` at a throwaway directory before
   `lib/rubot` is loaded, so tests never touch the real `~/.rubot`. Use
   `isolated_config(dir)` to build a Config in tests, never plain `Config.new`.
 - Every test file is independent and builds its own temp workspace — safe to
-  run alone or in parallel.
+  run alone or in parallel. Helpers, stubs and fake views shared by a group of
+  files live in `test/support/` (`web_channel_support.rb`, `tui_support.rb`)
+  and are mixed in with `include`; `rake test` only picks up `test/test_*.rb`,
+  so a support file is never run as a test.
 
 ## Code conventions
 
@@ -47,6 +53,10 @@ bundle exec rubocop                # lint (RuboCop Rails Omakase, Rails cops off
   are disabled (see `.rubocop.yml`) — use plain minitest `assert`/`refute`.
 - File names follow the class/function they define (`agent.rb`,
   `session_actor.rb`, `test_agent.rb`). New tests: `test/test_<topic>.rb`.
+- A test drives a public seam, never `send`. When a test needs a method that
+  is private, make that method public in the class with one documented block
+  naming it (`public :pump, :apply_event, ...` — see `Telegram` and `TUI`) and
+  say in the comment why it is a seam; anything not named there stays private.
 - Edit files with `file_ops edit` (targeted); use `write` only for new files or
   full rewrites. Never edit in place with `sed -i` or shell redirection.
 - Do not commit unless the user explicitly asks. Commit only after changes
@@ -92,6 +102,13 @@ bundle exec rubocop                # lint (RuboCop Rails Omakase, Rails cops off
   restricted tool set (no `delegate`, `subagent_results`, `notify`, `cron`,
   `instagram`) and an audit row in `subagent_runs` written through
   `StoreClient`.
+- Channels are split by domain, and a component is a module included into the
+  channel, not an object the channel owns: `Telegram` mixes in transport,
+  attachments, status, commands, messaging, scheduling, persona and the wizard,
+  and `Web` mixes in the router, auth, the route modules, turns, media and the
+  views (all under `channels/web/` and `web/`). A component reaches the
+  channel's state through `self` and never names the channel class, which is
+  what keeps each one small enough to read and to test.
 - File-backed state (`MEMORY.md`, session JSON) is written with `flock`.
 - The SQLite connection is not Ractor-safe: `SQLite3::Database` must live in
   the main Ractor (see `Rubot::Store`) and is reached through a port /
@@ -106,18 +123,23 @@ bin/                  executable + cache/benchmark scripts
 lib/rubot.rb          entry point
 lib/rubot/
   agent.rb            agent loop, system prompt, trimming/compaction
+  agent/              SystemPrompt, TurnLoop, Turn, tool execution, callbacks
   session.rb          history & session state
   config.rb           YAML config loader
   provider.rb, providers/   OpenAI/Anthropic/Ollama/OpenCode
   tool.rb, tools/     tool base + implementations (shell, file_ops, web, ...)
   channel.rb, channels/     TUI, Telegram, Web (HTMX + SSE)
+    channels/telegram/      transport, attachments, status, commands,
+                            messaging, scheduling, persona, persona_wizard
   actors/             SessionActor, SessionPool, CronActor
   store.rb, store/migrations/   SQLite session store + FTS + migrations
   memory*.rb          MEMORY.md, extractor, persona memory
   soul.rb, agents_file.rb, skill*.rb   identity, rules, skills
-  tui/, web/          UI components (TUI widgets, ERB views, assets)
+  tui/                TUI widgets + the class's own modules (commands, events,
+                      bindings); web/  router, auth, routes, turns, views
   safety_guard.rb     dangerous-command filter
 test/                 minitest, one file per topic
+test/support/         helpers and fakes shared by a group of test files
 config/               rubot.example.yml
 vendor/ruby-tui       local TUI gem
 ```
@@ -131,7 +153,7 @@ vendor/ruby-tui       local TUI gem
 - Adding a tool means registering it in `tools/registry.rb`, requiring it from
   `lib/rubot.rb`, and updating the tool-count assertions in `test/test_tools.rb`
   and `test/test_providers.rb`. If the tool changes the system prompt, add its
-  rule to `shipped_rules` so the cache epoch moves.
+  rule to `SystemPrompt#rules` so the cache epoch moves.
 - Changes to the prompt/system prompt can affect caching — see
   `test/test_payload_stability.rb`.
 - Feature documentation lives in `README.md`; the active task list is in
