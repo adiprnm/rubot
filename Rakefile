@@ -21,10 +21,10 @@ require "open3"
 TEST_FILES = FileList["test/test_*.rb"].exclude("test/test_helper.rb")
 
 # A shard carrying more than this many tests is split again. Tuned by
-# measurement: 12 balances process startup (~0.4s each) against tail latency
-# better than 8 or 16.
+# measurement: with 68 test files, 20 balances process startup (~0.4s each)
+# against tail latency better than the 12 that fit when there were fewer.
 def tests_per_shard
-  Integer(ENV["TESTS_PER_SHARD"] || 12, exception: false)&.clamp(1, 200) || 12
+  Integer(ENV["TESTS_PER_SHARD"] || 20, exception: false)&.clamp(1, 200) || 20
 end
 
 def test_workers(count)
