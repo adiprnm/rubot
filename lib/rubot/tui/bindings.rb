@@ -13,12 +13,25 @@ module Rubot
     module Bindings
       private
 
+      # The keyboard is registered in four passes, in this order: scrolling,
+      # the pointer, the keys that act on the turn, and what the prompt
+      # reports back. Nothing is rebound later.
       def wire_bindings
+        wire_scroll_keys
+        wire_pointer
+        wire_turn_keys
+        wire_prompt
+        wire_tick
+      end
+
+      def wire_scroll_keys
         @app.on_key(:page_up) { @log.scroll_by(-10) }
         @app.on_key(:page_down) { @log.scroll_by(10) }
         @app.on_key(:wheel_up) { @log.scroll_by(-3) }
         @app.on_key(:wheel_down) { @log.scroll_by(3) }
+      end
 
+      def wire_pointer
         # Drag with the left button to select; on release the text is copied
         # through OSC 52 (terminal clipboard). A press on the scrollbar column
         # grabs the bar instead: from there the drag scrolls the log until the
@@ -59,6 +72,9 @@ module Rubot
 
           copy_selection
         end
+      end
+
+      def wire_turn_keys
         @app.on_key(:ctrl_c) { @app.quit }
         # Hand the prompt to $EDITOR and take the result back into the input.
         @app.on_key(:ctrl_g) { edit_prompt }
@@ -70,7 +86,9 @@ module Rubot
           @log.clear_selection
           cancel_turn
         end
+      end
 
+      def wire_prompt
         # Typing, scrolling and new output all move the rows out from under a
         # highlight that was left on screen after a copy.
         @prompt.on(:change) { @log.clear_selection }
@@ -110,7 +128,9 @@ module Rubot
             @mailbox << line
           end
         end
+      end
 
+      def wire_tick
         @app.every(0.1) do
           pump
           refresh_thinking
