@@ -398,6 +398,126 @@ module Rubot
         assert_equal [ "c0c1c2c3c4c5c6c7c8c9" ], texts(turn)
       end
 
+      # A live turn is drawn once. Everything after that is a fragment: the row
+      # that grew, the row that arrived, the row that left. A page eight rounds
+      # into a turn never receives the seven rounds behind it again.
+      def test_a_flush_sends_only_the_rows_that_moved
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ [ "user", "Halo" ] ] })
+        turn = Rubot::Web::Turn.new(id: "t-live", session_id: "web_rubot")
+        turn.tool_started("file", "lib/a.rb")
+        turn.tool_finished("file", true)
+        turn.append_chunk("jawaban ")
+        state = { order: nil, sig: nil }
+
+        first = flushed(channel, turn, state)
+        assert_includes first, "event: turn\n", "the first paint is the whole timeline"
+        assert_includes first, "lib/a.rb"
+        assert_match(/id="t-t-live-\d+"/, first, "every row carries the id it can be replaced by")
+        refute_includes first, "hx-swap-oob", "the whole timeline is swapped as a whole"
+
+        # The answer grows: only its own row travels.
+        turn.append_chunk("bertambah")
+        grown = flushed(channel, turn, state)
+        assert_includes grown, "event: turn-patch\n"
+        assert_match(/id="t-t-live-\d+" hx-swap-oob="true"/, grown)
+        assert_includes grown, "jawaban bertambah"
+        refute_includes grown, "lib/a.rb", "the rows behind it are not sent again"
+
+        # A new row arrives: it is appended at the end. The answer above it is
+        # sealed by the same call — the live flag comes off its class — so that
+        # one block legitimately travels again; the rows before it do not.
+        turn.tool_started("file", "lib/b.rb")
+        added = flushed(channel, turn, state)
+        assert_includes added, "event: turn-patch\n"
+        assert_includes added, "lib/b.rb"
+        assert_match(/id="t-t-live-\d+">/, added, "a new row needs an id, not a destination")
+        refute_includes added, "beforeend", "the destination is the slot's job, not the row's"
+        refute_includes added, "lib/a.rb", "the first call is not re-sent"
+      end
+
+      # A new row is placed by the slot that receives it, not by an attribute
+      # on the row: that is what lets a row with no id of its own — a diff, a
+      # message the reader sent mid-turn — travel in the same payload.
+      def test_the_patch_slot_appends_to_the_timeline
+        turn = Rubot::Web::Turn.new(id: "t-live", session_id: "web_rubot")
+        turn.thinking("x")
+
+        page = Rubot::Web::View.render("_turn", turn: turn, text: nil)
+
+        assert_includes page, 'id="t-t-live-body"', "the container a new row is appended to"
+        assert_includes page, 'hx-target="#t-t-live-body"', "the slot knows where its rows go"
+        assert_includes page, 'hx-swap="beforeend"', "and that they go at the end"
+      end
+
+      # A row the turn takes back has to leave the page too: a thought too
+      # quick to mention is dropped from the timeline, and an incremental page
+      # would otherwise keep a "Thinking…" row that never happened.
+      def test_a_row_taken_back_is_deleted_from_the_page
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ [ "user", "Halo" ] ] })
+        turn = Rubot::Web::Turn.new(id: "t-live", session_id: "web_rubot")
+        turn.thinking("sebentar")
+        state = { order: nil, sig: nil }
+
+        first = flushed(channel, turn, state)
+        assert_includes first, "Thinking…", "the thought is on the page while it lasts"
+
+        turn.append_chunk("jawaban") # well under THINKING_SECONDS: the row is dropped
+        after = flushed(channel, turn, state)
+        assert_match(/hx-swap-oob="delete:#t-t-live-\d+"/, after, "the dropped row is deleted")
+        assert_includes after, "jawaban", "and the answer that replaced it is appended"
+      end
+
+      # A page that no longer holds the head of the timeline cannot be patched
+      # by appending: the whole timeline is the honest answer. This is also how
+      # a reader recovers from a fragment it never received.
+      def test_a_page_that_fell_out_of_step_is_redrawn_whole
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ [ "user", "Halo" ] ] })
+        turn = Rubot::Web::Turn.new(id: "t-live", session_id: "web_rubot")
+        turn.append_chunk("satu ")
+        turn.tool_started("file", "lib/a.rb")
+        state = { order: nil, sig: nil }
+        flushed(channel, turn, state)
+
+        state[:order] = state[:order].reverse # the page holds the rows out of order
+        out = flushed(channel, turn, state)
+        assert_includes out, "event: turn\n"
+        assert_includes out, "lib/a.rb"
+        refute_includes out, "hx-swap-oob"
+      end
+
+      # A row that changes after it is already on the page is replaced where it
+      # stands, not appended a second time. The attachments strip is the row
+      # that grows sideways: a second file joins the strip that is drawn.
+      def test_a_row_that_changes_is_replaced_in_place
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ [ "user", "Halo" ] ] })
+        turn = Rubot::Web::Turn.new(id: "t-live", session_id: "web_rubot")
+        turn.add_attachment(url: "/files/1.png", name: "one.png", id: "a1")
+        state = { order: nil, sig: nil }
+
+        first = flushed(channel, turn, state)
+        assert_includes first, "one.png"
+        assert_match(/id="t-t-live-\d+"/, first)
+
+        turn.add_attachment(url: "/files/2.png", name: "two.png", id: "a2")
+        after = flushed(channel, turn, state)
+        assert_match(/id="t-t-live-\d+" hx-swap-oob="true"/, after, "the strip is replaced in place")
+        assert_includes after, "two.png"
+        assert_includes after, "one.png", "the strip is drawn whole, cards and all"
+        refute_includes after, "hx-swap-oob=\"beforeend", "it is the same row, not a new one"
+      end
+
+      # One flush as the stream writer would send it: the same connection
+      # state carried across calls, which is what makes the patch possible.
+      def flushed(channel, turn, state)
+        out = StringIO.new
+        channel.write_event(out, turn, :turn, nil, state)
+        out.string
+      end
+
       def test_narration_stays_above_the_tool_row
         clock = FakeClock.new
         turn = build(clock)

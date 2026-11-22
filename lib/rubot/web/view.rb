@@ -144,6 +144,26 @@ module Rubot
           CGI.escapeHTML(text.to_s)
         end
 
+        # The attributes a live turn's row carries so the stream can address it:
+        # an id built from the turn and the row's own number, and — for a row
+        # that replaces one already on the page — the out-of-band instruction
+        # that lands it there. Empty for a transcript read back from disk:
+        # nothing streams into that page, and an id there would only invite a
+        # collision with the live turn's rows.
+        def item_attrs(item)
+          prefix = defined?(item_prefix) ? item_prefix : nil
+          seq = item[:seq]
+          return "" if prefix.nil? || seq.nil?
+
+          id = %( id="#{h("#{prefix}-#{seq}")}")
+          # A row that changes is replaced by id from outside the timeline. A row
+          # that is new carries no attribute: the slot the payload lands on
+          # targets the container and appends it (see _turn.erb), which is what
+          # lets a row with no id of its own — a diff, a mid-turn message — take
+          # part in the same payload.
+          defined?(item_oob) && item_oob == :replace ? %(#{id} hx-swap-oob="true") : id
+        end
+
         def fmt(text)
           Format.markdown(text, quotable: true)
         end
@@ -336,10 +356,18 @@ module Rubot
         # The row that says the turn is still running is not part of it — it
         # lives in the band above the composer, so the timeline stays a record
         # of the work rather than a place the last row keeps sliding down.
-        def turn_body(turn, token_query: "", ig_accounts: [], ig_linkable_accounts: [], ig_persona: "")
-          render("_timeline", items: turn.items, token_query: token_query,
+        def turn_body(turn, token_query: "", ig_accounts: [], ig_linkable_accounts: [], ig_persona: "",
+                      items: nil)
+          render("_timeline", items: items || turn.items, token_query: token_query,
+                              item_prefix: item_prefix_for(turn),
                               ig_accounts: ig_accounts, ig_linkable_accounts: ig_linkable_accounts,
                               ig_persona: ig_persona)
+        end
+
+        # The page writes the same ids the stream addresses its updates by, so a
+        # row that changes after a refresh is still the row that gets replaced.
+        def item_prefix_for(turn)
+          "t-#{turn.id}"
         end
 
         # A block of prose, rendered exactly as a turn's text is. The report that

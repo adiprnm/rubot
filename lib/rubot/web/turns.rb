@@ -283,10 +283,14 @@ module Rubot
           # A page that has just been painted already shows the turn's current
           # state, so the stream continues from here instead of replaying the
           # log: a refresh mid-answer lands on the latest text at once.
+          #
+          # `state` is this connection's memory of what was last sent, which is
+          # what lets a streaming flush carry one item instead of the timeline.
+          state = { order: nil, sig: nil }
           turn.each_event(from_now: true) do |type, payload|
             break unless @running
 
-            write_event(out, turn, type, payload)
+            write_event(out, turn, type, payload, state)
           end
         rescue IOError, Errno::EPIPE, Errno::ECONNRESET
           nil
@@ -369,10 +373,23 @@ module Rubot
         @event_mutex.synchronize { @event_subs.reject! { |_sid, other| other.equal?(queue) } }
       end
 
-      def write_event(out, turn, type, payload)
+      def write_event(out, turn, type, payload, state = {})
         case type
         when :turn
-          sse(out, "turn", render_timeline(turn))
+          # Only the rows that moved travel. A row added at the end is appended,
+          # a row whose content changed is replaced where it stands, and a row
+          # that left is deleted — all as out-of-band fragments, so a page that
+          # is eight rounds into a turn never receives the seven rounds behind
+          # it again. Measured on the turn this replaced: 31 rows, ~32KB per
+          # structural change, now a couple of KB.
+          items = turn.items
+          update = turn_updates(turn, items, state)
+          if update.nil?
+            remember(state, items)
+            sse(out, "turn", render_timeline(turn, items))
+          elsif !update.empty?
+            sse(out, "turn-patch", update)
+          end
         when :confirm
           sse(out, "confirm", View.render("_confirm", prompt: turn.confirm_prompt, turn_id: turn.id))
         when :notice
@@ -393,7 +410,13 @@ module Rubot
           out.write(": keepalive\n\n")
           out.flush if out.respond_to?(:flush)
         when :done
-          sse(out, "turn", render_timeline(turn))
+          # The one full render of the turn: the reader ends on exactly the
+          # timeline the server would have drawn, whatever the incremental
+          # updates did or did not land. It is also the resync point, so a
+          # missed fragment costs one turn at worst.
+          items = turn.items
+          remember(state, items)
+          sse(out, "turn", render_timeline(turn, items))
           # The footer's own sheet is not touched here: a background run has
           # already reported itself through the jobs registry, and a synchronous
           # one has no footer row at all. Writing it from the turn as well would
@@ -402,10 +425,83 @@ module Rubot
         end
       end
 
-      def render_timeline(turn)
+      def render_timeline(turn, items = nil)
         persona = owner_slug(turn.session_id) || default_slug
-        View.turn_body(turn, token_query: token_query, ig_persona: persona,
+        View.turn_body(turn, items: items, token_query: token_query, ig_persona: persona,
                              **ig_account_locals(persona))
+      end
+
+      # The same rows, drawn as their own out-of-band fragments: `:append` puts
+      # a new row at the end of the timeline, `:replace` swaps one in place by
+      # its id. Nothing else about the turn is re-sent.
+      def render_items(turn, items, mode)
+        persona = owner_slug(turn.session_id) || default_slug
+        View.render("_timeline", items: items, token_query: token_query,
+                                  item_prefix: "t-#{turn.id}", item_oob: mode,
+                                  ig_persona: persona, **ig_account_locals(persona))
+      end
+
+      # What this reader has not seen yet, as out-of-band fragments, or nil
+      # when the page has to be redrawn whole.
+      #
+      # A row is identified by `item[:seq]` — a number the turn gives it once
+      # and never reuses — so a row the compact view drops and later puts back
+      # is recognised as the row it was, not as a new one in the wrong place.
+      #
+      # The whole timeline is the answer in two cases: a reader that has not
+      # been written to yet, and a page whose rows are no longer the head of
+      # the timeline (an old row reappearing in the middle), where appending
+      # would put the new rows in the wrong order.
+      def turn_updates(turn, items, state)
+        seqs = items.map { |item| item[:seq] }
+        return nil if state[:order].nil? || seqs.any?(&:nil?)
+
+        order = state[:order]
+        sigs = state[:sig] || {}
+        now = {}
+        items.each { |item| now[item[:seq]] = item_signature(item) }
+
+        kept = order.select { |seq| now.key?(seq) }
+        return nil unless kept == seqs.first(kept.length)
+
+        gone = order.reject { |seq| now.key?(seq) }
+        changed = items.select { |item| sigs.key?(item[:seq]) && sigs[item[:seq]] != now[item[:seq]] }
+        added = items.reject { |item| sigs.key?(item[:seq]) }
+
+        body = +""
+        gone.each { |seq| body << %(<div hx-swap-oob="delete:##{item_id(turn, seq)}"></div>) }
+        body << render_items(turn, changed, :replace) unless changed.empty?
+        body << render_items(turn, added, :append) unless added.empty?
+
+        # Only once the fragments exist: a render that raised leaves the reader
+        # where it was, and the next flush offers the same rows again.
+        state[:order] = seqs
+        state[:sig] = now
+        body
+      end
+
+      # What the page was last given, so the next flush can tell what moved.
+      def remember(state, items)
+        state[:order] = items.map { |item| item[:seq] }
+        state[:sig] = items.each_with_object({}) do |item, sigs|
+          sigs[item[:seq]] = item_signature(item)
+        end
+      end
+
+      # What counts as "this row changed". The fade-in delay is per-draw
+      # bookkeeping rather than content: it moves a few milliseconds at a time
+      # for a row that was only just added, and re-sending a row whose mark did
+      # not change would be churn. Everything else — the text, a tool's state,
+      # a thought closing — is the row.
+      def item_signature(item)
+        item.reject { |key, _| key == :swap_ms }.hash
+      end
+
+      # The id the row is drawn with. The same string the template writes (see
+      # View#item_attrs), which is why the escaping is the same no-op for the
+      # hex turn ids the channel hands out.
+      def item_id(turn, seq)
+        "t-#{turn.id}-#{seq}"
       end
 
       def sse(out, event, html)

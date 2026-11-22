@@ -24,7 +24,12 @@ module Rubot
     class Turn
       HEARTBEAT_SECONDS = 15
       CONFIRM_TIMEOUT = 300
-      FLUSH_INTERVAL = 0.05
+      # How often a streaming answer is redrawn. Every flush re-renders the
+      # block being written and sends its whole HTML, so this is both CPU and
+      # bytes the reader pays: at 0.05 a 42KB answer cost 20 renders a second.
+      # 0.12 is still a steady crawl to the reader's eye (about 8 a second) and
+      # a third of the work.
+      FLUSH_INTERVAL = 0.12
 
       # A wait worth noticing earns a row; a quick one is not worth the space.
       THINKING_SECONDS = 3.0
@@ -80,6 +85,9 @@ module Rubot
         # into the keyframes with it (see note_entering_locked).
         @entered = {}
         @row_seq = 0
+        # The number each timeline row is addressed by on the page. Assigned
+        # when a row is first read (see #items), never reused.
+        @seq = 0
         @confirm = nil
         @response = nil
         @confirm_mutex = Mutex.new
@@ -168,8 +176,16 @@ module Rubot
       # A copy, so the renderer never shares a String the producer thread is
       # still appending to. The mode decides which rows survive: a compact turn
       # keeps only the call it is on (see Rubot::Web::ToolRows).
+      #
+      # Each row also gets a number the first time it is read, and keeps it for
+      # the life of the turn. It is an identity, not a position: a row the
+      # compact view drops and later puts back (a call that turned out to lead
+      # into an answer) comes back with the number it had, which is what lets
+      # the page replace that row where it stands instead of redrawing the
+      # whole timeline (see Web::Turns#turn_updates).
       def items
         @mutex.synchronize do
+          @items.each { |item| item[:seq] ||= (@seq = @seq.to_i + 1) }
           list = @items.map do |item|
             copy = item.dup
             copy[:text] = item[:text].dup if item[:text]

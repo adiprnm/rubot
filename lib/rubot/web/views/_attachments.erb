@@ -13,12 +13,11 @@
     them is a link, because that is what a download is: the same URL the
     lightbox or the tab offers, under the reader's own name.
 
-    The whole timeline is redrawn on every event of a running turn, and a card
-    that is rebuilt with it is fetched again — five of them blink in step with
-    the answer. So each one carries its stored id and asks htmx to keep the
-    node it already has: the file stays exactly as drawn while the text under
-    it grows. -%>
-<div class="attachments" role="group" aria-label="Lampiran dari Rubot">
+    The strip is the row that changes when a file joins it, so the live turn
+    addresses it by id and replaces it whole (see View#item_attrs). The cards
+    inside carry their stored id and ask htmx to keep the node it already has:
+    the file stays exactly as drawn instead of being fetched again. -%>
+<div class="attachments"<%= defined?(attrs) ? attrs : "" %> role="group" aria-label="Lampiran dari Rubot">
   <% attachments.each do |file| -%>
   <% if file[:kind] == :video -%>
   <figure class="attachment attachment--video"

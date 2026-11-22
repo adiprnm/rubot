@@ -1,17 +1,22 @@
 <%# The turn's timeline, in the order it happened: what the model thought,
-    what it said before reaching for a tool, the tool row, the answer. Rendered
-    whole on every change, so the reader never has to reconcile two streams. -%>
+    what it said before reaching for a tool, the tool row, the answer.
+
+    A live turn draws every row with an id (see View#item_attrs), and the
+    stream then sends only the rows that changed: a row added at the end, a row
+    whose content moved, a row that left. The whole timeline is only re-sent
+    when the page has to be resynced — at the close of the turn. A transcript
+    read back from disk passes no `item_prefix` and gets no ids at all. -%>
 <% items.each do |item| -%>
 <% case item[:kind] -%>
 <% when :thinking -%>
 <% if item[:closed_at] -%>
-<p class="row thinking done"><span class="mark think" aria-hidden="true"><%= mark(:thought) %></span><span class="label">Thought for <%= dur(item[:elapsed]) %></span></p>
+<p class="row thinking done"<%= item_attrs(item) %>><span class="mark think" aria-hidden="true"><%= mark(:thought) %></span><span class="label">Thought for <%= dur(item[:elapsed]) %></span></p>
 <% else -%>
-<p class="row thinking" data-since="<%= item[:epoch] %>" data-threshold="<%= Turn::THINKING_SECONDS %>"><span class="mark think" aria-hidden="true"><%= mark(:think) %></span><span class="label glow" aria-label="Thinking…"><%= glow("Thinking…") %></span><span class="live-clock"></span></p>
+<p class="row thinking" data-since="<%= item[:epoch] %>" data-threshold="<%= Turn::THINKING_SECONDS %>"<%= item_attrs(item) %>><span class="mark think" aria-hidden="true"><%= mark(:think) %></span><span class="label glow" aria-label="Thinking…"><%= glow("Thinking…") %></span><span class="live-clock"></span></p>
 <% end -%>
 <% when :tool -%>
 <% slow = item[:elapsed] && item[:elapsed] >= Turn::SLOW_TOOL_SECONDS -%>
-<div class="tool-row <%= item[:state] %><%= " is-swapped" if item[:swap_ms] %>" data-tool-key="<%= h("#{item[:name]}·#{item[:detail]}") %>"<% if item[:swap_ms] %> style="animation-delay: -<%= item[:swap_ms] %>ms"<% end %><% if item[:state] == :running %> data-since="<%= item[:epoch] %>" data-threshold="<%= Turn::SLOW_TOOL_SECONDS %>"<% end %>>
+<div class="tool-row <%= item[:state] %><%= " is-swapped" if item[:swap_ms] %>" data-tool-key="<%= h("#{item[:name]}·#{item[:detail]}") %>"<% if item[:swap_ms] %> style="animation-delay: -<%= item[:swap_ms] %>ms"<% end %><% if item[:state] == :running %> data-since="<%= item[:epoch] %>" data-threshold="<%= Turn::SLOW_TOOL_SECONDS %>"<% end %><%= item_attrs(item) %>>
   <span class="mark <%= item[:state] %>" aria-hidden="true"><%= state_mark(item[:state]) %></span>
   <span class="tool-name"><%= h(item[:name]) %></span>
 <% if item[:op].to_s != "" -%>
@@ -23,16 +28,16 @@
 <% when :steer -%>
 <%= View.render("_message", role: "user", text: item[:text]) %>
 <% when :attachments -%>
-<%= View.render("_attachments", attachments: item[:list]) %>
+<%= View.render("_attachments", attachments: item[:list], attrs: item_attrs(item)) %>
 <% when :instagram_connect -%>
 <%= View.render("_instagram_connect", token_query: token_query, ig_accounts: ig_accounts,
                                       ig_linkable_accounts: ig_linkable_accounts, ig_persona: ig_persona) %>
 <% when :text -%>
-<div class="text<%= item[:live] ? " is-live" : "" %>"><%= fmt(item[:text]) %></div>
+<div class="text<%= item[:live] ? " is-live" : "" %>"<%= item_attrs(item) %>><%= fmt(item[:text]) %></div>
 <% when :diff -%>
 <%= item[:html] %>
 <% when :compaction -%>
-<div class="compaction-row<%= " is-running" if item[:state] == :running %><%= " is-done" unless item[:state] %>" role="status" title="Ringkasan otomatis: percakapan lama diringkas untuk mengosongkan konteks">
+<div class="compaction-row<%= " is-running" if item[:state] == :running %><%= " is-done" unless item[:state] %>" role="status" title="Ringkasan otomatis: percakapan lama diringkas untuk mengosongkan konteks"<%= item_attrs(item) %>>
   <span class="compaction-mark" aria-hidden="true"><%= item[:state] == :running ? mark(:think) : mark(:compaction) %></span>
 <% if item[:state] == :running -%>
   <span class="compaction-label glow" aria-label="Compaction sedang berlangsung"><%= glow("Compaction sedang berlangsung…") %></span>
@@ -44,7 +49,7 @@
 <% end -%>
 </div>
 <% when :subagent -%>
-<div class="subagent-row subagent-<%= h(item[:phase]) %>"<% if item[:task] && !item[:task].empty? %> title="<%= h(item[:task]) %>"<% end %>>
+<div class="subagent-row subagent-<%= h(item[:phase]) %>"<% if item[:task] && !item[:task].empty? %> title="<%= h(item[:task]) %>"<% end %><%= item_attrs(item) %>>
   <span class="subagent-mark" aria-hidden="true"><%= item[:phase] == "done" ? "✓" : (item[:phase] == "failed" ? "✗" : "⟡") %></span>
   <span class="subagent-name"><%= h(item[:agent]) %></span>
   <span class="subagent-detail"><%= h(item[:detail]) %></span>

@@ -14,7 +14,17 @@
      sse-close="done"
      aria-live="polite"
      x-init="$store.turn.active = '<%= turn.id %>'">
-  <div class="turn-body" sse-swap="turn"><%= timeline(turn) %></div>
+  <%# The id is what a row added at the end is appended to; the rows inside
+      carry ids of their own (see View#item_attrs) so one of them can be
+      replaced without touching its neighbours. -%>
+  <div class="turn-body" id="t-<%= h(turn.id) %>-body" sse-swap="turn"><%= timeline(turn) %></div>
+  <%# Where a row that moved arrives. The payload is plain rows: the slot points
+      at the timeline's container and appends them, so a row that has no id of
+      its own (a diff, a mid-turn message) lands in place like any other. Rows
+      that change or leave still carry hx-swap-oob and are taken out of the
+      payload before this append runs; this slot then stays empty. -%>
+  <div class="turn-patch" sse-swap="turn-patch" hx-target="#t-<%= h(turn.id) %>-body"
+       hx-swap="beforeend" hidden></div>
   <%# A confirmation that was already waiting when the page was refreshed is
       drawn here: its event has long been in the log the stream no longer
       replays, so leaving the slot empty would strand a turn behind a question
