@@ -122,27 +122,54 @@ bundle exec rubocop                # lint (RuboCop Rails Omakase, Rails cops off
 bin/                  executable + cache/benchmark scripts
 lib/rubot.rb          entry point
 lib/rubot/
-  agent.rb            agent loop, system prompt, trimming/compaction
-  agent/              SystemPrompt, TurnLoop, Turn, tool execution, callbacks
+  agent.rb            turn entry, cancellation/steering, session wiring
+  agent/              SystemPrompt, TurnLoop, Turn, tool execution,
+                      tool wiring, message building, prompt pinning,
+                      model/preset precedence, usage accounting,
+                      background tasks, delegation, callbacks
   session.rb          history & session state
+  archive.rb          the one resolver for the open SQLite archive
   config.rb           YAML config loader
+  config/             model presets, provider settings
   provider.rb, providers/   OpenAI/Anthropic/Ollama/OpenCode
   tool.rb, tools/     tool base + implementations (shell, file_ops, web, ...)
   channel.rb, channels/     TUI, Telegram, Web (HTMX + SSE)
     channels/telegram/      transport, attachments, status, commands,
                             messaging, scheduling, persona, persona_wizard
   actors/             SessionActor, SessionPool, CronActor
-  store.rb, store/migrations/   SQLite session store + FTS + migrations
+  store.rb            archive: sessions, messages, transcripts
+  store/              row groups (search, settings, push subscriptions,
+                      delegated runs) + migrations/
   memory*.rb          MEMORY.md, extractor, persona memory
   soul.rb, agents_file.rb, skill*.rb   identity, rules, skills
+  formatting.rb       duration/text shaping shared by every channel
+  persona_store.rb    persona registry; PersonaStore.from_config builds one
   tui/                TUI widgets + the class's own modules (commands, events,
-                      bindings); web/  router, auth, routes, turns, views
+                      bindings); web/  router, auth, routes, turns, views,
+                      markdown (web/format.rb)
   safety_guard.rb     dangerous-command filter
 test/                 minitest, one file per topic
 test/support/         helpers and fakes shared by a group of test files
 config/               rubot.example.yml
 vendor/ruby-tui       local TUI gem
 ```
+
+## Where the responsibilities sit
+
+- A class that grew its own modules keeps one object: the modules are
+  `include`d, so a caller and a test still see `Agent#build_messages`,
+  `Store#search`, `Config#provider_settings`. When moving a method into one of
+  them, move it verbatim (comments included) and keep its visibility; a stub
+  seam used by tests (`Agent#system_prompt`, `Telegram#truncate`) is a real
+  method, not a call site to inline.
+- Personas are read through `PersonaStore.from_config(config, dir: ...)`; do not
+  spell out the four constructor arguments in a new channel.
+- The open archive is read through `Rubot::Archive.current`, never through
+  `Session.store` directly. `Session.store` remains the variable behind it for
+  the JSON fallback path.
+- Duration labels, text truncation and SSE parsing each have one implementation
+  (`Formatting`, `Formatting.truncate`, `Rubot::Sse`); a channel that needs a
+  seam over one keeps a one-line wrapper rather than a second copy.
 
 ## Workflow
 

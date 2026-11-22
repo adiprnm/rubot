@@ -87,7 +87,7 @@ module Rubot
 
       # Injected by the Agent with the session's store port. Inside a session
       # Ractor SQLite cannot be opened, so the tool must reach the archive
-      # through StoreService instead of Session.store. When no port is set
+      # through StoreService instead of the open archive. When no port is set
       # (tests, REPL, channels on the main Ractor) it falls back to the store.
       attr_accessor :store_port
 

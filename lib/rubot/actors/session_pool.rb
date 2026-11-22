@@ -37,7 +37,7 @@ module Rubot
 
         # The archive lives here because this runs in the main Ractor, where
         # SQLite is allowed. Actors reach it through `store_port`; readers
-        # through Session.store. A failure to open it falls back to JSON.
+        # through Rubot::Archive. A failure to open it falls back to JSON.
         @store, @store_service = open_store(@sessions_dir)
         Rubot::Archive.current = @store
 

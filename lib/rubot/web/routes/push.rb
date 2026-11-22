@@ -111,9 +111,10 @@ module Rubot
           end
         end
 
-        # Built per call rather than memoised: the archive behind `Session.store`
-        # is a setting tests swap between one call and the next, and a notifier
-        # holding the old one would answer from a stale list of devices.
+        # Built per call rather than memoised: the archive behind
+        # `Rubot::Archive.current` is a setting tests swap between one call and
+        # the next, and a notifier holding the old one would answer from a stale
+        # list of devices.
         def push_notifier
           store = Rubot::Archive.current
           store && Notifier.new(store: store, vapid: vapid, subject: @vapid_subject,
