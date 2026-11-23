@@ -2877,43 +2877,62 @@ select:focus-visible { outline: none; }
 .composer-notice[hidden] { display: none; }
 .composer-notice .notice, .composer-notice .error { margin: 0; }
 
-/* The wrapper around the field and the two pickers. Under a mouse it draws
-   nothing: `display: contents` hands its children straight to the chat column,
-   so the field and the pickers keep the separate rows they have always had.
-   On a phone it is the box itself (see the compact layout below). */
-/* Under a mouse the wrapper draws nothing at all: the field keeps its own box
-   and the caption keeps its own row under it. On a phone the wrapper becomes
-   the box and the caption moves inside it, beside the send button — see the
-   phone block below. */
-.composer-box { display: contents; }
+/* One box holds the field, the pill saying what the session runs on, and the
+   buttons that send: a prompt and the choice of model and effort that spends
+   it are read as one thing, and separate outlines stacked under each other
+   said they were two. The single outline is also the only chrome the row of
+   controls gets, which is why the pill is a tint rather than a box of its own.
 
-.composer {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
+   Three bands, laid out as a grid: the quoted paragraphs, the field across the
+   whole box, and under it one row of controls — the pill at the left, the
+   buttons at the right. The field is the form and the buttons live in that
+   form's row, so the two are placed by this grid rather than by the markup:
+   `display: contents` on the form and on its row hands their children to the
+   box, which is what lets the field have a line of its own while the button
+   still shares one with the pill.
+
+   The rows are placed rather than templated on purpose: a `grid-template`
+   reserves the quote row whether or not there is a quote in it, and the gap
+   either side of a row of nothing is a strip of air above the field that made
+   the first line look pushed away from the top of its own box. */
+.composer-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  /* The pill and the buttons are given their columns but not their row, and
+     the buttons come first in the markup: without `dense` the row they take
+     would push the pill onto a third line of its own. */
+  grid-auto-flow: row dense;
+  align-items: center;
+  column-gap: 0.5rem;
+  /* Air under the field, where the line of controls is a different thing from
+     the line being typed; none above it, where the box is already the frame. */
+  row-gap: 0.55rem;
   width: calc(100% - 3.2rem);
   max-width: 52rem;
-  margin: 0 auto 0.55rem;
-  padding: 0.4rem 0.4rem 0.4rem 0.8rem;
+  margin: 0 auto 0.5rem;
+  padding: 0.3rem 0.45rem 0.35rem 0.8rem;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--bg-dim);
   transition: border-color .12s, background .12s;
 }
 
-.composer:focus-within { border-color: var(--fg-faint); }
+.composer-box:focus-within { border-color: var(--fg-faint); }
 
-.composer-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 0.5rem;
-}
+/* The form is a box of contents and no box of its own: the outline, the
+   padding and the rows all belong to the box above. */
+.composer,
+.composer-row { display: contents; }
+
+/* Both of these take the whole width of the box, and each one that is present
+   opens its own row. */
+.composer-quotes,
+.composer textarea { grid-column: 1 / -1; }
 
 .composer textarea {
-  flex: 1;
   min-width: 0;
   min-height: 1.7rem;
-  padding: 0.15rem 0;
+  padding: 0;
   border: 0;
   background: none;
   color: var(--fg);
@@ -2932,16 +2951,29 @@ select:focus-visible { outline: none; }
 
 .composer textarea::placeholder { color: var(--fg-faint); font-style: italic; }
 
-.composer-actions { display: flex; gap: 0.4rem; }
+/* The buttons end the row of controls, at the far side of the box from the
+   pill: the two are read together, the choice and the press that spends it. */
+.composer-actions {
+  grid-column: 2;
+  justify-self: end;
+  display: flex;
+  gap: 0.4rem;
+}
 
-/* Two icon buttons rather than two words. The padding is the same on every
-   side so the square the icon sits in is the button's shape, and `line-height:
-   0` keeps the svg's own baseline from making it taller than it is. */
+/* Two round icon buttons rather than two words. The circle is the shape a
+   thumb aims at and it is the same shape at every width, so the row of
+   controls under the field stays one language; `line-height: 0` keeps the
+   svg's own baseline from making the button taller than it is. The size is
+   the pill's, too: the two are read as one row of controls, and a circle
+   taller than the pill beside it leaves the row looking ragged. */
 .composer-actions .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0.3rem;
+  width: 1.85rem;
+  height: 1.85rem;
+  padding: 0;
+  border-radius: 50%;
   line-height: 0;
 }
 
@@ -3757,13 +3789,20 @@ body.lightbox-open { overflow: hidden; }
     padding-right: 1rem;
   }
 
-  .composer-box,
-  .status-line { width: calc(100% - 2rem); }
-
-  /* The band above the field follows the field's own gutter: on a phone the
-     two edges are close enough that any difference reads as a misalignment. */
+  /* The rules under the thread keep the thread's own gutter, so the field, the
+     band above it and the status line under it all start and end on the same
+     two lines the conversation does. Margins rather than a centred width: the
+     thread's gutter is not the same on both sides, and centring a narrower box
+     would land it a pixel off the turn it answers. */
+  .status-line,
   .working-band,
-  .composer-notice { width: calc(100% - 2rem); }
+  .composer-notice,
+  .composer-box {
+    width: auto;
+    max-width: none;
+    margin-left: 1.1rem;
+    margin-right: 1rem;
+  }
 
   .msg .bubble { max-width: 90%; }
 
@@ -3879,23 +3918,20 @@ body.lightbox-open { overflow: hidden; }
 
 /* ---------- session model and thinking ------------------------ */
 
-/* Under a mouse the pill sits on a row of its own, under the box it belongs
-   to, on the same gutter and column as the field above. On a phone it moves
-   inside that box — see the phone block. */
+/* The pill is a row of the composer box itself, so it carries no width, no
+   gutter and no margin of its own: the box above already holds all three, and
+   a second set would push the pill off the field it belongs to. */
 .session-settings {
+  grid-column: 1;
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  width: calc(100% - 3.2rem);
-  max-width: 52rem;
-  margin: -0.15rem auto 0.5rem;
-  padding: 0 0.8rem;
   min-width: 0;
 }
 
 /* The whole choice, worn as one pill: the model, a dot, the effort. A pill
-   rather than a caption because it sits inside the box the reader types in on
-   a phone, and a bare line of mono there would read as text somebody wrote.
+   rather than a caption because it sits inside the box the reader types in,
+   and a bare line of mono there would read as text somebody wrote.
 
    Filled with a tint of the text colour rather than with a surface colour or a
    border: the box already draws the only outline this row needs, and a step of
@@ -3908,10 +3944,10 @@ body.lightbox-open { overflow: hidden; }
   gap: 0.32rem;
   max-width: 100%;
   min-width: 0;
-  /* The height of the button it shares a row with: the two are read as one
-     line, and a pill shorter than the button beside it makes the row look
-     misaligned at the bottom, which is the edge the eye follows. */
-  height: 1.7rem;
+  /* The three controls of the composer are read as one set even though they
+     sit on two rows, so the pill is drawn at the buttons' own height: a pill
+     shorter than the circle above it reads as a caption, not as a control. */
+  height: 1.85rem;
   padding: 0 0.72rem;
   font-family: var(--mono);
   font-size: 10px;
@@ -4111,15 +4147,13 @@ body.lightbox-open { overflow: hidden; }
 
 .settings-apply { padding: 0.35rem 0.95rem; font-size: 12px; }
 
-/* A phone has no hover and no room for a caption the reader has to squint at:
-   the caption grows to a thumb-sized control, and the dialog keeps its place in
-   the middle of the screen with only its width changing. The breakpoint is the
-   one the composer and the status line already change at. */
+/* A phone keeps the pill exactly as the laptop draws it — same height, same
+   type, same distance from the box. Only the dialog changes shape here, because
+   it has a screen to fit into rather than a column to sit in. The one thing
+   that grows is the size of the controls, and that lives with the rest of the
+   phone layout below. */
 @media (max-width: 860px) {
   .session-settings { gap: 0.45rem; }
-  /* 2.1rem is the send button's own height on a phone, so the pill and the
-     button end on the same line and start on it too. */
-  .session-trigger { height: 2.1rem; font-size: 10.5px; padding: 0 0.85rem; }
 
   .settings-dialog { width: calc(100vw - 1.5rem); max-height: min(80vh, 30rem); }
   .model-list { max-height: none; }
@@ -4521,77 +4555,24 @@ html:not(.js) .settings-tabs { display: none; }
   .working-band { min-height: 0.6rem; margin: 0.1rem auto 0.4rem; }
   .thread { padding-bottom: 0.3rem; }
 
-  /* On a phone the wrapper is the box the reader actually types in: the field
-     takes a row of its own, and the pill and the send button share the row
-     under it, inside that box. `display: contents` on the two forms is what
-     lets their children be rows of this grid while the markup keeps a form per
-     request — a prompt and a session setting are two different posts. */
-  .composer-box {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas:
-      "quotes  quotes"
-      "field   field"
-      "pickers actions";
-    align-items: end;
-    column-gap: 0.4rem;
-    row-gap: 0.15rem;
-    width: calc(100% - 2rem);
-    margin: 0 auto 0.25rem;
-    /* One inset on every side: the field's first character, the pill's left
-       edge and the button's right edge all sit on the same line as the box's
-       own corner. */
-    padding: 0.5rem 0.6rem;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    background: var(--bg-dim);
-    transition: border-color .12s, border-radius .12s;
-  }
+  /* The phone draws the box the laptop draws, tighter: the field keeps its
+     line with the buttons at its end, the pill keeps the row under it, inside
+     the same outline. Two things change here — the inset, because a phone has
+     less to spare, and the size of the controls, because a thumb is not a
+     mouse. The gutter comes from the narrow block above, which is the width
+     the thread uses, so the box stays in line with the conversation. */
+  .composer-box { row-gap: 0.45rem; padding: 0.4rem 0.45rem 0.35rem 0.65rem; }
 
-  .composer-box:focus-within { border-color: var(--fg-faint); }
+  .composer-box textarea { min-height: 1.4rem; font-size: 16px; line-height: 1.45; }
 
-  /* The box keeps the width it has when the field is empty. It used to grow to
-     the edges while typing, which read as the box jumping under the thumb and
-     left the field wider than the conversation above it; the gutter is the
-     width the thread uses, so the two stay in line instead. */
+  /* 2.1rem is a circle a thumb can hit, and the pill grows to the same height
+     so the two control rows read as one set. */
+  .composer-actions .btn,
+  .session-trigger { height: 2.1rem; }
 
-  .composer-box .composer,
-  .composer-box .composer-row { display: contents; }
-
-  .composer-box .composer-quotes { grid-area: quotes; }
-
-  .composer-box textarea {
-    grid-area: field;
-    width: 100%;
-    min-height: 1.4rem;
-    font-size: 16px;
-    line-height: 1.45;
-  }
-
-  .composer-box .composer-actions { grid-area: actions; gap: 0.3rem; }
-
-  /* A circle is what a thumb aims at, and this is the one control pressed on
-     every single prompt. */
-  .composer-box .composer-actions .btn {
-    width: 2.1rem;
-    height: 2.1rem;
-    padding: 0;
-    border-radius: 50%;
-  }
-
-  .composer-box .composer-actions .btn svg { width: 16px; height: 16px; }
-
-  /* The pill rides the box's own gutter, in the corner the thumb already
-     rests in, so the row's own width, centring and margins would only push it
-     off it. */
-  .composer-box .session-settings {
-    grid-area: pickers;
-    width: auto;
-    max-width: none;
-    margin: 0;
-    padding: 0;
-    gap: 0.5rem;
-  }
+  .composer-actions .btn { width: 2.1rem; }
+  .composer-actions .btn svg { width: 16px; height: 16px; }
+  .session-trigger { font-size: 10.5px; padding: 0 0.85rem; }
 
   .status-line { gap: 0.5rem; padding: 0 0 0.2rem; }
   .status-line .metrics { gap: 0.5rem; }
