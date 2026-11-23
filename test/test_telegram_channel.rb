@@ -402,7 +402,7 @@ module Rubot
 
       assert_equal 1, texts.size
       assert_includes texts[0], "💻 `shell_exec` · step 1 · 0s"
-      assert_includes texts[0], "bundle exec rspec"
+        assert_includes texts[0], "Menjalankan test"
       refute_includes texts[0], "Running tool"
       refute_includes texts[0], "Still working"
     end

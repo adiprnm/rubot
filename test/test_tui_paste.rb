@@ -353,8 +353,8 @@ module Rubot
       texts = log_texts(repl)
       refute texts.each_cons(2).any? { |above, below| above.empty? && below.empty? },
              "no double blank left behind: #{texts.map { |t| t.empty? ? '·' : t }.inspect}"
-      assert_equal texts.index { |text| text.include?("✓ shell_exec ls") } + 1,
-                   texts.index { |text| text.include?("⚒ shell_exec cat x") },
+      assert_equal texts.index { |text| text.include?("✓ Menampilkan isi direktori ini") } + 1,
+                   texts.index { |text| text.include?("⚒ Membaca isi x") },
                    "back-to-back tool rows stay adjacent"
     end
 
@@ -400,7 +400,7 @@ module Rubot
       assert thought, "the block is kept: #{texts.inspect}"
       assert_equal "", texts[thought - 1], "with a blank row above it"
       assert_equal "", texts[thought + 1], "and one below it"
-      assert texts[thought + 2].include?("cat x"), "the next tool row follows the blank"
+      assert texts[thought + 2].include?("Membaca isi x"), "the next tool row follows the blank"
     end
 
     # A quick thought between two tool rows leaves no seed of a blank: the
@@ -421,8 +421,8 @@ module Rubot
 
       texts = log_texts(repl)
       refute texts.any? { |text| text.include?("Thought for") }, "no block: #{texts.inspect}"
-      first = texts.index { |text| text.include?("shell_exec ls") }
-      assert_equal first + 1, texts.index { |text| text.include?("shell_exec cat x") },
+      first = texts.index { |text| text.include?("Menampilkan isi direktori ini") }
+      assert_equal first + 1, texts.index { |text| text.include?("Membaca isi x") },
                    "the two tool rows are adjacent"
     end
 

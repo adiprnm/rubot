@@ -1075,10 +1075,10 @@ module Rubot
 
         assert_includes view, "❯ fix the parser", "the user prompt is echoed"
         assert_includes view, "Let me look at the file.", "the narration is restored"
-        assert_includes view, "✓ file_ops read /src/parser.rb", "the finished tool row is restored"
+        assert_includes view, "✓ Membaca isi /src/parser.rb", "the finished tool row is restored"
         assert_includes view, "The blank line was skipped.", "the answer is restored"
-        assert_operator view.index("❯ fix the parser"), :<, view.index("✓ file_ops")
-        assert_operator view.index("✓ file_ops"), :<, view.index("The blank line was skipped.")
+        assert_operator view.index("❯ fix the parser"), :<, view.index("✓ Membaca isi /src/parser.rb")
+        assert_operator view.index("✓ Membaca isi /src/parser.rb"), :<, view.index("The blank line was skipped.")
       end
     end
 
@@ -1101,7 +1101,7 @@ module Rubot
         out, _err = capture_io { repl.handle_command("/resume work") }
 
         assert_includes out, "❯ fix the parser"
-        assert_includes out, "✓ shell_exec grep -n ruby"
+        assert_includes out, "✓ Mencari \"ruby\" di dalam berkas"
         assert_includes out, "Found it."
       end
     end

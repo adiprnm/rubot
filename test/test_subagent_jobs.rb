@@ -21,7 +21,7 @@ class TestSubagentJobs < Minitest::Test
     @jobs.update(session_id: "s1", run_id: "r1", phase: "tool", detail: "grep rhyme")
     @jobs.update(session_id: "s1", run_id: "r1", phase: "tool", detail: "write notes.md")
     run = @jobs.runs("s1").first
-    assert_equal "2 call · write notes.md", run[:line]
+    assert_equal "2 langkah · write notes.md", run[:line]
     assert_equal 1, @jobs.running_count("s1")
 
     @now += 12.4
@@ -30,7 +30,7 @@ class TestSubagentJobs < Minitest::Test
     run = @jobs.runs("s1").first
     assert_equal "done", run[:phase]
     assert_equal "a poem", run[:result]
-    assert_equal "2 call · 12.4s", run[:line]
+    assert_equal "2 langkah · 12.4s", run[:line]
     assert_equal 0, @jobs.running_count("s1")
     assert_equal [ "s1" ] * 4, changed
   end
@@ -43,6 +43,7 @@ class TestSubagentJobs < Minitest::Test
     run = @jobs.runs("s1").first
     assert_equal "rate limited", run[:line]
     refute_includes run[:line], "call"
+    refute_includes run[:line], "langkah"
     assert_equal 0, @jobs.running_count("s1")
   end
 
@@ -82,9 +83,9 @@ class TestSubagentJobs < Minitest::Test
   end
 
   def test_the_line_says_the_count_and_what_happened_last
-    assert_equal "3 call · grep rhyme",
+    assert_equal "3 langkah · grep rhyme",
                  Rubot::Web::SubagentLine.line(calls: 3, phase: "tool", detail: "grep rhyme")
-    assert_equal "3 call", Rubot::Web::SubagentLine.line(calls: 3, phase: "done", detail: "")
+    assert_equal "3 langkah", Rubot::Web::SubagentLine.line(calls: 3, phase: "done", detail: "")
     assert_equal "12s", Rubot::Web::SubagentLine.line(calls: 0, phase: "done", detail: "12s")
     assert_equal "boom", Rubot::Web::SubagentLine.line(calls: 4, phase: "failed", detail: "boom")
   end

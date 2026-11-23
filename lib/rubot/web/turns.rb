@@ -147,7 +147,8 @@ module Rubot
           on_tool_call: lambda do |name, args, _snapshot|
             announcement = args.to_h["message"].to_s.strip if name.to_s == "notify"
             announcement ||= ""
-            turn.tool_started(name, summarize_arguments(args), op: args.to_h["operation"])
+            turn.tool_started(name, ToolCaption.caption(name, args),
+                              op: args.to_h["operation"], title: ToolCaption.tooltip(name, args))
           end,
           on_tool_result: ->(name, result, diff) { tool_finished(turn, name, result, diff) },
           on_reasoning: ->(delta) { turn.thinking(delta) },
@@ -257,13 +258,6 @@ module Rubot
         turn.add_diff(html) if html
       rescue StandardError => e
         warn "[web] diff: #{e.class}: #{e.message}"
-      end
-
-      def summarize_arguments(args)
-        return "" unless args.is_a?(Hash) && !args.empty?
-
-        key = %w[command path query url pattern title].find { |k| args.key?(k) } || args.keys.first
-        args[key].to_s.split("\n").first.to_s[0, 100]
       end
 
       # --- sse -----------------------------------------------------------

@@ -45,9 +45,9 @@ module Rubot
     end
 
     def test_tool_summary_truncates_to_a_cell_budget
-      long = { "command" => "x" * 200 }
+      long = { "pattern" => "x" * 200 }
 
-      summary = build_repl.tool_summary("shell_exec", long)
+      summary = build_repl.tool_summary("search", long)
 
       assert summary.end_with?("\u2026"), "ellipsis marks the cut: #{summary.inspect}"
       assert_operator ::TUI::Text.width(summary), :<=, 64
@@ -58,14 +58,14 @@ module Rubot
       app = repl.instance_variable_get(:@app)
       ev = repl.instance_variable_get(:@events)
       app.render_lines # lay the log out so it knows its width
-      ev << [ :tool_call, "shell_exec", { "command" => "y" * 500 } ]
+      ev << [ :tool_call, "search", { "pattern" => "y" * 500 } ]
       repl.pump
 
-      row = plain(app.render_lines).find { |l| l.include?("shell_exec") }
+      row = plain(app.render_lines).find { |l| l.include?("Mencari") }
       assert row, "tool line must render"
       assert_operator ::TUI::Text.width(row.strip), :<=, repl.instance_variable_get(:@log).content_width,
                       "tool row must not exceed the log width: #{row.inspect}"
-      assert row.include?("\u2026"), "long arguments are cut"
+      assert row.include?("\u2026"), "a long sentence is cut"
     end
 
     def test_submit_echoes_prompt_on_screen
@@ -520,16 +520,18 @@ module Rubot
 
       view = plain(app.render_lines)
       # One line per tool call: the ⚒ row is replaced by ✓, args preserved.
-      tool_lines = view.select { |l| l.include?("shell_exec") }
+      tool_lines = view.select { |l| l.include?("Menjalankan") }
       assert_equal 1, tool_lines.size, "single tool line, got: #{tool_lines.inspect}"
-      assert tool_lines.first.include?("\u2713") && tool_lines.first.include?("ruby --version"),
-             "done line keeps the summary: #{tool_lines.first.inspect}"
+      assert tool_lines.first.include?("\u2713") && tool_lines.first.include?("Menjalankan Ruby"),
+             "done line keeps the sentence: #{tool_lines.first.inspect}"
       refute tool_lines.first.include?("\u2692")
 
       entries = repl.instance_variable_get(:@log).instance_variable_get(:@entries)
-      done = entries.find { |e| e.any? { |(t, _)| t.include?("shell_exec") } }
+      done = entries.find { |e| e.any? { |(t, _)| t.include?("Menjalankan") } }
       assert_includes done, [ "✓ ", :tool_ok ], "completed marker uses the calm green"
-      assert_includes done, [ "shell_exec", :muted ], "completed name recedes"
+      assert_includes done, [ "Menjalankan Ruby", :dim ], "the sentence is the row"
+      refute done.any? { |(text, _)| text.include?("shell_exec") },
+             "the tool's own name is not the reader's word for it"
     end
 
     def test_failed_tool_call_flips_the_marker_to_a_cross
@@ -540,13 +542,13 @@ module Rubot
       app = repl.instance_variable_get(:@app)
       app.send(:run_timers)
 
-      line = plain(app.render_lines).find { |l| l.include?("shell_exec") }
+      line = plain(app.render_lines).find { |l| l.include?("Menjalankan") }
       assert line, "the tool row is still there"
       assert_includes line, "\u2717", "a failed call is marked with a cross: #{line.inspect}"
       refute_includes line, "\u2713"
 
       entries = repl.instance_variable_get(:@log).instance_variable_get(:@entries)
-      done = entries.find { |e| e.any? { |(t, _)| t.include?("shell_exec") } }
+      done = entries.find { |e| e.any? { |(t, _)| t.include?("Menjalankan") } }
       assert_includes done, [ "✗ ", :error ]
     end
 
@@ -558,7 +560,7 @@ module Rubot
       app = repl.instance_variable_get(:@app)
       app.send(:run_timers)
 
-      line = plain(app.render_lines).find { |l| l.include?("shell_exec") }
+      line = plain(app.render_lines).find { |l| l.include?("Menjalankan") }
       assert_includes line, "\u2713"
       refute_includes line, "\u2717"
     end
@@ -571,7 +573,7 @@ module Rubot
       app = repl.instance_variable_get(:@app)
       app.send(:run_timers)
 
-      line = plain(app.render_lines).find { |l| l.include?("file_ops") }
+      line = plain(app.render_lines).find { |l| l.include?("Membaca isi /nope") }
       assert_includes line, "\u2717"
     end
 
@@ -587,7 +589,7 @@ module Rubot
       entries["shell_exec"][:started_at] -= 4.5
       repl.refresh_slow_tools
 
-      line = plain(app.render_lines).find { |l| l.include?("shell_exec") }
+      line = plain(app.render_lines).find { |l| l.include?("Menjalankan") }
       assert_includes line, "\u2692", "the call is still in flight: #{line.inspect}"
       assert_includes line, "\u00b7 4s", "a slow call shows how long it has been running: #{line.inspect}"
       assert line.rstrip.end_with?("\u00b7 4s"),
@@ -603,7 +605,7 @@ module Rubot
       ev << [ :tool_done, "shell_exec", nil, "[Exit code: 0]\n" ]
       repl.pump
 
-      line = plain(app.render_lines).find { |l| l.include?("shell_exec") }
+      line = plain(app.render_lines).find { |l| l.include?("Menjalankan") }
       assert_includes line, "\u2713"
       refute_includes line, "\u00b7", "a quick call keeps its quiet one-line row: #{line.inspect}"
     end
@@ -619,7 +621,7 @@ module Rubot
       ev << [ :tool_done, "shell_exec", nil, "[Exit code: 0]\n" ]
       repl.pump
 
-      line = plain(app.render_lines).find { |l| l.include?("shell_exec") }
+      line = plain(app.render_lines).find { |l| l.include?("Menjalankan") }
       assert_includes line, "\u2713", "the row still ends a check: #{line.inspect}"
       assert_includes line, "\u00b7 12s", "the finished row keeps how long it took: #{line.inspect}"
     end
@@ -636,7 +638,7 @@ module Rubot
       repl.refresh_slow_tools
 
       log = repl.instance_variable_get(:@log)
-      row = plain(app.render_lines).find { |l| l.include?("shell_exec") }
+      row = plain(app.render_lines).find { |l| l.include?("Menjalankan") }
       assert row, "the tool row is on screen"
 
       # The clock ends on the log's last text column; the bar's own column
@@ -658,7 +660,7 @@ module Rubot
       repl.refresh_slow_tools
 
       rows = plain(app.render_lines)
-      log_row = rows.index { |l| l.include?("shell_exec") }
+      log_row = rows.index { |l| l.include?("Menjalankan") }
       assert log_row, "the tool row is on screen"
       assert_includes rows[log_row], "\u00b7 4s", "the clock is still drawn: #{rows[log_row].inspect}"
       # The clock ends one cell short of the bar's column, which leaves a
@@ -675,9 +677,9 @@ module Rubot
       repl = build_repl
       ev = repl.instance_variable_get(:@events)
       app = repl.instance_variable_get(:@app)
-      ev << [ :tool_call, "shell_exec", { "command" => "echo #{'y' * 400}" } ]
+      ev << [ :tool_call, "search", { "pattern" => "y" * 400 } ]
       repl.pump
-      repl.instance_variable_get(:@tool_entries)["shell_exec"][:started_at] -= 7.0
+      repl.instance_variable_get(:@tool_entries)["search"][:started_at] -= 7.0
       repl.refresh_slow_tools
 
       rows = plain(app.render_lines)
@@ -699,7 +701,7 @@ module Rubot
     def test_the_tool_clock_follows_a_resize
       view = TUI::LogView.new
       view.layout(::TUI::Rect.new(0, 0, 60, 6))
-      view.add_entry([ [ "\u2692 shell_exec sleep 10", :text ] ],
+      view.add_entry([ [ "\u2692 Membaca isi a.rb", :text ] ],
                      indent: 2, tail: TUI::Transcript.elapsed_tail(7))
       view.render(::TUI::Canvas.new(60, 6))
 
@@ -707,7 +709,7 @@ module Rubot
       canvas = ::TUI::Canvas.new(30, 6)
       view.render(canvas)
 
-      row = plain(canvas.lines).find { |l| l.include?("shell_exec") }
+      row = plain(canvas.lines).find { |l| l.include?("Membaca") }
       assert_includes row, "\u00b7 7s"
       assert_equal view.instance_variable_get(:@rect).right - 2, row.rstrip.length - 1,
                    "the clock moved with the right edge: #{row.inspect}"
@@ -721,7 +723,7 @@ module Rubot
         { "role" => "tool", "tool_call_id" => "call_1", "content" => "[Exit code: 3]\nnope" }
       ]
       texts = TUI::Transcript.entries(messages, width: 73).map { |entry| entry[:segments].map(&:first).join }
-      row = texts.find { |t| t.include?("shell_exec") }
+      row = texts.find { |t| t.include?("Menjalankan") }
       assert_includes row, "\u2717", "restored session keeps the failure marker: #{row.inspect}"
     end
 
@@ -735,7 +737,7 @@ module Rubot
       app.send(:run_timers)
 
       view = plain(app.render_lines)
-      refute view.any? { |l| l.include?("file_ops") }, "the skill load is not a plain file row"
+      refute view.any? { |l| l.include?("Membaca isi") }, "the skill load is not a plain file row"
       skill_lines = view.select { |l| l.include?("kanyaah-brand") }
       assert_equal 1, skill_lines.size, "one line for the skill, got: #{skill_lines.inspect}"
       line = skill_lines.first
@@ -779,7 +781,7 @@ module Rubot
       app.send(:run_timers)
 
       view = plain(app.render_lines)
-      assert view.any? { |l| l.include?("file_ops") }, "writes keep the tool row: #{view.inspect}"
+      assert view.any? { |l| l.include?("Menulis berkas") }, "writes keep the tool row: #{view.inspect}"
       refute view.any? { |l| l.include?("skill new-skill") }
     end
 
@@ -792,7 +794,7 @@ module Rubot
 
       line = plain(app.render_lines).find { |l| l.include?("notes.md") }
       assert line, "regular read renders"
-      assert_includes line, "file_ops read /tmp/notes.md"
+      assert_includes line, "Membaca isi /tmp/notes.md"
       refute_includes line, "\u2726"
     end
 
@@ -800,17 +802,17 @@ module Rubot
       repl = build_repl
       ev = repl.instance_variable_get(:@events)
       ev << [ :stream_start ]
-      ev << [ :tool_call, "a_tool", { "x" => "1" } ]
-      ev << [ :tool_done, "a_tool" ]
-      ev << [ :tool_call, "b_tool", { "y" => "2" } ]
-      ev << [ :tool_done, "b_tool" ]
+      ev << [ :tool_call, "file_ops", { "operation" => "read", "path" => "a.rb" } ]
+      ev << [ :tool_done, "file_ops" ]
+      ev << [ :tool_call, "file_ops", { "operation" => "read", "path" => "b.rb" } ]
+      ev << [ :tool_done, "file_ops" ]
       app = repl.instance_variable_get(:@app)
       app.send(:run_timers)
 
       entries = repl.instance_variable_get(:@log).instance_variable_get(:@entries)
       texts = entries.map { |e| e.map(&:first).join }
-      a_ix  = texts.index { |t| t.include?("a_tool") }
-      b_ix  = texts.index { |t| t.include?("b_tool") }
+      a_ix  = texts.index { |t| t.include?("Membaca isi a.rb") }
+      b_ix  = texts.index { |t| t.include?("Membaca isi b.rb") }
 
       between = texts[(a_ix + 1)...b_ix] || []
       assert_empty between,

@@ -129,7 +129,7 @@ module Rubot
               stream: false,
               on_tool_call: ->(name, args, _snapshot) {
                 @subagent_jobs.update(session_id: sid, run_id: run_id, phase: "tool",
-                                      detail: "#{name} #{summarize_arguments(args)}")
+                                      detail: ToolCaption.caption(name, args))
               }
             )
             finish_subagent(sid, run_id, status: "done", result: answer.to_s)

@@ -164,21 +164,11 @@ module Rubot
           lines.join("\n")
         end
 
+        # The same phrase the timeline and the TUI draw (see
+        # Rubot::ToolCaption), so the card does not describe one call in words
+        # a reader cannot match to the row they see elsewhere.
         def tool_preview(tool_name, args)
-          case tool_name
-          when "shell_exec"
-            "```\n#{truncate(args["command"] || "...", 80)}\n```"
-          when "file_ops"
-            "#{args["operation"] || "read"}: #{truncate(args["path"] || "...", 60)}"
-          when "web_fetch"
-            "query: #{truncate(args["query"] || args["url"] || "...", 60)}"
-          when "memory"
-            "operation: #{args["operation"] || "..."}"
-          when "cron"
-            "operation: #{args["operation"] || "..."}"
-          else
-            "#{args.keys.first}: #{truncate(args.values.first.to_s, 60)}"
-          end
+          Rubot::ToolCaption.caption(tool_name, args)
         end
 
         # The stop hint appears once, and only when the request has gone on long

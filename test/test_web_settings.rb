@@ -329,24 +329,24 @@ module Rubot
       # there at all when there is nothing to say.
       def test_the_footer_sheet_names_itself_and_lists_the_runs
         running = [
-          { agent: "writer", phase: "tool", detail: "read notes.md", line: "1 call · read notes.md" },
+          { agent: "writer", phase: "tool", detail: "read notes.md", line: "1 langkah · read notes.md" },
           { agent: "researcher", phase: "started", detail: "find docs", line: "find docs" }
         ]
         html = Rubot::Web::View.render("_subagent_sheet", subagents: running)
         assert_includes html, %(<span class="subagent-label">subagent</span>)
         assert_includes html, "researcher"
-        assert_includes html, "1 call · read notes.md"
+        assert_includes html, "1 langkah · read notes.md"
         refute_includes html, %(id="subagent-sheet" hidden)
 
         finished = [
-          { agent: "writer", phase: "done", detail: "9s", line: "1 call · 9s", finished_at: Time.now }
+          { agent: "writer", phase: "done", detail: "9s", line: "1 langkah · 9s", finished_at: Time.now }
         ]
         html = Rubot::Web::View.render("_subagent_sheet", subagents: finished)
         assert_includes html, "subagent-done"
 
         # Nothing running and the last run long gone: the row keeps nothing.
         stale = [
-          { agent: "writer", phase: "done", detail: "9s", line: "1 call · 9s",
+          { agent: "writer", phase: "done", detail: "9s", line: "1 langkah · 9s",
             finished_at: Time.now - (Rubot::Web::SubagentJobs::DONE_MARK_SECONDS + 60) }
         ]
         html = Rubot::Web::View.render("_subagent_sheet", subagents: stale)
@@ -426,7 +426,7 @@ module Rubot
         assert_equal 2, sent.size
         refute_includes sent.last[1], %(id="subagent-sheet" hx-swap-oob="true")
         assert_includes sent.last[1], %(id="subagent-sheet-body" hx-swap-oob="innerHTML")
-        assert_includes sent.last[1], "1 call · grep rhyme"
+        assert_includes sent.last[1], "1 langkah · grep rhyme"
       end
 
       # A compact turn does not narrate the calls a delegated agent made: the
@@ -448,7 +448,7 @@ module Rubot
 
         assert_equal 1, turn.items.count { |item| item[:kind] == :subagent }
         assert_equal 1, html.scan("subagent-row").size
-        assert_includes html, "2 call · 12s"
+        assert_includes html, "2 langkah · 12s"
         refute_includes html, "read notes.md"
         refute_includes html, "grep rhyme"
         # The task still rides on the row, just not as a line of its own.
@@ -465,7 +465,7 @@ module Rubot
         assert_equal 1, html.scan("subagent-row").size
         assert_includes html, "subagent-failed"
         assert_includes html, "rate limited"
-        refute_includes html, "1 call"
+        refute_includes html, "1 langkah"
       end
 
       def test_a_compaction_callback_becomes_a_timeline_row

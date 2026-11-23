@@ -2476,38 +2476,17 @@ select:focus-visible { outline: none; }
   }
 }
 
-/* An open call says it with the turning ring on its left and nothing else. A
-   sweep across the whole row was tried and taken out: beside a spinner it is the
-   same sentence twice, and the row already has one thing that moves. */
+/* The sentence is the row: it shrinks and ellipsizes, while the mark and the
+   clock keep their whole width. Dimmer than the answer under it, because it is
+   what the agent did on the way there — but not faint, since it is now the only
+   thing the row has to say. */
 
-.tool-name {
-  flex: 0 0 auto;
-  color: var(--fg-dim);
-}
-
-/* What a file tool was asked to do: `file_ops` + `edit` + the path reads as one
-   sentence, and the name alone cannot tell a read from a write — which is the
-   difference between a turn that looked and one that changed the file. A chip
-   rather than plain words, because it is a value out of a fixed list and not
-   part of the path that follows it. */
-.tool-op {
-  flex: 0 0 auto;
-  padding: 0.05em 0.35em;
-  border-radius: 3px;
-  background: var(--bg2);
-  color: var(--fg-dim);
-  font-size: 0.92em;
-  line-height: 1.5;
-}
-
-/* The detail yields first: it shrinks and ellipsizes, while the name and the
-   clock keep their whole width. */
 .tool-detail {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--fg-faint);
+  color: var(--fg-dim);
 }
 
 /* A tool row and the answer under it are two different things: the row is

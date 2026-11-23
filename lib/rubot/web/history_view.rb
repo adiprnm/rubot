@@ -177,11 +177,16 @@ module Rubot
         row = {
           kind: :tool,
           name: name,
-          detail: summarize_arguments(arguments),
+          detail: ToolCaption.caption(name, arguments),
           state: result.nil? ? :unknown : (tool_ok?(result) ? :ok : :failed),
           elapsed: nil
         }
         op = arguments["operation"].to_s
+        # The call as the agent made it stays reachable on hover, the same way
+        # the live row keeps it: a replayed conversation shows what the live
+        # one showed, down to the tooltip.
+        tooltip = ToolCaption.tooltip(name, arguments)
+        row[:title] = tooltip unless tooltip.empty?
         # The instagram tool is named after the service, so its `connect`
         # operation would otherwise read "instagram connect connect" — the
         # name already says the service, the op only adds the verb.

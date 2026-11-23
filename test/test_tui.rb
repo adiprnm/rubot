@@ -656,7 +656,7 @@ end
 
       entries = repl.instance_variable_get(:@log).instance_variable_get(:@entries)
       texts = entries.map { |e| e.map(&:first).join.gsub("\n", "|") }
-      tool_ix = texts.index { |t| t.include?("shell_exec") }
+      tool_ix = texts.index { |t| t.include?("Menjalankan") }
 
       assert_equal "first answer", texts[tool_ix - 2]
       assert_equal [ [ "", nil ] ], entries[tool_ix - 1], "one spacer between answer and tool"
@@ -680,7 +680,7 @@ end
       ev << [ :tool_call, "shell_exec", { "command" => "ls" } ]
       repl.pump
       texts = log.instance_variable_get(:@entries).map { |entry| entry.map(&:first).join }
-      assert_equal [ "❯ list the files", "⚒ shell_exec ls" ], texts.last(2),
+      assert_equal [ "❯ list the files", "⚒ Menampilkan isi direktori ini" ], texts.last(2),
                    "the tool row sits directly under the prompt"
     end
 

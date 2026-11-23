@@ -22,11 +22,15 @@ module Rubot
 
       # --- row builders shared with the live TUI -------------------------
 
+      # The row is the sentence and the mark, nothing else: the tool's own name
+      # (`file_ops`, `shell_exec`) is the agent's vocabulary, not the reader's,
+      # and the sentence already says what it did. `name` stays in the
+      # signature because the live renderer keys a running row by it.
       def self.tool_call(name, summary, skill)
         if skill
           [ [ "#{Rubot::TUI::MARK[:skill]} ", :accent ], [ "skill ", :muted ], [ summary, :accent ] ]
         else
-          [ [ "#{Rubot::TUI::MARK[:tool]} ", :muted ], [ name.to_s, :accent ], [ " ", :muted ], [ summary, :dim ] ]
+          [ [ "#{Rubot::TUI::MARK[:tool]} ", :muted ], [ summary, :text ] ]
         end
       end
 
@@ -41,8 +45,8 @@ module Rubot
           # is what the reader came for, the label only marks the row.
           [ [ "#{mark} ", style ], [ "skill ", :dim ], [ summary, :dim ] ]
         else
-          segments = [ [ "#{mark} ", style ], [ name.to_s, :muted ] ]
-          segments += [ [ " ", :muted ], [ summary, :dim ] ] if summary && !summary.empty?
+          segments = [ [ "#{mark} ", style ] ]
+          segments += [ [ summary, :dim ] ] if summary && !summary.empty?
           segments
         end
       end
@@ -72,16 +76,11 @@ module Rubot
         match[1].to_i != 0
       end
 
+      # What the call is doing, in words: the same phrase the web timeline and
+      # the Telegram card draw (see Rubot::ToolCaption), cut to the cells this
+      # row has left rather than to a width of its own.
       def self.tool_summary(tool_name, args, max: 64)
-        args = {} unless args.is_a?(Hash)
-        raw = case tool_name.to_s
-        when "shell_exec" then args["command"].to_s
-        when "file_ops"
-                "#{args["operation"]} #{args["path"]}"
-        else
-                args.inspect
-        end
-        ::TUI::Text.truncate(raw.lines.first.to_s.strip, max)
+        ::TUI::Text.truncate(Rubot::ToolCaption.caption(tool_name, args), max)
       end
 
       # Returns the skill name when this tool call reads a skill's SKILL.md,
@@ -99,13 +98,15 @@ module Rubot
         name if name && !name.empty?
       end
 
-      # Cells left for the argument preview after the marker, the tool name
-      # and the separator, keeping one cell clear of the scrollbar.
-      def self.summary_limit(name, width)
+      # Cells left for the sentence after the marker and the indent, keeping one
+      # cell clear of the scrollbar. The tool's name is no longer drawn on the
+      # row (see .tool_call), so its width is no longer taken out here; `name`
+      # stays in the signature because both callers already have it.
+      def self.summary_limit(_name, width)
         width = width.to_i
         return 64 if width <= 0
 
-        [ width - 4 - ::TUI::Text.width(name.to_s) - 2, 0 ].max
+        [ width - 5, 0 ].max
       end
 
       def initialize(width: 0)

@@ -985,7 +985,7 @@ module Rubot
 
         assert_equal :tool, item[:kind]
         assert_equal "shell_exec", item[:name]
-        assert_equal "date -u", item[:detail]
+        assert_equal "Menampilkan tanggal dan waktu", item[:detail]
         assert_equal :ok, item[:state]
       end
 
@@ -1011,7 +1011,7 @@ module Rubot
         channel = Rubot::Channels::Web.new(channel_config: {})
         call = { "id" => "c1", "function" => { "name" => "shell_exec", "arguments" => "bukan json" } }
 
-        assert_equal "", channel.history_tool_items(call, {}, {}, "web_rubot").first[:detail]
+        assert_equal "Menjalankan perintah di terminal", channel.history_tool_items(call, {}, {}, "web_rubot").first[:detail]
       end
 
       # --- diff -----------------------------------------------------------

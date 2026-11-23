@@ -665,7 +665,8 @@ module Rubot
 
         items = channel.history("web_rubot").last[:items]
 
-        assert_equal %w[b.rb], items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
+        assert_equal [ "Membaca isi b.rb" ],
+                     items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
         assert_includes items.map { |item| item[:kind] }, :text, "the answer is not part of the log"
       end
 
@@ -681,7 +682,8 @@ module Rubot
 
         items = channel.history("web_rubot").last[:items]
 
-        assert_equal %w[b.rb], items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
+        assert_equal [ "Membaca isi b.rb" ],
+                     items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
       end
 
       # A call the model answered in words keeps its row in the replayed
@@ -711,7 +713,8 @@ module Rubot
 
         items = channel.history(sid).last[:items]
 
-        assert_equal %w[a.rb b.rb], items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
+        assert_equal [ "Membaca isi a.rb", "Membaca isi b.rb" ],
+                     items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
         assert_equal %i[tool text tool text], items.map { |item| item[:kind] }
       end
 
@@ -727,7 +730,8 @@ module Rubot
 
         assert(items.none? { |item| item[:kind] == :step }, "no marker rows")
         assert(items.none? { |item| item.key?(:round) }, "no pass numbers")
-        assert_equal %w[a.rb b.rb], items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
+        assert_equal [ "Membaca isi a.rb", "Membaca isi b.rb" ],
+                     items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
       end
 
       def test_a_verbose_persona_s_transcript_keeps_every_call
@@ -739,7 +743,8 @@ module Rubot
 
         items = channel.history("web_rubot").last[:items]
 
-        assert_equal %w[a.rb b.rb], items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
+        assert_equal [ "Membaca isi a.rb", "Membaca isi b.rb" ],
+                     items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
       end
 
       # One prompt, one message from the model asking twice, one answer — the
@@ -1113,20 +1118,25 @@ module Rubot
         assert_equal 0, rows.last[:swap_ms], "only the new call fades in"
       end
 
-      # A file tool's row has to say what it was asked to do. The name and the
-      # path cannot tell a read from a write on their own, and the chip is the
-      # one word that can — so it is drawn, and a tool that was given no
-      # operation is left without one rather than with an empty box.
-      def test_a_file_tool_row_wears_the_operation_it_was_given
+      # A row says what the file tool did inside one sentence, without the
+      # tool's own name in front of it: the name alone cannot tell a read from
+      # a write, and a chip beside the sentence repeated what it already said.
+      def test_a_file_tool_row_says_what_it_did_in_its_sentence
         edited = View.render("_timeline",
-                             items: [ { kind: :tool, name: "file_ops", detail: "lib/a.rb",
+                             items: [ { kind: :tool, name: "file_ops",
+                                        detail: ToolCaption.caption("file_ops",
+                                                                    { "operation" => "edit", "path" => "lib/a.rb" }),
                                         op: "edit", state: :ok, elapsed: nil } ])
-        assert_includes edited, %(<span class="tool-op">edit</span>)
+        assert_includes edited, "Mengubah isi lib/a.rb"
+        assert_includes edited, %(<span class="tool-detail">Mengubah isi lib/a.rb</span>),
+                        "the sentence is the row's own text"
+        refute_includes edited, "tool-op", "the operation is part of the sentence, not a chip"
+        refute_includes edited, "tool-name", "the tool's name is not the reader's word for it"
 
         plain = View.render("_timeline",
-                            items: [ { kind: :tool, name: "shell_exec", detail: "ls",
+                            items: [ { kind: :tool, name: "shell_exec", detail: "Menjalankan perintah di terminal",
                                        state: :ok, elapsed: nil } ])
-        refute_includes plain, "tool-op"
+        assert_includes plain, "Menjalankan perintah di terminal"
       end
 
       # The thought wears the half disc and keeps it still: a shape that means
