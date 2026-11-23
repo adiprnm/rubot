@@ -4552,7 +4552,11 @@ html:not(.js) .settings-tabs { display: none; }
 
 /* ---------- compact layout for PWA / mobile ----------------------- */
 @media (max-width: 860px), (pointer: coarse) {
-  .working-band { min-height: 0.6rem; margin: 0.1rem auto 0.4rem; }
+  /* Only the vertical air is set here: `auto` on the sides would cancel the
+     gutter the narrow block gives this band and shrink it to its own text,
+     which is what left the working row floating in the middle of the screen.
+     The sides keep the width the conversation uses. */
+  .working-band { min-height: 0.6rem; margin-top: 0.1rem; margin-bottom: 0.4rem; }
   .thread { padding-bottom: 0.3rem; }
 
   /* The phone draws the box the laptop draws, tighter: the field keeps its
