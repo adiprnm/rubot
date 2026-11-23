@@ -12,12 +12,6 @@ module Rubot
     module View
       ROOT = File.expand_path("views", __dir__)
 
-      ICONS = {
-        ok: "✓",
-        failed: "✗",
-        unknown: "·"
-      }.freeze
-
       # The status row is drawn with inline SVG rather than glyphs: Martian
       # Mono carries only ASCII and a handful of symbols, so a symbol like ⟳ or
       # ⊙ was silently borrowed from whatever fallback font the reader's
@@ -80,25 +74,14 @@ module Rubot
           %(<circle cx="5" cy="5" r="3.5" stroke-dasharray="15 7"/></svg>)
       end
 
-      # A drawn ring means "this is turning", so a drawn ring that is not turning
-      # reads as a spinner that stopped — which is why the thought does not get
-      # one. The half disc is a *state*, not a rotation: the mark the working row
-      # wore before the spinner, and the one piece of the row that can sit still
-      # beside a label that is already moving. "Thought for 12s" keeps its dashed
-      # arc, and a live row that is working spins.
+      # The one mark the timeline still draws: the ring that turns on the row
+      # above the field. A thought, a call and a compaction carry no mark at all
+      # — what a row has to say is a sentence, and while the row is waiting the
+      # sentence itself is what moves (see `glow`). This ring is drawn rather
+      # than typed because a rotation needs an arc with a gap in it, and no
+      # fallback font's glyph turns reliably.
       MARKS = {
-        think: "◐",
-        working: spinner_mark("mark-svg spin").freeze,
-        running: spinner_mark("mark-svg spin").freeze,
-        thought: %(<svg class="mark-svg" viewBox="0 0 10 10" fill="none" stroke="currentColor" ) +
-                 %(stroke-width="1.2" stroke-linecap="round" aria-hidden="true" focusable="false">) +
-                 %(<circle cx="5" cy="5" r="3.5" stroke-dasharray="1.7 1.5"/></svg>).freeze,
-        # A seam in the transcript: two pages folding into one. Drawn rather
-        # than typed so the mark keeps the same weight as the other row marks.
-        compaction: %(<svg class="mark-svg" viewBox="0 0 10 10" fill="none" stroke="currentColor" ) +
-                    %(stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" ) +
-                    %(aria-hidden="true" focusable="false">) +
-                    %(<path d="M1.5 2.5h3l1 5h3"/><path d="M7 6l1.5 1.5L7 9"/></svg>).freeze
+        working: spinner_mark("mark-svg spin").freeze
       }.freeze
 
       # The reading faces the settings page offers, in the order they are drawn.
@@ -177,13 +160,6 @@ module Rubot
           Format.markdown(text, quotable: false)
         end
 
-        def icon(state)
-          ICONS.fetch(state, "·")
-        end
-
-        # A drawn mark for the two rows whose glyph was a ring: the thought and
-        # the turn that is still running. The state rows keep their glyphs —
-        # ✓ and ✗ sit on the baseline where every mono font puts them.
         def mark(kind)
           MARKS.fetch(kind, "")
         end
@@ -200,15 +176,6 @@ module Rubot
             %(stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ) +
             %(focusable="false"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"/>) +
             %(<path d="M12 14v7"/></svg>)
-        end
-
-        # A tool row's mark. A call that is open gets the same turning arc as the
-        # rows above it instead of the half disc, which was a fallback font's
-        # shape. The ring is the row's only motion: a sweep across the whole row
-        # was tried beside it and taken out, because two things saying "still
-        # running" in the same 16px is one of them too many.
-        def state_mark(state)
-          state == :running ? MARKS[:running] : icon(state)
         end
 
         # The way into the archive. A drawn magnifier rather than an emoji: an
@@ -256,6 +223,21 @@ module Rubot
           text.to_s.each_char.with_index.map do |char, index|
             %(<span style="--i:#{index}">#{CGI.escapeHTML(char)}</span>)
           end.join
+        end
+
+        # How much of the light one letter gets. The stylesheet's step is a fixed
+        # tenth of a second, which is the right pace for a nine-letter
+        # "Thinking…" and wrong for everything longer: the delay keeps counting
+        # past the two-second cycle, so a sentence-length row — the compaction
+        # label, a tool row's own words — came back round in the middle and lit
+        # two places at once. The step is handed in per row instead, worked out
+        # so any row crosses in the same second and a half whatever its length.
+        GLOW_SECONDS = 1.5
+
+        def glow_step(text)
+          count = text.to_s.each_char.count
+          step = count.zero? ? 0.1 : (GLOW_SECONDS / count).round(3)
+          %( style="--glow-step:#{step}s")
         end
 
         # The turn body is rendered from Ruby rather than through a nested

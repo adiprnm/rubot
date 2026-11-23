@@ -426,14 +426,16 @@ module Rubot
 
         # A new row arrives: it is appended at the end. The answer above it is
         # sealed by the same call — the live flag comes off its class — so that
-        # one block legitimately travels again; the rows before it do not.
+        # one block legitimately travels again. The call before it does not: its
+        # light went out when the agent started speaking (see
+        # Turn#mark_awake_call), so there is nothing left on that row to redraw.
         turn.tool_started("file", "lib/b.rb")
         added = flushed(channel, turn, state)
         assert_includes added, "event: turn-patch\n"
         assert_includes added, "lib/b.rb"
         assert_match(/id="t-t-live-\d+">/, added, "a new row needs an id, not a destination")
         refute_includes added, "beforeend", "the destination is the slot's job, not the row's"
-        refute_includes added, "lib/a.rb", "the first call is not re-sent"
+        refute_includes added, "lib/a.rb", "a row whose light is already out is not sent again"
       end
 
       # A new row is placed by the slot that receives it, not by an attribute
@@ -614,6 +616,94 @@ module Rubot
         turn.tool_finished("file_ops", false)
 
         assert_equal :failed, turn.items.first[:state]
+      end
+
+      # The newest call keeps its light after it returns, while the turn is
+      # between things: one row is alive while the page is still being written,
+      # and none once it is done. A reader who looks up mid-turn should find the
+      # last thing the agent did still warm, and a finished transcript still.
+      def test_the_newest_call_keeps_its_light_until_the_turn_closes
+        turn = build
+        turn.tool_started("shell_exec", "ls")
+        turn.tool_finished("shell_exec", true)
+        turn.tool_started("file_ops", "a.rb")
+        turn.tool_finished("file_ops", true)
+
+        awake = turn.items.select { |item| item[:awake] }
+        assert_equal %w[a.rb], awake.map { |item| item[:detail] },
+                     "only the newest call is lit"
+
+        turn.finish("selesai")
+
+        refute(turn.items.any? { |item| item[:awake] }, "a closed turn has nothing moving in it")
+      end
+
+      # The agent's own words end the light. Once an answer is being written the
+      # call before it is history: the answer is what the reader is watching, and
+      # a machine row still glowing underneath it says work is happening where
+      # the work has already been reported.
+      def test_the_answer_puts_out_the_light_on_the_call_before_it
+        turn = build
+        turn.tool_started("shell_exec", "ls")
+        turn.tool_finished("shell_exec", true)
+        assert turn.items.last[:awake], "the call is the edge of the work until it is reported"
+
+        turn.append_chunk("Sudah kubaca.")
+
+        refute(turn.items.any? { |item| item[:awake] }, "the answer is the thing being written now")
+      end
+
+      # Red is the news on a failed call, and the light is a colour of its own:
+      # lit, the row would sweep its red away and say "working" over the one line
+      # that is not.
+      def test_a_failed_call_does_not_keep_the_light
+        turn = build
+        turn.tool_started("file_ops", "nope")
+        turn.tool_finished("file_ops", false)
+
+        refute turn.items.last[:awake]
+      end
+
+      # One row moves at a time. The thought that is still open is already the
+      # moving thing on the page, so the call before it gives the light up until
+      # the thought closes — two lines glowing at once is two things asking for
+      # the same eye, and the reader has one.
+      def test_an_open_thought_takes_the_light_from_the_call_it_follows
+        clock = FakeClock.new
+        turn = build(clock)
+        turn.tool_started("shell_exec", "ls")
+        turn.tool_finished("shell_exec", true)
+        assert turn.items.last[:awake], "the call is the newest thing while nothing else moves"
+
+        clock.advance(5.0)
+        turn.thinking("mikir")
+
+        refute(turn.items.any? { |item| item[:awake] }, "the open thought is the only moving row")
+
+        clock.advance(5.0)
+        turn.tool_started("shell_exec", "pwd")
+
+        assert_empty turn.items.select { |item| item[:awake] },
+                     "the new call is running instead: still one moving row"
+      end
+
+      # The compact view can drop the newest call — an edit that changed nothing
+      # has no row of its own — and then no call is lit at all. Lighting whatever
+      # row happened to survive would point at work from an earlier round.
+      def test_the_light_lands_on_no_row_when_the_newest_call_was_dropped
+        clock = FakeClock.new
+        turn = Turn.new(id: "t1", session_id: "s1", tool_output: "compact", clock: clock)
+        turn.tool_started("file_ops", "catatan.md", op: "write")
+        turn.tool_finished("file_ops", true)
+        clock.advance(5.0)
+        turn.thinking("mikir")
+        turn.tool_started("file_ops", "a.rb", op: "edit")
+        turn.tool_finished("file_ops", true)
+
+        rows = turn.items
+        assert_equal [ "catatan.md" ], rows.select { |item| item[:kind] == :tool }.map { |item| item[:detail] },
+                     "the empty edit is not drawn"
+        refute(rows.any? { |item| item[:awake] }, "and nothing pretends to be the newest call")
       end
 
       # --- thinking -------------------------------------------------------

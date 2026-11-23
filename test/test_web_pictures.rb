@@ -962,15 +962,12 @@ module Rubot
         assert_operator margin[2].to_f, :>, 0, "and room below it"
       end
 
-      # A ring typed as a glyph sits on the baseline, and its size comes from
-      # whichever font on the reader's machine happens to carry U+25CC — so
-      # beside "Thinking…" it was never the same twice, and on the machine that
-      # reported it, never centred. The rows that turn are drawn for that reason,
-      # and so is the mark on an open call. The thought keeps the half disc: it
-      # is a state rather than a rotation, and a rotation that does not rotate is
-      # the worse of the two. The finished states keep ✓ and ✗, which sit on the
-      # baseline in every mono face.
-      def test_the_marks_that_turn_are_drawn
+      # The timeline carries no marks any more: a thought, a call and a seam say
+      # what they have to say in words, and while they wait the words are what
+      # moves. Only the row above the field keeps a drawn ring — a rotation
+      # needs an arc with a gap in it, and no fallback glyph turns the same way
+      # on two machines.
+      def test_only_the_turn_that_is_running_still_carries_a_mark
         thinking = View.render("_timeline",
                                items: [ { kind: :thinking, epoch: 1.0, started_at: 0.0,
                                           closed_at: nil, elapsed: nil } ])
@@ -981,12 +978,15 @@ module Rubot
         done = View.render("_timeline",
                            items: [ { kind: :tool, name: "shell", detail: "ls",
                                       state: :ok, elapsed: 0.4 } ])
+        seam = View.render("_timeline",
+                           items: [ { kind: :compaction, epoch: 3.0 } ])
 
         assert_includes working, "mark-svg"
-        assert_includes running, "mark-svg"
-        refute_includes thinking, "◌", "the ring is no longer a borrowed glyph"
-        assert_includes thinking, "◐", "the half disc is a state, and keeps its shape"
-        assert_includes done, "✓", "a finished state keeps its glyph"
+        refute_includes thinking, "mark", "the word is the row: no mark beside it"
+        refute_includes running, "mark"
+        refute_includes done, "✓", "a finished call says nothing with a glyph"
+        refute_includes done, "mark"
+        refute_includes seam, "mark"
       end
 
       # The live thought glows one letter at a time, so the word is drawn as one
@@ -1014,27 +1014,75 @@ module Rubot
       # rewritten on every chunk of an answer — twenty times a second — and a
       # redraw begins every animation in it again, so a thought is the row that
       # can carry one: it is drawn when the wait starts and nothing redraws it
-      # until tokens arrive, which is when it is replaced anyway.
+      # until tokens arrive, which is when it is replaced anyway. A call row is
+      # the same bargain: it changes when its clock does, and not before.
       def test_the_glow_travels_across_the_word
         css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
 
         assert_match(/@keyframes label-glow/, css, "the glow keyframes are missing")
-        assert_match(/\.row \.label\.glow span,\s*\.compaction-row \.compaction-label\.glow span \{[^}]*animation: label-glow/, css)
+        assert_match(/\.row \.label\.glow span,\s*\.compaction-row \.compaction-label\.glow span,\s*\.tool-row \.tool-detail\.glow span \{[^}]*animation: label-glow/,
+                     css, "the three waits wear the same light")
         assert_match(/animation-delay: calc\(var\(--i/, css, "each letter needs its own phase")
       end
 
-      # A row gets one thing that moves. An open call already has the turning
-      # ring on its left, so the sweep that crossed the row was taken back out —
-      # two motions saying "still running" sixteen pixels apart is one too many.
-      def test_an_open_call_moves_once
+      # A tenth of a second per letter is the pace "Thinking…" wants and the
+      # wrong one for a sentence: the delay keeps counting past the two-second
+      # cycle, so a long row came back round in the middle and lit two places at
+      # once. The step is handed to the row instead, so any word crosses in the
+      # same second and a half whatever its length.
+      def test_the_sweep_takes_the_same_time_whatever_the_row_says
+        thinking = View.render("_timeline",
+                               items: [ { kind: :thinking, epoch: 1.0, started_at: 0.0,
+                                          closed_at: nil, elapsed: nil } ])
+        call = View.render("_timeline",
+                           items: [ { kind: :tool, name: "shell",
+                                      detail: "bundle exec rake test",
+                                      state: :running, epoch: 2.0, elapsed: nil } ])
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+
+        assert_includes thinking, %(style="--glow-step:0.167s")
+        assert_operator call[/--glow-step:([\d.]+)s/, 1].to_f, :<, 0.167,
+                        "a longer row gives each letter less of the light"
+        assert_match(/animation-delay: calc\(var\(--i, 0\) \* var\(--glow-step, 0\.1s\)\)/, css)
+      end
+
+      # A row gets one thing that moves, and on a call it is the sentence: the
+      # ring that used to sit beside it left with the rest of the marks, and the
+      # light travels the words instead. Only while the call is open — a page of
+      # settled rows all glowing is a page with nothing to look at — and the
+      # sweep across the whole row stays gone: two motions saying "still
+      # running" was one too many, and a ring plus a light is the same mistake
+      # in the other order.
+      def test_an_open_call_moves_once_and_a_settled_one_keeps_still
         css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
         running = View.render("_timeline",
                               items: [ { kind: :tool, name: "shell", detail: "ls",
                                          state: :running, epoch: 2.0, elapsed: 1.0 } ])
+        settled = View.render("_timeline",
+                              items: [ { kind: :tool, name: "shell", detail: "ls",
+                                         state: :ok, elapsed: 1.0 } ])
+        failed = View.render("_timeline",
+                             items: [ { kind: :tool, name: "shell", detail: "ls",
+                                        state: :failed, elapsed: 1.0 } ])
 
-        assert_includes running, "mark-svg spin", "the ring is the row's motion"
+        assert_includes running, "tool-detail glow", "the words are the row's motion"
+        refute_includes running, "mark-svg", "the ring went with the marks"
+        refute_includes settled, "glow", "a call that settled stops moving"
+        refute_includes failed, "glow", "and a call that failed is red, not lit"
         refute_match(/@keyframes tool-sweep/, css, "the sweep is gone")
         refute_match(/\.tool-row\.running::after/, css)
+      end
+
+      # The newest call keeps its light after it returns, so a page watched
+      # mid-turn has one row alive rather than none: the turn says so with
+      # `awake`, and the row that carries it glows as if it were still open.
+      def test_a_settled_call_that_the_turn_still_holds_glows
+        awake = View.render("_timeline",
+                            items: [ { kind: :tool, name: "shell", detail: "ls",
+                                       state: :ok, elapsed: 1.0, awake: true } ])
+
+        assert_includes awake, "tool-detail glow"
+        assert_includes awake, %(aria-label="ls"), "the split letters still read as a row"
       end
 
       # A turn redraws its whole timeline on every event, so the call row is a
@@ -1139,30 +1187,23 @@ module Rubot
         assert_includes plain, "Menjalankan perintah di terminal"
       end
 
-      # The thought wears the half disc and keeps it still: a shape that means
-      # "this is happening" does not have to turn, and a drawn ring that is not
-      # turning reads as a spinner that stopped. The glow is the thing that
-      # moves on this row. The marks that do turn are the ones being turned —
-      # the turn that is running, and a call that is open.
-      def test_the_thought_keeps_a_still_mark_while_the_word_glows
+      # The thought is a word and nothing else. The half disc that used to sit
+      # beside it was a state that never moved, which beside a word already
+      # moving is a second thing asking to be read. A finished thought is a fact
+      # about the past, so it keeps a plain label: no light, no mark.
+      def test_a_thought_is_its_word_and_nothing_else
         thinking = View.render("_timeline",
                                items: [ { kind: :thinking, epoch: 1.0, started_at: 0.0,
                                           closed_at: nil, elapsed: nil } ])
-        working = View.render("_working", since: 1.0)
-        running = View.render("_timeline",
-                              items: [ { kind: :tool, name: "shell", detail: "ls",
-                                         state: :running, epoch: 2.0, elapsed: 1.0 } ])
         thought = View.render("_timeline",
                               items: [ { kind: :thinking, epoch: 1.0, started_at: 0.0,
                                          closed_at: 4.0, elapsed: 12.0 } ])
 
-        assert_includes thinking, "◐"
-        refute_includes thinking, "spin", "the mark is a state, not a rotation"
         assert_includes thinking, "label glow", "the word is what moves here"
-        assert_includes working, "mark-svg spin"
-        assert_includes running, "mark-svg spin", "a call that is open is turning"
+        refute_includes thinking, "mark"
         assert_includes thought, "Thought for 12s"
-        refute_includes thought, "spin", "a finished thought must not keep turning"
+        refute_includes thought, "glow", "a finished thought must not keep glowing"
+        refute_includes thought, "mark"
       end
 
       # Spinning a full ring would look exactly like a still ring, so a mark that

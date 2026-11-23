@@ -197,6 +197,7 @@ module Rubot
           list = ToolRows.collapse(list) if ToolRows.compact?(@tool_output)
           note_entering_locked(list)
           mark_live_block(list)
+          mark_awake_call(list)
           list
         end
       end
@@ -211,6 +212,66 @@ module Rubot
         last = list.last
         list.each { |item| item[:live] = false if item[:kind] == :text }
         last[:live] = true if last && last[:kind] == :text && !@closed
+      end
+
+      # The light a call row wears does not go out the moment the call returns:
+      # the newest call stays lit while the turn is between things — until the
+      # agent speaks again, or the turn closes. A call that finished a second
+      # ago is still the last thing the agent did, and a page waiting for the
+      # next step reads better with one line warm than with none.
+      #
+      # The agent's own words end it. Once an answer is being written, the call
+      # before it is history: the answer is the thing the reader is watching
+      # now, and a machine row still glowing underneath it says work is
+      # happening where the work has already been reported. Same for a turn that
+      # closes — a finished page with a moving line in it reads as still going.
+      #
+      # One row moves at a time, which is the whole point of the arrangement: a
+      # thought that is still open is already the moving thing on the page, and
+      # so is a call in flight or a compaction being written. The light on a
+      # settled call goes out for the duration and comes back when the page is
+      # quiet again — "Thinking…" and the call before it glowing at once is two
+      # things asking for the same eye, and the reader has one.
+      #
+      # A call that failed is left out. Red is the news there, and the light is
+      # a colour of its own: lit, the row would walk its red away and say
+      # "working" over the one line that is not.
+      def mark_awake_call(list)
+        return if @closed
+        return if list.any? { |item| still_moving?(item) }
+        return if answered_since_the_call?
+
+        newest = @items.reverse.find { |item| item[:kind] == :tool }
+        return unless newest
+
+        # Only the call that really is the newest: the compact view can drop it
+        # (an edit that changed nothing has no row of its own), and lighting
+        # whatever call happens to be left would point at work from three
+        # rounds ago.
+        row = list.reverse.find { |item| item[:kind] == :tool }
+        row[:awake] = true if row && row[:seq] == newest[:seq] && row[:state] != :failed
+      end
+
+      # The agent has spoken over the call: words of its own have landed after
+      # the last thing it reached for, so the call is no longer the edge of the
+      # work.
+      def answered_since_the_call?
+        index = @items.rindex { |item| item[:kind] == :tool }
+        return false if index.nil?
+
+        @items[(index + 1)..].to_a.any? { |item| item[:kind] == :text }
+      end
+
+      # A row that is already the moving one: an open thought, a call still in
+      # flight, a compaction being written. Their own light is a state, so it
+      # does not wait for the turn to end to go out.
+      def still_moving?(item)
+        case item[:kind]
+        when :thinking then item[:closed_at].nil?
+        when :tool then item[:state] == :running
+        when :compaction then item[:state] == :running
+        else false
+        end
       end
 
       # --- producer side (agent callbacks) --------------------------------

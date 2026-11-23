@@ -201,18 +201,19 @@ module Rubot
         refute_includes html, "0s"
       end
 
-      # The running row wears the mark a thought wears, not a ring of its own:
-      # both say "a pause in the work", and a second mark for the same meaning
-      # made the timeline look like it had two kinds of waiting.
-      def test_timeline_draws_a_running_compaction_with_the_thought_mark
+      # The running seam is the light a thought wears and nothing else. A mark
+      # beside it made the timeline look like it had two kinds of waiting, and
+      # now no row in the timeline carries one at all.
+      def test_timeline_draws_a_running_compaction_as_a_word_that_glows
         item = { kind: :compaction, state: :running, epoch: Time.now.to_f }
 
         html = View.render("_timeline", items: [ item ])
 
         assert_includes html, "compaction-row is-running"
         assert_includes html, "Compaction sedang berlangsung"
-        assert_includes html, View::MARKS[:think]
-        refute_includes html, "mark-svg spin", "a compaction is not a spinner of its own"
+        assert_includes html, "compaction-label glow"
+        refute_includes html, "compaction-mark", "the seam has no mark left"
+        refute_includes html, "mark-svg", "a compaction is not a spinner of its own"
       end
 
       def test_timeline_collapses_a_kept_thought_to_one_row

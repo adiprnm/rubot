@@ -2241,14 +2241,15 @@ select:focus-visible { outline: none; }
 .turn-body > .text:last-child { margin-bottom: 1.05rem; }
 
 /* The mark is a label prefix, nothing more, and the row centres it on the
-   line rather than hanging it from the baseline: the thought and the running
-   turn draw their ring as an SVG in a square box (see `.row .mark`), and a box
-   centred on the line box is centred on the text it labels. The state rows
-   below ("✓ shell_exec") keep baseline alignment, where a glyph belongs. */
+   line rather than hanging it from the baseline: the running turn draws its
+   ring as an SVG in a square box (see `.row .mark`), and a box centred on the
+   line box is centred on the text it labels. It is the last mark left in the
+   timeline — a thought, a call and a seam carry none, and say what they have to
+   say in words that glow instead. */
 .mark { flex: 0 0 auto; }
 
 /* The ring is drawn, not typed: a fallback font's ◌ has its own size and sits
-   on the baseline, so beside "Thinking…" it always looked a touch low and
+   on the baseline, so beside "Working…" it always looked a touch low and
    never quite the same on two machines. The box is square and its SVG fills
    it, so the mark's own centre is the mark's box centre. */
 .row .mark {
@@ -2319,6 +2320,19 @@ select:focus-visible { outline: none; }
    tail of the cycle is the pause before it travels again — so the whole thing
    repeats without the word ever sitting still as a block.
 
+   The same light is what a call row wears, and the compaction seam while it is
+   running: a wait and a piece of work in flight are the same shape here, and
+   neither needs a mark beside it to say it twice. One row at a time is the
+   rule — the newest call keeps the light until the turn closes (see
+   Turn#mark_awake_call), and older rows keep none, or a transcript of twelve
+   calls would be twelve things moving at once and nothing to look at.
+
+   The delay is counted in letters, so how much of the light one letter gets is
+   the row's own business (`--glow-step`, written per row by the template): a
+   fixed tenth of a second is right for "Thinking…" and wraps past the cycle on
+   a sentence, which lit the middle of a long row while the head was still
+   going. The default is the one the short labels want.
+
    The light is the letter's own colour, not a halo around it. A text-shadow of
    the same colour as the glyph, on 11.5px mono, blurs into the strokes and
    reads as a glowing patch behind the word rather than a letter that is lit;
@@ -2328,11 +2342,13 @@ select:focus-visible { outline: none; }
 
    This is safe to animate where the rest of the timeline is not: a thought is
    drawn when the wait starts and nothing redraws it until tokens arrive, which
-   is exactly when it is replaced. */
+   is exactly when it is replaced, and a call row only changes when its clock
+   does. */
 .row .label.glow span,
-.compaction-row .compaction-label.glow span {
+.compaction-row .compaction-label.glow span,
+.tool-row .tool-detail.glow span {
   animation: label-glow 2s ease-in-out infinite;
-  animation-delay: calc(var(--i, 0) * 0.1s);
+  animation-delay: calc(var(--i, 0) * var(--glow-step, 0.1s));
 }
 
 @keyframes label-glow {
@@ -2343,7 +2359,9 @@ select:focus-visible { outline: none; }
 /* The seam an automatic compaction leaves in the timeline: older messages
    were summarized away and the model carried on with a smaller window. It is
    a quiet rule between two pieces of work, not another status to read, so it
-   takes the faint colour and a hairline instead of a bordered card. */
+   takes the faint colour and a hairline instead of a bordered card. No mark:
+   the words are the row, and while the summarizer works they carry the light a
+   thought carries — both are a pause in the work. */
 .compaction-row {
   display: flex;
   align-items: center;
@@ -2355,22 +2373,6 @@ select:focus-visible { outline: none; }
   color: var(--fg-faint);
 }
 
-.compaction-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 0.8em;
-  height: 0.8em;
-  color: var(--blue);
-}
-
-.compaction-mark .mark-svg { display: block; width: 100%; height: 100%; }
-
-/* While the summarizer is working the row wears the mark and the travelling
-   light a thought wears: both are a pause in the work, and a mark of its own
-   made the timeline look like it had two kinds of waiting. Once the result
-   lands the mark becomes the folded page and the light stops. */
 .compaction-row.is-running .compaction-label { color: var(--fg); }
 
 .compaction-label { color: var(--fg-dim); }
@@ -2424,26 +2426,14 @@ select:focus-visible { outline: none; }
   overflow: hidden;
 }
 
-.tool-row .mark {
-  flex: 0 0 auto;
-  /* A drawn mark needs a box to fill, and a box has no baseline of its own: on
-     a row whose text is baseline-aligned, an empty box would hang from the
-     baseline and ride high. It centres in the row instead, which is where the
-     marks above it sit too — and it centres what is *inside* it, or the ✓ sits
-     at the top of its own box and reads as a mark that missed the line. */
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  align-self: center;
-  width: 0.9em;
-  height: 0.9em;
-  line-height: 1;
-}
-.tool-row.running .mark { color: var(--yellow); }
-.tool-row.ok .mark { color: var(--green); }
-.tool-row.failed .mark { color: var(--red); }
-.tool-row.unknown .mark { color: var(--fg-faint); }
-
+/* A call row has no mark of its own: what it has to say is a sentence, and the
+   sentence is the row. While the call is open that sentence carries the light a
+   thought carries; once it settles the light stops, because one page of rows
+   all asking for the eye is no page at all. The state then shows as colour
+   alone, since there is no glyph left to carry it: red for a call that failed,
+   the faint grey for one whose result nobody could read. */
+.tool-row.failed .tool-detail { color: var(--red); }
+.tool-row.unknown .tool-detail { color: var(--fg-faint); }
 /* One call giving way to the next. The row is a new element on every event of
    a turn, so the animation would begin at zero twenty times a second and read
    as a blink; Rubot::Web::Turn sends the row's age along and the template turns
