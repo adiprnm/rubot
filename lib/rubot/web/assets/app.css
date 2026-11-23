@@ -2285,7 +2285,7 @@ select:focus-visible { outline: none; }
   gap: 0.35rem;
   margin: 0 0 0.4rem;
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
   letter-spacing: -0.03em;
   color: var(--fg-faint);
 }
@@ -2320,7 +2320,7 @@ select:focus-visible { outline: none; }
    repeats without the word ever sitting still as a block.
 
    The light is the letter's own colour, not a halo around it. A text-shadow of
-   the same colour as the glyph, on 10.5px mono, blurs into the strokes and
+   the same colour as the glyph, on 11.5px mono, blurs into the strokes and
    reads as a glowing patch behind the word rather than a letter that is lit;
    so the lit letter simply takes the brightest text colour and the rest fall
    back to the faint one, which is what makes the sweep visible in the first
@@ -2350,7 +2350,7 @@ select:focus-visible { outline: none; }
   gap: 0.35rem;
   margin: 0 0 0.4rem;
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
   letter-spacing: -0.03em;
   color: var(--fg-faint);
 }
@@ -2417,7 +2417,7 @@ select:focus-visible { outline: none; }
   max-width: none;
   margin: 0 0 0.4rem;
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
   letter-spacing: -0.03em;
   color: var(--fg-faint);
   white-space: nowrap;
@@ -2518,7 +2518,7 @@ select:focus-visible { outline: none; }
 /* ---------- diff ------------------------------------------------- */
 
 /* The hunks of a file a tool changed, under the row that changed it. It is
-   machine output — a mono block with the same 10.5px as the row above it — but
+   machine output — a mono block with the same 11.5px as the row above it — but
    it is also the one place a reader looks at a file, so the block gets the
    frame and the tint the row does not: a box says "this is a file", and the
    green and red say which way each line went.
@@ -2531,7 +2531,7 @@ select:focus-visible { outline: none; }
   border-radius: 6px;
   background: var(--bg-dim);
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
   letter-spacing: -0.03em;
   overflow: hidden;
 }
