@@ -1,47 +1,85 @@
-<%# The model and the thinking level this session runs on, under the field
-    the reader types in. Both are per-session choices, and both are the kind
-    of thing that changes right before a prompt is sent — so they sit under
-    the composer rather than in a settings page, the same width and centring
-    as the box above them.
+<%# The model and the thinking level this session runs on, under the field the
+    reader types in, as one control rather than two pickers.
+
+    Both are per-session choices, and both change right before a prompt is sent,
+    so they stay beside the composer instead of moving to a settings page. They
+    are read as one sentence — the model, a dot, the effort — because that is
+    how the session is described everywhere else, and a row of two native
+    selects under the field read as a form to fill in for something chosen once
+    per conversation.
+
+    The dialog holds the whole choice: the model list is long enough to need a
+    field that searches it, and the four efforts fit on a line under it. Saving
+    posts both at once, so a change cannot arrive half-applied.
 
     Both lists hold real choices only. There is no "follow the default" entry:
-    the default belongs to the persona, chosen where the persona is edited,
-    and a picker that can say "default" hides the very thing the reader wants
-    to know — which model, which effort.
-
-    A change posts at once (there is no save button to forget), and the answer
-    is this same row again with the new choice marked: a page cannot drift
-    from what the session really runs on. -%>
+    the default belongs to the persona, chosen where the persona is edited, and
+    a picker that can say "default" hides the very thing the reader wants to
+    know — which model, which effort. -%>
+<% chosen_model = model_choices.find { |choice| choice[:value] == session_model } %>
+<% model_label = chosen_model ? (chosen_model[:name].to_s.empty? ? chosen_model[:label] : chosen_model[:name]) : session_model %>
 <form id="session-settings" class="session-settings"
       data-model="<%= h(session_model) %>"
       data-thinking="<%= h(session_thinking) %>"
       hx-post="/s/<%= h(session_id) %>/settings<%= h(token_query) %>"
-      hx-trigger="change from:select"
+      hx-trigger="submit"
       hx-target="this"
       hx-swap="outerHTML">
-  <label class="session-setting session-setting-model">
-    <span class="session-setting-label">model</span>
-    <select class="session-select" name="model" autocomplete="off"
-            aria-label="Model sesi ini">
+  <button class="session-trigger" type="button" data-settings-open
+          aria-haspopup="dialog" aria-controls="session-settings-dialog"
+          aria-label="Model dan level thinking sesi ini: <%= h(model_label) %>, <%= h(session_thinking) %>">
+    <span class="session-trigger-model"><%= h(model_label.empty? ? "pilih model" : model_label) %></span>
+    <span class="session-trigger-dot" aria-hidden="true">·</span>
+    <span class="session-trigger-thinking"><%= h(session_thinking) %></span>
+  </button>
+
+  <%# A real <dialog>, so the browser supplies the top layer, the focus trap,
+      escape to close and an inert page behind it. The field stays put and only
+      the list under it scrolls: the query is the thing being edited. -%>
+  <dialog id="session-settings-dialog" class="settings-dialog"
+          aria-label="Model dan level thinking">
+    <div class="search-top">
+      <input class="search-input" type="search" autocomplete="off"
+             data-model-search placeholder="Cari model…" aria-label="Cari model">
+      <button class="search-close" type="button" data-settings-close title="Tutup (esc)">esc</button>
+    </div>
+
+    <div class="model-list" data-model-list role="radiogroup" aria-label="Model">
       <% model_choices.each do |choice| %>
-        <option value="<%= h(choice[:value]) %>"<%= " selected" if choice[:value] == session_model %>><%= h(choice[:label]) %></option>
+        <%# The row says the name; the id stays in the search text, so a reader
+            who knows the id can still find the model by typing it. -%>
+        <% display = choice[:name].to_s.empty? ? choice[:label] : choice[:name] %>
+        <label class="model-choice" data-search="<%= h("#{choice[:label]} #{choice[:value]}".downcase) %>">
+          <input type="radio" name="model" value="<%= h(choice[:value]) %>"<%= " checked" if choice[:value] == session_model %>>
+          <span class="model-choice-name"><%= h(display) %></span>
+        </label>
       <% end %>
       <%# The list is built from config and the provider catalog, and the model
           the session runs on can be a third thing (a hand-edited config, a
-          catalog that failed to load). Showing the real one beats showing an
-          empty box that misrepresents it. -%>
+          catalog that failed to load). Showing the real one beats marking
+          nothing and letting the next save silently move the session. -%>
       <% unless session_model.empty? || model_choices.any? { |choice| choice[:value] == session_model } %>
-        <option value="<%= h(session_model) %>" selected><%= h(session_model) %></option>
+        <label class="model-choice" data-search="<%= h(session_model.downcase) %>">
+          <input type="radio" name="model" value="<%= h(session_model) %>" checked>
+          <span class="model-choice-name"><%= h(session_model) %></span>
+        </label>
       <% end %>
-    </select>
-  </label>
-  <label class="session-setting session-setting-thinking">
-    <span class="session-setting-label">thinking</span>
-    <select class="session-select" name="thinking" autocomplete="off"
-            aria-label="Level thinking sesi ini">
+      <p class="model-empty" data-model-empty hidden>Tidak ada model yang cocok.</p>
+    </div>
+
+    <div class="thinking-row">
+      <span class="thinking-row-label">thinking</span>
       <% Persona::THINKING_LEVELS.each do |level| %>
-        <option value="<%= h(level) %>"<%= " selected" if level == session_thinking %>><%= h(level) %></option>
+        <label class="thinking-chip">
+          <input type="radio" name="thinking" value="<%= h(level) %>"<%= " checked" if level == session_thinking %>>
+          <span><%= h(level) %></span>
+        </label>
       <% end %>
-    </select>
-  </label>
+    </div>
+
+    <div class="settings-actions">
+      <span class="model-count" data-model-count aria-live="polite"><%= model_choices.size %> model</span>
+      <button class="btn settings-apply" type="submit">Simpan</button>
+    </div>
+  </dialog>
 </form>

@@ -10,6 +10,82 @@ module Rubot
     class TestWebViews < Minitest::Test
       include WebChannelSupport
 
+      # --- the session model and thinking choice ---------------------------
+
+      # Two selects under the composer put a form on the page for a choice made
+      # once per conversation. One control reports the choice and a dialog holds
+      # it: the model list is long enough to need a field that searches it.
+      def test_the_session_choice_is_one_control_opening_a_dialog
+        html = View.render("_session_settings",
+                           session_id: "web_rubot", token_query: "?token=t",
+                           model_choices: [ { value: "m-1", name: "Model Satu", label: "Model Satu (m-1)" },
+                                            { value: "m-2", name: "Model Dua", label: "Model Dua (m-2)" } ],
+                           session_model: "m-2", session_thinking: "high")
+
+        refute_includes html, "<select", "the two selects are gone"
+        assert_includes html, "data-settings-open", "one control opens the choice"
+        assert_includes html, 'id="session-settings-dialog"'
+        assert_includes html, "data-model-search", "the model list has to be searchable"
+        assert_includes html, "Model Satu", "every model is offered"
+
+        assert_match(/name="model" value="m-2"[^>]*checked/, html)
+        assert_match(/name="thinking" value="high"[^>]*checked/, html)
+
+        # The post still carries both halves at once, and answers into the row.
+        assert_includes html, 'hx-post="/s/web_rubot/settings?token=t"'
+        assert_includes html, 'hx-target="this"'
+      end
+
+      # The id is a machine's name for the model: the caption and the list say
+      # the name a reader recognises. The id stays in the search text, so
+      # looking a model up by id still works.
+      def test_the_session_choice_shows_the_model_name_and_not_its_id
+        html = View.render("_session_settings", session_id: "s", token_query: "",
+                           model_choices: [ { value: "glm-4.6", name: "GLM 4.6", label: "GLM 4.6 (glm-4.6)" } ],
+                           session_model: "glm-4.6", session_thinking: "high")
+
+        caption = html[%r{<button class="session-trigger".*?</button>}m]
+        refute_nil caption
+        assert_includes caption, "GLM 4.6"
+        refute_includes caption, "glm-4.6", "the caption says the name, not the id"
+
+        row = html[%r{<span class="model-choice-name">[^<]*</span>}]
+        assert_equal '<span class="model-choice-name">GLM 4.6</span>', row
+        assert_includes html, 'data-search="glm 4.6 (glm-4.6) glm-4.6"',
+                        "the id is still findable in the search"
+      end
+
+      # The model the session runs on can come from a hand-edited config or a
+      # catalog that failed to load. Showing it beats marking nothing, which
+      # would let the next save quietly move the session to another model.
+      def test_the_session_choice_shows_a_model_the_catalog_does_not_have
+        html = View.render("_session_settings", session_id: "s", token_query: "",
+                           model_choices: [], session_model: "hand.edited",
+                           session_thinking: "low")
+
+        assert_match(/name="model" value="hand\.edited"[^>]*checked/, html)
+      end
+
+      def test_the_session_choice_escapes_model_labels
+        html = View.render("_session_settings", session_id: "s", token_query: "",
+                           model_choices: [ { value: "x", label: "<b>x</b>" } ],
+                           session_model: "x", session_thinking: "minimal")
+
+        refute_includes html, "<b>x</b>"
+        assert_includes html, "&lt;b&gt;x&lt;/b&gt;"
+      end
+
+      # The dialog edits a copy of the choice, so the script has to be able to
+      # put it back: a refused save must not leave the row showing a model the
+      # session never took.
+      def test_the_session_choice_can_be_put_back_after_a_refusal
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+
+        assert_includes js, "resetSettingsChoices", "a refusal has to restore the choice"
+        assert_includes js, "filterModels", "the model list has to be searchable"
+        assert_includes js, "showModal", "the dialog is a real modal"
+      end
+
       # --- Views ----------------------------------------------------------
 
       def test_timeline_escapes_tool_detail

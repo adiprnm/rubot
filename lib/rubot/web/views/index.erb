@@ -249,15 +249,22 @@
         server says no, so the reason has to sit beside the field that held it. -%>
     <div id="composer-notice" class="composer-notice" hidden></div>
 
-    <%= View.render("_composer", session_id: session_id, token_query: token_query) %>
+    <%# The field, the caption saying which model and effort the session runs
+        on, and the button that sends are one box: the caption sits at the left
+        of the row under the field and the button at its right. They are two
+        forms — a prompt and a session setting are two different requests — and
+        the wrapper is the grid that puts them on one line. -%>
+    <div class="composer-box">
+      <%= View.render("_composer", session_id: session_id, token_query: token_query) %>
 
-    <%# The model and the thinking level this session runs on. Both are
-        per-session choices, and both are the kind of thing that is changed
-        right before a prompt is sent, so they live under the field the
-        reader types in rather than in a settings page. -%>
-    <%= View.render("_session_settings", session_id: session_id, token_query: token_query,
-                    model_choices: model_choices,
-                    session_model: session_model, session_thinking: session_thinking) %>
+      <%# The model and the thinking level this session runs on. Both are
+          per-session choices, and both are the kind of thing that is changed
+          right before a prompt is sent, so they live in the box the reader
+          types in rather than in a settings page. -%>
+      <%= View.render("_session_settings", session_id: session_id, token_query: token_query,
+                      model_choices: model_choices,
+                      session_model: session_model, session_thinking: session_thinking) %>
+    </div>
 
     <%# The footer is facts about the conversation, not about the moment: that
         a turn is running is said in the band above the field, where the work

@@ -311,8 +311,8 @@ module Rubot
         assert_equal 200, res.status
         assert_equal "model-a", handle.model
         assert_equal "low", handle.thinking
-        assert_includes res.body, 'value="model-a" selected'
-        assert_includes res.body, 'value="low" selected'
+        assert_includes res.body, 'value="model-a" checked'
+        assert_includes res.body, 'value="low" checked'
       end
 
       # The pickers offer real choices only, so a hand-crafted post carrying
@@ -343,9 +343,9 @@ module Rubot
         assert_equal 200, res.status
         assert_nil handle.model, "an unknown model is never applied"
         assert_nil handle.thinking, "an empty level leaves the persona's default alone"
-        assert_includes res.body, 'value="medium" selected', "the row marks the level it runs on"
+        assert_includes res.body, 'value="medium" checked', "the row marks the level it runs on"
         refute_includes res.body, "ikut default"
-        refute_includes res.body, 'value="" selected'
+        refute_includes res.body, 'value="" checked'
       end
 
       # The persona owns the defaults, so a session that has chosen nothing
@@ -363,8 +363,8 @@ module Rubot
         channel.render_session(res, "web_kanyaah", FakeRequest.new("/s/web_kanyaah"))
 
         assert_equal 200, res.status
-        assert_includes res.body, 'value="model-a" selected'
-        assert_includes res.body, 'value="high" selected'
+        assert_includes res.body, 'value="model-a" checked'
+        assert_includes res.body, 'value="high" checked'
         refute_includes res.body, "ikut default"
       end
 

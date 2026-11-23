@@ -2877,6 +2877,16 @@ select:focus-visible { outline: none; }
 .composer-notice[hidden] { display: none; }
 .composer-notice .notice, .composer-notice .error { margin: 0; }
 
+/* The wrapper around the field and the two pickers. Under a mouse it draws
+   nothing: `display: contents` hands its children straight to the chat column,
+   so the field and the pickers keep the separate rows they have always had.
+   On a phone it is the box itself (see the compact layout below). */
+/* Under a mouse the wrapper draws nothing at all: the field keeps its own box
+   and the caption keeps its own row under it. On a phone the wrapper becomes
+   the box and the caption moves inside it, beside the send button — see the
+   phone block below. */
+.composer-box { display: contents; }
+
 .composer {
   display: flex;
   flex-direction: column;
@@ -2923,6 +2933,19 @@ select:focus-visible { outline: none; }
 .composer textarea::placeholder { color: var(--fg-faint); font-style: italic; }
 
 .composer-actions { display: flex; gap: 0.4rem; }
+
+/* Two icon buttons rather than two words. The padding is the same on every
+   side so the square the icon sits in is the button's shape, and `line-height:
+   0` keeps the svg's own baseline from making it taller than it is. */
+.composer-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.3rem;
+  line-height: 0;
+}
+
+.composer-actions .btn svg { display: block; }
 
 /* ---------- pictures --------------------------------------------- */
 
@@ -3225,6 +3248,23 @@ body.lightbox-open { overflow: hidden; }
 }
 
 .btn.primary { border-color: var(--green); color: var(--green); }
+
+/* The send button is filled where its siblings are outlined: it is the one
+   action the screen exists for, and an icon-only control drawn in outline read
+   as secondary beside the field — on a phone the icon is the only label it
+   has. The stop button next to it stays outlined, in the colour that means
+   stop, so the two never argue about which is which. */
+.composer-actions .btn.primary {
+  background: var(--green);
+  border-color: var(--green);
+  color: var(--on-accent);
+}
+
+.composer-actions .btn.primary:disabled {
+  background: none;
+  border-color: var(--line);
+  color: var(--fg-faint);
+}
 
 .btn.primary:active { background: var(--green); color: var(--on-accent); }
 
@@ -3717,7 +3757,7 @@ body.lightbox-open { overflow: hidden; }
     padding-right: 1rem;
   }
 
-  .composer,
+  .composer-box,
   .status-line { width: calc(100% - 2rem); }
 
   /* The band above the field follows the field's own gutter: on a phone the
@@ -3839,9 +3879,9 @@ body.lightbox-open { overflow: hidden; }
 
 /* ---------- session model and thinking ------------------------ */
 
-/* The two per-session choices, under the field they belong to. Same width and
-   centring as the composer above so the row reads as part of it: mono,
-   lowercase, the weight of a caption rather than a form. */
+/* Under a mouse the pill sits on a row of its own, under the box it belongs
+   to, on the same gutter and column as the field above. On a phone it moves
+   inside that box — see the phone block. */
 .session-settings {
   display: flex;
   align-items: center;
@@ -3853,92 +3893,238 @@ body.lightbox-open { overflow: hidden; }
   min-width: 0;
 }
 
-.session-setting {
-  display: flex;
+/* The whole choice, worn as one pill: the model, a dot, the effort. A pill
+   rather than a caption because it sits inside the box the reader types in on
+   a phone, and a bare line of mono there would read as text somebody wrote.
+
+   Filled with a tint of the text colour rather than with a surface colour or a
+   border: the box already draws the only outline this row needs, and a step of
+   `--bg2` here was brighter than the field beside it — a label competing with
+   the one button on the screen. A tint of `--fg` at 9% sits just far enough
+   from the box to read as a control in both themes. */
+.session-trigger {
+  display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
+  gap: 0.32rem;
+  max-width: 100%;
   min-width: 0;
+  /* The height of the button it shares a row with: the two are read as one
+     line, and a pill shorter than the button beside it makes the row look
+     misaligned at the bottom, which is the edge the eye follows. */
+  height: 1.7rem;
+  padding: 0 0.72rem;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: -0.02em;
+  color: var(--fg-dim);
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  text-align: left;
+  transition: color .12s, background .12s;
 }
 
-/* A model id is the long thing here and a level is one word. The model takes
-   the room it needs and then stops well short of the column: a picker as wide
-   as the composer reads as a field to fill in, not as a setting to glance
-   at. */
-.session-setting-model { flex: 0 1 17rem; }
-.session-setting-thinking { flex: 0 0 auto; }
+.session-trigger:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 14%, transparent);
+}
 
-.session-setting-label {
-  flex: 0 0 auto;
+.session-trigger:focus-visible { outline: 1px solid var(--line); outline-offset: 2px; }
+
+/* A model id is the long thing here and a level is one word, so only the model
+   is allowed to be cut: the effort stays whole. */
+.session-trigger-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-trigger-dot,
+.session-trigger-thinking { flex: 0 0 auto; color: var(--fg-faint); }
+.session-trigger:hover .session-trigger-thinking { color: var(--fg-dim); }
+
+/* The dialog: the whole choice at once, the model list as the long half and the
+   four efforts on a line under it. A real <dialog>, so the browser supplies the
+   top layer, the focus trap and escape to close. */
+.settings-dialog {
+  width: min(92vw, 34rem);
+  max-height: min(82vh, 32rem);
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg0);
+  color: var(--fg);
+  box-shadow: 0 18px 60px var(--shadow-deep);
+  overflow: hidden;
+}
+
+/* Only while open: `display` on a dialog that is closed would keep it in the
+   page, and the browser's own rule is the one that hides it. */
+.settings-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-dialog::backdrop {
+  background: var(--scrim);
+  backdrop-filter: blur(1.5px);
+}
+
+/* The answers, in their own scroller so a hundred catalog models never push the
+   field, the efforts or the save button out of reach. */
+.model-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 19rem;
+  overflow-y: auto;
+  padding: 0.35rem 0.4rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg2) transparent;
+}
+
+.model-list::-webkit-scrollbar { width: 8px; }
+.model-list::-webkit-scrollbar-thumb {
+  background: var(--bg2);
+  border-radius: 8px;
+  border: 2px solid var(--bg0);
+}
+
+/* A whole row is the target, because a name is what the reader is aiming at
+   and a 12px radio is not. */
+.model-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.42rem 0.55rem;
+  border-radius: 5px;
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 12.5px;
+  letter-spacing: -0.02em;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+
+/* The search hides rows by the attribute, so the rule above must not win over
+   the browser's own `[hidden]`. */
+.model-choice[hidden] { display: none; }
+.model-choice:hover { background: var(--bg-dim); color: var(--fg); }
+.model-choice:has(input:checked) { background: var(--bg1); color: var(--fg); }
+
+/* The radio keeps its function and loses its chrome: the mark is drawn where
+   the eye already is, in the palette's own ink. */
+.model-choice input {
+  flex: 0 0 auto;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 0.72rem;
+  height: 0.72rem;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+}
+
+.model-choice input:checked {
+  border-color: var(--fg-dim);
+  background: radial-gradient(circle, var(--fg-dim) 0 44%, transparent 45%);
+}
+
+.model-choice-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Said only when the query finds nothing: an empty pane with no sentence reads
+   as a broken list. */
+.model-empty {
+  margin: 0.45rem 0.55rem 0.5rem;
+  font-size: 12.5px;
+  color: var(--fg-faint);
+}
+
+.model-empty[hidden] { display: none; }
+
+/* The effort is four words, so it is drawn as four chips: one of them is the
+   answer and the other three are visibly the other answers. */
+.thinking-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.55rem 0.75rem 0.65rem;
+  border-top: 1px solid var(--line-soft);
+}
+
+.thinking-row-label {
+  margin-right: 0.15rem;
+  font-family: var(--mono);
+  font-size: 9.5px;
   letter-spacing: -0.02em;
   color: var(--fg-faint);
 }
 
-/* A native select is a form control from another decade: grey chrome, a fat
-   arrow, a height that changes per platform. Only the text is wanted here, so
-   the chrome is dropped and the arrow drawn as a background. */
-.session-select {
-  flex: 1 1 auto;
-  min-width: 0;
-  max-width: 100%;
-  appearance: none;
-  -webkit-appearance: none;
+.thinking-chip { position: relative; display: inline-flex; cursor: pointer; }
+
+.thinking-chip input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.thinking-chip span {
+  display: inline-block;
+  padding: 0.2rem 0.55rem;
   font-family: var(--mono);
   font-size: 10.5px;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.02em;
   color: var(--fg-dim);
-  background-color: transparent;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'><path d='M0.7 0.9L4 4.1 7.3 0.9' fill='none' stroke='%237d8478' stroke-width='1.2' stroke-linecap='round'/></svg>");
-  background-repeat: no-repeat;
-  background-position: right 0.15rem center;
-  padding: 0.18rem 0.85rem 0.18rem 0.2rem;
-  border: 0;
-  border-radius: 3px;
-  outline: none;
-  /* The chosen model can be a long id; the closed control keeps its box and
-     lets the label be cut rather than widening the row. */
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  overflow: hidden;
-  cursor: pointer;
+  border: 1px solid var(--line);
+  border-radius: 999px;
 }
 
-.session-select:hover { color: var(--fg); }
-.session-select:focus,
-.session-select:focus-visible { outline: none; }
-/* An option list is drawn by the platform, so it keeps the page's own colours
-   where the browser lets them through. The list itself is read at arm's
-   length — a menu of 11px mono is a menu you have to lean into — so the
-   options carry their own size, a step above the closed control. */
-.session-select option {
-  background: var(--bg0);
-  color: var(--fg);
-  font-size: 13.5px;
-  line-height: 1.7;
+.thinking-chip:hover span { color: var(--fg); }
+.thinking-chip:has(input:checked) span { color: var(--fg); background: var(--bg1); border-color: var(--fg-faint); }
+.thinking-chip input:focus-visible + span { outline: 1px solid var(--line); outline-offset: 2px; }
+
+/* The count and the one button that makes the choice real. */
+.settings-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.55rem 0.75rem;
+  border-top: 1px solid var(--line-soft);
 }
+
+.model-count {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: -0.02em;
+  color: var(--fg-faint);
+}
+
+.settings-apply { padding: 0.35rem 0.95rem; font-size: 12px; }
 
 /* A phone has no hover and no room for a caption the reader has to squint at:
-   the row grows to a thumb-sized control and its letters grow with it, with
-   the model picker taking the width the row can spare. The breakpoint is the
+   the caption grows to a thumb-sized control, and the dialog keeps its place in
+   the middle of the screen with only its width changing. The breakpoint is the
    one the composer and the status line already change at. */
 @media (max-width: 860px) {
-  .session-settings { width: calc(100% - 2rem); padding: 0 0.4rem; gap: 0.45rem; }
-  .session-setting-model { flex: 1 1 auto; }
-  .session-setting-label { font-size: 9.5px; }
-  .session-select {
-    font-size: 11px;
-    padding: 0.4rem 1rem 0.35rem 0.35rem;
-    background-position: right 0.3rem center;
-  }
-}
+  .session-settings { gap: 0.45rem; }
+  /* 2.1rem is the send button's own height on a phone, so the pill and the
+     button end on the same line and start on it too. */
+  .session-trigger { height: 2.1rem; font-size: 10.5px; padding: 0 0.85rem; }
 
-/* Stripped of its chrome a select is only as tall as its text, which is right
-   under a mouse and too small under a thumb. The row sits right above the
-   keyboard on a phone, so it gets a real tap target there. */
-@media (pointer: coarse) {
-  .session-setting select { min-height: 2.6rem; }
-  .session-settings { margin-bottom: 0.4rem; }
+  .settings-dialog { width: calc(100vw - 1.5rem); max-height: min(80vh, 30rem); }
+  .model-list { max-height: none; }
+  .model-choice { padding: 0.6rem 0.55rem; font-size: 13px; }
+  .thinking-chip span { padding: 0.4rem 0.7rem; font-size: 11.5px; }
 }
 
 /* ---------- press feedback ---------------------------------------- */
@@ -4334,16 +4520,88 @@ html:not(.js) .settings-tabs { display: none; }
 @media (max-width: 860px), (pointer: coarse) {
   .working-band { min-height: 0.6rem; margin: 0.1rem auto 0.4rem; }
   .thread { padding-bottom: 0.3rem; }
-  .composer { gap: 0.25rem; margin: 0 auto 0.15rem; padding: 0.25rem 0.4rem 0.25rem 0.8rem; }
-  .composer textarea { min-height: 1.4rem; font-size: 16px; line-height: 1.45; }
+
+  /* On a phone the wrapper is the box the reader actually types in: the field
+     takes a row of its own, and the pill and the send button share the row
+     under it, inside that box. `display: contents` on the two forms is what
+     lets their children be rows of this grid while the markup keeps a form per
+     request — a prompt and a session setting are two different posts. */
+  .composer-box {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "quotes  quotes"
+      "field   field"
+      "pickers actions";
+    align-items: end;
+    column-gap: 0.4rem;
+    row-gap: 0.15rem;
+    width: calc(100% - 2rem);
+    margin: 0 auto 0.25rem;
+    /* One inset on every side: the field's first character, the pill's left
+       edge and the button's right edge all sit on the same line as the box's
+       own corner. */
+    padding: 0.5rem 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--bg-dim);
+    transition: border-color .12s, border-radius .12s;
+  }
+
+  .composer-box:focus-within { border-color: var(--fg-faint); }
+
+  /* The box keeps the width it has when the field is empty. It used to grow to
+     the edges while typing, which read as the box jumping under the thumb and
+     left the field wider than the conversation above it; the gutter is the
+     width the thread uses, so the two stay in line instead. */
+
+  .composer-box .composer,
+  .composer-box .composer-row { display: contents; }
+
+  .composer-box .composer-quotes { grid-area: quotes; }
+
+  .composer-box textarea {
+    grid-area: field;
+    width: 100%;
+    min-height: 1.4rem;
+    font-size: 16px;
+    line-height: 1.45;
+  }
+
+  .composer-box .composer-actions { grid-area: actions; gap: 0.3rem; }
+
+  /* A circle is what a thumb aims at, and this is the one control pressed on
+     every single prompt. */
+  .composer-box .composer-actions .btn {
+    width: 2.1rem;
+    height: 2.1rem;
+    padding: 0;
+    border-radius: 50%;
+  }
+
+  .composer-box .composer-actions .btn svg { width: 16px; height: 16px; }
+
+  /* The pill rides the box's own gutter, in the corner the thumb already
+     rests in, so the row's own width, centring and margins would only push it
+     off it. */
+  .composer-box .session-settings {
+    grid-area: pickers;
+    width: auto;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    gap: 0.5rem;
+  }
+
   .status-line { gap: 0.5rem; padding: 0 0 0.2rem; }
   .status-line .metrics { gap: 0.5rem; }
   .status-line .metric { gap: 0.2rem; }
   .status-line .usage-sheet { margin-left: 0.25rem; }
   .status-line .compact-toggle { margin-left: 0.25rem; }
-  .session-settings { gap: 0.4rem; margin: -0.2rem auto 0.1rem; }
-  .session-setting-label { font-size: 8.5px; }
-  .session-select { font-size: 10px; padding: 0.12rem 0.8rem 0.12rem 0.2rem; }
+  .session-settings { gap: 0.4rem; }
+  /* The pill keeps its own padding here: this block is about saving height
+     everywhere else, and a pill squeezed to its text is a pill a thumb misses
+     and a name that gets cut. */
   .usage-panel { box-shadow: none; max-height: 45vh; background: var(--bg0); }
 }
 

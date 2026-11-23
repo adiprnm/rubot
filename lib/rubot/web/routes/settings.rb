@@ -376,6 +376,10 @@ module Rubot
         end
       end
 
+      # Every model the pickers can offer, as value, name and label. The value is
+      # what gets stored, the name is what a reader recognises, and the label is
+      # the two together for the selects that have no room of their own for a
+      # second field.
       def model_choices
         config = @app_config
         return [] unless config
@@ -388,8 +392,9 @@ module Rubot
           next if id.empty? || seen[id]
 
           seen[id] = true
-          label = entry["name"].to_s
-          choices << { value: id, label: label.empty? || label == id ? id : "#{label} (#{id})" }
+          name = entry["name"].to_s
+          name = id if name.empty?
+          choices << { value: id, name: name, label: name == id ? id : "#{name} (#{id})" }
         end
 
         Array(config.models).each do |entry|
@@ -399,10 +404,10 @@ module Rubot
           next if name.empty? || seen[name]
 
           seen[name] = true
-          choices << { value: name, label: "#{name} (#{entry['model']})" }
+          choices << { value: name, name: name, label: "#{name} (#{entry['model']})" }
         end
 
-        choices.sort_by { |choice| [ choice[:label].downcase, choice[:value] ] }
+        choices.sort_by { |choice| [ choice[:name].downcase, choice[:value] ] }
       end
 
       # A model from a form, checked against what the provider and config
