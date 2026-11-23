@@ -157,6 +157,7 @@ module Rubot
       Built-in sub agents (always available, not listed as personas):
       - code_reviewer: review a diff for bugs, security and style
       - debugger: find the cause of an error and the smallest fix
+      - implementer: make a described code change, run the tests, report the diff
       - researcher: look up docs or references with source URLs
       - test_writer: write and run Ruby minitest cases
       - docs_writer: draft English README and AGENTS.md sections

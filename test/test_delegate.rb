@@ -395,10 +395,20 @@ class TestDelegate < Minitest::Test
   def test_builtin_subagents_are_available_but_not_user_personas
     store = Rubot::PersonaStore.new(dir: @tmpdir)
 
-    assert_equal 6, store.subagents.size
+    assert_equal 7, store.subagents.size
     assert_equal "Debugger", store["debugger"].name
     refute store.all.key?("debugger")
     refute store.specialists.map(&:first).include?("debugger")
+  end
+
+  def test_implementer_subagent_can_write_code
+    store = Rubot::PersonaStore.new(dir: @tmpdir)
+    persona = store["implementer"]
+
+    assert_equal "Implementer", persona.name
+    assert persona.internal
+    assert_equal Rubot::SubagentRegistry.allowed_tools("implementer"), %w[file_ops search shell_exec]
+    refute store.all.key?("implementer")
   end
 
   def test_delegates_to_a_builtin_subagent

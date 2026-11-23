@@ -27,7 +27,7 @@ class TestSystemPrompt < Minitest::Test
   # digest of "" and means "nothing to say yet".
   PLAIN_EPOCH = {
     "model" => "f5b4a6aa4ae011ab1607bf68cc669b914bf30700",
-    "rules" => "8744b99fe2204c2de8649d25529a38f62ba83d61",
+    "rules" => "805abefced9aa11f4449d3f81e0e2942758b4d2b",
     "persona" => "da39a3ee5e6b4b0d3255bfef95601890afd80709",
     "summary" => "da39a3ee5e6b4b0d3255bfef95601890afd80709",
     "skill" => "da39a3ee5e6b4b0d3255bfef95601890afd80709",

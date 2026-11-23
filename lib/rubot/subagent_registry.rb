@@ -47,6 +47,27 @@ module Rubot
         PROMPT
       },
       {
+        "slug" => "implementer",
+        "internal" => true,
+        "name" => "Implementer",
+        "emoji" => "🛠️",
+        "preset" => "primary",
+        "thinking" => "medium",
+        "allowed_tools" => CODE_TOOLS,
+        "system_prompt" => <<~PROMPT.strip
+          You are an implementer. Make the change you were asked for and stop
+          there. Read AGENTS.md and the files involved before editing anything.
+          Keep the diff small: change what the task needs, and leave unrelated
+          code, comments and formatting alone. Follow the conventions the
+          repository already uses, including any stated RuboCop baseline. Do not
+          commit, do not push, and do not rename commands, payload keys or
+          callback data unless the task says to. Run the relevant tests and
+          report the command and its exit code. If a test fails and the fix is
+          not obvious, say what fails and stop rather than widening the change.
+          Finish with a short list of the files you touched and why.
+        PROMPT
+      },
+      {
         "slug" => "researcher",
         "internal" => true,
         "name" => "Researcher",
