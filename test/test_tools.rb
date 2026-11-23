@@ -482,6 +482,81 @@ class TestTools < Minitest::Test
     refute_includes result, "tracker"
   end
 
+  def test_web_fetch_cleans_boilerplate_out_of_markdown
+    markdown = <<~MD
+      # Deploying
+
+      [Skip to content](#main-content)
+
+      Run the deploy command:
+
+      ```sh
+      wrangler deploy
+      ```
+
+      ```json
+      {"@context":"https://schema.org","@type":"WebPage","headline":"Deploying"}
+      ```
+
+      Was this helpful?
+
+      YesNo
+    MD
+    fake = FakeHTTP.new(FakeHTTPResponse.new(markdown, "content-type" => "text/markdown"))
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/docs/deploy")
+
+    assert_includes result, "wrangler deploy"
+    refute_includes result, "Skip to content"
+    refute_includes result, "@context"
+    refute_includes result, "Was this helpful"
+    refute_includes result, "YesNo"
+  end
+
+  def test_web_fetch_keeps_real_code_samples_in_markdown
+    markdown = "# API\n\n```json\n{\"user\":\"ada\",\"id\":1}\n```\n\n```sh\ncurl -X GET\n```\n"
+    fake = FakeHTTP.new(FakeHTTPResponse.new(markdown, "content-type" => "text/markdown"))
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/docs/api")
+
+    assert_includes result, '{"user":"ada","id":1}'
+    assert_includes result, "curl -X GET"
+  end
+
+  def test_web_fetch_keeps_prose_that_starts_with_yes
+    markdown = "# Flags\n\n```\n--force\n```\n\nYes, add --force to skip the prompt.\n"
+    fake = FakeHTTP.new(FakeHTTPResponse.new(markdown, "content-type" => "text/markdown"))
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/docs/flags")
+
+    assert_includes result, "Yes, add --force to skip the prompt."
+  end
+
+  def test_web_fetch_strips_scripts_embedded_in_markdown
+    markdown = "# Page\n\n<style>.x{color:red}</style>\n<script>track()</script>\n\nReal text.\n"
+    fake = FakeHTTP.new(FakeHTTPResponse.new(markdown, "content-type" => "text/markdown"))
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/docs/page")
+
+    assert_includes result, "Real text."
+    refute_includes result, "track()"
+    refute_includes result, "color:red"
+  end
+
+  def test_web_fetch_cleans_markdown_variants_too
+    html = "<html><body><pre>a</pre><pre>b</pre></body></html>"
+    markdown = "# Docs\n\n[Skip to content](#main)\n\n```\nx\n```\n"
+    fake = FakeHTTP.new(
+      FakeHTTPResponse.new(html, "content-type" => "text/html"),
+      FakeHTTPResponse.new(markdown, "content-type" => "text/markdown")
+    )
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/docs")
+
+    assert_includes result, "# Docs"
+    refute_includes result, "Skip to content"
+  end
+
   # --- web_fetch: main content extraction ---
 
   def test_web_fetch_prefers_declared_main_content

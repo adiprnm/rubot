@@ -56,6 +56,17 @@ module Rubot
       # current standard, `<article>` the common fallback.
       MAIN_TAGS = %w[main article].freeze
 
+      # Lines that are page furniture rather than content. Deliberately narrow:
+      # a line only disappears when the whole line is one of these, so prose that
+      # merely starts with "Yes," survives.
+      MARKDOWN_BOILERPLATE_LINES = %r{
+        \A\s*(?:
+            \[\s*skip\s+to[^\]]*\]\([^)]*\)
+          | was\s+this\s+(?:page\s+)?helpful\s*\??
+          | yes\s*(?:/\s*)?no
+        )\s*\z
+      }ix
+
       # Tags whose content is navigation, not content: menus, sidebars, cookie
       # banners and footers. Dropped wholesale before the window is applied.
       BOILERPLATE_TAGS = "nav|footer|aside|form".freeze
@@ -231,7 +242,7 @@ module Rubot
       # @return [Array(String, Symbol, URI)] body, its kind (:raw, :html,
       #   :markdown or :markdown_variant) and the URL it actually came from
       def readable_body(body, content_type, uri, code)
-        return [ body, :markdown, uri ] if markdown?(content_type, body)
+        return [ clean_markdown(body), :markdown, uri ] if markdown?(content_type, body)
         return [ body, :raw, uri ] unless html?(content_type, body)
 
         text = extract_text(body)
@@ -248,7 +259,7 @@ module Rubot
         # text we can get from the HTML.
         return [ text, :html, uri ] if variant.nil? || link_index?(variant)
 
-        [ variant, :markdown_variant, variant_uri ]
+        [ clean_markdown(variant), :markdown_variant, variant_uri ]
       end
 
       # Every condition that must hold before spending a second request on the
@@ -328,6 +339,24 @@ module Rubot
         return false unless text.start_with?("#") || text.include?("```")
 
         text.scan(/^```/).size >= 2
+      end
+
+      # Sites that serve markdown ship their own boilerplate inside it: schema.org
+      # JSON-LD, "skip to content" anchors and feedback widgets. It is a small
+      # share of the body, but it is the tail of every documentation fetch.
+      def clean_markdown(markdown)
+        text = markdown.gsub(%r{<script\b.*?</script>}im, " ")
+        text = text.gsub(%r{<style\b.*?</style>}im, " ")
+        # Fenced blocks that hold schema.org metadata, not an example the reader
+        # is meant to read. Ordinary ```json samples are kept.
+        text = text.gsub(/^```[^\n]*\n.*?^```[ \t]*$/m) { |fence| json_ld?(fence) ? " " : fence }
+        text = text.lines.reject { |line| line.match?(MARKDOWN_BOILERPLATE_LINES) }.join
+
+        collapse_whitespace(text)
+      end
+
+      def json_ld?(fence)
+        fence.match?(%r{"@context"\s*:\s*"https?://schema\.org|application/ld\+json})
       end
 
       # Documentation pages are worth a second request for their markdown
