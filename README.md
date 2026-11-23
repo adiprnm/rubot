@@ -250,7 +250,7 @@ Rubot ships with ten built-in tools:
 | `shell_exec` | Run shell commands in the launch directory; dangerous commands are blocked |
 | `file_ops` | Read, edit, write, append, delete, list, and inspect files |
 | `search` | Find files by glob or matching lines by regex, skipping `.git`, `node_modules`, and build output |
-| `web_fetch` | Fetch a URL and convert HTML to plain text (5,000 char cap) |
+| `web_fetch` | Fetch a URL (follows redirects), preferring markdown from docs sites and falling back to plain text (5,000 char cap, 12,000 for markdown) |
 | `memory` | Read and update persistent memory (enabled when memory is on) |
 | `cron` | Schedule one-time or recurring reminders and commands |
 | `send_files` | Deliver local files (pictures, videos, PDFs, notes) into the chat thread |

@@ -50,12 +50,17 @@ class TestTools < Minitest::Test
   # --- web_fetch ---
 
   class FakeHTTPResponse
+    MESSAGES = { "200" => "OK", "301" => "Moved Permanently", "302" => "Found",
+                 "303" => "See Other", "307" => "Temporary Redirect",
+                 "308" => "Permanent Redirect", "404" => "Not Found",
+                 "500" => "Internal Server Error" }.freeze
+
     attr_reader :body, :code, :message
 
-    def initialize(body, headers = {})
+    def initialize(body, headers = {}, code = "200")
       @body = body
-      @code = "200"
-      @message = "OK"
+      @code = code
+      @message = MESSAGES.fetch(code, "OK")
       @headers = headers
     end
 
@@ -70,8 +75,10 @@ class TestTools < Minitest::Test
     attr_accessor :ipaddr, :use_ssl, :verify_mode, :open_timeout, :read_timeout
     attr_reader :requests
 
-    def initialize(response)
-      @response = response
+    # Several responses model a redirect chain: each `get` consumes the next
+    # one, and the last response repeats if the tool asks for more.
+    def initialize(*responses)
+      @responses = responses
       @requests = []
     end
 
@@ -79,7 +86,7 @@ class TestTools < Minitest::Test
 
     def get(path, headers)
       @requests << [ path, headers ]
-      @response
+      @responses[@requests.size - 1] || @responses.last
     end
   end
 
@@ -260,6 +267,263 @@ class TestTools < Minitest::Test
 
     assert result.valid_encoding?
     assert_includes result, "café"
+  end
+
+  # --- web_fetch: redirects and markdown ---
+
+  def run_fetch(tool, fake, url, resolver: "93.184.216.34")
+    tool.stub(:resolve_and_check_host, resolver) do
+      Net::HTTP.stub(:new, fake) do
+        tool.execute({ "url" => url })
+      end
+    end
+  end
+
+  def test_web_fetch_follows_relative_redirect
+    fake = FakeHTTP.new(
+      FakeHTTPResponse.new("", { "location" => "/en/docs" }, "301"),
+      FakeHTTPResponse.new("landed here", "content-type" => "text/html")
+    )
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/")
+
+    assert_includes result, "HTTP 200 OK"
+    assert_includes result, "landed here"
+    assert_includes result, "Final URL: https://example.com/en/docs"
+    assert_equal [ "/", "/en/docs" ], fake.requests.map(&:first)
+  end
+
+  def test_web_fetch_revalidates_redirect_targets
+    # A public URL that redirects to localhost must still be refused: the SSRF
+    # guard has to run per hop, not once for the original URL.
+    fake = FakeHTTP.new(
+      FakeHTTPResponse.new("", { "location" => "http://127.0.0.1/secret" }, "302"),
+      FakeHTTPResponse.new("should not be reached")
+    )
+    resolver = ->(host) { host == "example.com" ? "93.184.216.34" : nil }
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/", resolver: resolver)
+
+    assert_includes result, "safety guard"
+    assert_equal 1, fake.requests.size
+  end
+
+  def test_web_fetch_follows_permanent_redirects
+    fake = FakeHTTP.new(
+      FakeHTTPResponse.new("", { "location" => "https://example.com/final" }, "308"),
+      FakeHTTPResponse.new("final body", "content-type" => "text/html")
+    )
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/")
+
+    assert_includes result, "final body"
+    assert_includes result, "Final URL: https://example.com/final"
+  end
+
+  def test_web_fetch_handles_location_headers_with_spaces
+    fake = FakeHTTP.new(
+      FakeHTTPResponse.new("", { "location" => "/new page" }, "302"),
+      FakeHTTPResponse.new("space landed", "content-type" => "text/html")
+    )
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/")
+
+    assert_includes result, "space landed"
+    assert_equal "/new%20page", fake.requests.last[0]
+  end
+
+  def test_web_fetch_survives_unusable_location_headers
+    # An unusable Location is not a fetch failure: the 3xx body is still an
+    # answer, and it beats returning nothing at all.
+    fake = FakeHTTP.new(FakeHTTPResponse.new("still useful", { "location" => "http://" }, "302"))
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/")
+
+    assert_includes result, "still useful"
+    assert_equal 1, fake.requests.size
+  end
+
+  def test_web_fetch_does_not_follow_redirects_to_other_schemes
+    fake = FakeHTTP.new(FakeHTTPResponse.new("moved", { "location" => "file:///etc/passwd" }, "301"))
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/")
+
+    assert_includes result, "moved"
+    assert_equal 1, fake.requests.size
+  end
+
+  def test_web_fetch_blocks_ipv4_mapped_ipv6_addresses
+    # ::ffff:127.0.0.1 is family 10, so an IPv4 range list never matches it.
+    tool = Rubot::Tools::Web.new
+
+    %w[::ffff:127.0.0.1 ::ffff:10.0.0.1 ::ffff:169.254.169.254].each do |mapped|
+      result = tool.stub(:resolve_addresses, [ mapped ]) do
+        tool.send(:resolve_and_check_host, "example.com")
+      end
+
+      assert_nil result, "#{mapped} should be blocked"
+    end
+  end
+
+  def test_web_fetch_stops_redirect_loops
+    fake = FakeHTTP.new(FakeHTTPResponse.new("", { "location" => "https://example.com/loop" }, "302"))
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/")
+
+    assert_includes result, "Too many redirects"
+    assert_equal Rubot::Tools::Web::MAX_REDIRECTS + 1, fake.requests.size
+  end
+
+  def test_web_fetch_asks_for_markdown_and_keeps_it_intact
+    markdown = "# Title\n\n```ruby\nputs 1\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n"
+    fake = FakeHTTP.new(FakeHTTPResponse.new(markdown, "content-type" => "text/markdown; charset=utf-8"))
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/docs")
+
+    assert_includes result, "(text/markdown)"
+    assert_includes result, "```ruby"
+    assert_includes result, "| 1 | 2 |"
+    assert_equal 1, fake.requests.size
+
+    accept = fake.requests.first[1]["Accept"]
+    assert accept.start_with?("text/markdown"), "markdown should be offered first, got #{accept}"
+  end
+
+  def test_web_fetch_probes_dot_md_on_documentation_pages
+    html = "<html><body><h1>API</h1><pre>curl x</pre><pre>curl y</pre></body></html>"
+    markdown = "# API\n\n```sh\ncurl x\n```\n"
+    fake = FakeHTTP.new(
+      FakeHTTPResponse.new(html, "content-type" => "text/html"),
+      FakeHTTPResponse.new(markdown, "content-type" => "text/markdown")
+    )
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/docs/api")
+
+    assert_equal [ "/docs/api", "/docs/api.md" ], fake.requests.map(&:first)
+    assert_includes result, "(text/markdown)"
+    assert_includes result, "curl x"
+  end
+
+  def test_web_fetch_does_not_probe_markdown_on_ordinary_pages
+    fake = FakeHTTP.new(FakeHTTPResponse.new("<html><body><p>news</p></body></html>",
+                                             "content-type" => "text/html"))
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/article")
+
+    assert_equal 1, fake.requests.size
+    assert_includes result, "news"
+  end
+
+  def test_web_fetch_does_not_probe_markdown_on_query_urls
+    html = "<html><body><pre>a</pre><pre>b</pre><p>body</p></body></html>"
+    fake = FakeHTTP.new(FakeHTTPResponse.new(html, "content-type" => "text/html"))
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/docs?utm=x")
+
+    assert_equal 1, fake.requests.size
+    assert_includes result, "body"
+  end
+
+  def test_web_fetch_does_not_probe_markdown_on_error_pages
+    # A 404 page full of code samples is still a 404 page.
+    html = "<html><body><pre>a</pre><pre>b</pre><p>not found</p></body></html>"
+    fake = FakeHTTP.new(FakeHTTPResponse.new(html, { "content-type" => "text/html" }, "404"))
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/docs/api")
+
+    assert_equal 1, fake.requests.size
+    assert_includes result, "not found"
+  end
+
+  def test_web_fetch_probes_md_without_the_html_extension
+    html = "<html><body><pre>a</pre><pre>b</pre></body></html>"
+    fake = FakeHTTP.new(
+      FakeHTTPResponse.new(html, "content-type" => "text/html"),
+      FakeHTTPResponse.new("# Docs\n\n```\nx\n```\n", "content-type" => "text/markdown")
+    )
+
+    run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/docs/api.html")
+
+    assert_equal "/docs/api.md", fake.requests.last[0]
+  end
+
+  def test_web_fetch_reports_the_markdown_url_it_used
+    html = "<html><body><pre>a</pre><pre>b</pre></body></html>"
+    fake = FakeHTTP.new(
+      FakeHTTPResponse.new(html, "content-type" => "text/html"),
+      FakeHTTPResponse.new("# Docs\n\n```\nx\n```\n", "content-type" => "text/markdown")
+    )
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/docs/api")
+
+    assert_includes result, "Final URL: https://example.com/docs/api.md"
+  end
+
+  def test_web_fetch_does_not_mistake_commented_text_for_markdown
+    fake = FakeHTTP.new(FakeHTTPResponse.new("# comment\n# another\na=b\n",
+                                             "content-type" => "text/plain"))
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/config")
+
+    assert_includes result, "# comment"
+    assert_includes result, "(text/plain)"
+    refute_includes result, "(text/markdown)"
+  end
+
+  def test_web_fetch_does_not_trust_markdown_headers_on_html_bodies
+    html = "<!-- tracker -->\n<!DOCTYPE html>\n<html><body>" \
+           "<script>x()</script><p>real text</p></body></html>"
+    fake = FakeHTTP.new(FakeHTTPResponse.new(html, "content-type" => "text/markdown"))
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/docs")
+
+    assert_includes result, "real text"
+    refute_includes result, "x()"
+    refute_includes result, "tracker"
+  end
+
+  def test_web_fetch_falls_back_when_dot_md_is_missing
+    html = "<html><body><pre>one</pre><pre>two</pre><p>real content</p></body></html>"
+    fake = FakeHTTP.new(
+      FakeHTTPResponse.new(html, { "content-type" => "text/html" }),
+      FakeHTTPResponse.new("not found", { "content-type" => "text/html" }, "404")
+    )
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/docs/api")
+
+    assert_equal 2, fake.requests.size
+    assert_includes result, "real content"
+    refute_includes result, "not found"
+  end
+
+  def test_web_fetch_ignores_markdown_link_indexes
+    # docs.github.com serves a link index from its .md suffix; the extracted
+    # HTML is the better answer there.
+    html = "<html><body><pre>code</pre><pre>code</pre><p>page body</p></body></html>"
+    index = "# Index\n\n#{(1..8).map { |i| "- [Page #{i}](https://example.com/p#{i})" }.join("\n")}\n"
+    fake = FakeHTTP.new(
+      FakeHTTPResponse.new(html, "content-type" => "text/html"),
+      FakeHTTPResponse.new(index, "content-type" => "text/markdown")
+    )
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/docs")
+
+    assert_includes result, "page body"
+    refute_includes result, "[Page 1]"
+  end
+
+  def test_web_fetch_truncates_markdown_at_its_own_cap
+    markdown = "# Docs\n\n#{'paragraph text ' * 3000}"
+    fake = FakeHTTP.new(FakeHTTPResponse.new(markdown, "content-type" => "text/markdown"))
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/docs")
+
+    # The markdown cap must be visibly larger than the plain-text one, and the
+    # body must actually reach it.
+    assert_operator result.length, :>, Rubot::Tools::Web::MAX_BODY
+    assert_operator result.length, :<, Rubot::Tools::Web::MAX_MARKDOWN_BODY * 2
+    assert_includes result, markdown[0, Rubot::Tools::Web::MAX_BODY * 2]
+    assert_includes result, "(body truncated)"
   end
 
   # --- send_files ---
