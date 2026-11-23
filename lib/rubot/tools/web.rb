@@ -52,6 +52,14 @@ module Rubot
       STRUCTURAL_TAGS = "br|p|div|section|article|header|footer|nav|aside|li|tr|h[1-6]" \
                         "|blockquote|figcaption|caption|dt|dd".freeze
 
+      # Tags a page uses to declare where its content lives. `<main>` is the
+      # current standard, `<article>` the common fallback.
+      MAIN_TAGS = %w[main article].freeze
+
+      # Tags whose content is navigation, not content: menus, sidebars, cookie
+      # banners and footers. Dropped wholesale before the window is applied.
+      BOILERPLATE_TAGS = "nav|footer|aside|form".freeze
+
       # Entities present in virtually every page. Numeric and hex forms are
       # decoded generically; anything unknown becomes a space so that markup
       # noise like "&weirdthing;" never reaches the transcript.
@@ -381,12 +389,68 @@ module Rubot
       # corner case rendering slightly wrong is acceptable where burning a
       # parser dependency is not.
       def extract_text(html)
+        title = document_title(html)
+        # Restricting to the main content first is what keeps the 5,000
+        # character window on the article instead of the site menu: on a
+        # Wikipedia article the menu alone used to fill 84% of it.
+        text = strip_markup(main_content(html) || html)
+        text = decode_entities(title.empty? ? text : "#{title}\n\n#{text}")
+
+        collapse_whitespace(text)
+      end
+
+      def document_title(html)
+        html[%r{<\s*title[^>]*>(.*?)<\s*/\s*title\s*>}im, 1].to_s.scrub.strip
+      end
+
+      # The block a page declares as its main content, when it owns enough of
+      # the markup to be the content rather than a shell. Returns nil for pages
+      # that do not declare one.
+      def main_content(html)
+        block = MAIN_TAGS.filter_map { |tag| largest_block(html, tag) }.max_by(&:length)
+        # An SPA shell ("<main id=root></main>") or a banner is not the content.
+        return nil if block.nil? || block.length * 10 < html.length
+
+        block
+      end
+
+      # Largest balanced block for a tag. A regex with a lazy body would stop at
+      # the first nested closing tag, so walk the tag depth instead.
+      def largest_block(html, tag)
+        pattern = %r{<\s*(/?)\s*#{tag}\b[^>]*>}i
+        depth = 0
+        start = nil
+        best = nil
+        pos = 0
+
+        while (match = pattern.match(html, pos))
+          pos = match.end(0)
+
+          if match[1] == "/"
+            next if depth.zero?
+
+            depth -= 1
+            next unless depth.zero? && start
+
+            block = html[start...match.begin(0)]
+            best = block if best.nil? || block.length > best.length
+            start = nil
+          else
+            start = match.end(0) if depth.zero?
+            depth += 1
+          end
+        end
+
+        best
+      end
+
+      def strip_markup(html)
         text = html.dup
 
-        # Keep the document title, then drop the whole head (metadata, links,
-        # inline styles) and every other non-text block.
-        title = text[%r{<\s*title[^>]*>(.*?)<\s*/\s*title\s*>}im, 1].to_s.scrub.strip
+        # Drop the title element too: it is prepended separately, and keeping it
+        # here would print it twice.
         text = text.gsub(%r{<\s*(script|style|noscript|template|head|iframe|svg|canvas)\b.*?<\s*/\s*\1\s*>}im, " ")
+        text = text.gsub(%r{<\s*(#{BOILERPLATE_TAGS})\b.*?<\s*/\s*\1\s*>}im, " ")
         text = text.gsub(%r{<!--.*?-->}m, " ")
 
         # Structural tags become newlines so paragraphs and lists stay readable.
@@ -394,14 +458,14 @@ module Rubot
         text = text.gsub(%r{</\s*(?:#{STRUCTURAL_TAGS})\s*>}i, "\n")
 
         # Everything else that is left over.
-        text = text.gsub(%r{<[^>]+>}, " ")
-        text = decode_entities(title.empty? ? text : "#{title}\n\n#{text}")
+        text.gsub(%r{<[^>]+>}, " ")
+      end
 
-        text
-          .gsub(/[ \t\r\f\v]+/, " ")
-          .gsub(/[ \t]*\n[ \t]*/, "\n")
-          .gsub(/\n{3,}/, "\n\n")
-          .strip
+      def collapse_whitespace(text)
+        text.gsub(/[ \t\r\f\v]+/, " ")
+            .gsub(/[ \t]*\n[ \t]*/, "\n")
+            .gsub(/\n{3,}/, "\n\n")
+            .strip
       end
 
       # Decode the entities a page cannot avoid. Unknown names degrade to a

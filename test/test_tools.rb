@@ -482,6 +482,70 @@ class TestTools < Minitest::Test
     refute_includes result, "tracker"
   end
 
+  # --- web_fetch: main content extraction ---
+
+  def test_web_fetch_prefers_declared_main_content
+    html = <<~HTML
+      <html><head><title>Docs</title></head><body>
+        <nav><a href="/">Home</a><a href="/pricing">Pricing</a></nav>
+        <main><h1>Real article</h1><p>Body text of the article.</p></main>
+        <footer>Copyright 2026</footer>
+      </body></html>
+    HTML
+    fake = FakeHTTP.new(FakeHTTPResponse.new(html, "content-type" => "text/html"))
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/post")
+
+    assert_includes result, "Real article"
+    assert_includes result, "Body text of the article."
+    refute_includes result, "Pricing"
+    refute_includes result, "Copyright"
+  end
+
+  def test_web_fetch_falls_back_to_article_when_there_is_no_main
+    html = "<html><body><div>junk menu</div>" \
+           "<article><h2>Post title</h2><p>Post content.</p></article></body></html>"
+    fake = FakeHTTP.new(FakeHTTPResponse.new(html, "content-type" => "text/html"))
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/blog/post")
+
+    assert_includes result, "Post title"
+    assert_includes result, "Post content."
+    refute_includes result, "junk menu"
+  end
+
+  def test_web_fetch_ignores_tiny_main_blocks
+    # Client-rendered apps ship an empty <main>; trusting it would return
+    # nothing at all.
+    html = "<html><body><main id=\"root\"></main>" \
+           "<div id=\"app\"><p>client rendered content</p></div></body></html>"
+    fake = FakeHTTP.new(FakeHTTPResponse.new(html, "content-type" => "text/html"))
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/app")
+
+    assert_includes result, "client rendered content"
+  end
+
+  def test_web_fetch_survives_unclosed_main_tags
+    html = "<html><body><main><p>no closing tag</p></body></html>"
+    fake = FakeHTTP.new(FakeHTTPResponse.new(html, "content-type" => "text/html"))
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/broken")
+
+    assert_includes result, "no closing tag"
+  end
+
+  def test_web_fetch_keeps_the_title_once_when_it_extracts_main_content
+    html = "<html><head><title>My Page</title></head><body>" \
+           "<main><p>The body.</p></main></body></html>"
+    fake = FakeHTTP.new(FakeHTTPResponse.new(html, "content-type" => "text/html"))
+
+    result = run_fetch(Rubot::Tools::Web.new, fake, "https://example.com/titled")
+
+    assert_equal 1, result.scan("My Page").size
+    assert_includes result, "The body."
+  end
+
   def test_web_fetch_falls_back_when_dot_md_is_missing
     html = "<html><body><pre>one</pre><pre>two</pre><p>real content</p></body></html>"
     fake = FakeHTTP.new(
