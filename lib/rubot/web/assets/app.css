@@ -1578,18 +1578,17 @@ select:focus-visible { outline: none; }
 .thread > .turn,
 .thread > #compaction-slot { width: 100%; max-width: 52rem; margin-inline: auto; }
 
-/* The marker that asks for the page above. A reader who has scrolled all the
-   way up should find more conversation arriving, not a button to press, so it
-   is a line of quiet text rather than a control. It sits above what it
-   precedes because that is the order the thread is in. */
+/* The sentinel that marks where the page above lands, and nothing else: one
+   pixel of invisible height at the top of the thread. It used to be a line of
+   quiet text, which read as something to find and press; the page above now
+   arrives on its own while scrolling (see `askForOlderPage` in app.js).
+   `margin-block`, not `margin`: the column rule above sets `margin-inline:
+   auto` for the sentinel too, and zeroing that would take it out of the column
+   the thread is drawn in. */
 .thread > .history-more {
-  margin-bottom: 1.05rem;
-  padding: 0.15rem 0;
-  text-align: center;
-  font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: -0.03em;
-  color: var(--fg-faint);
+  height: 1px;
+  margin-block: 0;
+  padding: 0;
 }
 
 .thread > .turn > .turn-body,

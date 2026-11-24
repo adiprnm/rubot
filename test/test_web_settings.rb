@@ -556,6 +556,10 @@ module Rubot
         assert_includes html, "(default)", "the default account is marked"
         assert_equal 2, html.scan('name="account"').length, "each account has its own Putuskan"
         assert_includes html, "name=\"account\" value=\"adipurnm\"", "the right account is named"
+        # The buttons answer for the card they sit in, not for the first
+        # #ig-status in the document: an older page drawn above the live one
+        # carries a card of its own, and the id selector swapped the wrong one.
+        assert_equal 2, html.scan('hx-target="closest .ig-connect-card"').length
       end
 
       def test_instagram_disconnect_route_removes_the_account

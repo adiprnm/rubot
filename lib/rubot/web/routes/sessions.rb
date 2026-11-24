@@ -201,8 +201,8 @@ module Rubot
         [ persona_label, session_label ].compact.join(" · ")
       end
 
-      # An older page, fetched by the marker at the top of the thread when the
-      # reader scrolls it into view.
+      # An older page, fetched by the sentinel at the top of the thread once the
+      # reader scrolls within reach of it.
       def render_history(res, sid, req)
         return not_found(res) unless owner_slug(sid)
 

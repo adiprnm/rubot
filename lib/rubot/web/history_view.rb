@@ -15,11 +15,37 @@ module Rubot
     # Included into the channel and left public on purpose: the views, the
     # live turn's status row and the tests all ask these questions directly.
     module HistoryView
-      # How much of a conversation the page draws at once. A long session is a
-      # lot of DOM to build for a reader who only ever looks at the end of it,
-      # so the page starts at the tail and earlier turns arrive as the reader
-      # scrolls up.
-      HISTORY_PAGE = 20
+      # How much of a conversation the page draws at once, counted in
+      # *messages* — the rows the archive holds and the request is built from.
+      #
+      # It is not counted in entries. A page of twenty turns reads as a sane
+      # amount of DOM right up until a turn is a thousand messages long: one
+      # session in the real archive answers eleven prompts with 2,402 rows, so
+      # twenty entries there is the whole conversation, tool output and all. The
+      # unit the reader pays for is the message, so that is the unit the page is
+      # cut by.
+      #
+      # The cut still lands on a turn boundary (see #page_start): a page that
+      # began halfway through a turn would draw a tool result whose call lives on
+      # the page above, and in the compact view it would draw the wrong call as
+      # "the last one". So the budget decides how far back to walk, never where
+      # inside a turn to stop.
+      HISTORY_PAGE_MESSAGES = 100
+      # How much the courtesy below may cost. A page begins where the reader
+      # spoke, not on an answer, so the walk is extended back to the prompt that
+      # opens it — but a session of fired jobs and sub agent reports is a run of
+      # turns with no prompt between them at all, and an unbounded walk there
+      # would take back every entry the budget just refused: the whole
+      # conversation on one page, which is the thing this paging exists to stop.
+      #
+      # Two ceilings, because one of them alone is the wrong unit. Counting
+      # entries does not bound anything: twelve turns can be twelve thousand
+      # messages. The reach is therefore also capped in messages, at twice the
+      # page budget, which keeps the page in the same order of size as the budget
+      # — unless one turn is that large on its own, in which case it is drawn
+      # whole and no reach is added at all.
+      HISTORY_SNAP_LIMIT = 12
+      HISTORY_SNAP_MESSAGES = HISTORY_PAGE_MESSAGES * 2
       # The provider names its windows by period; a reader asks by length. The
       # provider's own words stay on the wire — this is only how the panel says
       # them.
@@ -210,10 +236,15 @@ module Rubot
         {}
       end
 
-      # One page of the conversation: the entries that end at `before` (an
-      # index into the full history) and start HISTORY_PAGE entries earlier.
-      # `more` says whether anything older is left, so the page can draw the
-      # marker that asks for it.
+      # One page of the conversation: the entries that end at the entry boundary
+      # at or before the message `before` names, walking back until
+      # HISTORY_PAGE_MESSAGES messages are on it. `more` says whether anything
+      # older is left, so the page can draw the sentinel that asks for it.
+      #
+      # `before` is a *message* index, not an entry index. The message index is
+      # the only one the archive actually stores (see Store's `idx`), so it is
+      # the only one a link can carry and still mean the same place after a
+      # reload, a restart, or a change in how turns are grouped.
       #
       # `at` is the other way in, and the one a search result uses: the page
       # ends at the entry holding that message, so the hit is the last thing
@@ -228,31 +259,101 @@ module Rubot
         entries = history(sid)
         focus = at.nil? ? nil : focus_index(entries, at)
         stop = if at.nil?
-          before ? before.clamp(0, entries.size) : entries.size
+          before ? page_stop(entries, before) : entries.size
         elsif focus
           focus + 1
         else
           entries.size
         end
-        start = [ stop - HISTORY_PAGE, 0 ].max
+        start = page_start(entries, stop)
 
-        { entries: entries[start...stop], more: start.positive?, before: start,
+        { entries: entries[start...stop], more: start.positive?,
+          before: start.positive? ? entries[start]&.[](:idx).to_i : 0,
           landed: focus ? entries[focus] : nil }
       end
 
+      # How many entries begin before the message `before`. A cursor that
+      # precedes every entry — a link carried across a session that was trimmed
+      # before it was indexed — counts nothing, and drawing that would leave the
+      # reader with an empty thread, no sentinel and no way back. The tail is the
+      # answer there, the same one #focus_index gives for a hit it cannot place.
+      def page_stop(entries, before)
+        count = entries.count { |entry| entry[:idx].to_i < before }
+        count.zero? ? entries.size : count
+      end
+
+      # Where the page begins: whole entries, counted in messages.
+      #
+      # A turn is never cut in half, so the budget is a stopping rule rather
+      # than a boundary: walk back until the messages on the page reach
+      # HISTORY_PAGE_MESSAGES, and always keep at least one entry — a single
+      # turn longer than the whole budget has to be drawn somewhere, and the
+      # page it starts on is the only place it can go.
+      #
+      # The budget can land on a turn, and a page that opens with an answer whose
+      # question sits on the page above reads as a mistake. So the walk reaches
+      # for the prompt — but only so far (see #snap_to_prompt).
+      def page_start(entries, stop)
+        start = stop
+        spent = 0
+        while start.positive? && spent < HISTORY_PAGE_MESSAGES
+          start -= 1
+          spent += entry_messages(entries[start])
+        end
+        snap_to_prompt(entries, start, spent)
+      end
+
+      # `start` moved back to the prompt that opens it, or `start` itself when no
+      # prompt is within HISTORY_SNAP_LIMIT entries and HISTORY_SNAP_MESSAGES
+      # messages of it: a page that opens on a turn is better than one that
+      # swallows the rest of the conversation.
+      #
+      # `spent` is what the page already holds, so the reach is measured against
+      # the whole page rather than against the budget alone. Only the entries the
+      # walk actually adds are counted: the entry it starts on is already in
+      # `spent`.
+      def snap_to_prompt(entries, start, spent)
+        return start if entries[start].nil?
+
+        floor = [ start - HISTORY_SNAP_LIMIT, 0 ].max
+        candidate = start
+        loop do
+          break if candidate < floor
+          return candidate if entries[candidate][:kind] == :prompt
+          break if candidate.zero?
+
+          spent += entry_messages(entries[candidate - 1])
+          break if spent > HISTORY_SNAP_MESSAGES
+
+          candidate -= 1
+        end
+        start
+      end
+
+      # How many transcript rows an entry stands for. A prompt is one row; a
+      # turn is every message between its first and its last, tool results
+      # included — which is why a page counted in entries could hold a whole
+      # conversation and a page counted in messages cannot.
+      def entry_messages(entry)
+        entry[:last].to_i - entry[:idx].to_i + 1
+      end
+
       # The entry a search hit lands on: the prompt that quoted it, or the turn
-      # that answered it. A session trimmed since it was indexed has messages
-      # the page no longer holds, so the nearest entry above the index is the
-      # fallback rather than the tail of the conversation, which would be a
-      # page away from what was asked for.
+      # that answered it. When the index is past the last entry the hit still
+      # lands somewhere sensible — the newest one. A hit *older* than every entry
+      # cannot: an index that predates the archive has no entry above it, so this
+      # answers nil, `history_page` draws the tail, and the reader gets the end of
+      # the conversation without a mark. That is the cost of a session trimmed
+      # since it was indexed, and it is why the fallback does not pretend.
       def focus_index(entries, at)
         entries.index { |entry| entry[:idx].to_i <= at && entry[:last].to_i >= at } ||
           entries.rindex { |entry| entry[:idx].to_i <= at }
       end
 
       # Where the page older than this one lives. The token rides in the query
-      # string like every other link the page writes; the index is what the
-      # marker hands back, so no server-side cursor has to survive a restart.
+      # string like every other link the page writes; `before` is the message
+      # index the page starts at, so no server-side cursor has to survive a
+      # restart and the link means the same place a day later.
       def older_url(sid, before)
         params = []
         params << "token=#{CGI.escape(@token)}" if @token

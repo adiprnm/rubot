@@ -195,7 +195,7 @@
 
     <div id="thread" class="thread">
       <%# Only the tail of the conversation is drawn. The rest is one page of
-          entries away, fetched when the reader scrolls up to the marker — a
+          messages away, fetched when the reader scrolls up to the sentinel — a
           session with hundreds of turns should not cost a full render, and the
           bottom of it is all anyone opens it for. -%>
       <%= View.render("_history", entries: page[:entries], more: page[:more],

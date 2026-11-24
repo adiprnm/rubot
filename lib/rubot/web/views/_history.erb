@@ -1,15 +1,19 @@
-<%# One page of a conversation, oldest first. The marker sits above the entries
+<%# One page of a conversation, oldest first. The sentinel sits above the entries
     it precedes, so a reader who scrolls to the top is handed the page before
-    this one in the same place — the swap replaces the marker with the older
-    page and a marker of its own, and the order of the thread never changes.
+    this one in the same place — the older page is inserted where the sentinel
+    stood, with a sentinel of its own on top, and the order of the thread never
+    changes.
 
-    It is a reveal rather than a scroll listener: htmx asks for the page when
-    the marker actually enters the viewport, which is exactly when the reader
-    has reached the top, and stops asking when there is nothing older left. -%>
+    The sentinel carries the address and nothing else. What asks for the page is
+    the thread's own scroll (see `askForOlderPage` in app.js): htmx's `revealed`
+    could not do it here, because it only re-checks on a window scroll and this
+    shell scrolls `#thread`.
+
+    It carries no words either. Scrolling up should feel like the conversation
+    simply goes on, not like a control was found and pressed, so this is a pixel
+    of invisible height rather than a line of text announcing itself. -%>
 <% if more -%>
-<div class="history-more" hx-get="<%= h(older_url) %>" hx-trigger="revealed" hx-swap="outerHTML">
-  <span>Pesan sebelumnya…</span>
-</div>
+<div class="history-more" data-history-url="<%= h(older_url) %>"></div>
 <% end -%>
 <% entries.each do |msg| -%>
 <%# The entry a search result landed on. The hit names a message; a turn wraps

@@ -14,20 +14,50 @@ module Rubot
 
       # The page is opened to read the end of the conversation, not the
       # beginning of it: a session with hundreds of turns should not cost a
-      # full render to show its last answer.
+      # full render to show its last answer. It is cut by messages, not by
+      # entries, so a long session of short turns and a short session of long
+      # ones both land at a weight the reader can pay.
       def test_the_page_starts_at_the_end_of_a_long_conversation
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
-        write_long_session(channel, "web_kanyaah", 15)
+        write_long_session(channel, "web_kanyaah", 150)
 
         page = channel.history_page("web_kanyaah")
         prompts = page[:entries].select { |entry| entry[:kind] == :prompt }.map { |entry| entry[:text] }
 
-        assert_equal Rubot::Channels::Web::HISTORY_PAGE, page[:entries].size
         assert page[:more], "the older half is left to be fetched"
-        assert_includes prompts, "pesan 15", "the newest exchange is on the page"
+        assert_includes prompts, "pesan 150", "the newest exchange is on the page"
         refute_includes prompts, "pesan 1", "the oldest one is not"
+        # The walk stops once the budget is spent, then reaches back for a
+        # prompt, so a page is at least the budget and never many times it.
+        assert_operator spanned_messages(page), :>=, Rubot::Channels::Web::HISTORY_PAGE_MESSAGES
+        assert_operator spanned_messages(page), :<=, Rubot::Channels::Web::HISTORY_PAGE_MESSAGES * 2,
+                        "the page stays in the same order of size as the budget"
       end
 
+      # One turn can be longer than a whole page. It is still drawn in one piece:
+      # a page that cut it would show a tool result whose call sits on the page
+      # above, and the compact view would draw the wrong call as "the last one".
+      def test_a_single_turn_longer_than_the_budget_is_still_drawn_whole
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        # Three pages of messages in one turn, so the budget has to give way. The
+        # size comes from the constant: a fixture with the number written in it
+        # stops testing anything the day the budget moves.
+        steps = Rubot::Channels::Web::HISTORY_PAGE_MESSAGES * 3
+        write_messages(channel, "web_kanyaah", [
+                         { "role" => "user", "content" => "satu prompt panjang" }
+                       ] + Array.new(steps) { |i| { "role" => "assistant", "content" => "langkah #{i}" } })
+
+        page = channel.history_page("web_kanyaah")
+
+        assert_operator spanned_messages(page), :>, Rubot::Channels::Web::HISTORY_PAGE_MESSAGES
+        assert_equal 1, page[:entries].count { |entry| entry[:kind] == :turn }
+        assert_equal :turn, page[:entries].first[:kind],
+                     "the reach cannot afford the prompt three pages up"
+        assert page[:more], "the prompt it opens on is still above it"
+      end
+
+      # A conversation that fits under the budget is drawn whole, and the sentinel
+      # stays out of it.
       def test_a_conversation_that_fits_is_not_paged
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
         write_long_session(channel, "web_kanyaah", 3)
@@ -39,40 +69,169 @@ module Rubot
         assert_equal 0, page[:before], "there is nothing above the first page"
       end
 
-      # The marker hands back the index it was given, so scrolling up walks
-      # backwards through the same conversation one page at a time.
+      # A cursor that precedes every entry cannot name a page: the link came from
+      # a transcript that has since lost its first messages (a session trimmed
+      # before it was indexed). Drawing "everything before message 1" would leave
+      # the reader with an empty thread, no sentinel below and no way back, so
+      # the tail is drawn instead.
+      def test_a_cursor_older_than_the_first_entry_does_not_blank_the_thread
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        # A prompt with no text is not an entry, so the first entry starts at
+        # message 1 and a cursor of 1 is already older than all of them.
+        write_messages(channel, "web_kanyaah",
+                       [ { "role" => "user", "content" => "" } ] + (1..3).flat_map do |i|
+                         [ { "role" => "user", "content" => "pesan #{i}" },
+                           { "role" => "assistant", "content" => "balasan #{i}" } ]
+                       end)
+
+        page = channel.history_page("web_kanyaah", before: 1)
+
+        assert page[:entries].any?, "the thread is not blank"
+        assert_equal "pesan 1", page[:entries].first[:text],
+                     "the tail is drawn, which begins at the first entry"
+        refute page[:more]
+      end
+
+      # The sentinel hands back the message index the page starts at, so scrolling
+      # up walks backwards through the same conversation one page at a time. The
+      # turns are several messages long, so a cursor mistaken for an entry count
+      # cannot pass as the message index.
       def test_scrolling_up_asks_for_the_page_before
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
-        write_long_session(channel, "web_kanyaah", 25)
+        write_multi_message_session(channel, "web_kanyaah", 120)
 
         page = channel.history_page("web_kanyaah")
         older = channel.history_page("web_kanyaah", before: page[:before])
 
         assert older[:entries].any?, "there is a page above the first one"
         assert older[:more], "and one above that"
-        assert_equal 10, older[:before]
+        assert_operator older[:before], :<, page[:before]
+        assert_equal older[:before], older[:entries].first[:idx],
+                     "the cursor is the message the page starts at, not a count"
 
         newest = page[:entries].map { |entry| entry[:text] }
         refute (older[:entries].map { |entry| entry[:text] } & newest).any?,
                "two pages of one conversation do not overlap"
       end
 
-      def test_the_older_page_comes_back_with_the_marker_for_the_one_above_it
+      # Walking to the top has to visit every entry exactly once. A cursor read as
+      # an entry count instead of a message index would skip or repeat whole
+      # blocks, which is invisible one page at a time and obvious when tiled.
+      def test_the_pages_tile_the_conversation_with_no_gap_or_overlap
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
-        write_long_session(channel, "web_kanyaah", 25)
-        res = FakeResponse.new
+        write_multi_message_session(channel, "web_kanyaah", 120)
 
-        channel.render_history(res, "web_kanyaah", Struct.new(:query).new({ "before" => "22" }))
+        walked = []
+        before = nil
+        loop do
+          page = channel.history_page("web_kanyaah", before: before)
+          break if page[:entries].empty?
 
-        assert_includes res.body, "pesan 2", "the page ends where the marker was"
-        refute_includes res.body, "pesan 25", "and stops there rather than running on"
-        assert_includes res.body, 'hx-get="/s/web_kanyaah/history?before=2"',
-                        "the page above this one is asked for in turn"
+          walked.unshift(*page[:entries].map { |entry| entry[:idx] })
+          break unless page[:more]
+
+          before = page[:before]
+          assert_operator walked.size, :<=, channel.history("web_kanyaah").size,
+                          "the walk must terminate"
+        end
+
+        assert_equal channel.history("web_kanyaah").map { |entry| entry[:idx] }, walked,
+                     "every entry is drawn once, in order"
       end
 
-      # The last page has nothing above it, so the marker would ask for the same
+      # Every page opens where the reader spoke. A page that began with an answer
+      # would draw a reply to a question that is a scroll away, and the reader
+      # would read the conversation backwards for a moment before it made sense.
+      #
+      # The turns are deliberately uneven. With one message per entry a budget of
+      # 100 always lands on an even entry index, which is always a prompt, so the
+      # fixture would pass even with the snap removed — a test that cannot fail.
+      def test_every_page_opens_with_a_prompt
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        write_messages(channel, "web_kanyaah", (1..300).flat_map do |i|
+          [ [ { "role" => "user", "content" => "pesan #{i}" } ],
+            Array.new(i.odd? ? 1 : 3) { { "role" => "assistant", "content" => "balasan #{i}" } } ].flatten
+        end)
+
+        before = nil
+        pages = 0
+        loop do
+          page = channel.history_page("web_kanyaah", before: before)
+          break if page[:entries].empty?
+
+          pages += 1
+          assert_equal :prompt, page[:entries].first[:kind],
+                       "page #{pages} starts at message #{page[:entries].first[:idx]}"
+          break unless page[:more]
+
+          before = page[:before]
+          assert_operator pages, :<=, 40, "the walk must terminate"
+        end
+        assert_operator pages, :>, 1, "the walk covered more than one page"
+      end
+
+      # The entry cap alone is what stops the reach here: the prompt is 51 entries
+      # away (past the 12) but only 51 messages away, so a walk bounded only by
+      # messages would still find it. The page therefore opens on a turn.
+      def test_a_run_of_answers_with_no_prompt_does_not_swallow_the_conversation
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        write_messages(channel, "web_kanyaah",
+                       [ { "role" => "user", "content" => "job dimulai" } ] +
+                       Array.new(150) { |i| { "role" => "assistant", "content" => "laporan #{i}", "background" => true } })
+
+        page = channel.history_page("web_kanyaah")
+
+        assert_equal :turn, page[:entries].first[:kind], "the entry cap stops the reach"
+        assert_operator spanned_messages(page), :<=, Rubot::Channels::Web::HISTORY_PAGE_MESSAGES * 2,
+                        "the page is bounded even though it opens on an answer"
+        assert page[:more], "the rest is left to the page above"
+      end
+
+      # Twelve turns is not twelve messages: a run of very long turns must not be
+      # granted twelve turns of reach. The prompt sits exactly at the entry floor
+      # (12 turns back) and 2,400 messages away, so only the message cap stops it.
+      def test_a_run_of_long_answers_is_bounded_in_messages_too
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        # Each turn is exactly the reach's own ceiling, so one turn of reach is
+        # already all it gets: the cap and the fixture move with the budget.
+        block = Rubot::Channels::Web::HISTORY_PAGE_MESSAGES * 2
+        turns = Array.new(Rubot::Web::HistoryView::HISTORY_SNAP_LIMIT) do |i|
+          [ { "role" => "assistant", "content" => "job #{i}", "background" => true } ] +
+            Array.new(block - 1) { { "role" => "assistant", "content" => "langkah #{i}" } }
+        end
+        write_messages(channel, "web_kanyaah",
+                       [ { "role" => "user", "content" => "job dimulai" } ] + turns.flatten)
+
+        page = channel.history_page("web_kanyaah")
+
+        assert_equal :turn, page[:entries].first[:kind], "the message cap stops the reach"
+        assert_operator spanned_messages(page), :<=, Rubot::Channels::Web::HISTORY_PAGE_MESSAGES * 2,
+                        "the reach is measured in messages, not in entries"
+        assert page[:more], "the rest is left to the page above"
+      end
+
+      def test_the_older_page_comes_back_with_the_sentinel_for_the_one_above_it
+        channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
+        write_long_session(channel, "web_kanyaah", 150)
+        res = FakeResponse.new
+        expected = channel.history_page("web_kanyaah", before: 250)
+        # The cursor is the message the page actually begins with, not a count:
+        # that is what makes the link mean the same place after a reload.
+        assert_equal expected[:entries].first[:idx], expected[:before]
+
+        # Message 250 is the answer to "pesan 125".
+        channel.render_history(res, "web_kanyaah", Struct.new(:query).new({ "before" => "250" }))
+
+        assert_includes res.body, "pesan 125", "the page ends where the sentinel was"
+        refute_includes res.body, "pesan 140", "and stops there rather than running on"
+        assert_includes res.body,
+                        %(data-history-url="/s/web_kanyaah/history?before=#{expected[:before]}"),
+                        "the page above this one is asked for in turn, from where this one began"
+      end
+
+      # The last page has nothing above it, so the sentinel would ask for the same
       # page forever.
-      def test_the_first_page_completes_without_a_marker
+      def test_the_first_page_completes_without_a_sentinel
         channel = channel_with_sessions(personas: { "kanyaah" => { "name" => "Kanyaah" } })
         write_long_session(channel, "web_kanyaah", 3)
         res = FakeResponse.new
@@ -83,17 +242,22 @@ module Rubot
         refute_includes res.body, "history-more"
       end
 
-      def test_the_marker_asks_for_a_page_when_it_is_scrolled_into_view
-        html = View.render("_history", entries: [], more: true, before: 20,
+      # The sentinel is what keeps the scroll continuous: it carries the address
+      # of the page above and nothing else — no htmx trigger, because htmx only
+      # re-checks a revealed element on a *window* scroll and this shell scrolls
+      # `#thread` instead (see the note in app.js). No words either: a reader
+      # scrolling up should find the conversation going on, not a caption
+      # announcing that more exists.
+      def test_the_sentinel_is_silent_and_carries_only_the_address
+        html = View.render("_history", entries: [], more: true,
                                        older_url: "/s/web_kanyaah/history?before=20")
-        marker = html[/<div class="history-more".*?<\/div>/m]
+        sentinel = html[/<div class="history-more".*?<\/div>/m]
 
-        refute_nil marker
-        assert_includes marker, 'hx-get="/s/web_kanyaah/history?before=20"'
-        assert_includes marker, 'hx-trigger="revealed"',
-                        "the page is fetched when it is reached, not when the page loads"
-        assert_includes marker, 'hx-swap="outerHTML"',
-                        "the marker is replaced by the page it asked for"
+        refute_nil sentinel
+        assert_includes sentinel, 'data-history-url="/s/web_kanyaah/history?before=20"'
+        refute_includes sentinel, "hx-trigger",
+                        "the fetch is driven by the thread's scroll, not by htmx"
+        assert_empty sentinel[/>(.*)</m, 1].to_s.strip, "the sentinel carries no words"
       end
 
       def test_the_older_page_request_carries_the_token
@@ -106,13 +270,20 @@ module Rubot
       # Prepending a page moves everything below it down by its own height, and
       # the reader would be thrown out of the sentence they were reading. The
       # distance from the bottom is the one measure the insert cannot change.
+      # The scroll that asks for the page is read on the thread, because that is
+      # what scrolls; `window` never does in this shell.
       def test_a_prepended_page_keeps_the_reader_in_place
         js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
 
-        assert_includes js, "holdFromBottom"
-        assert_includes js, "thread.scrollTop = thread.scrollHeight - gap"
-        assert_includes js, "el.closest(\".history-more\")",
-                        "an older page must not trigger the jump to the bottom"
+        assert_includes js, "askForOlderPage",
+                        "the page above is asked for by the thread's own scroll"
+        assert_includes js, 'el.id !== "thread"'
+        assert_includes js, "thread.scrollTop = thread.scrollHeight - gap",
+                        "the distance from the bottom is put back after the insert"
+        assert_includes js, 'sentinel.insertAdjacentHTML("beforebegin", html)',
+                        "the older page lands above the entries already drawn"
+        refute_includes js, 'el.closest(".history-more")',
+                        "htmx is no longer asked to swap this element"
       end
 
       # A reader who has scrolled up is reading. A chunk that lands at the

@@ -80,11 +80,11 @@ module Rubot
       # How many messages one search answers with. The limit belongs to the
       # search that applies it, so it lives with it.
       SEARCH_LIMIT = Rubot::Web::Search::SEARCH_LIMIT
-      # How much of a conversation the page draws at once. A long session is a
-      # lot of DOM to build for a reader who only ever looks at the end of it,
-      # so the page starts at the tail and earlier turns arrive as the reader
-      # scrolls up.
-      HISTORY_PAGE = Rubot::Web::HistoryView::HISTORY_PAGE
+      # How much of a conversation the page draws at once, counted in messages.
+      # A long session is a lot of DOM to build for a reader who only ever looks
+      # at the end of it, so the page starts at the tail and earlier turns arrive
+      # as the reader scrolls up.
+      HISTORY_PAGE_MESSAGES = Rubot::Web::HistoryView::HISTORY_PAGE_MESSAGES
       # What a conversation is called before its prompt has been saved. The
       # sidebar names it, and the search results below fall back to it too.
       UNTITLED_SESSION = Rubot::Web::SessionBrowser::UNTITLED_SESSION

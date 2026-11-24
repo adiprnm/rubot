@@ -109,24 +109,25 @@ module Rubot
       def test_a_hit_opens_the_page_that_ends_at_its_message
         channel = channel_with_archive(
           personas: { "kanyaah" => { "name" => "Kanyaah" } },
-          messages: { "web_kanyaah" => (1..30).flat_map do |i|
+          messages: { "web_kanyaah" => (1..150).flat_map do |i|
             [ [ "user", "pesan #{i}" ], [ "assistant", "balasan #{i}" ] ]
           end }
         )
 
-        page = channel.history_page("web_kanyaah", at: 41)
+        page = channel.history_page("web_kanyaah", at: 241)
 
-        # Message 41 is the answer to "pesan 21", so the turn drawn last is the
+        # Message 241 is the answer to "pesan 121", so the turn drawn last is the
         # one the hit belongs to.
-        assert_equal 41, page[:entries].last[:idx]
+        assert_equal 241, page[:entries].last[:idx]
         assert_equal :turn, page[:entries].last[:kind]
         assert_same page[:entries].last, page[:landed]
         assert page[:more], "everything older is still a page away"
-        assert_operator page[:entries].size, :<=, Rubot::Channels::Web::HISTORY_PAGE
+        assert_operator spanned_messages(page), :<=, Rubot::Channels::Web::HISTORY_PAGE_MESSAGES * 2,
+                        "at: ends the page at the hit without unbounding it"
 
         html = View.render("_history", entries: page[:entries], more: false, older_url: "",
                                       landed: page[:landed])
-        assert_includes html, %(class="turn is-done is-landed" id="m-41")
+        assert_includes html, %(class="turn is-done is-landed" id="m-241")
       end
 
       # A turn wraps the whole round — the call, its result and the answer — so a
@@ -195,14 +196,14 @@ module Rubot
       def test_a_page_without_a_hit_is_still_the_tail
         channel = channel_with_archive(
           personas: { "kanyaah" => { "name" => "Kanyaah" } },
-          messages: { "web_kanyaah" => (1..30).flat_map do |i|
+          messages: { "web_kanyaah" => (1..150).flat_map do |i|
             [ [ "user", "pesan #{i}" ], [ "assistant", "balasan #{i}" ] ]
           end }
         )
 
         page = channel.history_page("web_kanyaah")
 
-        assert_equal 59, page[:entries].last[:idx]
+        assert_equal 299, page[:entries].last[:idx]
         assert_nil page[:landed]
         assert page[:more]
       end

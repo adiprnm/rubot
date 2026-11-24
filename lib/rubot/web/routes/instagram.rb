@@ -66,9 +66,10 @@ module Rubot
             warn "[web] instagram disconnect: #{e.message}"
           end
 
-          # The button is an htmx request targeting #ig-status, so answer with the
-          # card itself: htmx swaps it straight back to the connect state. A
-          # redirect would reload the whole page and lose the turn's live stream.
+          # The button is an htmx request targeting the card it sits in, so answer
+          # with the card itself: htmx swaps it straight back to the connect
+          # state. A redirect would reload the whole page and lose the turn's live
+          # stream.
           res["Content-Type"] = "text/html; charset=utf-8"
           res["Cache-Control"] = "no-store"
           res.body = instagram_card_markup(persona: persona)

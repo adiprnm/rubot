@@ -261,6 +261,23 @@ module Rubot
                    JSON.generate({ "id" => sid, "updated_at" => Time.now.utc.iso8601,
                                    "messages" => messages }))
       end
+      # How many transcript rows a page stands for: the unit the page is cut by
+      # (see HistoryView::HISTORY_PAGE_MESSAGES).
+      def spanned_messages(page)
+        page[:entries].sum { |entry| entry[:last].to_i - entry[:idx].to_i + 1 }
+      end
+      # A prompt and a turn of several messages: the shapes a cursor can be
+      # mistaken between, and the shape a real conversation has.
+      def write_multi_message_session(channel, sid, prompts)
+        dir = channel.instance_variable_get(:@app_config).sessions_dir
+        messages = (1..prompts).flat_map do |i|
+          [ { "role" => "user", "content" => "pesan #{i}" } ] +
+            Array.new(3) { |k| { "role" => "assistant", "content" => "balasan #{i}.#{k + 1}" } }
+        end
+        File.write(File.join(dir, "#{sid}.json"),
+                   JSON.generate({ "id" => sid, "updated_at" => Time.now.utc.iso8601,
+                                   "messages" => messages }))
+      end
       def kinds(turn)
         turn.items.map { |item| item[:kind] }
       end

@@ -37,7 +37,7 @@
         <form class="ig-disconnect-form" method="post"
               action="/instagram/disconnect<%= h(token_query) %>"
               hx-post="/instagram/disconnect<%= h(token_query) %>"
-              hx-target="#ig-status" hx-swap="outerHTML"
+              hx-target="closest .ig-connect-card" hx-swap="outerHTML"
               hx-confirm="Putuskan akun Instagram @<%= h(acc["username"]) %>?"
               x-data="{ busy: false }"
               @submit="busy = true">
@@ -61,7 +61,7 @@
         <form class="ig-link-form" method="post"
               action="/instagram/link<%= h(token_query) %>"
               hx-post="/instagram/link<%= h(token_query) %>"
-              hx-target="#ig-status" hx-swap="outerHTML"
+              hx-target="closest .ig-connect-card" hx-swap="outerHTML"
               x-data="{ busy: false }"
               @submit="busy = true">
           <input type="hidden" name="account" value="<%= h(acc["username"]) %>">
