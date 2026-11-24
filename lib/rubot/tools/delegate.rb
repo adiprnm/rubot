@@ -14,9 +14,10 @@ module Rubot
 
       def description
         "Delegate a self-contained task to another agent (a persona by slug). " \
-          "The sub agent has its own model, prompt, memory and workspace, and " \
-          "returns a written result. Use it for work that can be described in " \
-          "one message and checked when it comes back."
+          "The sub agent has its own model, prompt, memory and workspace. In a " \
+          "channel that runs delegations in the background this returns as soon " \
+          "as the run starts and the answer arrives on its own; in the others it " \
+          "returns with the written result."
       end
 
       def parameters

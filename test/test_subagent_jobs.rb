@@ -18,10 +18,11 @@ class TestSubagentJobs < Minitest::Test
     @jobs.start(session_id: "s1", run_id: "r1", agent: "writer", task: "write a poem")
     assert_equal 1, @jobs.running_count("s1")
 
-    @jobs.update(session_id: "s1", run_id: "r1", phase: "tool", detail: "grep rhyme")
-    @jobs.update(session_id: "s1", run_id: "r1", phase: "tool", detail: "write notes.md")
+    @jobs.update(session_id: "s1", run_id: "r1", phase: "tool")
+    @jobs.update(session_id: "s1", run_id: "r1", phase: "tool")
     run = @jobs.runs("s1").first
-    assert_equal "2 langkah · write notes.md", run[:line]
+    assert_equal "2 langkah · write a poem", run[:line],
+                 "the task stays the subject of the row while the run works"
     assert_equal 1, @jobs.running_count("s1")
 
     @now += 12.4
@@ -37,7 +38,7 @@ class TestSubagentJobs < Minitest::Test
 
   def test_a_failed_run_says_why_instead_of_counting_calls
     @jobs.start(session_id: "s1", run_id: "r1", agent: "writer", task: "poem")
-    @jobs.update(session_id: "s1", run_id: "r1", phase: "tool", detail: "grep rhyme")
+    @jobs.update(session_id: "s1", run_id: "r1", phase: "tool")
     @jobs.finish(session_id: "s1", run_id: "r1", status: "failed", error: "rate limited")
 
     run = @jobs.runs("s1").first
@@ -58,7 +59,7 @@ class TestSubagentJobs < Minitest::Test
   end
 
   def test_an_unknown_run_is_ignored_rather_than_created
-    @jobs.update(session_id: "s1", run_id: "ghost", phase: "tool", detail: "x")
+    @jobs.update(session_id: "s1", run_id: "ghost", phase: "tool")
     @jobs.finish(session_id: "s1", run_id: "ghost", status: "done", result: "x")
 
     assert_empty @jobs.runs("s1")
@@ -67,7 +68,7 @@ class TestSubagentJobs < Minitest::Test
   def test_a_snapshot_is_a_copy_the_reader_can_keep
     @jobs.start(session_id: "s1", run_id: "r1", agent: "writer", task: "poem")
     snapshot = @jobs.runs("s1").first
-    @jobs.update(session_id: "s1", run_id: "r1", phase: "tool", detail: "grep rhyme")
+    @jobs.update(session_id: "s1", run_id: "r1", phase: "tool")
 
     assert_equal "poem", snapshot[:detail]
   end
@@ -82,11 +83,29 @@ class TestSubagentJobs < Minitest::Test
     refute Rubot::Web::SubagentJobs.visible?([{ phase: "done", finished_at: stale }])
   end
 
-  def test_the_line_says_the_count_and_what_happened_last
-    assert_equal "3 langkah · grep rhyme",
-                 Rubot::Web::SubagentLine.line(calls: 3, phase: "tool", detail: "grep rhyme")
+  # The row's subject is the task, never the calls: what a delegated agent
+  # reaches for is its own business, and its captions read as if the reader's
+  # own agent were running them. The count of steps is the progress.
+  def test_the_line_counts_a_running_run_and_names_what_happened_once_it_ends
+    assert_equal "3 langkah · write a poem",
+                 Rubot::Web::SubagentLine.line(calls: 3, phase: "tool", detail: "write a poem")
+    assert_equal "3 langkah · write a poem",
+                 Rubot::Web::SubagentLine.line(calls: 3, phase: "thinking", detail: "write a poem")
+    assert_equal "write a poem", Rubot::Web::SubagentLine.line(calls: 0, phase: "started",
+                                                               detail: "write a poem")
     assert_equal "3 langkah", Rubot::Web::SubagentLine.line(calls: 3, phase: "done", detail: "")
     assert_equal "12s", Rubot::Web::SubagentLine.line(calls: 0, phase: "done", detail: "12s")
     assert_equal "boom", Rubot::Web::SubagentLine.line(calls: 4, phase: "failed", detail: "boom")
+  end
+
+  # A task is a whole brief and the row is one line wide. The beginning has to
+  # survive — it is what tells two runs apart — and the rest is on the tooltip.
+  def test_a_long_task_is_cut_to_the_beginning_rather_than_swallowed_by_the_row
+    task = "Review an uncommitted change in the Ruby project and report every bug you find"
+    line = Rubot::Web::SubagentLine.line(calls: 2, phase: "tool", detail: task)
+
+    assert line.start_with?("2 langkah · Review an uncommitted"), line
+    assert line.end_with?("…"), line
+    assert_operator line.length, :<=, "2 langkah · ".length + Rubot::Web::SubagentLine::SUBJECT_CHARS
   end
 end

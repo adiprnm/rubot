@@ -329,13 +329,14 @@ module Rubot
       # there at all when there is nothing to say.
       def test_the_footer_sheet_names_itself_and_lists_the_runs
         running = [
-          { agent: "writer", phase: "tool", detail: "read notes.md", line: "1 langkah · read notes.md" },
+          { agent: "writer", phase: "tool", detail: "tulis puisi", line: "1 langkah · tulis puisi" },
           { agent: "researcher", phase: "started", detail: "find docs", line: "find docs" }
         ]
         html = Rubot::Web::View.render("_subagent_sheet", subagents: running)
         assert_includes html, %(<span class="subagent-label">subagent</span>)
         assert_includes html, "researcher"
-        assert_includes html, "1 langkah · read notes.md"
+        assert_includes html, "1 langkah · tulis puisi"
+        refute_includes html, "read notes.md"
         refute_includes html, %(id="subagent-sheet" hidden)
 
         finished = [
@@ -421,12 +422,15 @@ module Rubot
         assert_includes sent.first[1], %(id="subagent-sheet" hx-swap-oob="true")
         assert_includes sent.first[1], %(id="subagent-sheet-body")
 
-        jobs.update(session_id: "web_rubot", run_id: "r1", phase: "tool", detail: "grep rhyme")
+        jobs.update(session_id: "web_rubot", run_id: "r1", phase: "tool")
 
         assert_equal 2, sent.size
         refute_includes sent.last[1], %(id="subagent-sheet" hx-swap-oob="true")
         assert_includes sent.last[1], %(id="subagent-sheet-body" hx-swap-oob="innerHTML")
-        assert_includes sent.last[1], "1 langkah · grep rhyme"
+        # The row counts the step and keeps naming the task, never the tool the
+        # sub agent reached for.
+        assert_includes sent.last[1], "1 langkah · tulis puisi"
+        refute_includes sent.last[1], "grep rhyme"
       end
 
       # A compact turn does not narrate the calls a delegated agent made: the

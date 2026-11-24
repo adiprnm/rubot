@@ -66,6 +66,40 @@ module Rubot
       assert_equal "Menjalankan perintah di terminal", command("")
     end
 
+    # Waiting is a command too, and the duration is the whole message: an agent
+    # that slept three times while a sub agent worked showed the same empty
+    # sentence three times.
+    def test_a_wait_says_how_long_it_waited
+      assert_equal "Menunggu 45 detik", command("sleep 45")
+      assert_equal "Menunggu 1 menit 30 detik", command("sleep 90; echo waited")
+      assert_equal "Menunggu 2 menit", command("sleep 2m")
+      assert_equal "Menunggu 1 jam", command("sleep 1h")
+      assert_equal "Menunggu 1 jam 5 menit", command("sleep 65m")
+      assert_equal "Menunggu 1 hari", command("sleep 1d")
+      assert_equal "Menunggu sebentar", command("sleep")
+    end
+
+    # The durations of a `sleep` add up, so reading only the first would report
+    # two thirds of a two-minute wait; and something too short to round to a
+    # second is still a wait, just not a countable one.
+    def test_a_wait_counts_every_duration_and_never_rounds_down_to_zero
+      assert_equal "Menunggu 2 menit", command("sleep 90 30")
+      assert_equal "Menunggu 1 menit 1 detik", command("sleep 1m 1")
+      assert_equal "Menunggu sebentar", command("sleep 0.4")
+      assert_equal "Menunggu sebentar", command("sleep 0")
+      assert_equal "Menunggu sebentar", command("sleep abc")
+    end
+
+    # Everything `sleep` accepts: the forms a script actually writes, and the
+    # one that never ends, which must not read as the shortest wait of all.
+    def test_a_wait_reads_the_forms_sleep_itself_accepts
+      assert_equal "Menunggu 16 menit 40 detik", command("sleep 1e3")
+      assert_equal "Menunggu 5 detik", command("sleep +5")
+      assert_equal "Menunggu 1 detik", command("sleep .5")
+      assert_equal "Menunggu tanpa batas", command("sleep infinity")
+      assert_equal "Menunggu tanpa batas", command("sleep inf")
+    end
+
     def test_a_tooltip_still_carries_the_command
       assert_equal "shell_exec · ls -la", ToolCaption.tooltip("shell_exec", { "command" => "ls -la" })
       assert_equal "shell_exec", ToolCaption.tooltip("shell_exec", {})

@@ -334,7 +334,7 @@ module Rubot
       def test_the_footer_toggle_marks_a_run_as_still_working
         jobs = Rubot::Web::SubagentJobs.new
         jobs.start(session_id: "web_rubot", run_id: "r1", agent: "writer", task: "tulis puisi")
-        jobs.update(session_id: "web_rubot", run_id: "r1", phase: "tool", detail: "grep rhyme")
+        jobs.update(session_id: "web_rubot", run_id: "r1", phase: "tool")
 
         html = Rubot::Web::View.render("_subagent_sheet", subagents: jobs.runs("web_rubot"))
         assert_includes html, %(<span class="subagent-run")

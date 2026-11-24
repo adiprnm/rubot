@@ -22,8 +22,11 @@ module Rubot
       def description
         "Read the answer of a delegated agent that finished in the background. " \
           "Background runs keep working after the turn that started them, so " \
-          "their answer is collected here. Each answer is returned once; call " \
-          "again later to see whether more have come back."
+          "their answer is collected here. Each answer is returned once. In a " \
+          "channel that runs delegations in the background the batch is also " \
+          "handed back to you on its own once the last run of it lands, so this " \
+          "is for when you need one now, or when an answer told you that more " \
+          "are waiting: never poll it in a loop or sleep until something is ready."
       end
 
       def parameters

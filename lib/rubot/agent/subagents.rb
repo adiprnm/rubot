@@ -66,7 +66,12 @@ module Rubot
             parent_session: @session.id.to_s
           )
           return "Sub agent #{slug} started in the background (run #{run_id}). " \
-                 "It keeps working after this turn ends. Call subagent_results to read what it found."
+                 "It keeps working after this turn ends, and a successful answer " \
+                 "comes back to you on its own once it lands: do not sit and wait " \
+                 "for it, and do not call subagent_results in a loop or sleep until " \
+                 "something is ready. Carry on with what you can do without it, or " \
+                 "end the turn. A run that fails is not reported back — ask for that " \
+                 "run by id if you need to know how it went."
         end
 
         begin

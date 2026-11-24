@@ -4,12 +4,14 @@ module Rubot
   # What a call is doing, in one sentence a reader who never saw the arguments
   # can follow.
   #
-  # The same call is drawn in five places: the live web timeline, the replayed
-  # transcript, the row a delegated run leaves, the Telegram status card and the
-  # TUI transcript. A reader comparing two of them must not find two different
-  # sentences about one call, so the wording is derived here, from the
-  # arguments alone, and every surface asks this module instead of formatting
-  # the arguments itself.
+  # The same call is drawn in four places: the live web timeline, the replayed
+  # transcript, the Telegram status card and the TUI transcript. A reader
+  # comparing two of them must not find two different sentences about one call,
+  # so the wording is derived here, from the arguments alone, and every surface
+  # asks this module instead of formatting the arguments itself. The row a
+  # delegated run leaves in the footer is deliberately not one of them: that row
+  # is about an agent and the task it was given, not about the calls it makes
+  # (see Web::SubagentLine).
   #
   # The sentence is the whole row, not a tail on the tool's name: `shell_exec`
   # and `file_ops` are the agent's words, not the reader's, and a row that said
@@ -36,6 +38,11 @@ module Rubot
     # How a compound line is cut before anything is read out of it: the first
     # command is the one the reader asked for, and the rest is plumbing.
     SEPARATORS = /&&|\|\||;|\|/
+    # An argument `sleep` accepts as a duration: everything coreutils takes, so
+    # that the forms a runaway waiter actually writes are read rather than
+    # ignored. `infinity` is in it because an unbounded wait is the one case
+    # where rounding to "sebentar" would be the opposite of the truth.
+    SLEEP_ARGUMENT = /\A([+-]?(?:inf(?:inity)?|(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:e[+-]?\d+)?))([smhd])?\z/i
 
     FILE_VERBS = {
       "read" => "Membaca isi ",
@@ -176,6 +183,7 @@ module Rubot
       when "ps", "top", "htop" then "Melihat proses yang sedang berjalan"
       when "kill", "pkill", "killall" then "Menghentikan proses"
       when "date" then "Menampilkan tanggal dan waktu"
+      when "sleep" then sleep_intent(tokens)
       when "which", "type" then "Mencari lokasi perintah #{words.first}".strip
       when "echo", "printf" then "Menuliskan teks pendek"
       when "ssh", "scp" then "Menghubungi server lain"
@@ -197,6 +205,70 @@ module Rubot
       return "Melihat log secara langsung" if head == "tail" && tokens.any? { |token| token.start_with?("-f") }
 
       "Membaca isi#{where(words.last, fallback: ' berkas')}"
+    end
+
+    # `sleep 90` is what waiting looks like on the command line, and the generic
+    # fallback said nothing about it: a run that waited three times in a row
+    # showed the same empty sentence three times. The duration is the whole
+    # message, so it is spelled out — and nothing more is claimed, because the
+    # command does not say what it is waiting for.
+    #
+    # Every argument is counted, since `sleep 90 30` waits two minutes: the
+    # durations add up, and reading only the first would understate the wait.
+    # A word that is not a duration contributes nothing.
+    def self.sleep_intent(tokens)
+      seconds = Array(tokens).sum { |token| sleep_seconds(token) || 0.0 }
+      if seconds.infinite?
+        return seconds.positive? ? "Menunggu tanpa batas" : "Menunggu sebentar"
+      end
+
+      label = wait_label(seconds)
+      label ? "Menunggu #{label}" : "Menunggu sebentar"
+    end
+
+    # Everything `sleep` accepts as a duration: `90`, `1.5`, `.5`, `+5`, `1e3`,
+    # `infinity`, and the s/m/h/d suffixes. The decimal separator arrives as
+    # either a point or a comma depending on who wrote it.
+    def self.sleep_seconds(argument)
+      match = argument.to_s.strip.match(SLEEP_ARGUMENT)
+      return nil unless match
+
+      number = match[1]
+      return Float::INFINITY if number.match?(/\A\+?inf/i)
+      return -Float::INFINITY if number.match?(/\A-inf/i)
+
+      value = number.tr(",", ".").to_f
+      case match[2].to_s.downcase
+      when "s" then value
+      when "m" then value * 60
+      when "h" then value * 3600
+      when "d" then value * 86_400
+      else value
+      end
+    end
+
+    # nil when there is nothing a row could count: no argument at all, or one
+    # too short to round up to a second. `sleep 0.4` is still a wait, just not
+    # one worth putting a number on.
+    def self.wait_label(seconds)
+      total = seconds.to_f.round
+      return nil if total < 1
+      return "#{total} detik" if total < 60
+
+      minutes, rest = total.divmod(60)
+      if minutes < 60
+        return "#{minutes} menit" if rest.zero?
+
+        return "#{minutes} menit #{rest} detik"
+      end
+
+      hours, minutes = minutes.divmod(60)
+      if hours < 24
+        return minutes.zero? ? "#{hours} jam" : "#{hours} jam #{minutes} menit"
+      end
+
+      days, hours = hours.divmod(24)
+      hours.zero? ? "#{days} hari" : "#{days} hari #{hours} jam"
     end
 
     # The pattern is read off the line rather than off the split tokens: a

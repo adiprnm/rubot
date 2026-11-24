@@ -9,8 +9,9 @@ module Rubot
     #
     # A background run has no turn to report into: the turn that asked for it
     # has already answered the reader and closed its event stream. So the state
-    # lives here instead — what is running, what it is doing, what it came back
-    # with — and the footer is drawn from it, not from the turn.
+    # lives here instead — what is running, what each run was asked to do, how
+    # far it has got, what it came back with — and the footer is drawn from it,
+    # not from the turn.
     #
     # Thread-safe because the executor threads write while the renderer reads,
     # and because a single page asks for it on every event.
@@ -84,8 +85,13 @@ module Rubot
         end
       end
 
-      # A tool call, or a passage of text, from the run itself.
-      def update(session_id:, run_id:, phase:, detail: nil)
+      # A tool call from the run itself.
+      #
+      # Only the phase moves, and the count of steps with it. What the run was
+      # asked to do stays as it was set at the start, because that is the thing
+      # the reader waiting on it is reading (see SubagentLine), and a caption of
+      # the tool it happens to be reaching for says less than the task does.
+      def update(session_id:, run_id:, phase:)
         sid = session_id.to_s
         change(sid) do
           run = @runs.dig(sid, run_id.to_s)
@@ -93,7 +99,6 @@ module Rubot
 
           phase = phase.to_s
           run[:phase] = phase
-          run[:detail] = detail.to_s unless detail.nil?
           run[:calls] = run[:calls].to_i + 1 if phase == "tool"
           run[:line] = SubagentLine.line(calls: run[:calls], phase: phase, detail: run[:detail])
         end

@@ -581,7 +581,7 @@ module Rubot
       repl = build_repl
       ev = repl.instance_variable_get(:@events)
       app = repl.instance_variable_get(:@app)
-      ev << [ :tool_call, "shell_exec", { "command" => "sleep 10" } ]
+      ev << [ :tool_call, "shell_exec", { "command" => "ffmpeg -i a.mp4 b.webm" } ]
       repl.pump
 
       # The call started 4.5 seconds ago and has not come back yet.
@@ -614,7 +614,7 @@ module Rubot
       repl = build_repl
       ev = repl.instance_variable_get(:@events)
       app = repl.instance_variable_get(:@app)
-      ev << [ :tool_call, "shell_exec", { "command" => "sleep 5" } ]
+      ev << [ :tool_call, "shell_exec", { "command" => "ffmpeg -i a.mp4 b.webm -c:v libx264" } ]
       repl.pump
       repl.instance_variable_get(:@tool_entries)["shell_exec"][:started_at] -= 12.2
 
@@ -632,7 +632,7 @@ module Rubot
       repl = build_repl
       ev = repl.instance_variable_get(:@events)
       app = repl.instance_variable_get(:@app)
-      ev << [ :tool_call, "shell_exec", { "command" => "sleep 10" } ]
+      ev << [ :tool_call, "shell_exec", { "command" => "ffmpeg -i a.mp4 b.webm" } ]
       repl.pump
       repl.instance_variable_get(:@tool_entries)["shell_exec"][:started_at] -= 4.5
       repl.refresh_slow_tools
@@ -654,7 +654,7 @@ module Rubot
       ev = repl.instance_variable_get(:@events)
       app = repl.instance_variable_get(:@app)
       40.times { |i| ev << [ :entry, [ [ "filler row #{i}", :text ] ], true, 0 ] }
-      ev << [ :tool_call, "shell_exec", { "command" => "sleep 10" } ]
+      ev << [ :tool_call, "shell_exec", { "command" => "ffmpeg -i a.mp4 b.webm" } ]
       repl.pump
       repl.instance_variable_get(:@tool_entries)["shell_exec"][:started_at] -= 4.5
       repl.refresh_slow_tools

@@ -127,9 +127,10 @@ module Rubot
             answer = handle.process(
               task,
               stream: false,
-              on_tool_call: ->(name, args, _snapshot) {
-                @subagent_jobs.update(session_id: sid, run_id: run_id, phase: "tool",
-                                      detail: ToolCaption.caption(name, args))
+              # Only the phase moves: the reader is told the run is still
+              # working, not which tool it reached for (see SubagentLine).
+              on_tool_call: ->(_name, _args, _snapshot) {
+                @subagent_jobs.update(session_id: sid, run_id: run_id, phase: "tool")
               }
             )
             finish_subagent(sid, run_id, status: "done", result: answer.to_s)
