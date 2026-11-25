@@ -221,6 +221,18 @@ module Rubot
           "fetch_page" => "Opening %{url}",
           "delegate" => "Asking a sub agent for help",
           "delegate_named" => "Asking %{agent} for help"
+        },
+        # The settings page's own language field. It reads through the same
+        # function as everything else, so the field that picks the language is
+        # itself evidence of the language it picked.
+        "settings" => {
+          "language" => {
+            "label" => "Language",
+            "note" => "What Rubot writes in: the tool rows, the thinking block and the status line. Applies to every channel of this install.",
+            "en" => "English",
+            "id" => "Indonesian",
+            "unknown" => "Language %{value} is not one this interface speaks: choose %{choices}."
+          }
         }
       },
       "id" => {
@@ -405,6 +417,15 @@ module Rubot
           "fetch_page" => "Membuka halaman %{url}",
           "delegate" => "Meminta bantuan subagent",
           "delegate_named" => "Meminta bantuan %{agent}"
+        },
+        "settings" => {
+          "language" => {
+            "label" => "Bahasa",
+            "note" => "Bahasa yang dipakai Rubot: baris tool, blok thinking, dan baris status. Berlaku untuk semua kanal di pemasangan ini.",
+            "en" => "English",
+            "id" => "Bahasa Indonesia",
+            "unknown" => "Bahasa %{value} tidak dikenal: pilih %{choices}."
+          }
         }
       }
     }.freeze

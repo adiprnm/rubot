@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "cgi"
 require "rubot"
 require_relative "support/web_channel_support"
 
@@ -98,6 +99,91 @@ module Rubot
         assert_equal "ollama", config.provider
         assert_equal "llama3", config.model
         assert_equal "sk-baru", config.api_key
+      end
+
+      # --- the language -----------------------------------------------------
+
+      # The language is a setting like any other, so it is a field like any
+      # other: two options, and the one in force is the one shown as chosen.
+      def test_the_settings_page_offers_both_languages_and_shows_the_active_one
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+
+        html = settings_page_of(channel)
+
+        assert_includes html, %(<select id="setting-bahasa" name="bahasa">)
+        assert_includes html, %(<option value="en" selected>English</option>)
+        assert_includes html, %(<option value="id">Indonesian</option>)
+
+        # A stored choice is the one the select opens on, not the first entry
+        # of the list.
+        channel.instance_variable_get(:@app_config).apply_settings("bahasa" => "id")
+
+        html = settings_page_of(channel)
+
+        assert_includes html, %(<option value="id" selected>)
+        refute_includes html, %(<option value="en" selected>)
+      end
+
+      # Saving a language changes the process that is running and the archive a
+      # restart reads. The two have to agree, or the page would speak a
+      # language the next boot has forgotten.
+      def test_saving_a_language_switches_the_process_and_survives_a_restart
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+        config = channel.instance_variable_get(:@app_config)
+        assert_equal "en", Rubot::I18n.locale
+
+        res = FakeResponse.new
+        channel.save_settings(res, form_post({ "bahasa" => "id", "provider" => "ollama" }))
+
+        assert_equal 303, res.status
+        assert_includes res.headers["Location"].to_s, "saved=1"
+        assert_equal "id", Rubot::I18n.locale, "the running process speaks the new language at once"
+        assert_equal "Menjalankan perintah di terminal",
+                     Rubot::ToolCaption.caption("shell_exec", { "command" => "" })
+
+        # A restart is a fresh Config with the archive laid over it, which is
+        # exactly the two lines bin/rubot runs before any channel starts.
+        reloaded = Rubot::Config.new(config.config_path)
+        assert_equal "en", reloaded.bahasa, "the file itself never learned it"
+        reloaded.apply_settings(Rubot::Store.saved_settings(config.sessions_dir))
+        assert_equal "id", reloaded.bahasa
+      ensure
+        Rubot::I18n.locale = Rubot::I18n::DEFAULT_LOCALE
+      end
+
+      # A language nobody speaks is refused where it is typed: the message
+      # names the value and the two that are accepted, nothing is stored, and
+      # the process keeps the language it had. A half-switched interface is
+      # worse than a rejected form.
+      def test_a_language_this_build_does_not_speak_is_refused_with_the_choices
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+
+        res = FakeResponse.new
+        channel.save_settings(res, form_post({ "bahasa" => "fr", "provider" => "ollama" }))
+
+        assert_equal 303, res.status
+        location = res.headers["Location"].to_s
+        message = CGI.unescape(location[/error=([^&]*)/, 1].to_s)
+
+        assert_includes message, "fr", "the refused value is named"
+        assert_includes message, "en, id", "the accepted ones are named"
+
+        assert_equal "en", Rubot::I18n.locale, "the interface is not left half in one language"
+        store = Rubot::Session.store
+        assert_nil store.setting("bahasa")
+        assert_nil store.setting("provider"), "a refused form stores nothing at all"
+
+        # And the page the reader lands on carries the reason, in the same
+        # words the redirect named.
+        page = FakeResponse.new
+        channel.render_settings(page, FakeRequest.new("/settings", query: { "error" => message }))
+
+        assert_includes page.body, CGI.escapeHTML(message)
+      ensure
+        Rubot::I18n.locale = Rubot::I18n::DEFAULT_LOCALE
       end
 
       def test_settings_page_lists_editable_presets_and_the_default_picker
@@ -652,6 +738,16 @@ module Rubot
       end
 
       # --- install settings (end) ------------------------------------------
+
+      private
+
+      # The settings page as one channel draws it, so a test can read the form
+      # the running install would send rather than a page built from fakes.
+      def settings_page_of(channel)
+        res = FakeResponse.new
+        channel.render_settings(res, FakeRequest.new("/settings"))
+        res.body
+      end
     end
   end
 end
