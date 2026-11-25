@@ -221,7 +221,7 @@ module Rubot
         assert_nil res.headers["HX-Refresh"]
         # The reason is pushed over SSE, not held in the response body.
         running = queue.pop
-        assert_includes running[1], "Summarizing the conversation"
+        assert_includes running[1], "Merangkum percakapan"
         cleared = queue.pop
         assert_includes cleared[1], 'id="compaction-slot"'
         note = queue.pop
@@ -295,12 +295,12 @@ module Rubot
         assert_equal 204, res.status
         running = queue.pop
         assert_includes running[1], "compaction-row is-running"
-        assert_includes running[1], "Summarizing the conversation"
+        assert_includes running[1], "Merangkum percakapan"
 
         release << :go
 
         seam = queue.pop
-        assert_includes seam[1], "Context summarized."
+        assert_includes seam[1], "Konteks diringkas."
         assert_includes seam[1], "2029 → 1565 token"
         refute_includes seam[1], "pesan diringkas"
         # The explicit "done" line under the button is the confirmation the
@@ -335,7 +335,7 @@ module Rubot
         channel.compact_session_now(res, "web_kanyaah", form_post({}))
 
         running = queue.pop
-        assert_includes running[1], "Summarizing the conversation"
+        assert_includes running[1], "Merangkum percakapan"
         cleared = queue.pop
         assert_includes cleared[1], 'id="compaction-slot"'
         refute_includes cleared[1], "compaction-row"
