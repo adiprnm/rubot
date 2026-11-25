@@ -35,7 +35,7 @@ module Rubot
       # call per passage. A background turn is exactly the one nobody is watching,
       # so a channel that can show it arriving does — otherwise the reader waits
       # through the whole answer in silence and then reads it all at once.
-      def process_background(message, fresh: false, label: "", &on_chunk)
+      def process_background(message, fresh: false, label: "", tools: true, &on_chunk)
         # Build local messages from session history ONLY (up to the last assistant response)
         # Do NOT include the current user message — this is a separate conversation turn
         @turn_start_index = @session.messages.size
@@ -46,28 +46,39 @@ module Rubot
         tool_calls = nil
         reasoning_content = nil
         rounds = 0
-        limit = max_rounds
+        # A report is words, not work. Handed the full toolset, a summary turn
+        # reads files and runs tests to be sure of what it already has, and the
+        # round limit is a thousand: a loop's report overran its own deadline
+        # that way and the reader was told nothing. One round and no tools is the
+        # shape that cannot wander (see Web::Reports).
+        limit = tools ? max_rounds : 1
+        tool_list = tools ? tool_definitions : []
+        # A report turn cannot make a call, so a call the model writes into its
+        # prose is noise: it is dropped before it reaches the transcript or the
+        # page (see Formatting.without_tool_markup). With tools on, a real call
+        # arrives in its own field and the prose is left alone.
+        clean = tools ? ->(text) { text } : ->(text) { Rubot::Formatting.without_tool_markup(text) }
 
         loop do
           break if rounds >= limit
 
           # A fired job runs on this agent's own persona, but the tool registry is
-        # shared — stamp the scope before the turn reaches any tool.
-        inject_tool_persona
+          # shared — stamp the scope before the turn reaches any tool.
+          inject_tool_persona
 
-        # A background turn has no channel callback to report retries to, so pass a
+          # A background turn has no channel callback to report retries to, so pass a
           # no-op rather than the `on_retry` local from #process — that variable
           # is not in scope here and used to raise NameError on every fired job.
           result = if block_given?
             # The answer accumulates here as well as in the provider: what the
             # reader is shown is the passage so far, not the fragment that just
             # arrived, so a repaint can never lose a word.
-            @provider.chat_stream(local_messages, tools: tool_definitions, on_retry: nil) do |chunk, _tools, _reasoning|
+            @provider.chat_stream(local_messages, tools: tool_list, on_retry: nil) do |chunk, _tools, _reasoning|
               response += chunk if chunk
-              on_chunk.call(response.dup) if chunk && !chunk.empty?
+              on_chunk.call(clean.call(response.dup)) if chunk && !chunk.empty?
             end
           else
-            @provider.chat(local_messages, tools: tool_definitions, on_retry: nil)
+            @provider.chat(local_messages, tools: tool_list, on_retry: nil)
           end
           # A background run is a separate, local transcript: count its tokens and cost,
           # but never let it become the anchor for /context's context size.
@@ -111,9 +122,14 @@ module Rubot
           end
         end
 
+        # A turn with no tools that spent its answer on a tool call said nothing
+        # usable: what is left after the markup is dropped is the answer, and
+        # when nothing is left the facts that were handed in stand in for it.
+        response = clean.call(response.to_s)
+
         # An empty answer falls back to the text that was handed in: something
         # has to stand in the transcript, and the request says more than "".
-        response = message if response.nil? || response.strip.empty?
+        response = message if response.strip.empty?
 
         # The answer carries a stamp so the transcript can give it a block of its
         # own (see the page's history): nothing prompted it, and glued under the

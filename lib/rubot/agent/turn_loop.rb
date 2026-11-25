@@ -40,6 +40,7 @@ module Rubot
         @subagent_count = 0
         @on_subagent = callbacks.subagent
         @on_delegate = callbacks.delegate
+        @on_loop = callbacks.on_loop
         @on_compaction = callbacks.compaction
         @on_compaction_start = callbacks.compaction_start
         @on_compaction_failed = callbacks.compaction_failed

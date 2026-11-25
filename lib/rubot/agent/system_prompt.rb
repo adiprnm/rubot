@@ -79,7 +79,7 @@ module Rubot
     # the epoch, or a session that is already running keeps answering under the
     # rules it was pinned with.
     def rules
-      [ FILE_DELIVERY_RULE, NOTIFY_RULE, SILENT_TOOL_RULE, DELEGATION_RULE, BATCH_REMINDER ].join("\u0000")
+      [ FILE_DELIVERY_RULE, NOTIFY_RULE, SILENT_TOOL_RULE, DELEGATION_RULE, LOOP_RULE, BATCH_REMINDER ].join("\u0000")
     end
 
     # The persona parts that reach the prompt: its own instructions and the
@@ -161,6 +161,9 @@ module Rubot
 
       # 1f. Delegation, only when the tool is available and enabled.
       parts << DELEGATION_RULE if tool_names.include?("delegate") && config.delegation_enabled?
+
+      # 1g. Loops, only when the tool is there to be called.
+      parts << LOOP_RULE if tool_names.include?("loop")
 
       # 2. SOUL.md (personality and identity). SOUL.md ships with its own
       # "# Soul" heading (see Soul::DEFAULT_SOUL), so the file's copy is

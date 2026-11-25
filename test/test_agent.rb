@@ -276,6 +276,101 @@ class TestAgentRoundLimit < Minitest::Test
     end
   end
 
+  # A provider that always wants to do work, and never just answers. Handed the
+  # toolset a summary turn can chase that until its deadline; the report path
+  # must ask for a turn that cannot.
+  class WorkHungryProvider
+    attr_reader :requests
+
+    def initialize
+      @requests = []
+    end
+
+    def name = "openai"
+
+    def chat(messages, tools: nil, on_retry: nil)
+      @requests << { messages: messages, tools: tools }
+      { "content" => "kabar", "tool_calls" => [
+        { "id" => "c1", "type" => "function",
+          "function" => { "name" => "shell_exec", "arguments" => "{\"command\":\"ls\"}" } }
+      ] }
+    end
+  end
+
+  # The report of a finished loop used to be a turn like any other: full toolset,
+  # up to a thousand rounds. One of them spent ninety seconds investigating and
+  # was cut off by its own deadline, so the reader was told nothing about a loop
+  # that had already stopped.
+  def test_a_report_turn_runs_one_round_without_tools
+    @tmpdir = Dir.mktmpdir
+    workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(workspace)
+    config_path = File.join(@tmpdir, "report-config.yml")
+    File.write(config_path, {
+      "agents" => { "defaults" => { "workspace" => workspace } },
+      "models" => [ { "name" => "test", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ]
+    }.to_yaml)
+
+    provider = WorkHungryProvider.new
+    agent = Rubot::Agent.new(
+      config: Rubot::Config.new(config_path),
+      provider: provider,
+      session_id: "background-report-tools"
+    )
+
+    agent.process_background("## loop x\nkriteria terpenuhi", label: "Kabar dari loop:\n\n", tools: false)
+
+    assert_equal 1, provider.requests.size,
+                 "one round: a provider that asks for a tool must not be given another"
+    assert_empty provider.requests.first[:tools].to_a,
+                 "no tool is offered, so nothing can be reached for"
+  end
+
+  # The failure the reader actually saw: a report turn whose provider wrote its
+  # native tool-call markup into the content, because no tools were offered and
+  # the model reached for one anyway.
+  class MarkupProvider
+    def name = "openai"
+
+    def chat_stream(_messages, tools: nil, on_retry: nil)
+      bar = "\uFF5C"
+      yield "Gw cek dulu.", nil, nil
+      yield " <#{bar}#{bar}DSML#{bar}#{bar}tool_calls>", nil, nil
+      { "content" => "Gw cek dulu. <#{bar}#{bar}DSML#{bar}#{bar}tool_calls>", "finish_reason" => "stop" }
+    end
+  end
+
+  def test_a_report_turn_never_shows_a_call_the_model_wrote_into_its_prose
+    @tmpdir = Dir.mktmpdir
+    workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(workspace)
+    config_path = File.join(@tmpdir, "markup-config.yml")
+    File.write(config_path, {
+      "agents" => { "defaults" => { "workspace" => workspace } },
+      "models" => [ { "name" => "test", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ]
+    }.to_yaml)
+
+    agent = Rubot::Agent.new(
+      config: Rubot::Config.new(config_path),
+      provider: MarkupProvider.new,
+      session_id: "background-report-markup"
+    )
+
+    written = []
+    response = agent.process_background("## loop x\nkriteria terpenuhi",
+                                        label: "Kabar dari loop:\n\n", tools: false) do |text|
+      written << text
+    end
+
+    assert_equal "Gw cek dulu.", response, "the answer is what came before the marker"
+    assert agent.session.messages.last["content"].include?("Gw cek dulu."),
+           "the prose the model did write is kept"
+    refute_includes agent.session.messages.last["content"], "\uFF5C",
+                    "the transcript never carries the markup"
+    refute(written.any? { |text| text.include?("\uFF5C") },
+           "nothing the page is handed carries the markup: #{written.inspect}")
+  end
+
   def test_a_background_turn_hands_its_answer_over_as_it_is_written
     @tmpdir = Dir.mktmpdir
     workspace = File.join(@tmpdir, "workspace")

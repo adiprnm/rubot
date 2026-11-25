@@ -47,6 +47,11 @@ module Rubot
     # Where the run is rooted. A persona with a workspace of its own gets a
     # config rooted there, so its SOUL.md, AGENTS.md, skills and memory are its
     # own instead of the main workspace's.
+    #
+    # `workspace` overrides that: a loop iteration works in the git worktree of
+    # the loop, which is neither the persona's workspace nor the install's. The
+    # files a run reads (its rules, its memory) come from that root, exactly as
+    # they would for a persona that lived there.
     def self.workspace_for(config:, slug:)
       PersonaStore.from_config(config, dir: File.dirname(config.personas_file)).workspace_for(slug)
     rescue StandardError
@@ -55,8 +60,8 @@ module Rubot
 
     # The config a delegated run reads its workspace from, as plain data (which
     # is all a Ractor will accept).
-    def self.config_data(config:, slug:)
-      workspace = workspace_for(config: config, slug: slug)
+    def self.config_data(config:, slug:, workspace: nil)
+      workspace ||= workspace_for(config: config, slug: slug)
       base = config.respond_to?(:with_persona_workspace) ? config : Config.from_data(config.snapshot, config_path: config.config_path)
       scoped = workspace ? base.with_persona_workspace(workspace) : base
       scoped.snapshot

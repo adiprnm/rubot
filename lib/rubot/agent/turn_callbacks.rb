@@ -15,12 +15,16 @@ module Rubot
     class TurnCallbacks
       attr_reader :tool_call, :tool_result, :progress, :confirm, :assistant_text,
                   :reasoning, :steer, :stopped, :usage, :subagent, :delegate,
-                  :compaction, :compaction_start, :compaction_failed, :retry_callback
+                  :compaction, :compaction_start, :compaction_failed, :retry_callback,
+                  # The `on_` prefix is the one reader that keeps it: a reader
+                  # named `loop` would shadow Kernel#loop for this object.
+                  :on_loop
 
       def initialize(tool_call: nil, tool_result: nil, progress: nil, confirm: nil,
                      assistant_text: nil, reasoning: nil, steer: nil, stopped: nil,
                      usage: nil, subagent: nil, delegate: nil, compaction: nil,
-                     compaction_start: nil, compaction_failed: nil, retry_callback: nil)
+                     compaction_start: nil, compaction_failed: nil, retry_callback: nil,
+                     on_loop: nil)
         @tool_call = tool_call
         @tool_result = tool_result
         @progress = progress
@@ -32,6 +36,7 @@ module Rubot
         @usage = usage
         @subagent = subagent
         @delegate = delegate
+        @on_loop = on_loop
         @compaction = compaction
         @compaction_start = compaction_start
         @compaction_failed = compaction_failed

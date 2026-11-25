@@ -1,0 +1,491 @@
+# frozen_string_literal: true
+
+require "time"
+
+require_relative "loop_store"
+require_relative "loop_worktree"
+
+module Rubot
+  # Runs one loop to a stopping point.
+  #
+  # A loop is a goal an agent works at over many iterations, so the work itself
+  # arrives through `runner` and the judgement through `verifier`: this class
+  # never touches a provider, a Ractor or a channel, which is what lets the
+  # whole cycle be tested with two lambdas. What it owns is the part that must
+  # be identical every time -- the budget, the record on disk, and the decision
+  # to stop -- because a loop that cannot stop is a bill, not a tool.
+  #
+  # The store is the only counter and the only status: the loop re-reads its
+  # state at the top of every iteration and again immediately before it spends
+  # anything, so a pause lands at an iteration boundary -- before the next one is
+  # paid for, never in the middle of a turn -- and a resumed run continues from
+  # the file, not from a fresh budget.
+  #
+  # Two stops are worth telling apart. A *stall* is an agent that produced
+  # nothing new twice in a row, judged by what the runner reported rather than by
+  # the worktree, which is clean again once the work is committed, so iterating
+  # only spends tokens. *Verifier stuck* is the opposite: the agent does produce
+  # new work, yet the same reason comes back, so more iterations will not fix it.
+  # "The same reason" is judged on a normalised key, not on the raw sentence: a
+  # verifier names the file and the count it just looked at, and those move every
+  # iteration (see #reason_key).
+  class LoopRun
+    Result = Struct.new(:state, :stop_reason, :iterations_run, :message, keyword_init: true)
+
+    # How much of the log reaches an iteration: enough to know what was tried.
+    # An iteration writes two entries -- the work and its verdict -- so this is
+    # about five iterations of history, which is more than the default cap lets
+    # a loop run in one go.
+    LOG_WINDOW = 10
+    COMMIT_SUBJECT_CHARS = 72
+    STUCK_REPEATS = 3
+    STALL_REPEATS = 2
+    # What a normalised reason has instead of the parts that move: a hash, a
+    # count, a path. The placeholder itself carries none of those, so a later
+    # rule cannot rewrite what an earlier one put down.
+    REASON_PLACEHOLDER = "<var>"
+    # A file named without a directory: a root file, or one whose path was
+    # already folded away. Anything not in this list is left alone, because a
+    # path is only worth folding when it is plainly one.
+    REASON_FILE = %r{[^\s/]*\.(?:rb|md|txt|json|yml|yaml|erb|html|css|js|sh|lock|toml)\b}
+    # Only a prefix of the reason is compared: a verifier that rambles should not
+    # have its first sentence buried, and two failures that agree this far agree
+    # in the part that matters.
+    STUCK_REASON_CHARS = 120
+    VERDICTS = { "done" => :done, "not_yet" => :not_yet }.freeze
+
+    # Every way a run can end, in one place, so a caller can write an exhaustive
+    # case over the result instead of grepping for the symbols.
+    STOP_REASONS = %i[
+      done_by_verifier max_iterations budget stalled verifier_stuck paused not_active
+      missing error worktree_missing repo_mismatch
+    ].freeze
+
+    # Raised only to leave an iteration that cannot go on: the note is on disk
+    # by then, and the stop reason travels with it because a runner that failed
+    # and a worktree that vanished are different repairs for the user.
+    class Failed < StandardError
+      attr_reader :stop_reason
+      def initialize(message, stop_reason: :error)
+        super(message)
+        @stop_reason = stop_reason
+      end
+    end
+
+    # `max_tokens` is an override, never the budget itself: the cap that counts
+    # is the one in the state file, so a resumed run, a cron retry or a second
+    # process cannot hand a spent loop another full budget by omitting it.
+    def initialize(store:, worktree:, runner:, verifier:, max_tokens: nil)
+      @store = store
+      @worktree = worktree
+      @runner = runner
+      @verifier = verifier
+      @max_tokens = max_tokens&.to_i
+    end
+
+    def call(id)
+      state = @store.load(id)
+      return result(nil, :missing, 0, "no loop with id #{id.to_s.inspect}") if state.nil?
+      return result(state, stop_reason_for(state.status), 0, "loop is #{state.status}") unless active?(state)
+
+      # A loop names the repository it was created for. Running it against
+      # another one would put an iteration's commits on a branch nobody reads,
+      # so a mismatch is refused instead of repaired.
+      mine = state.repo.to_s
+      theirs = @worktree.repo.to_s
+      if !mine.empty? && !theirs.empty? && File.expand_path(mine) != File.expand_path(theirs)
+        return result(state, :repo_mismatch, 0, "loop is bound to #{mine}, not #{theirs}")
+      end
+
+      begin
+        ensure_worktree(state.id)
+      rescue LoopWorktree::Error, SystemCallError => e
+        # The loop stays active: a repository that cannot take a worktree today
+        # (dirty tree, missing branch) can take one after the user looks at it.
+        return result(state, :error, 0, "could not create a worktree: #{e.message}")
+      end
+
+      run(state.id)
+    end
+
+    private
+
+    # Nothing is counted here: how far the loop has come is read back from the
+    # store, which is what makes a resumed run agree with the file.
+    def run(id)
+      # Nothing has been produced before the first iteration, so an iteration
+      # producing nothing must not compare equal to "no previous key".
+      previous_key = Object.new
+      repeats = 0
+      stuck_key = nil
+      stuck_count = 0
+
+      loop do
+        state = @store.load(id) or return result(nil, :missing, 0, "loop disappeared")
+
+        # Re-read every iteration: a pause lands here, at the boundary, before
+        # another iteration is paid for. Nothing interrupts a turn already being
+        # worked, which is why #iterate looks once more before it spends.
+        unless active?(state)
+          return result(state, stop_reason_for(state.status), iterations_of(state), "loop is #{state.status}")
+        end
+        return stop_at_the_cap(state) if state.iterations.to_i >= state.max_iterations.to_i
+        return result(state, :budget, iterations_of(state),
+                      "spent #{state.tokens} of #{budget_for(state)} tokens") if over_budget?(state)
+
+        begin
+          step = iterate(state)
+        rescue Failed => e
+          return stopped(id, e.stop_reason, e.message)
+        end
+
+        if step[:verdict] == :done
+          # No note here: the verdict is already in the file, written once by
+          # #iterate where every verdict passes.
+          finish(id, "done")
+          return stopped(id, :done_by_verifier, step[:reason])
+        end
+
+        # Compared by its normalised key, never by its bytes: the verifier
+        # reasons about the file and the number it just looked at, so the same
+        # failure comes back in different words every iteration. What the user
+        # reads -- the note and the result -- stays the raw sentence.
+        now = reason_key(step[:reason])
+        stuck_count = now == stuck_key ? stuck_count + 1 : 1
+        stuck_key = now
+        if stuck_count >= STUCK_REPEATS
+          finish(id, "paused", "verifier gave the same reason #{stuck_count} times: #{step[:reason]}")
+          return stopped(id, :verifier_stuck, step[:reason])
+        end
+
+        # Only what the runner said it produced goes in the key, not the reason:
+        # an agent that keeps producing while the verifier keeps refusing is
+        # stuck (above), which is a different repair from one that stopped.
+        key = step[:produced]
+        repeats = key == previous_key ? repeats + 1 : 1
+        previous_key = key
+        next if repeats < STALL_REPEATS
+
+        finish(id, "stalled", "no new work for #{repeats} iterations: #{step[:reason]}")
+        return stopped(id, :stalled, step[:reason])
+      end
+    end
+
+    # One iteration: ask for work, charge it, keep it, then have it judged. The
+    # count and the tokens reach the store the moment the runner returns --
+    # before the commit, the diff read, the verdict or the log write, any of
+    # which can fail -- so an iteration that falls over still costs what the
+    # provider already charged for it.
+    #
+    # One entry per iteration and one per verdict. The iteration's is written
+    # once the commit sha and both halves of the spend are known, before the
+    # verdict's, and so sits below it in the file's newest-first log: written
+    # earlier it could only carry the number and the worker's part, and written
+    # in both places -- by the runner and by the run -- the same text landed
+    # twice, which is how a real run logged five entries for one iteration.
+    #
+    # The split is measured, not reported. A lambda may charge the store itself
+    # (LoopRunner does) or hand the tokens back to be charged here (a plain
+    # runner lambda), so what each side spent is the difference in the store's
+    # one total, read before the runner and after each call. `tokens` stays the
+    # only counter: the budget is checked against it, and nothing here keeps a
+    # second one that could disagree with it.
+    def iterate(state)
+      # The status was read at the top of the loop and that read is a moment old
+      # by now: a pause issued in the gap would still buy a whole iteration plus
+      # its verification, tens of thousands of tokens, after the user was told the
+      # loop had stopped. This is the last look that can say no for free.
+      check_still_active!(state.id)
+
+      iteration = state.iterations.to_i + 1
+      before = tokens_of(state.id)
+      record = call_runner(runner_context(state, iteration))
+      charge(state.id, iteration, record[:tokens].to_i)
+      fail_iteration(state.id, "iteration #{iteration} failed: #{record[:error]}") if record[:error]
+
+      text = one_line(record[:text])
+      begin
+        # Read before the commit: afterwards the worktree is clean again.
+        diff = diff_of(state.id)
+        ours = commit_iteration(state.id, record[:text])
+      rescue LoopWorktree::Error => e
+        fail_iteration(state.id, "commit failed: #{e.message}")
+      rescue Errno::ENOENT => e
+        # A worktree removed underneath the run is where the loop stops, not an
+        # exception for the caller to translate.
+        fail_iteration(state.id, "worktree is missing: #{e.message}", reason: :worktree_missing)
+      end
+
+      # The runner may commit its own work; then the sha it reported is the one.
+      commit = record[:commit] || ours
+      # Measured between two reads of one total, so a file that went away mid
+      # iteration cannot make the split negative.
+      worker = [ tokens_of(state.id) - before, 0 ].max
+
+      verdict = ask_verifier(state, iteration, text, commit, diff)
+      verifier = [ tokens_of(state.id) - before - worker, 0 ].max
+
+      @store.update(state.id) do |s|
+        s.add_entry(entry(iteration_note(iteration, commit, worker, verifier, text)))
+      end
+      fail_iteration(state.id, "verifier failed: #{verdict[:error]}") if verdict[:error]
+      @store.update(state.id) { |s| s.add_entry(entry("verifier: #{verdict[:reason]}")) }
+
+      {
+        verdict: verdict[:verdict], reason: verdict[:reason], commit: commit,
+        produced: produced(record[:commit], ours, record[:progress])
+      }
+    end
+
+    # The second and last look at the status, taken when the next iteration is
+    # already chosen but nothing has been spent on it yet. Nothing is written
+    # here: the store already says paused, and the run leaves the file exactly as
+    # the user set it. A pause lands at an iteration boundary, never mid-turn --
+    # an iteration whose runner has already been called is left to finish and to
+    # be judged, and this check stops the loop before another one is paid for.
+    def check_still_active!(id)
+      state = @store.load(id) or raise Failed.new("loop disappeared", stop_reason: :missing)
+      return if active?(state)
+
+      raise Failed.new("loop is #{state.status}", stop_reason: stop_reason_for(state.status))
+    end
+
+    def ensure_worktree(id)
+      return if @worktree.exists?(id)
+
+      dir = @worktree.create(id: id)
+      branch = @worktree.branch(id)
+      @store.update(id) do |s|
+        s.worktree = dir
+        s.branch = branch
+      end
+    end
+
+    # The subject comes from the report as written: the flattened text is what
+    # the log and the verifier read, not what git is asked to record.
+    def commit_iteration(id, report)
+      return nil unless @worktree.changed?(id)
+
+      @worktree.commit(id, message: subject(report))
+    end
+
+    # The file's cap unless the caller named one for this run.
+    def budget_for(state) = @max_tokens || state.max_tokens.to_i
+
+    def over_budget?(state) = state.tokens.to_i >= budget_for(state)
+
+    def diff_of(id) = @worktree.diff_stat(id)
+
+    def runner_context(state, iteration)
+      {
+        id: state.id,
+        iteration: iteration,
+        goal: state.goal,
+        done_criteria: state.done_criteria,
+        worktree: state.worktree,
+        log: state.log.first(LOG_WINDOW).map(&:text)
+      }
+    end
+
+    def verifier_context(state, iteration, text, commit, diff)
+      runner_context(state, iteration).merge(text: text, commit: commit, diff_stat: diff)
+    end
+
+    # Both callables return plain hashes and may fail in three ways: raise,
+    # answer with an :error, or answer something that is not a hash at all. All
+    # three end the same way, with the reason on disk instead of a stack trace
+    # in a terminal nobody is watching. What the runner produced is read from
+    # its own report: a clean worktree is not evidence of anything, because the
+    # runner may have committed what it did.
+    def call_runner(context)
+      record = @runner.call(context)
+      return { error: "runner returned #{record.class}" } unless record.is_a?(Hash)
+
+      tokens = (record[:tokens] || record["tokens"]).to_i
+      error = record[:error] || record["error"]
+      return { error: error.to_s, tokens: tokens } if error
+
+      { text: (record[:text] || record["text"]).to_s, tokens: tokens,
+        commit: sha_of(record), progress: progress_of(record) }
+    rescue StandardError => e
+      { error: "#{e.class}: #{e.message}", tokens: 0 }
+    end
+
+    def sha_of(record) = (record[:commit] || record["commit"]).to_s.strip.then { |sha| sha.empty? ? nil : sha }
+
+    # nil means the runner said nothing about progress, which is not the same
+    # as saying there was none: only an explicit false overrides its commits.
+    def progress_of(record)
+      value = record[:progress].nil? ? record["progress"] : record[:progress]
+      value.nil? ? nil : value != false
+    end
+
+    def ask_verifier(state, iteration, text, commit, diff)
+      record = @verifier.call(verifier_context(state, iteration, text, commit, diff))
+      return { error: "verifier returned #{record.class}" } unless record.is_a?(Hash)
+
+      verdict = verdict_of(record[:verdict] || record["verdict"])
+      return { error: "unknown verdict #{record[:verdict].inspect}" } if verdict.nil?
+
+      reason = (record[:reason] || record["reason"]).to_s.strip
+      { verdict: verdict, reason: reason.empty? ? "no reason given" : reason }
+    rescue StandardError => e
+      { error: "#{e.class}: #{e.message}" }
+    end
+
+    def verdict_of(value) = VERDICTS[value.to_s]
+
+    # The key that decides whether the verifier said the same thing again.
+    #
+    # The raw sentence cannot be compared. A verifier reports what it just
+    # looked at -- "case notes/04.md has 7 entries" -- so a loop that keeps
+    # producing work while the criteria never pass hands back a different string
+    # every iteration: same failure, different file, different count. Compared
+    # byte for byte, that loop looks like news each time and runs to the cap or
+    # the budget, and the one stop meant to catch it can never fire outside a
+    # fake verifier that repeats itself. Folding out the moving parts leaves the
+    # claim itself, so two refusals of one failure compare equal while "the
+    # tests do not compile" is still a different failure from "the config is
+    # missing". Only the comparison uses this; the reason the user reads stays
+    # the sentence the verifier wrote.
+    def reason_key(reason)
+      key = reason.to_s.downcase
+      key = key.gsub(/\b0x[0-9a-f]{4,}\b|\b[0-9a-f]{6,}\b/, REASON_PLACEHOLDER) # a hash, a sha, 0xdeadbeef
+      key = key.gsub(/\d+/, REASON_PLACEHOLDER)              # a count, a line, an offset
+      key = key.gsub(%r{\S*/\S*}, REASON_PLACEHOLDER)        # notes/05.md, src/lib/foo
+      key = key.gsub(REASON_FILE, REASON_PLACEHOLDER)        # a root foo.rb, foo.md
+      key.gsub(/\s+/, " ").strip[0, STUCK_REASON_CHARS].to_s
+    end
+
+    def fail_iteration(id, note, reason: :error)
+      # The counters are already charged, so nothing here touches them: this
+      # writes the status and the note, raising with the reason for #run.
+      @store.update(id) do |s|
+        s.status = "paused"
+        s.add_entry(entry(note))
+      end
+      raise Failed.new(note, stop_reason: reason)
+    end
+
+    # A status, and a note only when the stop has something of its own to say.
+    # `done` passes none: the verdict that ended the loop is already in the file,
+    # written once where every verdict is written, and saying it again here is
+    # how one verdict came to be logged twice.
+    def finish(id, status, note = nil)
+      @store.update(id) do |s|
+        s.status = status
+        s.add_entry(entry(note)) if note
+      end
+    end
+
+    # The cap settles where every other stop does, not in a caller that may or
+    # may not remember it: a file left saying `active` at it=2/2 is a loop that
+    # `list` shows as running forever and nothing will ever move. `paused` is
+    # the status, the same one a spent budget gets, because the repair is the
+    # same road -- raise the cap and resume -- and every reader of a status
+    # already knows what `paused` means. The reason stays :max_iterations: how
+    # the loop stopped and what the file says afterwards are two facts, and a
+    # status of its own would ripple into every badge and resume rule for none.
+    def stop_at_the_cap(state)
+      finish(state.id, "paused",
+             "iteration cap reached at #{state.max_iterations} iterations; " \
+             "raise max_iterations before resuming")
+      stopped(state.id, :max_iterations, "reached #{state.max_iterations} iterations")
+    end
+
+    # The one write that must not be lost: the count and the tokens land before
+    # the commit and before the verdict, so a pause or a crash costs the
+    # iteration in flight and not the budget already spent.
+    #
+    # `update`, never `save`: the state this iteration read at the top of the
+    # loop is stale by the time the runner answers, and #save merges a stale
+    # object by diffing its facts against the ones it was read with. `tokens`
+    # would differ, so #save writes that object's absolute total and erases
+    # whatever the verifier charged while the iteration was in flight. #update
+    # instead re-reads the file under the exclusive lock and adds to what is
+    # there, so this charge and a verifier's -- from this process or another --
+    # both survive, counted once each.
+    def charge(id, iteration, tokens)
+      @store.update(id) do |s|
+        s.iterations = iteration
+        s.tokens = s.tokens.to_i + tokens
+      end
+    end
+
+    def entry(text) = LoopStore::Entry.new(at: Time.now, text: text)
+
+    # The one entry an iteration gets: what it did, the commit it stands on when
+    # there is one, and what each side of the turn cost.
+    #
+    # The part after the colon is the commit subject a runner made itself, so
+    # `git log` on the loop's branch and this file read as the same history in
+    # the same order. The sha cannot be in the subject of the commit it names,
+    # which is why the parenthetical sits between the number and the text rather
+    # than being part of the subject git records.
+    def iteration_note(iteration, commit, worker, verifier, text)
+      facts = []
+      facts << "sha #{commit[0, 7]}" if commit
+      facts << "worker #{kilo(worker)}"
+      facts << "verifier #{kilo(verifier)}"
+      "iteration #{iteration} (#{facts.join(', ')}): #{text}"
+    end
+
+    # Tokens as a reader adds them up: a thousand at a time, because the exact
+    # figure is in the frontmatter and a log line is history, not an invoice.
+    def kilo(tokens)
+      count = tokens.to_i
+      count < 1_000 ? count.to_s : "#{(count / 1_000.0).round}k"
+    end
+
+    # What a step of the iteration cost, from the one counter the budget is
+    # checked against: read either side of the call, the difference is what it
+    # spent no matter which side charged it.
+    def tokens_of(id)
+      state = @store.load(id)
+      state ? state.tokens.to_i : 0
+    end
+
+    # A commit subject is one line, taken from the report's own first line and
+    # capped so a runaway first line cannot become the whole history. The
+    # report is not flattened first: a second line belongs in the log entry,
+    # never in a subject that would then carry a newline into git.
+    def subject(report)
+      line = report.to_s.each_line.first.to_s.strip[0, COMMIT_SUBJECT_CHARS].to_s.strip
+      line.empty? ? "loop iteration" : line
+    end
+
+    # One implementation, shared with the store: both shape a note into one line.
+    def one_line(text) = LoopStore.one_line(text)
+
+    # What the iteration produced, from what the runner reported and from the
+    # commit made out of what it left behind -- never from the worktree's dirty
+    # state: an agent that commits its own work leaves the worktree clean, and a
+    # dirty check would call that a stall on the iteration that did the most.
+    # `progress: false` overrides both; `progress: true` without a commit is
+    # work the runner cannot name but did do.
+    def produced(reported_commit, commit, progress)
+      return nil if progress == false
+
+      reported_commit || commit || (Object.new if progress)
+    end
+
+    # The result reads its counters from the store: a resumed run reports the
+    # loop's total rather than a count of its own.
+    def stopped(id, reason, message)
+      state = @store.load(id)
+      result(state, reason, state ? iterations_of(state) : 0, message)
+    end
+
+    def iterations_of(state) = state.iterations.to_i
+
+    # A paused loop is resumable whatever paused it -- the user, or the run
+    # itself at the cap -- and anything else is finished.
+    def stop_reason_for(status) = status.to_s == "paused" ? :paused : :not_active
+
+    def active?(state) = state.status.to_s == "active"
+
+    def result(state, stop_reason, iterations_run, message)
+      Result.new(state: state, stop_reason: stop_reason, iterations_run: iterations_run, message: message)
+    end
+  end
+end

@@ -243,7 +243,7 @@ Scheduled jobs and explicitly requested announcements can wake the device throug
 
 ## Tools
 
-Rubot ships with ten built-in tools:
+Rubot ships with eleven built-in tools:
 
 | Tool | Purpose |
 |------|---------|
@@ -257,6 +257,7 @@ Rubot ships with ten built-in tools:
 | `notify` | Ask for the end of the current turn to be announced on the user's devices |
 | `instagram` | Connect an Instagram Business/Creator account and schedule feed posts |
 | `delegate` | Hand a self-contained task to another persona (when delegation is enabled) |
+| `loop` | Work a goal through repeated iterations in a git worktree of its own |
 
 ## Sub-agent Delegation
 
@@ -274,6 +275,14 @@ delegation:
 The lead calls `delegate` with the target persona's slug and a complete task. Every channel shows live progress: a count of running sub agents and what each is doing (the web working band, the TUI working badge, and the Telegram status card). The web and TUI also keep a row per delegation in the transcript. Runs are recorded in the `subagent_runs` table of the session archive; a sub agent's own conversation is kept out of the sidebar.
 
 New scripts and snippets are written in Ruby (`ruby -e '...'` or a `.rb` file). Existing Python in a repo or skill is run as-is. To add a tool, subclass `Rubot::Tool` in `lib/rubot/tools/` and register it in `registry.rb`.
+
+## Loops
+
+A loop is a goal the agent works at over several attempts. `loop` creates one from a goal, a checkable definition of done, and the path of a git repository. Each loop then gets a worktree and a branch of its own, so the checkout you are working in never moves, and one commit lands per iteration. Nothing is pushed: publishing the work is your decision, taken from your own checkout once you have read what the loop did.
+
+Operations are `start`, `status`, `list`, `pause`, `resume` and `stop`. State lives in one markdown file per loop at `<workspace>/loops/<id>.md` (YAML frontmatter for the facts, a newest-first log below), so `cat` shows what a loop is doing and an editor can repair it. The iterations stop on the iteration cap, the token budget, a verifier that says done, a stall (no new work twice in a row) or a verifier stuck on the same reason; `status` is where you read which one happened.
+
+A loop stops at 5 iterations or 500,000 tokens by default, whichever comes first; `resume` with `max_iterations` raises the cap of a loop that stopped at it. Both brakes are real: a real iteration costs about 85,000 tokens of worker and verifier together, so five of them fit under the budget. Each iteration writes two log entries: the work, with the commit sha and what the worker and the verifier each spent, and the verdict on it.
 
 ## Skills
 

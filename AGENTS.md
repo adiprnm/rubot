@@ -102,6 +102,30 @@ bundle exec rubocop                # lint (RuboCop Rails Omakase, Rails cops off
   restricted tool set (no `delegate`, `subagent_results`, `notify`, `cron`,
   `instagram`) and an audit row in `subagent_runs` written through
   `StoreClient`.
+- **Loops** (`loop_run.rb`, `loop_runner.rb`) are the one kind of work that
+  outlives the turn that started it. A loop is a goal with a checkable
+  definition of done, worked through several iterations in a git worktree of
+  its own on branch `loop/<id>`, so the user's checkout is never touched and an
+  iteration that turns out to be wrong is one `reset` away. The state of a loop
+  lives in one markdown file per loop under the install root's `loops`
+  directory, and that file is the only source of truth: iterations, tokens
+  spent, the budget itself, and the log an iteration reads. **LoopRun** decides
+  whether to go on and stops only for the reasons in `STOP_REASONS` (verifier
+  satisfied, cap, budget, stall, verifier stuck, paused, error); **LoopRunner**
+  is the single place that reaches an agent, through an injected
+  `session_runner` lambda, so a whole loop is driven in tests by a proc with no
+  model and no Ractor. One commit per iteration, never a push. An iteration
+  writes exactly two log entries -- the work (iteration number, commit sha, and
+  what the worker and the verifier each spent) and the verdict -- and the token
+  split is read off the store's one total rather than counted again. The cap is
+  5 by default and the budget 500,000 tokens, chosen so a real iteration (~85k)
+  lets the cap fire first instead of the budget. A loop that ends
+  `done` has its worktree removed and keeps its branch, because the branch is
+  the record; one that stops any other way keeps its worktree, because the next
+  resume continues in it. A loop that stopped as stalled or stuck is reported,
+  not restarted blindly, and `loop` is in `SUBAGENT_FORBIDDEN_TOOLS`: a sub
+  agent that opened a loop would hand back an answer while the work it began
+  kept spending tokens.
 - Channels are split by domain, and a component is a module included into the
   channel, not an object the channel owns: `Telegram` mixes in transport,
   attachments, status, commands, messaging, scheduling, persona and the wizard,
@@ -141,6 +165,10 @@ lib/rubot/
   store/              row groups (search, settings, push subscriptions,
                       delegated runs) + migrations/
   memory*.rb          MEMORY.md, extractor, persona memory
+  loop_store.rb       one markdown state file per loop: budget, counters, log
+  loop_worktree.rb    a git worktree and branch per loop, commit per iteration
+  loop_run.rb         the iteration cycle and the reasons it stops
+  loop_runner.rb      the one place a loop reaches an agent, via a lambda
   soul.rb, agents_file.rb, skill*.rb   identity, rules, skills
   formatting.rb       duration/text shaping shared by every channel
   persona_store.rb    persona registry; PersonaStore.from_config builds one

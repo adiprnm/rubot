@@ -602,6 +602,38 @@ module Rubot
     end
   end
 
+  # A fired job lands on whichever channel wrote it, and a loop_tick job can
+  # only be honoured where a loop can iterate. Telegram has no session pool and
+  # no worktree, so it says so in one line instead of crashing the delivery.
+  class TestTelegramCronFire < Minitest::Test
+    def setup
+      @tmpdir = Dir.mktmpdir
+      @config = isolated_config(@tmpdir, name: "test_cron_fire")
+      @agent = Rubot::Agent.new(config: @config, session_id: "test_cron_fire",
+                                tools: Rubot::Tools::Registry.new)
+      @tg = StubbedTelegram.new(
+        agent: @agent,
+        channel_config: { "token" => "fake", "typing_indicator" => false }
+      )
+    end
+
+    def teardown
+      FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+    end
+
+    def test_a_loop_tick_job_says_where_the_loop_can_be_resumed
+      @tg.send(:cron_fire_callback,
+               mode: "loop_tick", job_id: "job1", loop_id: "impl-1", target_chat_id: 42,
+               result: { success: true, loop_id: "impl-1" })
+
+      assert_equal 1, @tg.sent.size, "one short message, not a silent drop"
+      chat_id, text, = @tg.sent.first
+      assert_equal 42, chat_id, "it answers in the chat that asked for the job"
+      assert_includes text, "impl-1", "the reader has to know which loop it was"
+      assert_includes text, "web channel"
+    end
+  end
+
   # A second message while a turn is running steers that turn (delivered
   # between rounds) instead of queueing behind it.
   class TestTelegramSteering < Minitest::Test

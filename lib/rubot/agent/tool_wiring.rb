@@ -78,10 +78,14 @@ module Rubot
       # The delegate tool needs a handle back to this agent to do the spawning.
       # Set at the start of every turn, like the persona stamp, because the tool
       # registry is shared between agents in the same Ractor.
+      #
+      # The loop tool needs the same handle for the same reason: in actor mode
+      # the channel holds a proxy and cannot stamp a runner on it, so the tool
+      # asks the agent, and the agent hands the request to the channel.
       def inject_tool_delegate
         return unless @tools.respond_to?(:all)
 
-        %w[delegate subagent_results].each do |name|
+        %w[delegate subagent_results loop].each do |name|
           tool = @tools.get(name)
           tool.agent = self if tool && tool.respond_to?(:agent=)
         end

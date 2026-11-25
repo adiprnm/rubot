@@ -178,6 +178,25 @@ module Rubot
       assert_equal "Memori", ToolCaption.caption("memory", {})
     end
 
+    # Starting a loop is the one call whose argument matters to the reader: the
+    # worktree and the branch follow from the goal, so the goal is the sentence.
+    # The rest of the tool is one verb each, and an operation nobody recognises
+    # must still read as a sentence rather than as the bare word "start".
+    def test_a_loop_says_what_it_is_started_for
+      assert_equal "Memulai loop: stop the paging jump",
+                   ToolCaption.caption("loop", { "operation" => "start", "goal" => "stop the paging jump" })
+      assert_equal "Memulai loop baru", ToolCaption.caption("loop", { "operation" => "start" })
+      long = ToolCaption.caption("loop", { "operation" => "start",
+                                           "goal" => "one long goal cut before it fills the row " + ("x" * 80) })
+      assert long.start_with?("Memulai loop: one long goal"), long
+      assert long.end_with?("…"), "a goal is cut, not spilled into the row: #{long.inspect}"
+      assert_operator long.length, :<=, "Memulai loop: ".length + Rubot::ToolCaption::PATTERN_CHARS
+      assert_equal "Melihat daftar loop", ToolCaption.caption("loop", { "operation" => "list" })
+      assert_equal "Membatalkan iterasi terakhir", ToolCaption.caption("loop", { "operation" => "undo" })
+      assert_equal "Loop: detach", ToolCaption.caption("loop", { "operation" => "detach" })
+      assert_equal "Loop", ToolCaption.caption("loop", {})
+    end
+
     def test_an_unknown_tool_keeps_the_arguments_it_arrived_with
       assert_equal "list", ToolCaption.caption("todo_tool", { "action" => "list" })
       assert_equal "mystery", ToolCaption.caption("mystery", {})

@@ -1185,6 +1185,113 @@ module Rubot
         refute_empty pushes.first[:body].to_s.strip, "an empty notification is a notification nobody understands"
       end
 
+      # --- a job that wakes a loop ----------------------------------------
+
+      # A loop_tick job produces no turn of its own: it hands an existing loop
+      # another chance, and the loop's own file says whether it can take one.
+      # The runner is a fake, so nothing here opens a worktree or reaches a
+      # model.
+      def test_a_loop_tick_fire_resumes_the_loop_and_tells_the_devices
+        channel, base, loop_id = channel_with_a_loop(status: "paused")
+        pushes = []
+        runner = fire_loop_tick(channel, base, loop_id, pushes: pushes,
+                                answer: "OK: loop #{loop_id} stopped: budget")
+
+        assert_equal [ loop_id ], runner.resumed, "the loop is woken once, with the id the job named"
+        assert_equal 1, pushes.size, "nobody has the page open, so where it got has to reach a phone"
+        assert_equal "implementer", pushes.first[:slug]
+        assert_equal "rubot · Implementer", pushes.first[:title],
+                     "the persona signs it, the way it signs a fired turn"
+        assert_equal "loop #{loop_id} stopped: budget", pushes.first[:body],
+                     "the verdict keeps the runner's words and loses the tool's prefix"
+        assert_match(%r{\A/s/web_implementer}, pushes.first[:url])
+      end
+
+      # A job whose loop was deleted must not announce a run that never
+      # happened: one warning names the id, and nothing is pushed.
+      def test_a_loop_tick_fire_for_a_loop_that_is_gone_warns_and_pushes_nothing
+        channel, base, = channel_with_a_loop
+        pushes = []
+        runner = nil
+        _out, err = capture_io do
+          runner = fire_loop_tick(channel, base, "ghost-1", pushes: pushes)
+        end
+
+        assert_empty runner.resumed, "there is nothing to wake"
+        assert_empty pushes
+        assert_includes err, "ghost-1", "the warning names the loop that could not be resumed"
+      end
+
+      # A finished loop is not re-armed by a line in a job file: its criteria
+      # were answered, and a schedule cannot answer them again.
+      def test_a_loop_tick_fire_for_a_finished_loop_warns_and_pushes_nothing
+        channel, base, loop_id = channel_with_a_loop(status: "done")
+        pushes = []
+        runner = nil
+        _out, err = capture_io do
+          runner = fire_loop_tick(channel, base, loop_id, pushes: pushes)
+        end
+
+        assert_empty runner.resumed
+        assert_empty pushes
+        assert_includes err, loop_id
+      end
+
+      # A job that outlived its persona still has somewhere to land, exactly as
+      # a fired turn does.
+      def test_a_loop_tick_fire_with_an_unknown_persona_falls_back_to_the_default
+        channel, base, loop_id = channel_with_a_loop
+        pushes = []
+        fire_loop_tick(channel, base, loop_id, pushes: pushes, slug: "ghost")
+
+        assert_equal channel.send(:default_slug), pushes.first[:slug]
+        assert_match(%r{\A/s/#{channel.session_id}}, pushes.first[:url])
+      end
+
+      # A runner with nothing to say leaves the job's own description, the same
+      # fallback the other modes get.
+      def test_a_loop_tick_notification_falls_back_to_the_jobs_description
+        channel, base, loop_id = channel_with_a_loop
+        pushes = []
+        fire_loop_tick(channel, base, loop_id, pushes: pushes, answer: "", description: "Loop malam")
+
+        assert_equal "Loop malam", pushes.first[:body]
+      end
+
+      # A loop is where the runner keeps it: the store sits under the workspace
+      # the conversation is bound to, so a fire finds the file production does.
+      def channel_with_a_loop(status: "paused")
+        channel = channel_with_sessions(personas: { "implementer" => { "name" => "Implementer" } })
+        base = channel.send(:workspace_for_session, "web_implementer")
+        store = Rubot::LoopStore.new(dir: File.join(base, "loops"))
+        loop = store.create(goal: "Ship the parser", done_criteria: "the suite passes", repo: base)
+        store.update(loop.id) { |state| state.status = status }
+        [ channel, base, loop.id ]
+      end
+
+      # One fired loop_tick job with the session, the runner and the notifier
+      # stubbed, which leaves the branch under test: the id it resumes and what
+      # it tells the devices.
+      def fire_loop_tick(channel, base, loop_id, pushes:, slug: "implementer",
+                         answer: "OK: loop resumed", description: "Loop malam")
+        runner = FakeCronLoopRunner.new(base: base, answer: answer)
+        tool = Rubot::Tools::Loop.new
+        tool.loop_runner = runner
+        agent = FakeToolAgent.new(tool)
+        channel.define_singleton_method(:prepare_delivery) { |_sid| nil }
+        channel.define_singleton_method(:session_for) { |_sid| agent }
+        channel.define_singleton_method(:notify_push) do |persona, **options|
+          pushes << { slug: persona }.merge(options)
+          { "queued" => 1 }
+        end
+
+        channel.send(:handle_cron_fire,
+                     mode: "loop_tick", job_id: "job1", slug: slug, loop_id: loop_id,
+                     description: description, result: { success: true, loop_id: loop_id })
+
+        runner
+      end
+
       def test_each_session_row_carries_a_way_to_delete_it
         channel = channel_with_sessions(
           personas: { "kanyaah" => { "name" => "Kanyaah" } },

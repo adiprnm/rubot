@@ -279,6 +279,7 @@ module Rubot
       def prepare_delivery(sid)
         bind_file_delivery(sid)
         bind_cron_delivery(sid)
+        bind_loop_runner(sid)
       end
 
       # The sidebar and the header after a turn. A conversation is named by its

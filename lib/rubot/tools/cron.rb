@@ -91,6 +91,12 @@ module Rubot
             "slug" => {
               "type" => "string",
               "description" => "Persona the job belongs to (set by the channel)"
+            },
+            "loop_id" => {
+              "type" => "string",
+              "description" => "Id of an existing loop this job resumes instead of running " \
+                               "an agent turn. The loop keeps its own budget and stop conditions; " \
+                               "the schedule only decides when it gets another chance."
             }
           },
           "required" => [ "operation" ]

@@ -69,6 +69,17 @@ module Rubot
       "disable" => "Menonaktifkan satu tugas"
     }.freeze
 
+    # `start` is missing on purpose: it is the one operation with something to
+    # say about the call (see `loop_caption`).
+    LOOP_VERBS = {
+      "status" => "Melihat keadaan satu loop",
+      "list" => "Melihat daftar loop",
+      "pause" => "Menghentikan loop sementara",
+      "resume" => "Melanjutkan loop yang berhenti",
+      "stop" => "Menghentikan loop",
+      "undo" => "Membatalkan iterasi terakhir"
+    }.freeze
+
     INSTAGRAM_VERBS = {
       "connect" => "Menyiapkan sambungan Instagram",
       "status" => "Memeriksa akun Instagram",
@@ -94,6 +105,7 @@ module Rubot
       when "send_files" then send_caption(args)
       when "memory" then operation_caption("Memori", MEMORY_VERBS, args)
       when "cron" then operation_caption("Tugas terjadwal", CRON_VERBS, args)
+      when "loop" then loop_caption(args)
       when "instagram" then INSTAGRAM_VERBS.fetch(args["operation"].to_s, "Mengurus Instagram")
       when "notify" then "Bersiap memberi kabar begitu selesai"
       else unknown_caption(name, args)
@@ -404,6 +416,21 @@ module Rubot
       return "Mengirim satu berkas" if count == 1
 
       "Mengirim #{count} berkas"
+    end
+
+    # A loop is started for a goal, and the goal is the only part of that call a
+    # reader cares about: the worktree, the branch and the iteration cap are all
+    # consequences of it. Everything else the tool does is one verb (see
+    # LOOP_VERBS), and an operation this map does not know still reads as a
+    # sentence rather than as the word the model happened to send.
+    def self.loop_caption(args)
+      operation = args["operation"].to_s
+      return operation_caption("Loop", LOOP_VERBS, args) unless operation == "start"
+
+      goal = args["goal"].to_s.gsub(/\s+/, " ").strip
+      return "Memulai loop baru" if goal.empty?
+
+      "Memulai loop: #{clip(goal, PATTERN_CHARS)}"
     end
 
     def self.operation_caption(prefix, verbs, args)

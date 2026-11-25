@@ -160,6 +160,11 @@ module Rubot
           # behind on purpose: the run gets a session actor of its own, so the
           # reader can send the next prompt while it works.
           on_delegate: ->(request) { start_delegate(turn.session_id, request) },
+          # A loop the channel is expected to work, for the same reason and in
+          # the same shape: the tool runs inside the session Ractor, where a
+          # thread, a pool and a lambda cannot be handed to it, so the request
+          # travels out as data and the run happens on this side.
+          on_loop: ->(request) { handle_loop_request(turn.session_id, request) },
           on_compaction: lambda do |result|
             turn.compaction(result)
             compacted = true

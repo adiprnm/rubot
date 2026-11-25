@@ -65,5 +65,24 @@ module Rubot
 
       "#{text[0, max_len]}…"
     end
+
+    # Everything from the first tool-call marker on: some models write their
+    # native call syntax into the prose when they are given no tools to call.
+    # A DeepSeek template spells it `<｜DSML｜ invoke name="shell_exec">`, and a
+    # report turn that wanted to look at a worktree emitted a whole call that
+    # way — the provider had nothing to parse it into, so it landed as the
+    # answer and the reader was shown markup. A turn with no tools cannot make a
+    # call, so the marker is a call, not prose: what came before it is the answer.
+    TOOL_MARKUP = /<[^<>\n]{0,8}\uFF5CDSML\uFF5C/
+    # The other spelling of the same thing, for a template that names it plainly.
+    TOOL_MARKUP_TAG = /<[^<>\n]{0,8}\uFF5Ctool[^<>]*\uFF5C/i
+
+    def without_tool_markup(text)
+      value = text.to_s
+      cut = [ value.match(TOOL_MARKUP), value.match(TOOL_MARKUP_TAG) ].compact.min_by { |match| match.begin(0) }
+      return value unless cut
+
+      value[0, cut.begin(0)].rstrip
+    end
   end
 end

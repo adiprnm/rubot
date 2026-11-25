@@ -48,7 +48,15 @@ module Rubot
 
     def add_job(scheduler, arguments, delivery_context)
       message = arguments["message"]
-      return "ERROR: 'message' is required for add operation" unless message && !message.strip.empty?
+      loop_id = arguments["loop_id"].to_s.strip
+      loop_id = nil if loop_id.empty?
+
+      # A loop_tick job resumes a loop that already says what it does, so it
+      # needs a schedule and an id, not a prompt. Every other mode still has to
+      # say what to run.
+      if loop_id.nil? && (message.nil? || message.strip.empty?)
+        return "ERROR: 'message' is required for add operation"
+      end
 
       id = scheduler.add(
         message: message,
@@ -62,7 +70,8 @@ module Rubot
         workspace: arguments["workspace"] || context_value(delivery_context, :workspace),
         channel: context_value(delivery_context, :channel),
         slug: arguments["slug"] || context_value(delivery_context, :slug),
-        new_session: truthy(arguments["new_session"])
+        new_session: truthy(arguments["new_session"]),
+        loop_id: loop_id
       )
 
       job = scheduler.get(id)
@@ -75,9 +84,18 @@ module Rubot
       end
 
       <<~RESULT.strip
-        ✅ `#{id}` | #{schedule_desc} | #{job['mode']} | #{job['command'] ? "cmd: #{job['command']}" : message}
+        ✅ `#{id}` | #{schedule_desc} | #{job['mode']} | #{job_label(job, message)}
         Use `/cron show #{id}` to see details, or `operation=remove job_id=#{id}` to delete.
       RESULT
+    end
+
+    # What the job runs, in one phrase: a command, the loop it wakes, or the
+    # message it sends.
+    def job_label(job, message = nil)
+      return "cmd: #{job['command']}" if job["command"]
+      return "loop #{job['loop_id']}" if job["loop_id"]
+
+      job["message"] || message
     end
 
     def list_jobs(scheduler)
@@ -95,6 +113,7 @@ module Rubot
           job["cron_expr"]
         end
         msg = job["command"] || job["message"]
+        msg ||= "loop #{job['loop_id']}" if job["loop_id"]
         lines << "#{icon} `#{job['id']}` | #{schedule} | #{job['mode']} | #{msg}"
       end
       lines.join("\n")
@@ -126,7 +145,7 @@ module Rubot
         Mode: #{job['mode']}
         Schedule: #{schedule_desc}
         Next run: #{job['next_run'] || 'N/A'}
-        #{job['command'] ? "Command: #{job['command']}" : "Message: #{job['message']}"}
+        #{job['command'] ? "Command: #{job['command']}" : (job['loop_id'] ? "Loop: #{job['loop_id']}" : "Message: #{job['message']}")}
         Description: #{job['description']}
         Runs: #{job['run_count']}
         Deliver to: #{delivery_desc(job)}

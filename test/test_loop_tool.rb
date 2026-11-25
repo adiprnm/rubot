@@ -1,0 +1,480 @@
+# frozen_string_literal: true
+
+require_relative "test_helper"
+
+# The tool is a thin adapter: this file drives it against a real state file on
+# disk and a fake runner that records the calls it received, so a loop can be
+# created, listed, paused and resumed with no model, no Ractor and no network.
+class TestLoopTool < Minitest::Test
+  # Stands in for the channel handle the agent would inject as loop_runner. The
+  # block, when a test passes one, runs at the moment the runner is told to
+  # resume: it is how a test sees what the file said by then.
+  class FakeRunner
+    attr_reader :calls
+
+    def initialize(&on_resume)
+      @calls = []
+      @on_resume = on_resume
+    end
+
+    def start(id) = @calls << [ :start, id ]
+    def abort(id) = @calls << [ :abort, id ]
+    def resume(id)
+      @on_resume&.call(id)
+      @calls << [ :resume, id ]
+    end
+  end
+
+  # Stands in for the agent a turn stamps on the tool. It records what it was
+  # asked and answers with a sentence, like Agent#request_loop does.
+  class FakeAgent
+    attr_reader :requests
+
+    def initialize(answer = "Loop started in the background. A status call shows where it got.")
+      @answer = answer
+      @requests = []
+    end
+
+    def request_loop(**request)
+      @requests << request
+      @answer
+    end
+  end
+
+  def setup
+    @tmp = Dir.mktmpdir("rubot-loop-tool")
+    @root = File.join(@tmp, "root")
+    @store = Rubot::LoopStore.new(dir: File.join(@root, "loops"))
+    @repo = File.join(@tmp, "repo")
+    FileUtils.mkdir_p(@repo)
+    @runner = FakeRunner.new
+    @tool = Rubot::Tools::Loop.new(store_root: @root)
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmp) if File.exist?(@tmp)
+  end
+
+  # -- helpers ---------------------------------------------------------------
+
+  def start_loop(**overrides)
+    @tool.execute(
+      { "operation" => "start", "goal" => "make the demo honest",
+        "done_criteria" => "the demo test is green", "repo" => @repo }.merge(overrides)
+    )
+  end
+
+  def create(**overrides)
+    @store.create(
+      **{ goal: "make the demo honest", done_criteria: "the demo test is green", repo: @repo }.merge(overrides)
+    )
+  end
+
+  def assert_error(result)
+    assert result.start_with?("ERROR:"), result
+  end
+
+  def assert_ok(result)
+    assert result.start_with?("OK:"), result
+  end
+
+  # The state a run now leaves behind when it reaches its cap: paused, with the
+  # iterations already at the cap, which is the state a resume has to get out of.
+  def cap_stopped(max_iterations: 2)
+    state = create(max_iterations: max_iterations)
+    @store.update(state.id) do |loop|
+      loop.status = "paused"
+      loop.iterations = max_iterations
+    end
+    state
+  end
+
+  # -- start -----------------------------------------------------------------
+
+  def test_start_without_a_runner_records_the_loop_and_says_no_runner_is_attached
+    result = start_loop
+
+    assert_ok result
+    assert_includes result, "no runner is attached"
+
+    id = result[/(\d{8}-\d{6}-[0-9a-f]+)/, 1]
+    refute_nil id, result
+    state = @store.load(id)
+    refute_nil state
+    assert_equal "active", state.status
+    assert_equal 0, state.iterations
+    assert_equal @repo, state.repo
+  end
+
+  def test_start_with_a_runner_hands_the_loop_to_it
+    @tool.loop_runner = @runner
+
+    result = start_loop
+
+    assert_ok result
+    id = @store.ids.first
+    assert_equal [ [ :start, id ] ], @runner.calls
+  end
+
+  def test_start_rejects_a_missing_goal
+    result = start_loop("goal" => nil)
+
+    assert_error result
+    assert_includes result, "goal"
+    assert_empty @store.ids
+  end
+
+  def test_start_rejects_missing_done_criteria
+    result = start_loop("done_criteria" => "")
+
+    assert_error result
+    assert_includes result, "done_criteria"
+    assert_empty @store.ids
+  end
+
+  def test_start_rejects_a_missing_repo
+    result = start_loop("repo" => nil)
+
+    assert_error result
+    assert_includes result, "repo"
+    assert_empty @store.ids
+  end
+
+  def test_start_rejects_a_repo_path_that_does_not_exist
+    result = start_loop("repo" => File.join(@tmp, "missing"))
+
+    assert_error result
+    assert_includes result, "not an existing directory"
+    assert_empty @store.ids
+  end
+
+  # -- list ------------------------------------------------------------------
+
+  def test_list_with_no_loops
+    assert_equal "No loops.", @tool.execute("operation" => "list")
+  end
+
+  def test_list_shows_every_loop_with_its_iterations_and_status
+    first = create
+    second = create(goal: "second goal")
+    @store.update(second.id) do |loop|
+      loop.status = "paused"
+      loop.iterations = 3
+    end
+
+    lines = @tool.execute("operation" => "list").lines.map(&:chomp)
+
+    assert_equal 2, lines.size
+    line = lines.find { |candidate| candidate.start_with?(first.id) }
+    refute_nil line, lines.inspect
+    assert_includes line, "it=0/5"
+    assert_includes line, "active"
+
+    line = lines.find { |candidate| candidate.start_with?(second.id) }
+    refute_nil line, lines.inspect
+    assert_includes line, "it=3/5"
+    assert_includes line, "paused"
+  end
+
+  # The listing is where a reader meets the cap, and the loop was created here
+  # with no cap of its own: five is the default a loop actually gets.
+  def test_a_loop_started_without_a_cap_gets_five_iterations
+    @tool.loop_runner = @runner
+
+    result = start_loop
+
+    assert_ok result
+    assert_equal 5, @store.load(@store.ids.first).max_iterations
+    assert_includes @tool.execute("operation" => "list"), "it=0/5"
+  end
+
+  # Two places state the number -- the store a start falls back to and this
+  # tool's own constant -- and they may not drift apart: the cap the tool writes
+  # and the cap a loop gets without it are the same fact. Five, because a real
+  # iteration costs about 85k tokens and the 500k budget has to outlast the cap.
+  def test_the_tools_default_cap_is_the_stores_and_fits_the_budget
+    assert_equal 5, Rubot::Tools::Loop::DEFAULT_MAX_ITERATIONS
+    assert_equal Rubot::LoopStore::State::DEFAULT_MAX_ITERATIONS, Rubot::Tools::Loop::DEFAULT_MAX_ITERATIONS
+    assert_operator 85_112 * Rubot::Tools::Loop::DEFAULT_MAX_ITERATIONS, :<=,
+                    Rubot::LoopStore::State::DEFAULT_MAX_TOKENS,
+                    "five real iterations must fit under the budget, or the cap is decorative"
+  end
+
+  # -- status ----------------------------------------------------------------
+
+  def test_status_shows_the_goal_and_the_newest_entries_first
+    state = create
+    @store.append_log(state.id, "first try")
+    @store.append_log(state.id, "second try")
+
+    result = @tool.execute("operation" => "status", "id" => state.id)
+
+    assert_includes result, "make the demo honest"
+    assert_includes result, "the demo test is green"
+    assert_includes result, state.id
+    assert_operator result.index("second try"), :<, result.index("first try")
+  end
+
+  def test_status_caps_the_log_at_the_last_five_entries
+    state = create
+    7.times { |i| @store.append_log(state.id, "step #{i + 1}") }
+
+    result = @tool.execute("operation" => "status", "id" => state.id)
+
+    assert_includes result, "step 7"
+    assert_includes result, "step 6"
+    assert_includes result, "step 3"
+    refute_includes result, "step 2"
+    refute_includes result, "step 1"
+    refute_includes result, "loop started"
+  end
+
+  def test_status_on_a_missing_loop_is_an_error_and_does_not_raise
+    result = @tool.execute("operation" => "status", "id" => "20260101-000000-aaaa")
+
+    assert_equal "ERROR: no loop '20260101-000000-aaaa'", result
+  end
+
+  # A cap can only be raised through the numbers the reader can see, so the
+  # status has to carry it next to the iterations already spent.
+  def test_status_shows_the_cap_next_to_the_iterations
+    state = cap_stopped(max_iterations: 4)
+
+    result = @tool.execute("operation" => "status", "id" => state.id)
+
+    assert_includes result, "iterations: 4/4"
+    assert_includes result, "status: paused"
+  end
+
+  # -- pause / resume / stop -------------------------------------------------
+
+  def test_pause_pauses_an_active_loop_and_aborts_the_runner
+    state = create
+    @tool.loop_runner = @runner
+
+    result = @tool.execute("operation" => "pause", "id" => state.id)
+
+    assert_ok result
+    assert_equal "paused", @store.load(state.id).status
+    assert_equal [ [ :abort, state.id ] ], @runner.calls
+  end
+
+  def test_pause_on_a_done_loop_is_a_no_op_that_says_so
+    state = create
+    @store.update(state.id) { |loop| loop.status = "done" }
+    @tool.loop_runner = @runner
+
+    result = @tool.execute("operation" => "pause", "id" => state.id)
+
+    assert_ok result
+    assert_includes result, "done"
+    assert_equal "done", @store.load(state.id).status
+    assert_empty @runner.calls
+  end
+
+  def test_resume_reactivates_a_paused_loop_and_asks_the_runner_to_continue
+    state = create
+    @store.update(state.id) { |loop| loop.status = "paused" }
+    @tool.loop_runner = @runner
+
+    result = @tool.execute("operation" => "resume", "id" => state.id)
+
+    assert_ok result
+    assert_equal "active", @store.load(state.id).status
+    assert_equal [ [ :resume, state.id ] ], @runner.calls
+  end
+
+  def test_resume_on_a_done_loop_is_refused_and_leaves_it_done
+    state = create
+    @store.update(state.id) { |loop| loop.status = "done" }
+    @tool.loop_runner = @runner
+
+    result = @tool.execute("operation" => "resume", "id" => state.id)
+
+    assert_error result
+    assert_includes result, "done"
+    assert_equal "done", @store.load(state.id).status
+    assert_empty @runner.calls
+  end
+
+  # -- raising the cap on resume ---------------------------------------------
+
+  # A loop that stopped at its cap is paused, and the cap is the one fact that
+  # has to move for it to run again. The resume is where the user already is.
+  def test_resume_with_a_higher_max_iterations_raises_the_cap_before_continuing
+    state = cap_stopped(max_iterations: 2)
+    caps_at_resume = []
+    runner = FakeRunner.new { |id| caps_at_resume << @store.load(id).max_iterations }
+    @tool.loop_runner = runner
+
+    result = @tool.execute("operation" => "resume", "id" => state.id, "max_iterations" => 5)
+
+    assert_ok result
+    reread = @store.load(state.id)
+    assert_equal 5, reread.max_iterations
+    assert_equal "active", reread.status
+    assert_equal [ 5 ], caps_at_resume, "the run must see the raised cap before it is asked to continue"
+    assert_equal [ [ :resume, state.id ] ], runner.calls
+  end
+
+  def test_resume_refuses_a_cap_at_or_below_the_iterations_already_spent
+    state = cap_stopped(max_iterations: 2)
+    @tool.loop_runner = @runner
+
+    [ 2, 1, 0 ].each do |cap|
+      result = @tool.execute("operation" => "resume", "id" => state.id, "max_iterations" => cap)
+
+      assert_error result
+      assert_includes result, "must be above 2"
+      reread = @store.load(state.id)
+      assert_equal 2, reread.max_iterations, "a refused resume must leave the cap alone"
+      assert_equal "paused", reread.status, "and must not revive the loop"
+    end
+
+    assert_empty @runner.calls
+  end
+
+  def test_resume_refuses_a_cap_that_is_not_a_whole_number
+    state = cap_stopped(max_iterations: 2)
+    @tool.loop_runner = @runner
+
+    result = @tool.execute("operation" => "resume", "id" => state.id, "max_iterations" => "a few")
+
+    assert_error result
+    assert_includes result, "whole number"
+    reread = @store.load(state.id)
+    assert_equal 2, reread.max_iterations
+    assert_equal "paused", reread.status
+    assert_empty @runner.calls
+  end
+
+  # Allowed, and it must stay a resume of a capped loop: no cap is invented, so
+  # the next run stops on the same number instead of running unbounded.
+  def test_resume_without_a_cap_leaves_the_cap_where_it_was
+    state = cap_stopped(max_iterations: 2)
+    @tool.loop_runner = @runner
+
+    result = @tool.execute("operation" => "resume", "id" => state.id)
+
+    assert_ok result
+    assert_equal 2, @store.load(state.id).max_iterations, "a resume must not raise a cap nobody asked for"
+    assert_equal "active", @store.load(state.id).status
+    assert_equal [ [ :resume, state.id ] ], @runner.calls
+  end
+
+  # A loop already iterating is never started twice -- one worktree, one index,
+  # one iteration number -- but its cap is still a fact worth raising.
+  def test_resume_with_a_cap_on_an_active_loop_raises_it_without_starting_a_second_run
+    state = create(max_iterations: 2)
+    @store.update(state.id) { |loop| loop.iterations = 2 }
+    @tool.loop_runner = @runner
+
+    result = @tool.execute("operation" => "resume", "id" => state.id, "max_iterations" => 6)
+
+    assert_ok result
+    assert_includes result, "already active"
+    assert_equal 6, @store.load(state.id).max_iterations
+    assert_empty @runner.calls, "an already active loop must not get a second run"
+  end
+
+  def test_stop_pauses_the_loop_and_says_stopped
+    state = create
+    @tool.loop_runner = @runner
+
+    result = @tool.execute("operation" => "stop", "id" => state.id)
+
+    assert_ok result
+    assert_includes result, "stopped"
+    assert_equal "paused", @store.load(state.id).status
+    assert_equal [ [ :abort, state.id ] ], @runner.calls
+  end
+
+  # -- hand-off to the agent -------------------------------------------------
+
+  # In actor mode the channel holds a proxy, so no runner can be attached here.
+  # The agent is the way out, and its sentence is what the model reads.
+  def test_start_with_an_agent_and_no_runner_asks_the_agent
+    agent = FakeAgent.new
+    @tool.agent = agent
+
+    result = start_loop
+
+    assert_ok result
+    assert_includes result, "background"
+    assert_equal 1, agent.requests.size
+    assert_equal :start, agent.requests.first[:op]
+    assert_equal @store.ids.first, agent.requests.first[:id]
+  end
+
+  # A runner on this side iterates without crossing a Ractor, so a round trip
+  # through the agent would only be a second way to start the same loop.
+  def test_a_local_runner_is_used_without_asking_the_agent
+    agent = FakeAgent.new
+    @tool.agent = agent
+    @tool.loop_runner = @runner
+
+    result = start_loop
+
+    assert_ok result
+    assert_equal [ [ :start, @store.ids.first ] ], @runner.calls
+    assert_empty agent.requests, "the agent must not be asked when a runner is here"
+  end
+
+  # nil is the signal that no channel asked for loops, not an error: the tool
+  # owes its honest sentence, exactly as it gave before the agent existed.
+  def test_an_agent_that_answers_nil_leaves_the_honest_message
+    @tool.agent = FakeAgent.new(nil)
+
+    result = start_loop
+
+    assert_includes result, "no runner is attached"
+  end
+
+  def test_resume_with_an_agent_and_no_runner_asks_the_agent_to_resume
+    state = create
+    @store.update(state.id) { |loop| loop.status = "paused" }
+    @tool.agent = FakeAgent.new
+
+    result = @tool.execute("operation" => "resume", "id" => state.id)
+
+    assert_ok result
+    assert_equal "active", @store.load(state.id).status
+    assert_equal [ { op: :resume, id: state.id } ], @tool.instance_variable_get(:@agent).requests
+  end
+
+  # Pause and stop are one write on this side, and one request to the channel:
+  # its runner is what knows whether the run is still being paid for.
+  def test_pause_with_an_agent_and_no_runner_asks_the_agent_to_abort
+    state = create
+    @tool.agent = FakeAgent.new("OK: the runner was told to abort")
+
+    result = @tool.execute("operation" => "pause", "id" => state.id)
+
+    assert_includes result, "told to abort"
+    assert_equal "paused", @store.load(state.id).status
+    assert_equal [ { op: :abort, id: state.id } ], @tool.instance_variable_get(:@agent).requests
+  end
+
+  # -- robustness ------------------------------------------------------------
+
+  def test_an_unknown_operation_lists_the_valid_ones
+    result = @tool.execute("operation" => "explode")
+
+    assert_error result
+    Rubot::Tools::Loop::OPERATIONS.each { |name| assert_includes result, name }
+  end
+
+  def test_the_tool_never_raises_when_the_store_cannot_be_created
+    blocker = File.join(@tmp, "blocked")
+    File.write(blocker, "a file where the loops directory should be")
+    tool = Rubot::Tools::Loop.new(store_root: blocker)
+
+    result = tool.execute(
+      "operation" => "start", "goal" => "g", "done_criteria" => "d", "repo" => @repo
+    )
+
+    assert_error result
+    assert_includes result, blocker
+    assert_equal "No loops.", tool.execute("operation" => "list")
+  end
+end

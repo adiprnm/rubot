@@ -253,6 +253,8 @@ module Rubot
         channel.report_subagents_when_done("web_rubot")
 
         assert_equal 1, said.size
+        assert_equal false, said.first[:tools],
+                     "a report is words, not work: the turn must not be handed the toolset"
         sent = []
         sent << queue.pop until queue.empty?
         appends = sent.select { |item| item.is_a?(Array) && item[0] == :append }

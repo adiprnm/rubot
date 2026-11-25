@@ -136,4 +136,20 @@ class TestSse < Minitest::Test
 
     assert_equal "API error 500: boom", error.message
   end
+
+  # A model given no tools can still write a call into its prose. A report turn
+  # did exactly that, and the reader was shown the markup instead of the news.
+  def test_a_tool_call_written_into_prose_is_cut_off
+    bar = "\uFF5C"
+    markup = "<#{bar}#{bar}DSML#{bar}#{bar}tool_calls>\n" \
+             "<#{bar}#{bar}DSML#{bar}#{bar}invoke name=\"shell_exec\">\nls\n"
+
+    assert_equal "Laporannya begini.",
+                 Rubot::Formatting.without_tool_markup("Laporannya begini.\n\n#{markup}")
+    assert_equal "", Rubot::Formatting.without_tool_markup(markup),
+                 "a turn that only made a call said nothing usable"
+    assert_equal "Kalimat biasa.", Rubot::Formatting.without_tool_markup("Kalimat biasa."),
+                 "prose without a marker is left exactly as it arrived"
+    assert_equal "", Rubot::Formatting.without_tool_markup("")
+  end
 end

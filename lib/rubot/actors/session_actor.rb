@@ -165,6 +165,10 @@ module Rubot
           # plain data for the same reason every other event does, and the
           # parent turn carries on without waiting for it.
           on_delegate: ->(request) { events << [ :delegate, request ] },
+          # A loop the channel is expected to work, on the same terms: plain
+          # data on its way to the main Ractor, while the turn carries on
+          # without waiting for an iteration it did not run.
+          on_loop: ->(request) { events << [ :loop, request ] },
           on_compaction: ->(result) { events << [ :compaction, result ] },
           on_compaction_start: -> { events << [ :compaction_start ] },
           on_compaction_failed: -> { events << [ :compaction_failed ] },
@@ -210,7 +214,8 @@ module Rubot
         response = agent.process_background(
           msg[:text],
           label: msg[:label].to_s,
-          fresh: msg[:fresh] ? true : false
+          fresh: msg[:fresh] ? true : false,
+          tools: msg.fetch(:tools, true)
         ) { |text| emit_event(events, [ :chunk, text ]) }
 
         emit_event(events, [ :done, response ])

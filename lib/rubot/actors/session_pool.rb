@@ -189,14 +189,16 @@ module Rubot
       #
       # Built from plain data on purpose — a persona hash and a config snapshot
       # — because nothing else may be handed to a new Ractor.
-      def delegate(parent_session:, slug:, run_id:, model: nil)
+      def delegate(parent_session:, slug:, run_id:, model: nil, workspace: nil, session_id: nil)
         persona = @persona_store[slug]
         return nil unless persona
 
-        config_data = SubagentSpec.config_data(config: @config, slug: slug)
+        config_data = SubagentSpec.config_data(config: @config, slug: slug, workspace: workspace)
         data = SubagentSpec.persona_data(config: @config, persona: persona, slug: slug,
                                         model_override: model)
-        sid = "#{parent_session}~sub-#{run_id}"
+        # A delegated run names itself after the parent; a loop iteration names
+        # itself after the loop, because it has no conversation to belong to.
+        sid = session_id || "#{parent_session}~sub-#{run_id}"
 
         ractor = @mutex.synchronize do
           @actors[sid] ||= SessionActor.new(

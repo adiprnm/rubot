@@ -100,7 +100,7 @@ module Rubot
 
     # Add a new scheduled job. Returns job ID.
     # FIX (VULN-13): Validates command through safety guard before storing.
-    def add(message:, cron_expr: nil, every_seconds: nil, at_seconds: nil, command: nil, mode: nil, description: "", target_chat_id: nil, target_thread_id: nil, workspace: nil, channel: nil, slug: nil, new_session: false)
+    def add(message: nil, cron_expr: nil, every_seconds: nil, at_seconds: nil, command: nil, mode: nil, description: "", target_chat_id: nil, target_thread_id: nil, workspace: nil, channel: nil, slug: nil, new_session: false, loop_id: nil)
       if at_seconds
         schedule_type = "at"
         at_seconds = at_seconds.to_i
@@ -116,7 +116,29 @@ module Rubot
         raise "One of cron_expr, every_seconds, or at_seconds is required"
       end
 
-      mode = command ? :command : (mode || :agent_turn).to_sym
+      # A loop_tick job is the fourth mode: it wakes a loop that already exists
+      # instead of running a turn, a shell command, or delivering a message.
+      #
+      # Leaving it out of the other three is a raise rather than a precedence
+      # order, so the three modes keep exactly the meaning they had: with no
+      # loop_id the line below is the one that was always there, and with one
+      # the job can only be a loop. Silently dropping whichever half lost would
+      # leave a job that no longer does what its writer asked for.
+      if loop_id
+        requested = mode&.to_sym
+        if command || (requested && !%i[loop_tick agent_turn].include?(requested))
+          raise ArgumentError,
+                "a loop_tick job cannot also be #{command ? 'a shell command' : "mode #{requested}"}"
+        end
+      end
+
+      mode = if loop_id
+        :loop_tick
+      elsif command
+        :command
+      else
+        (mode || :agent_turn).to_sym
+      end
 
       # FIX (VULN-1): Validate command through safety guard before storing
       if command && !command.strip.empty?
@@ -170,7 +192,11 @@ module Rubot
           # A conversation of its own for every run, instead of one more turn
           # in the conversation that created the job. A daily practice session
           # wants a fresh transcript; a reminder does not.
-          "new_session" => new_session ? true : false
+          "new_session" => new_session ? true : false,
+          # The loop a loop_tick job wakes. Cron only decides when; the loop
+          # keeps its own iterations, budget and stop conditions, which is what
+          # lets one run out of tokens today and continue tomorrow.
+          "loop_id" => loop_id
         }
 
         # File it where it was written: a persona's reminder belongs to the
@@ -381,7 +407,10 @@ module Rubot
           slug: job["slug"],
           # Ask for a conversation of its own rather than another turn in the
           # one that created the job.
-          new_session: job["new_session"] ? true : false
+          new_session: job["new_session"] ? true : false,
+          # The loop a loop_tick job wakes; nil for every other mode, which is
+          # what tells a channel that no turn was produced for it.
+          loop_id: job["loop_id"]
         }
         @on_fire.call(fire_result)
         fire_result
@@ -472,6 +501,11 @@ module Rubot
         { success: true, agent_message: job["message"], mode: "agent_turn" }
       when "deliver"
         { success: true, deliver_message: job["message"], mode: "deliver" }
+      when "loop_tick"
+        # Nothing is run here: the loop is woken by the channel, because waking
+        # one needs a session to iterate in and this object has none. Firing is
+        # still a success — the job did all a schedule can do.
+        { success: true, loop_id: job["loop_id"], mode: "loop_tick" }
       else
         { success: false, error: "Unknown mode: #{job['mode']}" }
       end

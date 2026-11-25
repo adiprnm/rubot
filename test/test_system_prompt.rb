@@ -18,8 +18,8 @@ require_relative "test_helper"
 class TestSystemPrompt < Minitest::Test
   # SHA1 of the prompt, with the temporary directory replaced by "<root>" so
   # the number does not depend on where the suite runs.
-  PLAIN_PROMPT = "adb6b9e71e7d51a603c57b0dfe6b121e35a9a23d"
-  RICH_PROMPT = "a26387846b1953ee459db2f116238d869adac206"
+  PLAIN_PROMPT = "23566ecf584ea1bdc00544ca2ab4ef767a968704"
+  RICH_PROMPT = "8db1e17d7816f15cd6cfe03f36b86e1be03231d6"
   CHANGE_PATCH = "74fb59b8e45b2a4e0c20614d4ad727bed5b2e311"
 
   # The fingerprint a session pins its prompt under, key by key. Anything that
@@ -27,7 +27,7 @@ class TestSystemPrompt < Minitest::Test
   # digest of "" and means "nothing to say yet".
   PLAIN_EPOCH = {
     "model" => "f5b4a6aa4ae011ab1607bf68cc669b914bf30700",
-    "rules" => "805abefced9aa11f4449d3f81e0e2942758b4d2b",
+    "rules" => "60e27e95f0b9c287ab8214e8639cd192e0c3dd23",
     "persona" => "da39a3ee5e6b4b0d3255bfef95601890afd80709",
     "summary" => "da39a3ee5e6b4b0d3255bfef95601890afd80709",
     "skill" => "da39a3ee5e6b4b0d3255bfef95601890afd80709",

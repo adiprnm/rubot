@@ -133,7 +133,7 @@ module Rubot
     def process_message(message, session_id: nil, on_tool_call: nil, on_tool_result: nil, on_progress: nil,
                         on_confirm: nil, on_assistant_text: nil, on_reasoning: nil, on_usage: nil,
                         on_subagent: nil, on_compaction: nil, on_compaction_start: nil, on_compaction_failed: nil,
-                        on_delegate: nil)
+                        on_delegate: nil, on_loop: nil)
       sid = (session_id || "default").to_s
       handle = session_for(sid)
 
@@ -164,7 +164,8 @@ module Rubot
         on_compaction: on_compaction,
         on_compaction_start: on_compaction_start,
         on_compaction_failed: on_compaction_failed,
-        on_delegate: on_delegate
+        on_delegate: on_delegate,
+        on_loop: on_loop
       ) do |chunk|
         on_stream_chunk(chunk) if respond_to?(:on_stream_chunk)
       end

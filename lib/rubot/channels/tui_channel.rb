@@ -70,6 +70,13 @@ module Rubot
             fresh: result[:new_session] ? true : false
           )
           @tui_instance&.deliver_cron(response) if response && !response.empty?
+        when "loop_tick"
+          # A loop needs its worktree and the runner that owns it, and the
+          # runner lives in the web channel's process. Saying so is better than
+          # the silence a missing arm gave: the job looks broken otherwise.
+          @tui_instance&.deliver_cron(
+            "Loop #{result[:loop_id]} is due. Loops iterate from the web channel; resume it there."
+          )
         end
       rescue StandardError => e
         warn "[cron] TUI callback error: #{e.class}: #{e.message}"

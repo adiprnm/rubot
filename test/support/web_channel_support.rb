@@ -143,6 +143,24 @@ module Rubot
           title
         end
       end
+
+      # The loop runner as a fired loop_tick job sees one: the base its loop
+      # files sit under, and the resume it was asked for. A run itself belongs
+      # to the loop's own tests, not here.
+      class FakeCronLoopRunner
+        attr_reader :base, :resumed
+
+        def initialize(base:, answer: "OK: loop resumed")
+          @base = base
+          @answer = answer
+          @resumed = []
+        end
+
+        def resume(id)
+          @resumed << id
+          @answer
+        end
+      end
       class FakeWorkspacePool
         def initialize(workspace)
           @workspace = workspace
@@ -164,8 +182,8 @@ module Rubot
         said = []
         channel.define_singleton_method(:session_for) do |_sid|
           fake = Object.new
-          fake.define_singleton_method(:process_background) do |text, label: "", fresh: false, &chunk|
-            said << { text: text, label: label, fresh: fresh }
+          fake.define_singleton_method(:process_background) do |text, label: "", fresh: false, tools: true, &chunk|
+            said << { text: text, label: label, fresh: fresh, tools: tools }
             chunk&.call("Siap, ")
             chunk&.call("hasilnya kubaca.")
             "Siap, hasilnya kubaca."

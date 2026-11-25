@@ -17,6 +17,7 @@ require_relative "../web/auth"
 require_relative "../web/diff"
 require_relative "../web/highlight"
 require_relative "../web/history_view"
+require_relative "../web/loops"
 require_relative "../web/notifier"
 require_relative "../web/push"
 require_relative "../web/media"
@@ -142,6 +143,7 @@ module Rubot
       include Rubot::Web::Media
       include Rubot::Web::SessionBrowser
       include Rubot::Web::HistoryView
+      include Rubot::Web::Loops
       include Rubot::Web::Subagents
       include Rubot::Web::Turns
 
@@ -248,6 +250,10 @@ module Rubot
         @running = false
         stop_learning_worker(timeout: 3)
         @instagram_thread&.join(2)
+        # Before the server goes: a loop thread that outlives the pool builds a
+        # new actor against a stopped store, and one killed inside a commit
+        # leaves an index.lock the next run trips over.
+        stop_loop_threads(timeout: 3)
         @server&.shutdown
       end
 

@@ -1,0 +1,473 @@
+# frozen_string_literal: true
+
+require_relative "../loop_run"
+require_relative "../loop_runner"
+require_relative "../loop_store"
+require_relative "../loop_worktree"
+require_relative "reports"
+
+module Rubot
+  module Web
+    # The web channel's half of a loop: the one place that hands the loop tool
+    # something able to iterate.
+    #
+    # A loop outlives the turn that started it, so nothing here waits for it.
+    # Iterations run on a thread of their own, in a worktree of their own, and a
+    # reader learns where the loop got by asking the tool for its status -- a
+    # loop's progress is a file on disk, not a stream to draw.
+    module Loops
+      # The drawing of a report is shared with the delegated runs, which arrive
+      # the same way: a background turn in a conversation that is already open.
+      include Rubot::Web::Reports
+
+      # The state file and the checkout it works in sit under the same root, so
+      # a loop's file and its worktree are never separated by a configuration
+      # change: the tool is stamped with the same root (see #bind_loop_runner).
+      LOOPS_DIR = "loops"
+      WORKTREES_DIR = "worktrees"
+      # The operations a `:loop` event can carry: the ones a runner performs.
+      # Status and list are answered from the state file by the tool itself.
+      LOOP_OPS = %i[start resume abort].freeze
+      # What a finished run is worth a turn for. The exclusions are the point:
+      # `paused` is the reader's own doing and they know how it ended, while
+      # `missing` and `not_active` are not endings at all -- nothing ran, so
+      # there is nothing to report. `worktree_missing` is the run's own name for
+      # a checkout that vanished mid-iteration, which is the same repair as a
+      # worktree that could not be prepared in the first place.
+      #
+      # Every way of running out of room is in here, not only the ones that read
+      # like a verdict: `budget` spent the loop's tokens, `max_iterations` used
+      # its last chance, `verifier_stuck` kept getting the same refusal. A loop
+      # that stops short of the goal and says nothing is a loop the reader has
+      # to ask `status` about -- which is the whole reason this exists.
+      ANNOUNCED_STOPS = %i[
+        done_by_verifier stalled budget max_iterations verifier_stuck
+        error worktree_error worktree_missing
+      ].freeze
+      # The model's cue that this arrived on its own, shaped like the one a
+      # finished batch of delegated runs gets. "Kabar" rather than "hasil",
+      # because not every ending is a result: a loop that broke or ran out of
+      # budget arrives through the same door.
+      LOOP_REPORT_LABEL = "Kabar dari loop yang kamu jalankan:\n\n"
+      # How long a report waits for the reader's own turn to end before it gives
+      # up and draws anyway. Bounded: a turn that never ends must not become a
+      # thread that never ends either.
+      TURN_WAIT_SECONDS = 300
+
+      # What the loop tool holds. The tool speaks a tool's language -- start,
+      # resume, abort, and a plain string back -- while LoopRunner speaks the
+      # run's, so this is the seam and the only object the tool ever sees.
+      class SessionRunner
+        attr_reader :base
+
+        def initialize(base:, store:, session_runner:, logger: nil, async: true, on_finish: nil)
+          @base = base
+          @store = store
+          @async = async
+          @logger = logger
+          # Where the run's ending goes. A loop outlives the turn that started
+          # it, so a thread that has nobody reading it is the one place left to
+          # say where the loop got; the channel closes its session id into this.
+          @on_finish = on_finish
+          # One run per loop at a time. Two runs on one id share a worktree, an
+          # iteration number and a session file, and a session's token total
+          # already contains the other run's spend, so the same budget would be
+          # charged twice and both would commit into one index.
+          @running = {}
+          @threads = []
+          @mutex = Mutex.new
+          @runner = LoopRunner.new(
+            store: store,
+            worktree_root: File.join(base, WORKTREES_DIR),
+            session_runner: session_runner,
+            logger: logger
+          )
+        end
+
+        # A run lasts as long as its iterations do, and the caller is a tool
+        # call inside someone's turn: answering now and working on a thread is
+        # what keeps the conversation usable while the loop works.
+        def start(id) = launch(:start, id)
+        def resume(id) = launch(:resume, id)
+
+        # The claim, in public for one caller. A `loop` tool call spoken inside
+        # a Ractor reaches the channel as plain data, so the channel is what
+        # has to take the claim, before it hands the run on: taken there, a
+        # second request for an id already running can say so once instead of
+        # queueing a run that would work the same worktree. It is the same
+        # claim #start takes, so one id still means one run.
+        def claim_start(id) = claim(id)
+
+        # The claimed run, on a thread of its own: exactly what #start does once
+        # the claim is in, for a caller that has already made it.
+        def run_claimed(op, id)
+          spawn(op, id)
+          "OK: loop #{id} is iterating on a thread of its own; ask for its status to see where it got"
+        end
+
+        # Whether the id names a loop file this runner can work. Asked before a
+        # handed-off request goes near a thread: a run on an unknown id would
+        # only answer :missing inside it, where nobody is reading.
+        def known?(id)
+          !@store.load(id).nil?
+        rescue LoopStore::Corrupt
+          true # an unreadable file is the run's own problem to report, not this one
+        end
+
+        # A pause is not a signal to a thread: the run re-reads the loop's
+        # status at the top of every iteration, so writing it is what stops the
+        # loop -- after the iteration in flight, never in the middle of one.
+        def abort(id)
+          @store.update(id) { |loop| loop.status = "paused" if loop.status.to_s == "active" }
+          "OK: loop #{id} stops after the iteration in flight, which is still paid for"
+        rescue LoopStore::Corrupt
+          raise
+        rescue StandardError => e
+          # A pause that did not reach the file leaves the loop running, so it
+          # is not an OK: the reader would stop watching a loop still spending.
+          "ERROR: loop #{id} could not be paused: #{e.message}"
+        end
+
+        # Waited on before the pool shuts down: a thread that wakes up after it
+        # builds a new actor against a stopped store, and one killed mid-commit
+        # leaves an index.lock that the next run trips over.
+        def join(timeout = 5)
+          threads = @mutex.synchronize { @threads.dup }
+          deadline = Time.now + timeout
+          threads.each do |thread|
+            left = deadline - Time.now
+            break if left <= 0
+
+            thread.join(left)
+          end
+          threads.size
+        end
+
+        def running?(id)
+          @mutex.synchronize { @running.key?(id) }
+        end
+
+        private
+
+        def launch(op, id)
+          return run_now(op, id) unless @async
+          return "OK: loop #{id} is already iterating; ask for its status to see where it got" unless claim_start(id)
+
+          run_claimed(op, id)
+        end
+
+        # The run itself, claimed already. Everything that outlives the caller
+        # is here: the thread, the failure note it has nobody else to tell, the
+        # release of the id when it lands, and the report of where it got.
+        def spawn(op, id)
+          thread = Thread.new do
+            Thread.current.report_on_exception = false
+            outcome = nil
+            begin
+              outcome = @runner.public_send(op, id)
+            rescue StandardError => e
+              # Nobody is reading a thread: the caller was answered with a
+              # promise, so the only place to leave a trace is the loop's own
+              # file. A warning on stderr is not a trace a reader will find. A
+              # run that broke before it could name a reason is announced as
+              # one, in the shape the announcement reads.
+              note_failure(id, e)
+              outcome = failure_result(id, e)
+            ensure
+              # Released before the report: the run is over, and the report is a
+              # turn in the conversation rather than part of the loop. A resume
+              # asked for while it is being written must not be told the id is
+              # still busy.
+              @mutex.synchronize { @running.delete(id) }
+            end
+            announce(id, outcome)
+          end
+
+          @mutex.synchronize { @threads << thread }
+          thread
+        end
+
+        def claim(id)
+          @mutex.synchronize do
+            return false if @running.key?(id)
+
+            @running[id] = true
+          end
+        end
+
+        def note_failure(id, error)
+          text = "run failed: #{error.class}: #{error.message}"
+          @logger&.call("loop #{id}: #{text}")
+          @store.append_log(id, text)
+        rescue StandardError
+          nil
+        end
+
+        # A run outlives the turn that started it, so without this the reader
+        # learns where it got only by asking for `status` -- or never. This is
+        # the one moment the channel can speak unprompted, so it is where the
+        # report hangs.
+        #
+        # Nothing here may escape: a report is a provider request in another
+        # conversation, and a loop that finished cannot be undone by one that
+        # failed to say so. The loop's file is left exactly as the run wrote it.
+        def announce(id, outcome)
+          @on_finish&.call(id, outcome)
+        rescue StandardError => e
+          @logger&.call("loop #{id}: could not be reported: #{e.class}: #{e.message}")
+        end
+
+        # An exception is a run that broke before it could answer with a reason,
+        # so it is turned into the shape the announcement reads. The counters are
+        # the file's: #note_failure has already written what is known of them.
+        def failure_result(id, error)
+          state = begin
+            @store.load(id)
+          rescue StandardError
+            nil
+          end
+
+          LoopRun::Result.new(
+            state: state,
+            stop_reason: :error,
+            iterations_run: state ? state.iterations.to_i : 0,
+            message: "#{error.class}: #{error.message}"
+          )
+        end
+
+        # The synchronous shape a test drives: the same call, answered with the
+        # run's own reason instead of a promise.
+        def run_now(op, id)
+          outcome = @runner.public_send(op, id)
+          "OK: loop #{id} stopped: #{outcome.stop_reason}"
+        rescue LoopStore::Corrupt => e
+          "ERROR: #{e.message}"
+        end
+      end
+
+      # What a `:loop` event asks for. The tool spoke inside the session Ractor,
+      # where no runner can be handed to it, so the agent called its `on_loop`
+      # callback with plain data and this is where that data is worked: the same
+      # runner methods the local path calls, in the conversation's own runner,
+      # so the iterations answer as its persona and the state file sits under
+      # the same root the tool reads.
+      #
+      # Nothing waits, and nothing raises: a request names a loop that is gone,
+      # or one that is already iterating, and both are one line in the log
+      # rather than a turn that fails on work it delegated.
+      def handle_loop_request(sid, request)
+        data = request.to_h
+        op = data[:op].to_s.to_sym
+        id = data[:id].to_s
+        # The parent conversation is what the request names; the turn carrying
+        # the event is the same one, and only a fallback.
+        parent = data[:parent_session].to_s
+        parent = sid.to_s if parent.empty?
+
+        unless LOOP_OPS.include?(op)
+          return warn_loop_request(id, "operation #{data[:op].inspect} is not one a channel works")
+        end
+        return warn_loop_request(id, "the request names no loop") if id.empty?
+
+        base = workspace_for_session(parent).to_s
+        return warn_loop_request(id, "no workspace is known for #{parent}") if base.empty?
+
+        runner = loop_runner_for(parent, base)
+        warn_loop_persona(id, data[:slug].to_s, owner_slug(parent) || default_slug)
+
+        return warn_loop_request(id, "no loop with that id") unless runner.known?(id)
+
+        # A pause is one file write: the run re-reads the status at the top of
+        # every iteration, so there is nothing to hand to a thread.
+        if op == :abort
+          runner.abort(id)
+          return true
+        end
+
+        # The claim is what makes a second request harmless, and it is the same
+        # claim a tool call takes: one id, one run, whatever started it.
+        unless runner.claim_start(id)
+          return warn_loop_request(id, "already iterating; the second request starts nothing")
+        end
+
+        runner.run_claimed(op, id)
+        true
+      rescue StandardError => e
+        warn_loop_request(id, "#{e.class}: #{e.message}")
+        false
+      end
+
+      private
+
+      # Bound with the other tool contexts before a turn starts (see
+      # #prepare_delivery). The runner belongs to the conversation rather than to
+      # the tool, because two conversations may work on two loops at once and
+      # each one's iterations answer as its own persona.
+      def bind_loop_runner(sid)
+        tool = session_for(sid).tools.get("loop")
+        return unless tool
+
+        base = workspace_for_session(sid).to_s
+        return if base.empty?
+
+        # In actor mode the channel holds a ToolProxy, which can only forward a
+        # call: the runner is a lambda and a lambda does not cross a Ractor
+        # boundary. Binding is a no-op there, so the tool asks the agent
+        # instead and the request comes back as a `:loop` event
+        # (see #handle_loop_request). Raising NoMethodError in the middle of
+        # every turn is what an unguarded setter did.
+        return unless tool.respond_to?(:loop_runner=)
+
+        tool.workspace = base
+        tool.loop_runner = loop_runner_for(sid, base)
+      end
+
+      # Named so a test can drive the seam without send: binding is a step a turn
+      # performs, and one iteration is one turn. Both are what a channel hands
+      # the loop tool, so both are what a test has to be able to see.
+      def loop_runner_for(sid, base)
+        @loop_runners ||= {}
+        @loop_runner_mutex ||= Mutex.new
+        key = [ sid, base ]
+        # WEBrick answers turns on threads of its own, so two of them can bind
+        # the same conversation at once: unsynchronised, each builds its own
+        # SessionRunner and two stores end up writing one directory.
+        @loop_runner_mutex.synchronize do
+          @loop_runners[key] ||= SessionRunner.new(
+            base: base,
+            store: LoopStore.new(dir: File.join(base, LOOPS_DIR)),
+            session_runner: loop_session_runner(sid),
+            logger: ->(text) { warn "[loop] #{text}" },
+            # The conversation is closed into the report rather than handed to
+            # the runner as an argument: a run reports where it was created, and
+            # that is fixed the moment the tool is bound.
+            on_finish: ->(id, outcome) { report_loop_finished(sid, id, outcome) }
+          )
+        end
+      end
+
+      # What the conversation is told when a run ends: a background turn in the
+      # session that opened the loop, so the agent says it in its own words and
+      # the message is archived like any other -- a report a reader cannot
+      # scroll back to is one they have to ask for again.
+      #
+      # Not every ending deserves a turn (see ANNOUNCED_STOPS), and none of them
+      # may cost the loop anything: a failure here is the runner's to log, which
+      # is why nothing is rescued on this side.
+      def report_loop_finished(sid, id, outcome)
+        return unless ANNOUNCED_STOPS.include?(outcome.stop_reason.to_s.to_sym)
+
+        wait_for_quiet_turn(sid)
+        prepare_delivery(sid)
+        deliver_report(sid, text: loop_report_text(id, outcome), label: LOOP_REPORT_LABEL)
+      end
+
+      # The reader's own turn comes first. A block opened while it is running
+      # would land above an answer still being written, and only a reload would
+      # put the two back in the archive's order — the same reason a delegated
+      # batch is not reported into a live turn (see Subagents#claim_subagent_results).
+      def wait_for_quiet_turn(sid)
+        deadline = Time.now + TURN_WAIT_SECONDS
+        sleep 0.5 while live_turn(sid) && Time.now < deadline
+      end
+
+      # What the conversation is told. It carries the facts a reader would
+      # otherwise ask `status` for, and the stop reason both as the runner's own
+      # word -- which a resume, an undo and the file all use -- and in plain
+      # words, because `done_by_verifier` is not a sentence.
+      def loop_report_text(id, outcome)
+        state = outcome.state
+        lines = [ "## loop #{id}" ]
+        goal = state&.goal.to_s.strip
+        lines << "Tujuan: #{goal}" unless goal.empty?
+        lines << "Yang terjadi: #{loop_stop_phrase(outcome.stop_reason)}"
+        lines << "Alasan berhenti: #{outcome.stop_reason}"
+        lines << "Iterasi: #{outcome.iterations_run}"
+        if state
+          lines << "Token terpakai: #{state.tokens.to_i} dari #{state.max_tokens.to_i}"
+          branch = state.branch.to_s.strip
+          lines << "Branch: #{branch}" unless branch.empty?
+          worktree = state.worktree.to_s.strip
+          lines << "Worktree: #{worktree}" unless worktree.empty?
+        end
+
+        message = outcome.message.to_s.strip
+        lines.push("", message) unless message.empty?
+        lines.join("\n").rstrip
+      end
+
+      # One turn of one iteration, in the loop's worktree. The session is a
+      # throwaway: it gets an id of its own per iteration, it is not a
+      # conversation the roster lists, and nothing in it is marked unread --
+      # a loop's sessions are not places a reader can open.
+      def loop_session_runner(sid)
+        slug = owner_slug(sid) || default_slug
+
+        lambda do |session_id:, prompt:, workspace:|
+          handle = @pool&.delegate(parent_session: "loop", slug: slug, run_id: session_id,
+                                   workspace: workspace, session_id: session_id)
+          # Two different causes reach this branch, and the log is the only
+          # place a reader can tell them apart later.
+          raise "no session pool is running and no persona '#{slug}' is known, so the loop cannot reach an agent" unless handle
+
+          tokens = 0
+          begin
+            text = handle.process(prompt, stream: false,
+                                  on_usage: ->(report) { tokens = report[:total_tokens].to_i })
+            { text: text.to_s, tokens: tokens }
+          ensure
+            # The iteration is over, so its actor has nothing left to do.
+            @pool&.invalidate(session_id)
+          end
+        end
+      end
+
+      # Called from the channel's stop path, before the pool goes down.
+      def stop_loop_threads(timeout: 5)
+        runners = @loop_runners ? @loop_runners.values : []
+        runners.each { |runner| runner.join(timeout) }
+        runners.size
+      end
+
+      # One line, one place: a request that could not be worked is never an
+      # exception, because it arrived from a turn that has already been
+      # answered.
+      def warn_loop_request(id, reason)
+        warn "[loop] #{id.to_s.empty? ? 'request' : id}: #{reason}"
+        false
+      end
+
+      # Iterations answer as the conversation's persona, which was fixed when
+      # its runner was built. A request naming another one is worth a line: the
+      # loop would otherwise work as an agent the reader did not choose.
+      def warn_loop_persona(id, asked, iterating_as)
+        return if asked.empty? || asked == iterating_as
+
+        warn "[loop] #{id}: asked for persona #{asked}, iterating as #{iterating_as}"
+      end
+
+      # Plain words for the run's own vocabulary: the reader asked what became
+      # of their goal, not for the symbol that ended it.
+      def loop_stop_phrase(reason)
+        case reason.to_sym
+        when :done_by_verifier then "kriteria yang kamu tetapkan sudah terpenuhi"
+        when :stalled then "tidak ada kemajuan baru, jadi iterasi lagi hanya akan membakar token"
+        when :budget then "jatah token untuk loop ini habis"
+        when :max_iterations then "batas iterasinya tercapai sebelum kriterianya terpenuhi"
+        when :verifier_stuck then "verifier terus menolak dengan alasan yang sama, jadi iterasi lagi tidak mengubah apa pun"
+        when :worktree_error, :worktree_missing then "worktree-nya bermasalah, jadi iterasinya tidak bisa jalan"
+        else "loop berhenti karena gagal"
+        end
+      end
+
+      # Named so a test can drive the seam without send: binding is a step a turn
+      # performs, and one iteration is one turn. Both are what a channel hands
+      # the loop tool, so both are what a test has to be able to see. The report
+      # is a seam for the same reason: what a finished run says to its
+      # conversation is a fact about the channel, not about the thread that ran
+      # it.
+      public :bind_loop_runner, :loop_session_runner, :stop_loop_threads,
+             :report_loop_finished, :loop_report_text
+    end
+  end
+end

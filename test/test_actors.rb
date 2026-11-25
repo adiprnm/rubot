@@ -678,7 +678,7 @@ end
 def test_session_handle_streams_a_background_turn
   ractor = Ractor.new do
     agent = Class.new do
-      def process_background(_text, label: "", fresh: false, &on_chunk)
+      def process_background(_text, label: "", fresh: false, tools: true, &on_chunk)
         on_chunk&.call("Halo")
         on_chunk&.call("Halo dunia")
         "Halo dunia"
@@ -1033,5 +1033,65 @@ class TestSessionPoolShutdown < Minitest::Test
     assert_empty pool.instance_variable_get(:@actors), "and the pool forgets them"
     assert_operator elapsed, :<, 0.6,
                     "four actors that each need 0.2s must not cost 0.8s"
+  end
+end
+
+# The loop hand-off, in the same shape delegation uses: the agent calls a
+# callback with plain data, the callback becomes an event on the port, and the
+# channel works the loop on the main side where a runner can exist.
+class TestActorLoopHandOff < Minitest::Test
+  REQUEST = { op: :start, id: "20260101-000000-a001", parent_session: "s1", slug: "implementer" }.freeze
+
+  # The agent's callback becomes an event, exactly as :delegate does.
+  def test_session_actor_turns_the_loop_callback_into_an_event
+    agent = Class.new do
+      def process(_text, **callbacks)
+        callbacks[:on_loop].call(op: :start, id: "20260101-000000-a001",
+                                 parent_session: "s1", slug: "implementer")
+        "ok"
+      end
+    end.new
+
+    events = []
+    Timeout.timeout(5) do
+      Rubot::Actors::SessionActor.handle_message(
+        agent, { type: :message, text: "go", events: events, stream: false }
+      )
+    end
+
+    loop_event = events.find { |event| event[0] == :loop }
+    refute_nil loop_event, events.inspect
+    assert_equal REQUEST, loop_event[1]
+    assert_equal "ok", events.last[1]
+  end
+
+  # The request survives the boundary as plain data, which is what a hash of
+  # symbols and strings is: nothing here holds a proc, a port or a runner.
+  def test_session_handle_forwards_a_loop_request_untouched
+    ractor = Ractor.new do
+      loop do
+        msg = Ractor.receive
+        case msg[:type]
+        when :message
+          msg[:events] << [ :loop, { op: :start, id: "20260101-000000-a001",
+                                     parent_session: "s1", slug: "implementer" } ]
+          msg[:events] << [ :done, "ok" ]
+        when :shutdown
+          break
+        end
+      end
+    end
+
+    handle = Rubot::Actors::SessionHandle.new(ractor, "fake-loop")
+    requests = []
+    response = Timeout.timeout(5) do
+      handle.process("go", on_loop: ->(request) { requests << request }) { |_chunk| nil }
+    end
+
+    assert_equal "ok", response
+    assert_equal [ REQUEST ], requests
+  ensure
+    ractor&.send({ type: :shutdown })
+    ractor&.join
   end
 end

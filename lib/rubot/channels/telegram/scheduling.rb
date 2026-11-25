@@ -116,6 +116,17 @@ module Rubot
             session_id = thread_id ? "tg_#{chat_id}_#{thread_id}" : "tg_#{chat_id}"
             response = session_for(session_id).process_cron(result[:result][:agent_message])
             send_message(chat_id, response, thread_id) if response && !response.empty?
+          when "loop_tick"
+            # A loop iterates through a worktree and a session pool, and this
+            # channel has neither: nothing here binds the loop tool to a runner,
+            # so there is nobody to hand the id to. Say where it can be woken
+            # rather than pretending the tick worked, and never raise: this runs
+            # on the delivery port, where an exception would take the rest of
+            # the fired batch with it.
+            send_message(chat_id,
+                         "🔁 Loop `#{result[:loop_id]}` is scheduled, but not resumed here: " \
+                         "loops run on the web channel. Resume it from there.",
+                         thread_id)
           end
         rescue StandardError => e
           warn "[cron] Callback error: #{e.class}: #{e.message}"

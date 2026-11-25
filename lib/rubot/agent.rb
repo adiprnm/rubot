@@ -23,6 +23,7 @@ require_relative "agents_file"
 require_relative "tools/memory_tool"
 require_relative "memory_extractor"
 require_relative "agent/background"
+require_relative "agent/loops"
 require_relative "agent/message_builder"
 require_relative "agent/model_selection"
 require_relative "agent/prompt_pinning"
@@ -166,6 +167,25 @@ module Rubot
       You may also delegate to any of the user's own personas by slug.
     PROMPT
 
+    # When a loop is the right tool and when it is a bill. Kept in the shipped
+    # rules so the prompt epoch moves when this text changes (see
+    # SystemPrompt#rules).
+    LOOP_RULE = <<~PROMPT.strip.freeze
+      # Loops: Work That Needs Several Attempts
+
+      `loop` works a goal through repeated iterations, one commit per iteration
+      in a git worktree that belongs to the loop and never to your checkout.
+
+      Use it only for work that needs several attempts to finish and has a
+      checkable definition of done. Never for a single edit: one tool call does
+      that better and leaves nothing behind to clean up.
+
+      Every loop gets its own worktree, so state the repo path, the goal and the
+      done_criteria precisely. A loop that stops as stalled or stuck should be
+      reported, not restarted blindly: the state file says what the last
+      iterations tried, and that is what the user needs to hear.
+    PROMPT
+
     # Running the calls of one tool round lives beside #process, not inside it:
     # see agent/tool_execution.rb.
     include ToolExecution
@@ -177,6 +197,10 @@ module Rubot
     # Running a task in another persona's workspace, and the audits and progress
     # events that come with it. See agent/subagents.rb.
     include Subagents
+
+    # Asking the channel to work a loop, when no runner can be held here. See
+    # agent/loops.rb.
+    include Loops
 
     # What a turn cost and how much of the window it left. See
     # agent/usage_accounting.rb.
@@ -395,14 +419,14 @@ module Rubot
     def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil,
                 on_assistant_text: nil, on_reasoning: nil, on_steer: nil, on_stopped: nil, on_usage: nil,
                 on_subagent: nil, on_compaction: nil, on_compaction_start: nil, on_compaction_failed: nil, on_retry: nil,
-                on_delegate: nil, stream: true, &on_chunk)
+                on_delegate: nil, on_loop: nil, stream: true, &on_chunk)
       # One object for what this turn reports back, so the phases below name the
       # callback they use instead of carrying fifteen keywords each.
       callbacks = TurnCallbacks.new(tool_call: on_tool_call, tool_result: on_tool_result,
                                     progress: on_progress, confirm: on_confirm,
                                     assistant_text: on_assistant_text, reasoning: on_reasoning,
                                     steer: on_steer, stopped: on_stopped, usage: on_usage,
-                                    subagent: on_subagent, delegate: on_delegate,
+                                    subagent: on_subagent, delegate: on_delegate, on_loop: on_loop,
                                     compaction: on_compaction, compaction_start: on_compaction_start,
                                     compaction_failed: on_compaction_failed,
                                     retry_callback: on_retry)
@@ -823,7 +847,11 @@ module Rubot
     # the user, scheduling jobs or drawing an Instagram card from a background
     # worker would all be surprising. A sub agent does its work and returns a
     # written result; the lead stays the one voice the user hears.
-    SUBAGENT_FORBIDDEN_TOOLS = %w[delegate subagent_results notify cron instagram].freeze
+    # `loop` is on the list because a loop outlives the turn that starts it: a
+    # sub agent that opened one would hand back an answer while the work it
+    # began kept spending tokens, with nobody watching the file it writes to.
+    # Loops are started by a channel, which is where a reader can see them.
+    SUBAGENT_FORBIDDEN_TOOLS = %w[delegate subagent_results notify cron instagram loop].freeze
 
     def log_debug(msg)
       warn "[debug] #{msg}" if @config.debug?

@@ -655,6 +655,113 @@ end
 # Jobs are filed by the install, and a job can say who should run it and
 # whether it wants a conversation of its own — the two things a daily practice
 # session needs and a plain reminder does not.
+# A loop_tick job is the fourth mode: it wakes a loop that already exists
+# instead of running a turn, a command or a delivery. The loop keeps its own
+# budget and stop conditions, so the job is the one that needs no message.
+class TestCronLoopTick < Minitest::Test
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @scheduler = Rubot::CronScheduler.new(workspace: @tmpdir)
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+  end
+
+  def test_a_loop_tick_job_round_trips_through_the_store
+    result = Rubot::CronCommands.execute(@scheduler,
+                                         { "operation" => "add", "loop_id" => "impl-1",
+                                           "every_seconds" => 86_400, "description" => "Harian" })
+
+    assert_includes result, "✅"
+    assert_includes result, "loop_tick"
+
+    id = result.match(/✅ `([^`]+)`/)[1]
+    job = @scheduler.get(id)
+    assert_equal "loop_tick", job["mode"]
+    assert_equal "impl-1", job["loop_id"]
+    assert_nil job["message"], "the loop says what it does, so a tick needs no message of its own"
+
+    reloaded = Rubot::CronScheduler.new(workspace: @tmpdir).get(id)
+    assert_equal "loop_tick", reloaded["mode"]
+    assert_equal "impl-1", reloaded["loop_id"]
+  end
+
+  def test_a_loop_tick_job_cannot_also_run_a_command
+    result = Rubot::CronCommands.execute(@scheduler,
+                                         { "operation" => "add", "loop_id" => "impl-1",
+                                           "command" => "echo hi", "every_seconds" => 60 })
+
+    assert_includes result, "ERROR"
+    assert_empty @scheduler.list, "a job that asks to be two things is filed as neither"
+  end
+
+  def test_a_loop_tick_job_cannot_be_a_deliver_job
+    assert_raises(ArgumentError) do
+      @scheduler.add(loop_id: "impl-1", mode: :deliver, every_seconds: 60)
+    end
+
+    assert_empty @scheduler.list
+  end
+
+  # The three modes that were there before mean exactly what they meant: no
+  # loop on any of them, and no job of theirs refused.
+  def test_the_other_three_modes_are_unchanged
+    turn = @scheduler.get(@scheduler.add(message: "Pagi", every_seconds: 60))
+    cmd = @scheduler.get(@scheduler.add(message: "echo hi", command: "echo hi", every_seconds: 60))
+    deliver = @scheduler.get(@scheduler.add(message: "Minum air", mode: :deliver, every_seconds: 60))
+
+    assert_equal "agent_turn", turn["mode"]
+    assert_nil turn["loop_id"]
+    assert_equal "command", cmd["mode"]
+    assert_nil cmd["loop_id"]
+    assert_equal "deliver", deliver["mode"]
+    assert_nil deliver["loop_id"]
+  end
+
+  def test_a_message_is_still_required_for_the_other_modes
+    result = Rubot::CronCommands.execute(@scheduler, { "operation" => "add", "every_seconds" => 60 })
+
+    assert_includes result, "ERROR"
+    assert_includes result, "message"
+    assert_empty @scheduler.list
+  end
+
+  # The firing callback is the only thing a channel sees, so the id it has to
+  # resume travels on the event and not only in the job file.
+  def test_a_fired_job_carries_its_loop_id_and_a_turn_carries_none
+    fired = []
+    scheduler = Rubot::CronScheduler.new(workspace: @tmpdir) { |result| fired << result }
+    tick_id = scheduler.add(loop_id: "impl-1", at_seconds: 1, description: "Tick")
+    turn_id = scheduler.add(message: "Pagi", at_seconds: 1)
+    sleep 2
+
+    scheduler.fire_due_jobs
+
+    tick = fired.find { |result| result[:job_id] == tick_id }
+    turn = fired.find { |result| result[:job_id] == turn_id }
+
+    assert_equal "loop_tick", tick[:mode]
+    assert_equal "impl-1", tick[:loop_id]
+    assert_equal "impl-1", tick[:result][:loop_id]
+    assert tick[:result][:success], "waking a loop is all a schedule can do, and it did it"
+    assert_equal "agent_turn", turn[:mode]
+    assert_nil turn[:loop_id]
+  end
+
+  def test_the_tool_offers_a_loop_to_resume
+    tool = Rubot::Tools::Cron.new(workspace: @tmpdir)
+    property = tool.parameters["properties"]["loop_id"]
+
+    assert_equal "string", property["type"]
+    assert_includes property["description"], "resume"
+    refute_includes tool.parameters["required"], "loop_id"
+  end
+end
+
+# Jobs are filed by the install, and a job can say who should run it and
+# whether it wants a conversation of its own — the two things a daily practice
+# session needs and a plain reminder does not.
 class TestCronStoreAndDelivery < Minitest::Test
   def setup
     @root = Dir.mktmpdir

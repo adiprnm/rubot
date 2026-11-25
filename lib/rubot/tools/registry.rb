@@ -63,6 +63,7 @@ module Rubot
         register Instagram.new
         register Delegate.new
         register SubagentResults.new
+        register Loop.new
       end
     end
   end
