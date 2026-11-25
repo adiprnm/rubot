@@ -254,10 +254,13 @@ module Rubot
       # because every request re-sent a conversation that had grown (see
       # #request_facts). A runner that reports none leaves it nil.
       metrics = record[:metrics]
+      # The ceiling this iteration reached, if it reached one: the agent reports
+      # it, and the entry is the only place it becomes history.
+      round_cap = record[:round_cap]
       spent = tokens_of(state.id)
       if budget_stop || spent >= budget_for(state)
         @store.update(state.id) do |s|
-          s.add_entry(entry(iteration_note(iteration, commit, worker, 0, text, metrics)))
+          s.add_entry(entry(iteration_note(iteration, commit, worker, 0, text, metrics, round_cap)))
         end
         fail_iteration(state.id, "budget spent at iteration #{iteration}: " \
                                  "#{spent} of #{budget_for(state)} tokens", reason: :budget)
@@ -267,7 +270,7 @@ module Rubot
       verifier = [ tokens_of(state.id) - before - worker, 0 ].max
 
       @store.update(state.id) do |s|
-        s.add_entry(entry(iteration_note(iteration, commit, worker, verifier, text, metrics)))
+        s.add_entry(entry(iteration_note(iteration, commit, worker, verifier, text, metrics, round_cap)))
       end
       fail_iteration(state.id, "verifier failed: #{verdict[:error]}") if verdict[:error]
       @store.update(state.id) { |s| s.add_entry(entry("verifier: #{verdict[:reason]}")) }
@@ -362,10 +365,12 @@ module Rubot
       error = record[:error] || record["error"]
       budget = flag_of(record, :budget_stopped) || flag_of(record, :budget)
       metrics = (record[:metrics] || record["metrics"])
+      round_cap = (record[:round_cap] || record["round_cap"])
       return { error: error.to_s, tokens: tokens, budget: budget, metrics: metrics } if error
 
       { text: (record[:text] || record["text"]).to_s, tokens: tokens, budget: budget,
-        commit: sha_of(record), progress: progress_of(record), metrics: metrics }
+        commit: sha_of(record), progress: progress_of(record), metrics: metrics,
+        round_cap: round_cap }
     rescue StandardError => e
       { error: "#{e.class}: #{e.message}", tokens: 0 }
     end
@@ -496,13 +501,27 @@ module Rubot
     # conversation that grew. It is nil for a runner that reports none -- there
     # is then nothing honest to say, and a fabricated "req 0" would read as a turn
     # that made no request at all.
-    def iteration_note(iteration, commit, worker, verifier, text, metrics = nil)
+    def iteration_note(iteration, commit, worker, verifier, text, metrics = nil, round_cap = nil)
       facts = []
       facts << "sha #{commit[0, 7]}" if commit
       facts << "worker #{kilo(worker)}"
       facts << "verifier #{kilo(verifier)}"
       facts.concat(request_facts(metrics))
+      facts.concat(round_facts(round_cap))
       "iteration #{iteration} (#{facts.join(', ')}): #{text}"
+    end
+
+    # The one fact that says the iteration stopped at its own ceiling rather
+    # than on its own: a reader who sees a thin entry needs to know whether the
+    # work ran out or the turn did. Present only when the agent reported it, so a
+    # runner that cannot is not accused of a cap it never reached.
+    def round_facts(cap)
+      cap = cap.is_a?(Hash) ? cap : {}
+      rounds = read_metric(cap, :rounds).to_i
+      limit = read_metric(cap, :limit).to_i
+      return [] unless rounds.positive? && limit.positive?
+
+      [ "rounds #{rounds}/#{limit}" ]
     end
 
     # The three facts of a turn's own shape, each only when the report carried

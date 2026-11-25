@@ -64,11 +64,15 @@ class TestWebLoops < Minitest::Test
     STOP_NOTICE = "⏹️ Stopped by user."
 
     attr_reader :calls, :cancelled
+    # What the agent reports after a turn that reached its round cap; nil for
+    # every other turn, which is what the runner then leaves out of its answer.
+    attr_reader :last_round_cap
 
     def initialize(tokens: 1_234, text: "wrote step.txt", raise_with: nil, usage: nil, reports: nil,
-                   cancel_ok: true, cancel_raises: false, cancel_results: [], between: nil)
+                   cancel_ok: true, cancel_raises: false, cancel_results: [], between: nil, round_cap: nil)
       @tokens = tokens
       @text = text
+      @last_round_cap = round_cap
       @raise_with = raise_with
       # Cumulative totals, the way a turn reports them, oldest first; `reports`
       # is the same thing with the provisional flag each report carries.
@@ -305,6 +309,30 @@ class TestWebLoops < Minitest::Test
                                                     prompt: "do one step", workspace: "/tmp/wt")
 
     assert_equal({ text: "wrote step.txt", tokens: 1_234 }, answer)
+  end
+
+  # The iteration's own ceiling rides back with the answer, because the run is
+  # the side with the log to write it into: a reader of `loop status` has to be
+  # able to tell a thin iteration from one that hit its cap.
+  def test_an_iteration_that_reached_its_round_cap_says_so_in_the_answer
+    handle = FakeHandle.new(text: "a step", round_cap: { rounds: 40, limit: 40 })
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = channel.loop_session_runner("s1").call(session_id: "loop-abc~it1",
+                                                    prompt: "do one step", workspace: "/tmp/wt")
+
+    assert_equal({ rounds: 40, limit: 40 }, answer[:round_cap])
+    assert_equal "a step", answer[:text]
+  end
+
+  def test_an_iteration_that_ended_on_its_own_carries_no_cap
+    handle = FakeHandle.new(text: "a step")
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = channel.loop_session_runner("s1").call(session_id: "loop-abc~it1",
+                                                    prompt: "do one step", workspace: "/tmp/wt")
+
+    refute answer.key?(:round_cap), "nothing was cut, so nothing is claimed"
   end
 
   # -- the budget, inside the turn -------------------------------------------

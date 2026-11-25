@@ -29,6 +29,12 @@ module Rubot
     # Stop button and by the turn's cost figure; this number only exists to
     # catch a model that would otherwise loop forever with nobody watching.
     DEFAULT_MAX_ROUNDS = 1000
+    # Rounds one loop iteration may take. A loop's iteration is a turn whose
+    # cost lands on the loop's own token budget, and one request inside it
+    # re-sends the whole conversation: 99 to 110 requests of a growing context
+    # was one measured iteration. The cap is a ceiling on that, and the turn
+    # still gets one last round with no tools so it can say where it stopped.
+    DEFAULT_LOOP_MAX_ROUNDS = 40
     DEFAULT_AUTO_COMPACT = true
     DEFAULT_COMPACT_THRESHOLD_PERCENT = 60.0
     # Messages kept verbatim next to the summary. Six was a caption's worth: a
@@ -415,6 +421,16 @@ module Rubot
 
     # Deprecated alias for callers that still use the old name.
     alias max_tool_iterations max_rounds
+
+    # How many rounds one loop iteration may take. Set separately from
+    # `max_rounds` because the two are ceilings on different things: an
+    # ordinary turn is a conversation the reader is holding, while an iteration
+    # is one step of a loop that will be asked again, and its cost lands on the
+    # loop's budget. 0 or absent means the default of 40.
+    def loop_max_rounds
+      limit = agent_defaults["loop_max_rounds"].to_i
+      limit.positive? ? limit : DEFAULT_LOOP_MAX_ROUNDS
+    end
 
     # --- History window --------------------------------------------------
     #

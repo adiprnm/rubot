@@ -193,7 +193,12 @@ module Rubot
           agent.process(msg[:text], **callbacks)
         end
 
-        events << [ :done, response ]
+        # The round cap the turn reached, when it reached one, rides out with the
+        # answer: a loop iteration's ceiling is a fact about what stopped it, and
+        # only the agent knows it. Nil for an ordinary turn, which is what the
+        # reader on the other side then finds.
+        round_cap = agent.respond_to?(:last_round_cap) ? agent.last_round_cap : nil
+        events << [ :done, response, { round_cap: round_cap } ]
       rescue StandardError => e
         events << [ :error, e.class.name, e.message, Array(e.backtrace).first(5) ]
       ensure

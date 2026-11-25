@@ -31,6 +31,13 @@ agents:
     # tools; re-asks and continuations also count. A multi-file coding task
     # routinely needs more than 50. Default 120.
     max_rounds: 120
+    # Maximum rounds one iteration of a loop may take. An iteration is a step a
+    # loop will ask for again, and every request inside it re-sends the whole
+    # conversation, so its ceiling is much lower than a conversation's: one
+    # measured iteration made 99 to 110 requests over a context that grew from
+    # 19k to 76k tokens. At the cap the turn gets one last round with no tools
+    # to say where it stopped, and the loop's log records it. Default 40.
+    loop_max_rounds: 40
     # Context compaction. When the conversation reaches `threshold_percent` of
     # the model's context window, older turns are summarized into the running
     # summary and the most recent `keep_recent_messages` are kept verbatim.

@@ -31,7 +31,10 @@ module Rubot
         # This turn can now be stopped with /stop (or Ctrl+C in the REPL).
         @cancellation.start!
         Thread.current[:rubot_cancellation] = @cancellation
-        turn = Turn.new(limit: max_rounds)
+        turn = Turn.new(limit: turn_round_limit, close_out: loop_iteration_session?)
+        # A cap reported by an earlier turn must not be read as this one's: the
+        # reader of the answer looks here to write down what stopped it.
+        @last_round_cap = nil
         # The tool registry is shared across sessions, so the persona that owns
         # this turn has to be stamped on it now — not at boot, where a second
         # persona's actor would silently overwrite the first one's scope.
@@ -132,10 +135,23 @@ module Rubot
 
         # Say so when the run was cut short, instead of stopping silently. The
         # wording matters here: this limit is a net under a runaway loop, so the
-        # reader is told what was done and what is left, not handed homework.
+        # reader is told what was done and what is left, not handed homework. A
+        # loop iteration's cap is not that net: it is the iteration's own
+        # ceiling, and "lanjut" is not the word for a loop that asks again by
+        # itself.
         if turn.limit_hit
-          notice = "⚠️ Turn stopped after #{turn.limit} rounds without finishing. " \
-                   "Say \"lanjut\" to carry on from here — the work so far is saved."
+          # What the loop's log needs to know: the iteration stopped at its cap,
+          # not on its own. Two numbers rather than a sentence, because the entry
+          # has its own line to write. A turn outside a loop keeps the wording it
+          # always had, so its channels read the same text as before.
+          @last_round_cap = { rounds: turn.rounds, limit: turn.limit } if turn.close_out?
+          notice = if turn.close_out?
+            "⚠️ The iteration stopped at its round cap (#{turn.limit}) and reported " \
+              "where it got. The next iteration continues from here."
+          else
+            "⚠️ Turn stopped after #{turn.limit} rounds without finishing. " \
+              "Say \"lanjut\" to carry on from here — the work so far is saved."
+          end
           combined = combined.empty? ? notice : "#{combined}\n\n#{notice}"
         end
 
@@ -161,6 +177,15 @@ module Rubot
         loop do
           if turn.exhausted?
             turn.limit_hit = true
+            # A loop iteration's cap is a ceiling on cost, not a guillotine. The
+            # agent gets one last round with no tools to say where it stopped,
+            # which is what makes the next iteration start from a report instead
+            # of from a call that was cut off halfway. An ordinary turn keeps the
+            # hard stop: its reader is waiting, and it is told so below.
+            if turn.close_out? && !turn.closed_out
+              turn.closed_out = true
+              response, reasoning_content = close_out_round(turn, callbacks, stream: stream, &on_chunk)
+            end
             break
           end
 
@@ -290,6 +315,36 @@ module Rubot
         false
       end
 
+      # The one round an iteration gets after its cap: no tools, one question,
+      # and the answer is the turn's closing text. It is a request like any
+      # other -- measured and published like one -- but it does not count towards
+      # the cap, because it is the chance to stop cleanly rather than to work. A
+      # stop that lands while it runs unwinds like every other provider call, and
+      # the turn reports itself stopped instead.
+      def close_out_round(turn, callbacks, stream:, &on_chunk)
+        messages = build_messages
+        messages << { "role" => "user", "content" => LOOP_CLOSE_OUT_PROMPT }
+        live = { prompt_tokens: context_usage[:tokens], output_tokens: 0 }
+        emit_usage(callbacks.usage, live: live)
+
+        response, result = begin
+          ask_provider(messages, callbacks, response: "", live: live, stream: stream, tools: [], &on_chunk)
+        rescue Cancelled
+          turn.stopped = true
+          return [ "", nil ]
+        end
+
+        record_usage(result, messages: messages)
+        emit_usage(callbacks.usage)
+        response, _tool_calls, reasoning_content, _finish_reason =
+          read_result(result, turn, response, nil)
+        # The closing text is the turn's answer: the channel is handed the
+        # iteration's own report, not a fallback invented because no normal
+        # round had anything to say.
+        turn.answer << response unless turn.stopped || response.to_s.empty?
+        [ response, reasoning_content ]
+      end
+
       # One provider result, in whichever of the three shapes a provider
       # returns it, read into the names the loop works with.
       def read_result(result, turn, response, finish_reason)
@@ -347,8 +402,10 @@ module Rubot
           log_debug("Tool result: #{tool_result[0..200]}")
 
           # A successful write carries its before/after text so the TUI can
-          # rebuild the diff on /resume.
-          @session.add("tool", tool_result, tool_call_id: call[:id], ui_diff: ui_diff)
+          # rebuild the diff on /resume. The transcript gets the clipped copy:
+          # the callback above already showed the full result, and every later
+          # request re-sends what is written here.
+          @session.add("tool", Rubot::ToolOutput.clip(tool_result), tool_call_id: call[:id], ui_diff: ui_diff)
 
           # A tool that answered with UI has nothing for the model to say.
           # End the turn here instead of asking for a reply that would only
@@ -469,11 +526,11 @@ module Rubot
       # Returns [response, result]: the answer as far as it has arrived (a
       # truncated answer keeps appending across continuations) and whatever the
       # provider returned for the caller to parse.
-      def ask_provider(messages, callbacks, response:, live:, stream:, &on_chunk)
+      def ask_provider(messages, callbacks, response:, live:, stream:, tools: tool_definitions, &on_chunk)
         result = if block_given? && stream
           live_chars = 0
           live_emitted_at = 0.0
-          @provider.chat_stream(messages, tools: tool_definitions, on_retry: callbacks.retry_callback) do |chunk, tool_data, reasoning|
+          @provider.chat_stream(messages, tools: tools, on_retry: callbacks.retry_callback) do |chunk, tool_data, reasoning|
             # Thinking arrives before (and between) answer chunks; the answer
             # itself is never delayed by it.
             callbacks.reasoning&.call(reasoning) if reasoning && !reasoning.empty?
@@ -494,7 +551,7 @@ module Rubot
             yield chunk if chunk && block_given?
           end
         else
-          @provider.chat(messages, tools: tool_definitions, on_retry: callbacks.retry_callback)
+          @provider.chat(messages, tools: tools, on_retry: callbacks.retry_callback)
         end
 
         [ response, result ]

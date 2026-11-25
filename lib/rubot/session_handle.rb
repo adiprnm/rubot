@@ -26,6 +26,10 @@ module Rubot
       }.freeze
 
       attr_reader :session_id
+      # What the last turn's round cap was, when it reached one (see
+      # Agent#last_round_cap). A loop's runner reads it after the turn to write
+      # the fact into the iteration's log entry; an ordinary turn leaves it nil.
+      attr_reader :last_round_cap
 
       def initialize(ractor, session_id, stop_port = nil)
         @ractor = ractor
@@ -78,6 +82,7 @@ module Rubot
                   on_delegate: nil, on_loop: nil, stream: true, &on_chunk)
         events = Ractor::Port.new
         control = nil
+        @last_round_cap = nil
 
         @ractor.send({ type: :message, text: message, events: events, stream: stream })
 
@@ -132,6 +137,7 @@ module Rubot
 
             control << [ :confirm_result, event[1], answered ]
           when :done
+            @last_round_cap = event[2].is_a?(Hash) ? event[2][:round_cap] : nil
             response = event[1].to_s
             break
           when :error

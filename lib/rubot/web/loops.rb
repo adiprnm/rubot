@@ -518,13 +518,23 @@ module Rubot
           # must not become the loop's log entry or the commit's subject.
           text = "" if stopped
 
+          # The iteration's own ceiling, when it reached one. The agent is the
+          # only side that knows it, and the run is the only side with the log to
+          # write it into, so it rides back with the answer.
+          cap = handle.last_round_cap if handle.respond_to?(:last_round_cap)
+
           # Zero back to a caller that knows the budget: this turn has already
           # paid every token it reported, and a total charged a second time by
           # the run is one turn billed twice.
-          next with_shape({ text: text.to_s, tokens: seen }, shape) if budget.nil?
+          if budget.nil?
+            report = { text: text.to_s, tokens: seen }
+            report[:round_cap] = cap if cap
+            next with_shape(report, shape)
+          end
 
           owed = outstanding(ledger, id, measured, paid)
           report = with_shape({ text: text.to_s, tokens: 0, spent: measured, budget_stopped: stopped }, shape)
+          report[:round_cap] = cap if cap
           report[:unwritten] = owed if owed.positive?
           report
         end

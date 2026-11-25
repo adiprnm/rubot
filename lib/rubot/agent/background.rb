@@ -313,6 +313,13 @@ module Rubot
       # to compact_session as something it may not summarize.
       def run_auto_compaction
         return unless @config.auto_compact?
+        # An iteration of a loop never compacts. Its session is thrown away when
+        # the turn ends, so the summarizer would be a request paid for a
+        # transcript nobody reads again -- and it would rewrite the conversation
+        # mid-turn, which is what broke the prefix cache the rest of the turn
+        # was still hitting (96% of it, measured). The round cap and the clipping
+        # of tool output are what bound that turn; a summary is not.
+        return if loop_iteration_session?
         min_keep = @config.token_based_compaction? ? 2 : @config.compact_keep_recent_messages
         return if @session.message_count <= min_keep
 

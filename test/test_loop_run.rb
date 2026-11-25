@@ -1078,6 +1078,40 @@ class TestLoopRun < Minitest::Test
     assert_equal 1, texts.count { |text| text.include?("still red") }, texts.inspect
   end
 
+  # An iteration that stopped at its round cap is not one that ended because the
+  # work was done: the entry says so, in the same parenthetical as the spend, so
+  # a thin result can be read for what it is. The fact arrives from the agent
+  # through the runner and is never inferred from the text.
+  def test_an_iteration_that_reached_its_round_cap_says_so_in_the_entry
+    state = new_loop
+    run = loop_run(
+      runner: runner do |ctx|
+        write_file(ctx, "a.txt", "1\n")
+        { text: "started a.txt", tokens: 100, round_cap: { rounds: 40, limit: 40 } }
+      end,
+      verifier: verdicts({ verdict: :done, reason: "a.txt exists" })
+    )
+
+    run.call(state.id)
+
+    assert_equal "iteration 1 (sha #{head_sha(state.id)}, worker 100, verifier 0, rounds 40/40): " \
+                 "started a.txt", iteration_entry(state.id)
+  end
+
+  # A runner that reports no cap leaves no claim of one: the entry is the one it
+  # always was, so a loop driven by an older runner does not look capped.
+  def test_a_runner_that_reports_no_cap_leaves_the_fact_out_of_the_entry
+    state = new_loop
+    run = loop_run(
+      runner: runner { |ctx| write_file(ctx, "a.txt", "1\n"); { text: "added a.txt", tokens: 100 } },
+      verifier: verdicts({ verdict: :done, reason: "a.txt exists" })
+    )
+
+    run.call(state.id)
+
+    refute_includes iteration_entry(state.id), "rounds "
+  end
+
   # The done path used to write the verdict once from #iterate and again from
   # its own stop, so the last thing the file said about a finished loop was the
   # same sentence twice. Counted in the file itself, not in a copy of the log.

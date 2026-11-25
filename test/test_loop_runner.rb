@@ -35,6 +35,7 @@ class TestLoopRunner < Minitest::Test
     @iteration_tokens = 1_000
     @verify_tokens = 250
     @metrics = nil
+    @round_cap = nil
     @answer = ->(number) { "wrote step #{number}.txt" }
     @verdict = ->(number) { "NOT_YET still red #{number}" }
   end
@@ -70,7 +71,8 @@ class TestLoopRunner < Minitest::Test
         elsif @changes
           write_step(workspace, number)
         end
-        { text: @answer.call(number), tokens: @iteration_tokens, metrics: @metrics }
+        { text: @answer.call(number), tokens: @iteration_tokens, metrics: @metrics,
+          round_cap: @round_cap }
       end
     end
   end
@@ -232,6 +234,42 @@ class TestLoopRunner < Minitest::Test
     assert_match(/iteration 1 \(sha \h{7}, worker 1k, verifier 250\): wrote step 1\.txt/, second,
                  "one entry per iteration, carrying its sha and both halves of the spend")
     assert_operator second.index("iteration 1 ("), :<, second.index("loop started")
+  end
+
+  # Measured iterations were 76% one-call rounds, and every request re-sends the
+  # conversation: five dependent calls written one per round pay for the same
+  # growing context five times, while two independent calls made together pay for
+  # it once. The instruction that asks for the batch is in every iteration, and
+  # it costs a line, not the ceiling.
+  def test_the_iteration_prompt_asks_for_independent_tool_calls_in_one_round
+    state = new_loop(max_iterations: 5)
+    # A different reason each time: the run treats a repeated one as a verifier
+    # stuck, and this test is about the prompt, not about stopping early.
+    @verdict = ->(number) { "NOT_YET waiting on #{%w[alpha beta gamma delta epsilon][number - 1]}" }
+
+    loop_runner.start(state.id)
+
+    prompts = prompts_of("~it")
+    assert_equal 5, prompts.size
+    prompts.each do |prompt|
+      assert_includes prompt, "Batch independent tool calls"
+      assert_operator prompt.lines.size, :<=, Rubot::LoopRunner::PROMPT_LINES,
+                      "the whole prompt, instruction included, stays under the ceiling"
+    end
+  end
+
+  # An iteration that ran out of rounds is not an iteration that ran out of
+  # work, and the log has to say which one it was. The agent reports the cap, the
+  # runner carries it, and the entry writes it beside the spend.
+  def test_an_iteration_that_hit_its_round_cap_says_so_in_its_entry
+    state = new_loop(max_iterations: 1)
+    @round_cap = { rounds: 40, limit: 40 }
+
+    loop_runner.start(state.id)
+
+    entry = iteration_entries(state.id).first.text
+    assert_includes entry, "rounds 40/40"
+    assert_includes entry, "worker 1k", "the cap sits beside what the turn cost"
   end
 
   def test_the_verifier_prompt_judges_the_worktree_and_never_reads_the_log

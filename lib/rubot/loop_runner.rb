@@ -216,7 +216,8 @@ module Rubot
         # budget means -- it is the one that knows whether a verdict is still
         # worth buying.
         { text: note, tokens: 0, commit: reported, progress: progress,
-          budget_stopped: answer[:budget_stopped], metrics: answer[:metrics] }
+          budget_stopped: answer[:budget_stopped], metrics: answer[:metrics],
+          round_cap: answer[:round_cap] }
       end
     end
 
@@ -303,6 +304,9 @@ module Rubot
         # Only a runner that watched the budget says this, and only when it
         # stopped the turn for it.
         budget_stopped: truthy?(answer[:budget_stopped] || answer["budget_stopped"]),
+        # The cap the iteration reached, when it reached one: reported by the
+        # agent, carried here, written into the entry by the run.
+        round_cap: (answer[:round_cap] || answer["round_cap"]),
         # The shape of the turn's requests, when the door measured it (see
         # Web#loop_session_runner). Passed through untouched and never
         # invented here: a session runner that reports none leaves the entry
@@ -341,9 +345,14 @@ module Rubot
     def truthy?(value) = value == true || value == "true"
 
     # In the order an iteration needs it: what is wanted, how it is judged, where
-    # to work, what was already tried, and only then one instruction. The log is
+    # to work, what was already tried, and only then the instructions. The log is
     # trimmed from its oldest end, because the newest entry is the one that says
     # where the last turn stopped.
+    #
+    # The batching line is about the bill: a request carries the whole
+    # conversation, so five dependent calls written one per round pay for the
+    # same growing context five times, while two independent calls made together
+    # pay for it once. Measured iterations were 76% one-call rounds.
     def iteration_prompt(context, dir, branch)
       lines = [
         "Goal:", clip(context[:goal], GOAL_LINES),
@@ -351,9 +360,15 @@ module Rubot
         "", "Worktree: #{dir}", "Branch: #{branch}",
         "", "Log, newest first:"
       ]
-      room = [ [ PROMPT_LINES - 3 - lines.size, LOG_WINDOW ].min, 0 ].max
+      tail = [
+        "",
+        "Batch independent tool calls: when two or more calls do not need each",
+        "other's output, make them together in one round instead of one per round.",
+        "Make one step of progress toward the done criteria, then stop."
+      ]
+      room = [ [ PROMPT_LINES - lines.size - tail.size, LOG_WINDOW ].min, 0 ].max
       Array(context[:log]).first(room).each { |entry| lines << "- #{LoopStore.one_line(entry)}" }
-      lines.push("", "Make one step of progress toward the done criteria, then stop.")
+      lines.concat(tail)
       lines.join("\n")
     end
 
