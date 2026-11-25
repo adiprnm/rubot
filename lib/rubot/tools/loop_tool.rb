@@ -72,7 +72,8 @@ module Rubot
             "max_tokens" => {
               "type" => "integer",
               "description" => "Token budget for the whole loop (start, default #{DEFAULT_MAX_TOKENS}); " \
-                               "the run stops a turn that spends it rather than waiting for an iteration to end"
+                               "the run stops a turn that spends it rather than waiting for an iteration to end. " \
+                               "resume raises it, and that is the only way a loop that spent its budget runs again"
             }
           },
           "required" => [ "operation" ]
@@ -119,13 +120,22 @@ module Rubot
                              max_iterations: max_iterations(args), max_tokens: budget)
         if @loop_runner
           @loop_runner.start(state.id)
-          return "OK: loop #{state.id} started in a worktree of its own: #{truncated(state.goal)}"
+          return "OK: loop #{state.id} started in a worktree of its own: #{truncated(state.goal)} " \
+                 "#{allowance(state)}"
         end
 
         handed = request_from_agent(:start, state.id)
-        return handed if handed
+        return "#{handed} #{allowance(state)}" if handed
 
-        "OK: loop #{state.id} created, but no runner is attached to this channel, so it will not iterate"
+        "OK: loop #{state.id} created, but no runner is attached to this channel, so it will not iterate. " \
+          "#{allowance(state)}"
+      end
+
+      # What a start has just allowed, said out loud. The budget a loop gets
+      # without asking is twelve million tokens, which is a number nobody can
+      # guess: a start that whispers it leaves a reader to discover the bill.
+      def allowance(state)
+        "Budget: #{state.max_tokens} tokens, up to #{state.max_iterations} iterations."
       end
 
       def list_loops(store)
@@ -194,6 +204,11 @@ module Rubot
       # spends anything and would stop on the same number every time. This is
       # where the user already is when that happens, so this is where the cap is
       # raised -- and it reaches the file, because the run reads it there.
+      #
+      # The budget is the same fact with the same failure: a spent loop stops at
+      # the run's own boundary before it spends a token, so a resume that does
+      # not raise `max_tokens` buys nothing. It is refused here, which makes
+      # raising the budget the one road back for a loop that ran out.
       def resume(store, args)
         state, error = state_for(store, args)
         return error if error
@@ -201,32 +216,51 @@ module Rubot
 
         cap, refusal = cap_for_resume(state, args)
         return refusal if refusal
+        budget, refusal = budget_for_resume(state, args)
+        return refusal if refusal
 
         if state.status == "active"
-          return "OK: loop #{state.id} is already active and iterating" if cap.nil?
+          return "OK: loop #{state.id} is already active and iterating" if cap.nil? && budget.nil?
 
           # A loop already iterating is not started a second time -- two runs on
           # one worktree share an index and an iteration number -- but its cap is
           # a fact in the file, and raising it is the one useful thing to do here.
-          store.update(state.id) { |loop| loop.max_iterations = cap }
-          return "OK: loop #{state.id} is already active; its cap is now #{cap}"
+          store.update(state.id) do |loop|
+            loop.max_iterations = cap if cap
+            loop.max_tokens = budget if budget
+          end
+          return "OK: loop #{state.id} is already active; #{raised_note(cap, budget)}"
         end
 
         # One write, before the runner is asked to continue: the run reads the
-        # cap from the file, so a cap written afterwards is a number it never saw.
+        # cap and the budget from the file, so a number written afterwards is one
+        # it never saw.
         store.update(state.id) do |loop|
           loop.max_iterations = cap if cap
+          loop.max_tokens = budget if budget
           loop.status = "active"
         end
+        note = raised_note(cap, budget)
         if @loop_runner
           @loop_runner.resume(state.id)
+          return "OK: loop #{state.id} resumed; #{note}; the runner was asked to continue" unless note.empty?
+
           return "OK: loop #{state.id} resumed; the runner was asked to continue"
         end
 
         handed = request_from_agent(:resume, state.id)
-        return handed if handed
+        return [ handed, note ].reject(&:empty?).join("; ") if handed
 
         "OK: loop #{state.id} resumed; no runner is attached to this channel"
+      end
+
+      # What a resume changed, in the reader's words: the two facts that stop a
+      # loop and are the only ones a resume may move. Empty when it moved none.
+      def raised_note(cap, budget)
+        facts = []
+        facts << "its cap is now #{cap}" if cap
+        facts << "its budget is now #{budget} tokens" if budget
+        facts.join(" and ")
       end
 
       # The cap a resume asks for, and the refusal when it leaves the loop with
@@ -247,6 +281,36 @@ module Rubot
         end
 
         [ cap, nil ]
+      end
+
+      # The budget a resume asks for, and the two refusals around it. A budget a
+      # loop has already spent is the one thing a resume cannot walk away from:
+      # the run stops on the file's own numbers before it spends anything, so
+      # waking it again and again buys nothing and announces the same stop every
+      # time. Raising the budget is the road back, which is why the resume that
+      # names none is refused instead of writing a status nobody can act on.
+      def budget_for_resume(state, args)
+        raw = text(args["max_tokens"])
+        if raw.empty?
+          spent = state.tokens.to_i
+          return [ nil, nil ] if spent < state.max_tokens.to_i
+
+          return [ nil, "ERROR: loop #{state.id} has spent #{spent} of #{state.max_tokens} tokens; " \
+                        "raise max_tokens above #{spent} to resume it" ]
+        end
+
+        budget = Integer(raw, exception: false)
+        if budget.nil? || budget <= 0
+          return [ nil, "ERROR: max_tokens must be a whole number of tokens above zero; got #{raw.inspect}" ]
+        end
+
+        spent = state.tokens.to_i
+        if budget <= spent
+          return [ nil, "ERROR: loop #{state.id} has spent #{spent} tokens; max_tokens must be above " \
+                        "#{spent} to resume it, and #{budget} is not" ]
+        end
+
+        [ budget, nil ]
       end
 
       # Drop the last committed iteration: the worktree goes back one commit on

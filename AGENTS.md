@@ -126,7 +126,17 @@ bundle exec rubocop                # lint (RuboCop Rails Omakase, Rails cops off
   budget is the one stop that reaches inside a turn: the channel's
   `loop_session_runner` debits each usage report as it arrives and cancels the
   turn at the budget, the run commits what that turn left behind, and no verdict
-  is bought for it. A loop that ends
+  is bought for it. Only *measured* usage is debited: a report carries
+  `provisional: true` while it includes an estimate of the request still in
+  flight, and billing that estimate is a bill for a guess the real figure then
+  undercuts. The brake may read the higher number (measured plus estimate) so a
+  turn still stops early, but the store only ever holds measured tokens, and a
+  debit that does not land leaves the difference owed rather than swallowed. A
+  resume is the one road back for a loop that spent its budget: a spent loop is
+  refused by both the runner and the `loop` tool, with one entry saying to raise
+  `max_tokens`, and `max_tokens` on `resume` is the only way to raise it. That
+  stop is announced once per allowance, not once per tick, and `loop start`
+  states the budget it just allowed. A loop that ends
   `done` has its worktree removed and keeps its branch, because the branch is
   the record; one that stops any other way keeps its worktree, because the next
   resume continues in it. A loop that stopped as stalled or stuck is reported,

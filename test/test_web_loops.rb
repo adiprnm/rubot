@@ -57,15 +57,30 @@ class TestWebLoops < Minitest::Test
   # each one re-sends the conversation -- which is what makes the budget a
   # moving number rather than one figure at the end.
   class FakeHandle
+    # What a cancelled turn really hands back. The agent appends a notice to its
+    # answer instead of returning nothing (see Agent::STOP_NOTICE), so a runner
+    # that took the returned text as the turn's work would commit and log the
+    # notice itself.
+    STOP_NOTICE = "⏹️ Stopped by user."
+
     attr_reader :calls, :cancelled
 
-    def initialize(tokens: 1_234, text: "wrote step.txt", raise_with: nil, usage: nil)
+    def initialize(tokens: 1_234, text: "wrote step.txt", raise_with: nil, usage: nil, reports: nil,
+                   cancel_ok: true, cancel_raises: false, cancel_results: [], between: nil)
       @tokens = tokens
       @text = text
       @raise_with = raise_with
-      # Cumulative totals, the way a turn reports them: the last one is the
-      # whole turn's spend.
-      @usage = usage
+      # Cumulative totals, the way a turn reports them, oldest first; `reports`
+      # is the same thing with the provisional flag each report carries.
+      @reports = reports || usage&.map { |total| { total_tokens: total } }
+      # Runs before each report is handed over, which is how a test lands
+      # something between two requests of one turn.
+      @between = between
+      @cancel_ok = cancel_ok
+      @cancel_raises = cancel_raises
+      # A scripted answer per cancellation, for a stop that has to be asked for
+      # twice before it lands.
+      @cancel_results = cancel_results
       @calls = []
       @cancelled = 0
     end
@@ -74,22 +89,31 @@ class TestWebLoops < Minitest::Test
       @calls << { prompt: prompt, stream: stream }
       raise @raise_with if @raise_with
 
-      if @usage.nil?
+      if @reports.nil?
         on_usage&.call({ total_tokens: @tokens })
       else
-        @usage.each { |total| on_usage&.call({ total_tokens: total }) }
+        @reports.each_with_index do |report, index|
+          @between&.call(index)
+          on_usage&.call(report)
+        end
       end
-      # A turn stopped from the outside never returns: the actor raises into
-      # the session that asked for it (see SessionHandle#process).
-      raise Rubot::Cancelled, "stopped for its budget" if @cancelled.positive?
+      # A turn stopped from the outside can come back either way: the actor
+      # raises into the session that asked for it, or the agent answers with
+      # the notice it appended.
+      raise Rubot::Cancelled, "stopped for its budget" if @cancelled.positive? && @cancel_raises
+      return STOP_NOTICE if @cancelled.positive?
 
       @text
     end
 
     # What SessionHandle#cancel! does: a :stop on the port of the turn running.
+    # It answers false when the port is already gone, which is a stop that never
+    # landed.
     def cancel!
       @cancelled += 1
-      true
+      return @cancel_results.shift unless @cancel_results.empty?
+
+      @cancel_ok
     end
   end
 
@@ -252,7 +276,9 @@ class TestWebLoops < Minitest::Test
 
     assert_equal 1, handle.cancelled, "the turn is stopped from the inside, once"
     assert_equal true, answer[:budget_stopped]
-    assert_equal "", answer[:text], "a cancelled turn has no answer to hand back; its stop is the report"
+    assert_equal "", answer[:text],
+                 "a cancelled turn hands back its 'stopped' notice, never an answer: " \
+                 "the stop is the report, and the notice would otherwise become the log entry and the commit subject"
 
     reread = @store.load(state.id)
     assert_equal 60_000, reread.tokens, "every report debited as it arrived, and only once"
@@ -266,7 +292,7 @@ class TestWebLoops < Minitest::Test
   # an error would end the loop as broken work instead of as spent money.
   def test_a_cancelled_turn_is_a_budget_stop_and_not_an_error
     state = loop_state(max_tokens: 10_000)
-    handle = FakeHandle.new(usage: [ 30_000 ])
+    handle = FakeHandle.new(usage: [ 30_000 ], cancel_raises: true)
     channel = harness(pool: FakePool.new(handle))
 
     answer = channel.loop_session_runner("s1").call(session_id: "loop-#{state.id}~it1",
@@ -309,6 +335,197 @@ class TestWebLoops < Minitest::Test
                                            id: state.id, budget: 100_000, spent: 95_000)
 
     assert_equal 1, handle.cancelled, "5,000 left is not enough for a report of 10,000"
+  end
+
+  # The estimate of a request that has not come back is not a bill. A report
+  # carries usage-so-far plus the in-flight request's guess (see
+  # UsageAccounting, `provisional`), so billing every report billed a figure the
+  # provider never confirmed: the guess was debited, the real usage came in
+  # lower, and a counter that refuses a negative delta could only go up. Four
+  # reports of one turn, two of them estimates, must leave the measured total.
+  def test_a_provisional_report_is_never_billed_and_the_store_ends_at_the_measured_usage
+    state = loop_state(max_tokens: 1_000_000)
+    handle = FakeHandle.new(reports: [
+      { total_tokens: 40_000, provisional: true },
+      { total_tokens: 39_000, provisional: false },
+      { total_tokens: 94_000, provisional: true },
+      { total_tokens: 93_000, provisional: false }
+    ])
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = channel.loop_session_runner("s1").call(session_id: "loop-#{state.id}~it1",
+                                                    prompt: "do one step", workspace: "/tmp/wt",
+                                                    id: state.id, budget: 1_000_000, spent: 0)
+
+    assert_equal 0, handle.cancelled, "nothing here reaches the budget"
+    assert_equal 93_000, @store.load(state.id).tokens,
+                 "39,000 + 54,000 measured tokens, never the 40,000 and 94,000 estimates on top"
+    assert_equal 93_000, answer[:spent]
+    assert_equal 0, answer[:tokens], "the turn paid the store, so the run charges nothing"
+  end
+
+  # The guess is allowed to decide the stop, because stopping late costs a whole
+  # turn: the decision reads the higher figure while the store reads the
+  # measured one.
+  def test_a_provisional_estimate_may_stop_the_turn_but_is_not_billed
+    state = loop_state(max_tokens: 50_000)
+    handle = FakeHandle.new(reports: [ { total_tokens: 60_000, provisional: true } ])
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = channel.loop_session_runner("s1").call(session_id: "loop-#{state.id}~it1",
+                                                    prompt: "do one step", workspace: "/tmp/wt",
+                                                    id: state.id, budget: 50_000, spent: 0)
+
+    assert_equal 1, handle.cancelled, "60,000 estimated is past a budget of 50,000"
+    assert_equal true, answer[:budget_stopped]
+    assert_equal 0, @store.load(state.id).tokens,
+                 "an estimate nobody has confirmed is not written down as money spent"
+  end
+
+  # A failed debit must not advance the counter it was measured against: the
+  # difference between what was reported and what was written has to be debited
+  # again by the next report, or the turn is billed and the loop never hears of
+  # it.
+  def test_a_debit_that_could_not_be_written_is_retried_on_the_next_report
+    state = loop_state(max_tokens: 100_000)
+    path = @store.path(state.id)
+    original = File.read(path)
+    # A directory where the state file was: every write to it fails, the way a
+    # full disk or a read-only mount does.
+    FileUtils.rm_f(path)
+    FileUtils.mkdir_p(path)
+    restore = lambda do |index|
+      next unless index == 1
+
+      FileUtils.rm_rf(path)
+      File.write(path, original)
+    end
+    handle = FakeHandle.new(reports: [ { total_tokens: 10_000 }, { total_tokens: 30_000 } ], between: restore)
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = nil
+    _out, err = capture_io do
+      answer = channel.loop_session_runner("s1").call(session_id: "loop-#{state.id}~it1",
+                                                      prompt: "do one step", workspace: "/tmp/wt",
+                                                      id: state.id, budget: 100_000, spent: 0)
+    end
+
+    assert_includes err, "could not debit 10000", "a debit that never landed is said out loud"
+    assert_equal 30_000, @store.load(state.id).tokens,
+                 "the second report owes the whole measured total, not only its own increase"
+    assert_nil answer[:unwritten], "nothing is left unwritten once a later debit lands"
+  end
+
+  # The other end of the same rule: when no debit lands at all, the turn says
+  # what the store is missing instead of ending as if it were paid.
+  def test_a_debit_that_never_lands_is_reported_at_the_end_of_the_turn
+    state = loop_state(max_tokens: 100_000)
+    path = @store.path(state.id)
+    FileUtils.rm_f(path)
+    FileUtils.mkdir_p(path)
+    handle = FakeHandle.new(reports: [ { total_tokens: 10_000 }, { total_tokens: 30_000 } ])
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = nil
+    _out, err = capture_io do
+      answer = channel.loop_session_runner("s1").call(session_id: "loop-#{state.id}~it1",
+                                                      prompt: "do one step", workspace: "/tmp/wt",
+                                                      id: state.id, budget: 100_000, spent: 0)
+    end
+
+    assert_equal 30_000, answer[:unwritten], "what the store is owed, in the turn's own report"
+    assert_includes err, "could not debit"
+  end
+
+  # A cancellation that never reached the turn is not a stopped turn. Claiming
+  # it stopped would end the loop as spent money while the turn was still
+  # buying requests.
+  def test_a_cancel_that_does_not_land_is_not_reported_as_a_stop
+    state = loop_state(max_tokens: 10_000)
+    handle = FakeHandle.new(cancel_ok: false, reports: [ { total_tokens: 30_000 } ])
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = channel.loop_session_runner("s1").call(session_id: "loop-#{state.id}~it1",
+                                                    prompt: "do one step", workspace: "/tmp/wt",
+                                                    id: state.id, budget: 10_000, spent: 0)
+
+    assert_equal 1, handle.cancelled, "the stop was asked for"
+    assert_equal false, answer[:budget_stopped], "a stop that did not land must not be claimed"
+    assert(@store.load(state.id).log.any? { |entry| entry.text.include?("could not be stopped") },
+           "the loop's own log is where a stop that did not land is read")
+  end
+
+  # A stop the turn never received is asked for again on the next report, and
+  # the failure is written down once: a turn is only ever reported as stopped
+  # when a cancellation actually landed.
+  def test_a_stop_that_does_not_land_is_asked_again_on_the_next_report
+    state = loop_state(max_tokens: 10_000)
+    handle = FakeHandle.new(cancel_results: [ false, true ],
+                            reports: [ { total_tokens: 20_000 }, { total_tokens: 30_000 } ])
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = channel.loop_session_runner("s1").call(session_id: "loop-#{state.id}~it1",
+                                                    prompt: "do one step", workspace: "/tmp/wt",
+                                                    id: state.id, budget: 10_000, spent: 0)
+
+    assert_equal 2, handle.cancelled, "the stop is asked for until one lands"
+    assert_equal true, answer[:budget_stopped]
+    assert_equal 1, @store.load(state.id).log.count { |entry| entry.text.include?("could not be stopped") },
+                 "one line about the failure, not one per report"
+    assert_equal 30_000, @store.load(state.id).tokens
+  end
+
+  # -- waking a loop ---------------------------------------------------------
+
+  # A loop that stopped for its budget is paused, and `paused` is exactly what a
+  # tick and a tool call are allowed to wake. Nothing raises the budget by
+  # itself, so waking a spent loop bought nothing and cost everything: an entry
+  # in the file, a turn or a boundary stop, and an announcement to the
+  # conversation -- every tick, forever.
+  def test_a_spent_loop_is_not_woken_by_an_automatic_resume_and_is_not_announced_again
+    channel = harness
+    delivered = []
+    turns = []
+    channel.define_singleton_method(:prepare_delivery) { |_sid| nil }
+    channel.define_singleton_method(:deliver_report) { |_sid, text:, label: ""| delivered << text }
+    state = @store.create(goal: "g", done_criteria: "c", repo: @base, max_tokens: 5_000)
+    @store.update(state.id) { |loop| loop.status = "paused"; loop.tokens = 6_000 }
+
+    runner = Rubot::Web::Loops::SessionRunner.new(
+      base: @base, store: @store,
+      session_runner: lambda do |session_id:, prompt:, workspace:|
+        turns << session_id
+        { text: "a step", tokens: 900 }
+      end,
+      on_finish: ->(id, outcome) { channel.report_loop_finished("s1", id, outcome) }
+    )
+
+    2.times do
+      runner.resume(state.id)
+      runner.join(5)
+    end
+
+    assert_empty turns, "a loop that has spent its budget buys no turn"
+    assert_empty delivered, "the same stop is not announced to the conversation twice"
+    reread = @store.load(state.id)
+    assert_equal "paused", reread.status
+    assert_equal 1, reread.log.count { |entry| entry.text.include?("max_tokens") },
+                 "one entry saying how to get going again, however many ticks fire"
+  end
+
+  # The other side of the same rule: a paused loop with room left is woken, so
+  # the refusal above is about the budget and not about waking at all.
+  def test_a_paused_loop_with_room_left_is_woken
+    state = @store.create(goal: "g", done_criteria: "c", repo: @base, max_tokens: 5_000)
+    @store.update(state.id) { |loop| loop.status = "paused"; loop.tokens = 1_000 }
+    runner = session_runner(async: false, on_finish: ->(_id, _outcome) { nil })
+
+    answer = runner.resume(state.id)
+
+    refute_includes answer, "max_tokens", "nothing was refused"
+    # Not a git repository here, so the run stops before an iteration is paid
+    # for: it was woken, and that is what this says.
+    assert_includes answer, "stopped:"
   end
 
   # -- a handed-off request --------------------------------------------------
@@ -505,12 +722,13 @@ class TestWebLoops < Minitest::Test
     assert_equal 2, channel.openings.uniq.size, "one block, one index"
   end
 
-  def session_runner(on_finish: nil, logger: nil)
+  def session_runner(on_finish: nil, logger: nil, async: true)
     Rubot::Web::Loops::SessionRunner.new(
       base: @base,
       store: @store,
       session_runner: ->(session_id:, prompt:, workspace:) { { text: "", tokens: 0 } },
       logger: logger,
+      async: async,
       on_finish: on_finish
     )
   end
@@ -612,6 +830,28 @@ class TestWebLoops < Minitest::Test
     end
 
     assert_equal 3, delivered.size, "each ending reports once"
+  end
+
+  # The budget stop is the one a schedule can announce over and over: a tick
+  # wakes the same spent loop, and every wake would say the same sentence in the
+  # parent conversation. Once per allowance is news; the second copy is what a
+  # reader stops reading.
+  def test_a_budget_stop_is_announced_once_per_allowance
+    channel = harness
+    delivered = []
+    channel.define_singleton_method(:prepare_delivery) { |_sid| nil }
+    channel.define_singleton_method(:deliver_report) { |_sid, text:, label: ""| delivered << text }
+    state = @store.create(goal: "g", done_criteria: "c", repo: @base, max_tokens: 5_000)
+
+    2.times { channel.report_loop_finished("s1", state.id, result_for(state, :budget)) }
+
+    assert_equal 1, delivered.size, "one stop, one announcement"
+
+    # A bigger budget is a different allowance, so meeting it again is news.
+    @store.update(state.id) { |loop| loop.max_tokens = 50_000 }
+    channel.report_loop_finished("s1", state.id, result_for(@store.load(state.id), :budget))
+
+    assert_equal 2, delivered.size
   end
 
   def test_the_report_carries_the_goal_and_why_the_loop_stopped

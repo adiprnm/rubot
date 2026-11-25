@@ -40,11 +40,21 @@ module Rubot
     SUBJECT_CHARS = LoopRun::COMMIT_SUBJECT_CHARS
     NO_VERDICT = "verifier gave no verdict"
     DEFAULT_SUBJECT = "loop iteration"
+    # What an iteration the budget stopped says in its commit subject and its
+    # log entry. The turn has no answer to name -- it was cancelled mid-flight --
+    # and the notice the agent appends to a stopped turn ("Stopped by user") is
+    # not one: it would become the history of a loop nobody stopped.
+    BUDGET_SUBJECT = "stopped for its budget"
+    # The first words of the one entry a spent loop gets when it is woken: it is
+    # the marker that says the refusal is already in the log, so a schedule that
+    # fires every five minutes writes it once instead of forever.
+    BUDGET_REFUSED = "resume refused:"
     # A resume may wake these up. `done` is not one of them: its verdict was
     # answered, and an id in a log file must not re-arm a finished loop.
     RESUMABLE = %w[ paused stalled ].freeze
 
-    def initialize(store:, worktree_root:, session_runner:, verifier_persona: "code_reviewer", logger: nil)
+    def initialize(store:, worktree_root:, session_runner:, verifier_persona: "code_reviewer", logger: nil,
+                   budget: false)
       @store = store
       @worktree_root = worktree_root
       @session_runner = session_runner
@@ -54,6 +64,10 @@ module Rubot
       # channel's -- only knows a session, a prompt and a workspace, and asking
       # it for a fourth keyword is an ArgumentError before the turn even starts.
       @budget_aware = accepts?(:budget, :spent, :id)
+      # A channel that works a loop in production says the brake is required, so
+      # a runner that cannot take it stops the loop with a line in the log
+      # rather than running with the brake silently off.
+      @budget_required = budget
       # The session boundary takes no persona, so the name reaches the verifier
       # in its prompt: the only place a channel can see it.
       @verifier_persona = verifier_persona
@@ -68,10 +82,46 @@ module Rubot
 
     # Wakes a paused or stalled loop first; the counters are on disk, so the run
     # continues from the file's iteration rather than from zero.
+    #
+    # Not every wake is a run. A loop that stopped for its budget is paused, and
+    # raising the budget is the only thing that gets it going again: waking it
+    # again would buy a turn or a boundary stop and announce the same stop into
+    # the conversation, tick after tick. The refusal is recorded once and
+    # answered as the run's own :budget result, so nothing downstream reads a
+    # wake that did nothing as a loop that moved.
     def resume(id)
-      status = @store.load(id)&.status.to_s
-      @store.update(id) { |loop| loop.status = "active" } if RESUMABLE.include?(status)
+      state = @store.load(id)
+      refusal = spent_refusal(id)
+      return result(@store.load(id), :budget, iterations_of(state), refusal) if refusal
+
+      @store.update(id) { |loop| loop.status = "active" } if RESUMABLE.include?(state&.status.to_s)
       run(id)
+    end
+
+    # The note a spent loop gets instead of another wake, nil when it still has
+    # room. Public because the channel asks before it spawns a thread: a wake
+    # that buys nothing must not answer as if it had started something.
+    def spent_refusal(id)
+      state = @store.load(id) or return nil
+      # Only a loop a wake can move: a finished loop is not re-armed by a bigger
+      # budget, and an active one is already spending it.
+      return nil unless RESUMABLE.include?(state.status.to_s)
+
+      # The file's own budget, not an argument: the run reads the same number at
+      # its boundary, so a resume and a turn cannot disagree about what is left.
+      budget = state.max_tokens.to_i
+      return nil if state.tokens.to_i < budget
+
+      text = "#{BUDGET_REFUSED} spent #{state.tokens.to_i} of #{budget} tokens; " \
+             "raise max_tokens to continue"
+      # Once per loop, not once per wake: the entry is what tells a reader why a
+      # schedule keeps firing and nothing moves, and a log of the same sentence
+      # is a log nobody reads.
+      unless state.log.any? { |entry| entry.text.to_s.start_with?(BUDGET_REFUSED) }
+        @store.update(id) { |loop| loop.add_entry(entry(text)) }
+      end
+      log("loop #{id}: #{text}")
+      text
     end
 
     private
@@ -148,19 +198,23 @@ module Rubot
         before = worktree.head(id)
         answer = ask("loop-#{id}~it#{iteration}", iteration_prompt(context, dir, branch), dir,
                      id: id, budget: context[:budget], spent: context[:spent])
+        # A turn the budget stopped has no answer to name: what stopped it is the
+        # entry and the commit subject, so the agent's own "stopped" notice never
+        # becomes either.
+        note = answer[:budget_stopped] ? BUDGET_SUBJECT : answer[:text]
         # Charged here, before the commit, because the commit can fail: a stale
         # index.lock or a refused commit would otherwise throw away a turn the
         # provider already billed. The report hands back zero, since the run
         # charges what a runner reports and this one has already paid.
         charge(id, answer[:tokens])
-        commit = commit_iteration(worktree, id, commit_message(iteration, answer[:text]))
+        commit = commit_iteration(worktree, id, commit_message(iteration, note))
         after = worktree.head(id)
         progress, reported = progress_report(commit, before, after)
         # A turn the budget stopped is reported, never raised: the work it left
         # behind is committed like any other, and the run decides what a spent
         # budget means -- it is the one that knows whether a verdict is still
         # worth buying.
-        { text: answer[:text], tokens: 0, commit: reported, progress: progress,
+        { text: note, tokens: 0, commit: reported, progress: progress,
           budget_stopped: answer[:budget_stopped] }
       end
     end
@@ -212,15 +266,43 @@ module Rubot
     def ask(session_id, prompt, workspace, id: nil, budget: nil, spent: nil)
       log("#{session_id}: #{prompt.lines.size} prompt lines in #{workspace}")
       call = { session_id: session_id, prompt: prompt, workspace: workspace }
-      call.merge!(id: id, budget: budget, spent: spent) if @budget_aware
+      if @budget_aware
+        call.merge!(id: id, budget: budget, spent: spent)
+      elsif @budget_required
+        # A production channel's runner has to take the brake. Falling back to
+        # the three-keyword call would leave the loop with no way to stop a turn
+        # and nothing in the log to say so, so this stops the loop instead.
+        raise ArgumentError,
+              "the session runner does not accept the :id, :budget and :spent keywords, " \
+              "so this loop's token budget could not reach the turn it is spending"
+      end
       answer = @session_runner.call(**call)
       raise TypeError, "session runner returned #{answer.class}" unless answer.is_a?(Hash)
+
+      # Tokens the turn could not write to the loop's budget come back with it:
+      # they are the store's shortfall, and the loop's own log is where a reader
+      # finds out that the total is not the whole bill.
+      unwritten = (answer[:unwritten] || answer["unwritten"]).to_i
+      report_unwritten(id, unwritten) if unwritten.positive?
 
       { text: (answer[:text] || answer["text"]).to_s,
         tokens: (answer[:tokens] || answer["tokens"]).to_i,
         # Only a runner that watched the budget says this, and only when it
         # stopped the turn for it.
         budget_stopped: truthy?(answer[:budget_stopped] || answer["budget_stopped"]) }
+    end
+
+    # A turn whose spend never reached the file says so where the loop is read:
+    # the store is short by that much, and silently ending the iteration as if
+    # it were paid is how a budget stops meaning anything.
+    def report_unwritten(id, tokens)
+      return if id.to_s.empty?
+
+      note = "#{tokens} tokens spent on this turn could not be written to the loop's budget"
+      log("loop #{id}: #{note}")
+      @store.append_log(id, note)
+    rescue StandardError => e
+      log("loop #{id}: could not record #{tokens} unwritten tokens: #{e.message}")
     end
 
     # What a keyword-only callable agrees to be called with. A lambda says so

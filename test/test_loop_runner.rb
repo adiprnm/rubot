@@ -91,9 +91,9 @@ class TestLoopRunner < Minitest::Test
     @agent_commits.respond_to?(:call) ? @agent_commits.call(number) : @agent_commits
   end
 
-  def loop_runner(session: nil, logger: nil)
+  def loop_runner(session: nil, logger: nil, budget: false)
     Rubot::LoopRunner.new(store: @store, worktree_root: @root,
-                          session_runner: session || session_runner, logger: logger)
+                          session_runner: session || session_runner, logger: logger, budget: budget)
   end
 
   def worktree_path(id) = Rubot::LoopWorktree.new(root: @root, repo: @repo).path(id)
@@ -501,6 +501,109 @@ class TestLoopRunner < Minitest::Test
     assert_equal 6_000, @store.load(state.id).tokens,
                  "charged once: the turn paid the store, and the run charged nothing on top"
     assert_equal 2, commits(state.id), "the init commit plus the one the stopped turn made"
+  end
+
+  # The budget keywords are the brake, and a production runner that cannot take
+  # them must not fall back to the three-keyword path in silence: the loop would
+  # run with nothing able to stop a turn, and not one line would say so.
+  def test_a_runner_that_must_take_the_budget_but_cannot_fails_hard
+    state = new_loop(max_iterations: 1)
+    session = lambda do |session_id:, prompt:, workspace:|
+      @calls << { session_id: session_id, prompt: prompt, workspace: workspace }
+      { text: "NOT_YET red", tokens: 100 }
+    end
+
+    result = loop_runner(session: session, budget: true).start(state.id)
+
+    assert_equal :error, result.stop_reason
+    assert_includes result.message, "budget"
+    assert_empty @calls, "nothing is spent on a turn nothing could stop"
+    assert(@store.load(state.id).log.any? { |entry| entry.text.include?("budget") },
+           "the reason is in the loop's own log, where a reader finds it")
+  end
+
+  # A loop that stopped for its budget is paused, and paused is what a tick
+  # wakes -- but nothing in the file can raise the budget, so the wake buys
+  # nothing. It must not buy a turn, and it must say why once instead of every
+  # time a schedule fires.
+  def test_a_resume_past_the_budget_buys_no_turn_and_is_recorded_once
+    state = @store.create(goal: GOAL, done_criteria: CRITERIA, repo: @repo, max_tokens: 2_000)
+    @store.update(state.id) do |loop|
+      loop.status = "paused"
+      loop.iterations = 1
+      loop.tokens = 3_000
+    end
+
+    first = loop_runner.resume(state.id)
+    second = loop_runner.resume(state.id)
+
+    assert_equal :budget, first.stop_reason
+    assert_equal :budget, second.stop_reason
+    assert_empty @calls, "a spent loop buys no turn, however often it is woken"
+    reread = @store.load(state.id)
+    assert_equal "paused", reread.status
+    assert_equal 1, reread.log.count { |entry| entry.text.include?("max_tokens") },
+                 "one entry saying how to get going again, not one per wake"
+  end
+
+  # What the loop tool writes when the reader names a bigger budget: the run
+  # reads the file, so that write is what makes the next iteration affordable.
+  def test_a_resume_runs_again_once_the_budget_is_raised
+    state = @store.create(goal: GOAL, done_criteria: CRITERIA, repo: @repo,
+                          max_iterations: 3, max_tokens: 2_000)
+    @store.update(state.id) do |loop|
+      loop.status = "paused"
+      loop.iterations = 1
+      loop.tokens = 3_000
+    end
+    @verdict = ->(_number) { "DONE finished it" }
+    @store.update(state.id) { |loop| loop.max_tokens = 20_000 }
+
+    result = loop_runner.resume(state.id)
+
+    assert_equal :done_by_verifier, result.stop_reason
+    refute_empty @calls, "a bigger budget is what buys the next turn"
+    assert_equal "loop-#{state.id}~it2", @calls.first[:session_id], "it continues from the file's iteration"
+  end
+
+  # Tokens a channel could not write down are not silently forgiven: the turn
+  # says what the store is owed, and the loop's log is where it lands.
+  def test_tokens_a_channel_could_not_write_are_named_in_the_loops_log
+    state = new_loop(max_iterations: 1)
+    session = lambda do |session_id:, prompt:, workspace:, id: nil, budget: nil, spent: nil|
+      { text: "a step", tokens: 0, unwritten: 12_345 }
+    end
+
+    loop_runner(session: session, budget: true).start(state.id)
+
+    assert(@store.load(state.id).log.any? { |entry| entry.text.include?("12345") },
+           "the tokens nothing wrote down are named in the loop's own log")
+  end
+
+  # A turn the budget stopped hands the agent's own notice back ("Stopped by
+  # user") instead of an answer -- see Agent::STOP_NOTICE. The entry and the
+  # commit subject say what actually happened; the notice belongs to neither, and
+  # a loop whose history reads "Stopped by user" is a loop a reader will think
+  # they ended.
+  def test_a_stopped_turn_puts_the_stop_in_the_log_not_the_agents_notice
+    state = @store.create(goal: GOAL, done_criteria: CRITERIA, repo: @repo, max_tokens: 5_000)
+    session = lambda do |session_id:, prompt:, workspace:, id: nil, budget: nil, spent: nil|
+      if session_id.include?("~verify")
+        { text: "NOT_YET red", tokens: 100 }
+      else
+        File.write(File.join(workspace, "step1.txt"), "1\n")
+        { text: "⏹️ Stopped by user.", tokens: 0, budget_stopped: true, spent: 6_000 }
+      end
+    end
+
+    result = loop_runner(session: session, budget: true).start(state.id)
+
+    assert_equal :budget, result.stop_reason
+    log = @store.load(state.id).log.map(&:text)
+    refute(log.any? { |text| text.include?("Stopped by user") }, "the agent's notice is not the loop's history")
+    assert(log.any? { |text| text.include?("stopped for its budget") }, log.inspect)
+    assert_equal "iteration 1: stopped for its budget",
+                 git(@repo, "log", "-1", "--format=%s", "loop/#{state.id}").strip
   end
 
   # -- the verdict -----------------------------------------------------------

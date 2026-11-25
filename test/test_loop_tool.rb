@@ -89,6 +89,19 @@ class TestLoopTool < Minitest::Test
     state
   end
 
+  # The state a budget stop leaves behind: paused, with the tokens already past
+  # the budget in the file. Nothing in the file can move on its own, which is
+  # why a resume that only sets the status walks straight back into this.
+  def budget_stopped(tokens: 6_000, max_tokens: 5_000)
+    state = create(max_tokens: max_tokens)
+    @store.update(state.id) do |loop|
+      loop.status = "paused"
+      loop.iterations = 1
+      loop.tokens = tokens
+    end
+    state
+  end
+
   # -- start -----------------------------------------------------------------
 
   def test_start_without_a_runner_records_the_loop_and_says_no_runner_is_attached
@@ -168,6 +181,19 @@ class TestLoopTool < Minitest::Test
 
     assert_ok result
     assert_equal Rubot::LoopStore::State::DEFAULT_MAX_TOKENS, @store.load(@store.ids.first).max_tokens
+  end
+
+  # The budget a loop gets without asking is twelve million tokens, and a
+  # reader who is not told that has no way to notice what a start is about to
+  # allow: the number is said out loud, whether it was asked for or defaulted.
+  def test_start_says_the_budget_the_loop_gets
+    result = start_loop
+
+    assert_ok result
+    assert_includes result, "12000000", "a start names the budget it just allowed"
+
+    asked = start_loop("max_tokens" => 750_000)
+    assert_includes asked, "750000", "and the one it was given instead"
   end
 
   # Refused rather than coerced: a budget of zero stops the loop before its
@@ -417,6 +443,77 @@ class TestLoopTool < Minitest::Test
     assert_includes result, "already active"
     assert_equal 6, @store.load(state.id).max_iterations
     assert_empty @runner.calls, "an already active loop must not get a second run"
+  end
+
+  # -- the budget on resume --------------------------------------------------
+
+  # A spent budget is the one stop a resume cannot walk away from: the run stops
+  # on the same file's numbers before it spends anything, so a resume that only
+  # moved the status would stop at the same boundary, one tick at a time. The
+  # budget is the fact that has to move, and the resume is where the reader
+  # already is when it happens.
+  def test_resume_with_a_bigger_budget_raises_it_before_continuing
+    state = budget_stopped
+    budgets_at_resume = []
+    runner = FakeRunner.new { |id| budgets_at_resume << @store.load(id).max_tokens }
+    @tool.loop_runner = runner
+
+    result = @tool.execute("operation" => "resume", "id" => state.id, "max_tokens" => 20_000)
+
+    assert_ok result
+    reread = @store.load(state.id)
+    assert_equal 20_000, reread.max_tokens
+    assert_equal "active", reread.status
+    assert_equal [ 20_000 ], budgets_at_resume, "the run must see the raised budget before it continues"
+    assert_includes result, "20000", "the answer says what the loop may spend now"
+    assert_equal [ [ :resume, state.id ] ], runner.calls
+  end
+
+  # Raising the budget is the only way on, so a resume that does not raise it is
+  # refused where the reader can read why, instead of reviving a loop that stops
+  # again before it spends a token.
+  def test_resume_of_a_spent_loop_without_a_bigger_budget_is_refused
+    state = budget_stopped
+    @tool.loop_runner = @runner
+
+    result = @tool.execute("operation" => "resume", "id" => state.id)
+
+    assert_error result
+    assert_includes result, "max_tokens"
+    assert_includes result, "6000", "the answer says what was spent"
+    assert_includes result, "5000", "and what it was allowed"
+    reread = @store.load(state.id)
+    assert_equal "paused", reread.status, "a refused resume must not revive the loop"
+    assert_equal 5_000, reread.max_tokens, "and must not move the budget nobody raised"
+    assert_empty @runner.calls
+  end
+
+  def test_resume_refuses_a_budget_at_or_below_what_was_already_spent
+    state = budget_stopped
+    @tool.loop_runner = @runner
+
+    [ 6_000, 1 ].each do |budget|
+      result = @tool.execute("operation" => "resume", "id" => state.id, "max_tokens" => budget)
+
+      assert_error result
+      assert_includes result, "6000", "a budget that does not clear the spend is not a way on"
+      assert_equal "paused", @store.load(state.id).status
+      assert_equal 5_000, @store.load(state.id).max_tokens
+    end
+
+    assert_empty @runner.calls
+  end
+
+  def test_resume_refuses_a_budget_that_is_not_a_whole_number
+    state = budget_stopped
+    @tool.loop_runner = @runner
+
+    result = @tool.execute("operation" => "resume", "id" => state.id, "max_tokens" => "a lot")
+
+    assert_error result
+    assert_includes result, "whole number"
+    assert_equal "paused", @store.load(state.id).status
+    assert_empty @runner.calls
   end
 
   def test_stop_pauses_the_loop_and_says_stopped

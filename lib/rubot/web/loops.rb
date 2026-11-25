@@ -80,7 +80,11 @@ module Rubot
             store: store,
             worktree_root: File.join(base, WORKTREES_DIR),
             session_runner: session_runner,
-            logger: logger
+            logger: logger,
+            # This is production: the brake has to reach the turn, and a runner
+            # that cannot take the budget keywords is a bug worth stopping for
+            # rather than a loop that runs with nothing able to stop it.
+            budget: true
           )
         end
 
@@ -88,7 +92,19 @@ module Rubot
         # call inside someone's turn: answering now and working on a thread is
         # what keeps the conversation usable while the loop works.
         def start(id) = launch(:start, id)
-        def resume(id) = launch(:resume, id)
+
+        # A wake is not always a run. A loop that stopped for its budget is
+        # paused, which is exactly what a schedule and a resume are allowed to
+        # wake, and nothing outside the loop's own file can raise that budget:
+        # waking it would buy a turn or a boundary stop, say so to the
+        # conversation, and do it again on the next tick. The refusal is the
+        # honest answer, and it is recorded once rather than once per wake.
+        def resume(id)
+          refusal = @runner.spent_refusal(id)
+          return "OK: loop #{id} is paused: #{refusal}" if refusal
+
+          launch(:resume, id)
+        end
 
         # The claim, in public for one caller. A `loop` tool call spoken inside
         # a Ractor reaches the channel as plain data, so the channel is what
@@ -355,11 +371,29 @@ module Rubot
       # may cost the loop anything: a failure here is the runner's to log, which
       # is why nothing is rescued on this side.
       def report_loop_finished(sid, id, outcome)
-        return unless ANNOUNCED_STOPS.include?(outcome.stop_reason.to_s.to_sym)
+        reason = outcome.stop_reason.to_s.to_sym
+        return unless ANNOUNCED_STOPS.include?(reason)
+        return if reason == :budget && !announce_budget?(id, outcome.state)
 
         wait_for_quiet_turn(sid)
         prepare_delivery(sid)
         deliver_report(sid, text: loop_report_text(id, outcome), label: LOOP_REPORT_LABEL)
+      end
+
+      # A budget stop is the one ending a schedule can produce over and over: a
+      # tick wakes the same spent loop, and every wake would say the same
+      # sentence into the parent conversation. Once per allowance is news; the
+      # second copy is the reason a reader stops reading them. A bigger budget is
+      # a different allowance, so meeting it again is worth saying.
+      def announce_budget?(id, state)
+        key = [ id.to_s, state&.max_tokens.to_i ]
+        @announced_budget ||= {}
+        @announced_budget_mutex ||= Mutex.new
+        @announced_budget_mutex.synchronize do
+          return false if @announced_budget.key?(key)
+
+          @announced_budget[key] = true
+        end
       end
 
       # The reader's own turn comes first. A block opened while it is running
@@ -420,26 +454,45 @@ module Rubot
           # place a reader can tell them apart later.
           raise "no session pool is running and no persona '#{slug}' is known, so the loop cannot reach an agent" unless handle
 
-          total = 0
+          # Three numbers, and they are not the same number.
+          #
+          # `seen` is the last report as the provider sent it, estimate and all:
+          # that is what the brake reads, because stopping late costs a whole
+          # turn. `measured` is the last figure the provider actually charged
+          # for -- a report without `provisional` -- and `paid` is how much of it
+          # is already on the loop's file. Only measured usage is ever debited:
+          # the estimate in `seen` describes a request that has not come back,
+          # so billing it bills a guess, and when the real figure lands lower
+          # there is nothing to give back.
           paid = 0
-          halted = false
-          # A report carries the turn's running total, so what is new is the
-          # difference from the last one. Debited as it arrives rather than at
-          # the end, because a turn stopped for its budget never reaches the end
-          # of the turn to hand its total back: what the provider already billed
-          # has to be on the loop's file before the cancellation lands.
+          measured = 0
+          seen = 0
+          stopped = false
+          stop_failures = 0
+
           on_usage = lambda do |report|
-            total = report[:total_tokens].to_i
+            seen = usage_field(report, :total_tokens).to_i
             # A caller that knows no budget keeps the old answer and charges it
             # itself, which is what every caller written before this did.
             next if budget.nil?
 
-            debit(ledger, id, total - paid)
-            paid = total
-            next if halted || spent.to_i + total < budget.to_i
+            measured = [ measured, seen ].max unless provisional?(report)
+            # A debit that did not land must not advance `paid`: the difference
+            # between what was reported and what was written is owed again by
+            # the next report, or named as unwritten at the end of the turn.
+            paid = measured if measured > paid && debit(ledger, id, measured - paid)
 
-            halted = true
-            handle.cancel!
+            next if stopped || spent.to_i + seen < budget.to_i
+
+            # A cancellation that did not land is not a stop: the turn is still
+            # running and still spending, so it is asked again on the next
+            # report, and the first failure is said where the loop is read.
+            if handle.cancel!
+              stopped = true
+            else
+              record_stop_failed(ledger, id) if stop_failures.zero?
+              stop_failures += 1
+            end
           end
 
           text = ""
@@ -448,34 +501,85 @@ module Rubot
           rescue StandardError
             # The cancellation this turn asked for comes back as an exception
             # from the turn that was still running. That is the stop working,
-            # not a failure to report: what stopped the loop is its budget.
-            raise unless halted
+            # not a failure to report: what stopped the loop is its budget. A
+            # turn whose stop never landed is a real failure and travels.
+            raise unless stopped
           ensure
             # The iteration is over, so its actor has nothing left to do.
             @pool&.invalidate(session_id)
           end
+          # A stopped turn hands back the agent's own notice ("Stopped by
+          # user"), not an answer: what stopped it is the budget, and the notice
+          # must not become the loop's log entry or the commit's subject.
+          text = "" if stopped
 
           # Zero back to a caller that knows the budget: this turn has already
           # paid every token it reported, and a total charged a second time by
           # the run is one turn billed twice.
-          next { text: text.to_s, tokens: total } if budget.nil?
+          next { text: text.to_s, tokens: seen } if budget.nil?
 
-          { text: text.to_s, tokens: 0, spent: total, budget_stopped: halted }
+          owed = outstanding(ledger, id, measured, paid)
+          report = { text: text.to_s, tokens: 0, spent: measured, budget_stopped: stopped }
+          report[:unwritten] = owed if owed.positive?
+          report
         end
+      end
+
+      # What the store is still owed, after one last attempt at the end of the
+      # turn. A debit that never landed is money the provider billed and the
+      # loop's file never heard of, so it is not swallowed: it travels back with
+      # the turn's report, where the run writes it into the log.
+      def outstanding(ledger, id, measured, paid)
+        owed = [ measured - paid, 0 ].max
+        return 0 if owed.zero?
+        return 0 if debit(ledger, id, owed)
+
+        owed
+      end
+
+      # A usage report may arrive under symbol or string keys, and the one
+      # spelling is the one the channel's own accounting uses.
+      def usage_field(report, key)
+        value = report[key]
+        value.nil? ? report[key.to_s] : value
+      end
+
+      # A report is provisional while it carries the estimate of a request that
+      # has not returned (see UsageAccounting#report). Its absence and its
+      # falsehood mean the same thing: this figure is the provider's.
+      def provisional?(report) = truthy_usage?(usage_field(report, :provisional))
+
+      def truthy_usage?(value) = value == true || value == "true"
+
+      # A stop the turn never received, said where a loop is read: the turn is
+      # still spending, so what it spends lands on the file after all and the
+      # run ends the iteration at its budget boundary instead.
+      def record_stop_failed(ledger, id)
+        return unless ledger && id
+
+        ledger.append_log(id, "budget stop did not reach the turn: it could not be stopped, " \
+                              "so it runs to its end and the loop stops at the iteration boundary")
+      rescue StandardError => e
+        warn "[loop] #{id}: could not record a stop that did not land: #{e.message}"
       end
 
       # What a turn is spending, written the moment it is known. A loop's tokens
       # are its budget, so a debit that never lands is money spent that nothing
       # notices; `update` is the store's own charge path, the one the run uses
       # for a whole iteration, so the two cannot disagree about the total.
+      #
+      # Answers whether the write landed, because a caller that bills in deltas
+      # may only advance its own counter on a true.
       def debit(ledger, id, tokens)
-        return unless ledger && id && tokens.positive?
+        return false unless ledger && id && tokens.positive?
 
         ledger.update(id) { |loop| loop.tokens = loop.tokens.to_i + tokens }
+        true
       rescue StandardError => e
-        # A file that cannot be written is the run's to report at the end of the
-        # iteration, never a reason to lose the turn still arriving.
+        # A file that cannot be written is the turn's to report in its answer and
+        # the run's to write down, never a reason to lose the turn still arriving.
         warn "[loop] #{id}: could not debit #{tokens} tokens: #{e.message}"
+        false
       end
 
       # The store a turn pays into: the same directory the run counts, reached
