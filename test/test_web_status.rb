@@ -10,6 +10,20 @@ module Rubot
     class TestWebStatus < Minitest::Test
       include WebChannelSupport
 
+      # The compaction note is drawn in Indonesian here, the language the view
+      # was written in before the dictionary existed; the switch itself, en
+      # against id, is test_i18n.rb's business. Pinning it keeps these tests
+      # reading the wording instead of matching whichever language is default.
+      def setup
+        super
+        Rubot::I18n.locale = "id"
+      end
+
+      def teardown
+        Rubot::I18n.locale = Rubot::I18n::DEFAULT_LOCALE
+        super
+      end
+
       # --- status row -----------------------------------------------------
 
       # The row the TUI footer became: same three figures, words replaced by
@@ -411,11 +425,14 @@ module Rubot
         assert_includes erb, 'x-bind:disabled="$store.turn.compacting"'
       end
 
+      # A compaction that raised has to leave the reader a line they can act on,
+      # so the failure branch is rendered here rather than only found in the
+      # template's source.
       def test_the_compact_note_has_a_failure_branch
-        erb = File.read(File.expand_path("../lib/rubot/web/views/_compact_note.erb", __dir__))
+        html = View.render("_compact_note", state: :error)
 
-        assert_includes erb, "when :error"
-        assert_includes erb, "Ringkasan gagal"
+        assert_includes html, "Ringkasan gagal"
+        refute_includes html, View.render("_compact_note", state: :done)
       end
 
       def test_broadcast_refresh_reaches_only_the_page_showing_that_session

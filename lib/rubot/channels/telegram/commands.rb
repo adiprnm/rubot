@@ -75,13 +75,13 @@ module Rubot
         def handle_compact_command
           result = request_agent.compact_session
           unless result
-            return [ :skip, "ℹ️ Tidak ada yang perlu di-compact (percakapan masih pendek atau ringkasan gagal dibuat)." ]
+            return [ :skip, "ℹ️ #{I18n.t("compaction.empty")}" ]
           end
 
-          lines = [ "🗜️ **Compact selesai**" ]
-          lines << "Pesan diringkas: #{result[:summarized_messages]}"
-          lines << "Pesan dipertahankan: #{result[:kept_messages]}"
-          lines << "Perkiraan konteks: #{result[:context_before]} → #{result[:context_after]} token"
+          lines = [ "🗜️ **#{I18n.t("compaction.title")}**" ]
+          lines << I18n.t("compaction.summarized", count: result[:summarized_messages])
+          lines << I18n.t("compaction.kept", count: result[:kept_messages])
+          lines << I18n.t("compaction.context", before: result[:context_before], after: result[:context_after])
           [ :skip, lines.join("\n") ]
         end
 
