@@ -4,9 +4,9 @@
     and repeating it here would be shouting after the fact. -%>
 <% case state -%>
 <% when :rebuilt -%>
-  <p class="usage-note">Prompt akan dibangun ulang pada pesan berikutnya — memory, skill, dan AGENTS.md yang berubah ikut masuk.</p>
+  <p class="usage-note"><%= h(I18n.t("web.repin.rebuilt")) %></p>
 <% when :busy -%>
-  <p class="usage-note">Turn masih berjalan. Kirim ulang setelah selesai: prompt dibangun sebelum pesan berikutnya, bukan di tengah jawaban.</p>
+  <p class="usage-note"><%= h(I18n.t("web.repin.busy")) %></p>
 <% else -%>
-  <p class="usage-note">Prompt belum di-pin — pesan berikutnya memang sudah membangunnya dari yang terbaru.</p>
+  <p class="usage-note"><%= h(I18n.t("web.repin.none")) %></p>
 <% end -%>

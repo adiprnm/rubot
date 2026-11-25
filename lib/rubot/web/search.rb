@@ -58,7 +58,7 @@ module Rubot
             html: hit[:html],
             idx: hit[:idx],
             session_id: sid,
-            title: hit[:title].to_s.strip.empty? ? UNTITLED_SESSION : hit[:title].to_s.strip,
+            title: hit[:title].to_s.strip.empty? ? I18n.t("web.sessions.untitled") : hit[:title].to_s.strip,
             emoji: persona ? persona.emoji_or : "🤖",
             persona_label: persona ? persona.label : slug.capitalize,
             age: iso_age(hit[:created_at])

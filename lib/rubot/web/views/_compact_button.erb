@@ -8,6 +8,6 @@
         hx-target="#compact-note" hx-swap="innerHTML"
         hx-disabled-elt="this"
         x-bind:disabled="$store.turn.compacting"
-        title="Ringkas konteks sekarang" aria-label="Ringkas konteks sekarang">
+        title="<%= h(I18n.t("web.compact.now")) %>" aria-label="<%= h(I18n.t("web.compact.now")) %>">
   <%= usage_icon(:compact) %>
 </button>

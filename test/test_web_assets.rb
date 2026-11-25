@@ -80,7 +80,7 @@ module Rubot
         channel.send(:dispatch, gate_request("/unlock", method: "POST", query_string: "token=nope"), res)
 
         assert_equal 403, res.status
-        assert_includes res.body, "Token tidak cocok."
+        assert_includes res.body, Rubot::I18n.t("web.gate.token_mismatch")
         assert_nil res.headers["Set-Cookie"], "a wrong token writes no cookie"
       end
 

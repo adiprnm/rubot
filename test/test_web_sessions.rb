@@ -434,7 +434,7 @@ module Rubot
         rows = channel.session_rows("kanyaah", "web_kanyaah~20261108-090000")
 
         assert_equal 1, rows.size
-        assert_equal "Sesi baru", rows.first[:label]
+        assert_equal Rubot::I18n.t("web.sessions.untitled"), rows.first[:label]
         assert rows.first[:active]
       end
 
@@ -471,7 +471,7 @@ module Rubot
                      "pinned and recent are both open"
         assert_includes html, %(<span class="group-name">Pinned</span>)
         assert_includes html, %(<span class="group-name">Recent</span>)
-        assert_includes html, "Belum ada sesi yang di-pin."
+        assert_includes html, Rubot::I18n.t("web.sessions.empty_pinned")
       end
 
       def test_a_pinned_conversation_sits_above_the_rest_and_only_once
@@ -724,7 +724,7 @@ module Rubot
         assert_includes html, %(hx-get="/s/web_kanyaah~01/recent?page=2&amp;token=t0k")
         assert_includes html, %(hx-target="#recent-more")
         assert_includes html, %(hx-swap="outerHTML")
-        assert_includes html, "Muat lebih banyak"
+        assert_includes html, Rubot::I18n.t("web.sessions.more")
         refute_includes html, "page-note", "there are no numbered pages any more"
       end
 
@@ -1302,7 +1302,7 @@ module Rubot
         html = View.render("_sessions", groups: groups, token_query: "?token=t0k")
 
         assert_includes html, %(action="/s/web_kanyaah/delete?token=t0k")
-        assert_includes html, %(aria-label="Hapus sesi")
+        assert_includes html, %(aria-label="#{Rubot::I18n.t("web.sessions.delete")}")
       end
 
       def test_opening_a_persona_lands_on_its_newest_conversation

@@ -14,7 +14,7 @@
       <circle cx="17.6" cy="6.5" r="1.1" fill="currentColor" stroke="none"></circle>
     </svg>
   </span>
-  <span class="ig-connect-text">Hubungkan akun Instagram Business/Creator kamu</span>
+  <span class="ig-connect-text"><%= h(I18n.t("web.instagram_connect.prompt")) %></span>
   <form class="ig-connect-form" method="get" action="/instagram/connect<%= h(token_query) %>"
         target="_blank" rel="noopener noreferrer"
         x-data="{ busy: false }"
@@ -23,7 +23,7 @@
     <button class="btn primary ig-connect-btn" type="submit" :disabled="busy"
             :aria-busy="busy ? 'true' : 'false'">
       <span class="ig-spinner" aria-hidden="true" x-show="busy"></span>
-      <span x-text="busy ? 'Menghubungkan…' : 'Connect dengan Instagram'">Connect dengan Instagram</span>
+      <span x-text="busy ? '<%= js_text(I18n.t("web.instagram_connect.connecting")) %>' : '<%= js_text(I18n.t("web.instagram_connect.connect")) %>'"><%= h(I18n.t("web.instagram_connect.connect")) %></span>
     </button>
   </form>
 <% unless ig_accounts.empty? -%>
@@ -32,13 +32,13 @@
       <li class="ig-account-row">
         <span class="ig-account-name">
           <span class="ig-check" aria-hidden="true">✓</span>
-          @<%= h(acc["username"]) %><% if acc["is_default"] %> <span class="ig-default-label">(default)</span><% end %>
+          @<%= h(acc["username"]) %><% if acc["is_default"] %> <span class="ig-default-label"><%= h(I18n.t("web.instagram_connect.default")) %></span><% end %>
         </span>
         <form class="ig-disconnect-form" method="post"
               action="/instagram/disconnect<%= h(token_query) %>"
               hx-post="/instagram/disconnect<%= h(token_query) %>"
               hx-target="closest .ig-connect-card" hx-swap="outerHTML"
-              hx-confirm="Putuskan akun Instagram @<%= h(acc["username"]) %>?"
+              hx-confirm="<%= h(I18n.t("web.instagram_connect.disconnect_confirm", account: acc["username"])) %>"
               x-data="{ busy: false }"
               @submit="busy = true">
           <input type="hidden" name="account" value="<%= h(acc["username"]) %>">
@@ -46,7 +46,7 @@
           <button class="btn ig-disconnect-btn" type="submit" :disabled="busy"
                   :aria-busy="busy ? 'true' : 'false'">
             <span class="ig-spinner" aria-hidden="true" x-show="busy"></span>
-            <span x-text="busy ? 'Memutus…' : 'Putuskan'">Putuskan</span>
+            <span x-text="busy ? '<%= js_text(I18n.t("web.instagram_connect.disconnecting")) %>' : '<%= js_text(I18n.t("web.instagram_connect.disconnect")) %>'"><%= h(I18n.t("web.instagram_connect.disconnect")) %></span>
           </button>
         </form>
       </li>
@@ -57,7 +57,7 @@
   <ul class="ig-account-list ig-linkable-list">
     <% ig_linkable_accounts.each do |acc| -%>
       <li class="ig-account-row">
-        <span class="ig-account-name">@<%= h(acc["username"]) %> <span class="ig-default-label">(akun existing)</span></span>
+        <span class="ig-account-name">@<%= h(acc["username"]) %> <span class="ig-default-label"><%= h(I18n.t("web.instagram_connect.existing")) %></span></span>
         <form class="ig-link-form" method="post"
               action="/instagram/link<%= h(token_query) %>"
               hx-post="/instagram/link<%= h(token_query) %>"
@@ -69,7 +69,7 @@
           <button class="btn ig-link-btn" type="submit" :disabled="busy"
                   :aria-busy="busy ? 'true' : 'false'">
             <span class="ig-spinner" aria-hidden="true" x-show="busy"></span>
-            <span x-text="busy ? 'Menghubungkan…' : 'Link akun ini'">Link akun ini</span>
+            <span x-text="busy ? '<%= js_text(I18n.t("web.instagram_connect.connecting")) %>' : '<%= js_text(I18n.t("web.instagram_connect.link")) %>'"><%= h(I18n.t("web.instagram_connect.link")) %></span>
           </button>
         </form>
       </li>

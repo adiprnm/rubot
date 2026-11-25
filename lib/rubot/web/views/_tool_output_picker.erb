@@ -2,10 +2,10 @@
     live here once: a mode added to Persona::TOOL_OUTPUT_MODES shows up in the
     edit panel and the new-persona panel at the same time. -%>
 <% mode_labels = {
-     "verbose" => "Verbose — semua panggilan tool tetap tampil",
-     "compact" => "Compact — hanya panggilan tool terbaru yang tampil"
+     "verbose" => I18n.t("web.tool_output.verbose"),
+     "compact" => I18n.t("web.tool_output.compact")
    } -%>
-<label>Tool output
+<label><%= h(I18n.t("web.tool_output.label")) %>
   <select name="tool_output">
     <% Persona::TOOL_OUTPUT_MODES.each do |mode| %>
       <option value="<%= h(mode) %>"<%= " selected" if mode == selected %>><%= h(mode_labels[mode] || mode) %></option>

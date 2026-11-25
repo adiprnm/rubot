@@ -8,10 +8,10 @@
     runs watches these numbers move too. `id` is what the swap lands on, which
     is why the list has one and the panel around it does not. -%>
 <dl class="usage-facts" id="usage-facts">
-  <dt>model</dt>
+  <dt><%= h(I18n.t("web.usage.facts.model")) %></dt>
   <dd title="<%= h(model) %>"><%= h(model) %></dd>
 
-  <dt>biaya</dt>
+  <dt><%= h(I18n.t("web.usage.facts.cost")) %></dt>
   <dd class="usage-cost">
     <span class="value"><%= h(cost) %></span>
     <% unless breakdown.to_s.empty? -%>
@@ -19,30 +19,30 @@
     <% end -%>
   </dd>
 
-  <dt>permintaan</dt>
-  <dd><%= h(requests) %> · <%= h(messages) %> pesan</dd>
+  <dt><%= h(I18n.t("web.usage.facts.requests")) %></dt>
+  <dd><%= h(requests) %> · <%= h(I18n.t("web.usage.facts.messages", count: messages)) %></dd>
 
-  <dt>token</dt>
-  <dd><%= h(tokens_in) %> masuk · <%= h(tokens_out) %> keluar<% if reasoning.to_s.empty? == false %> · <%= h(reasoning) %> penalaran<% end %></dd>
+  <dt><%= h(I18n.t("web.usage.facts.tokens")) %></dt>
+  <dd><%= h(I18n.t("web.usage.facts.split", input: tokens_in, output: tokens_out)) %><% if reasoning.to_s.empty? == false %> · <%= h(I18n.t("web.usage.facts.reasoning", tokens: reasoning)) %><% end %></dd>
 
   <% unless re_read.to_s.empty? -%>
-    <dt>dibaca ulang</dt>
-    <dd title="Bagian dari permintaan terakhir yang dibayar dengan harga penuh: itulah yang dimakan pergeseran prefix."><%= h(re_read) %> token</dd>
+    <dt><%= h(I18n.t("web.usage.facts.reread")) %></dt>
+    <dd title="<%= h(I18n.t("web.usage.facts.reread_title")) %>"><%= h(I18n.t("web.usage.facts.reread_value", tokens: re_read)) %></dd>
   <% end -%>
 
-  <dt>cache</dt>
+  <dt><%= h(I18n.t("web.usage.facts.cache")) %></dt>
   <dd><%= h(cache) %></dd>
 
   <% unless saved.to_s.empty? -%>
-    <dt>dihemat</dt>
-    <dd title="Selisih harga input penuh dengan harga baca cache untuk token yang terbaca dari cache. Bukan bagian dari biaya — ini uang yang tidak keluar.">$<%= h(saved) %></dd>
+    <dt><%= h(I18n.t("web.usage.facts.saved")) %></dt>
+    <dd title="<%= h(I18n.t("web.usage.facts.saved_title")) %>">$<%= h(saved) %></dd>
   <% end -%>
 
   <% unless cache_history.to_s.empty? -%>
-    <dt>riwayat cache</dt>
-    <dd title="Porsi cache tiap permintaan, terlama dulu. Deretan 0% berarti prefix prompt berubah terus; satu 0% setelah compaction itu wajar."><%= h(cache_history) %></dd>
+    <dt><%= h(I18n.t("web.usage.facts.cache_history")) %></dt>
+    <dd title="<%= h(I18n.t("web.usage.facts.cache_history_title")) %>"><%= h(cache_history) %></dd>
   <% end -%>
 
-  <dt>context</dt>
+  <dt><%= h(I18n.t("web.usage.facts.context")) %></dt>
   <dd><%= h(ctx) %></dd>
 </dl>

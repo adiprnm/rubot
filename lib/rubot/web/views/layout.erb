@@ -16,7 +16,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="rubot">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>rubot · <%= h(title) %></title>
+  <title><%= h(I18n.t("web.document.title", title: title)) %></title>
   <link rel="preload" href="/assets/source-serif-4-var.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="/assets/martian-mono-var.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/assets/app.css?v=<%= h(asset_version) %>">

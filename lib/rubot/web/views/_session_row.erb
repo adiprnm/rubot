@@ -20,7 +20,7 @@
         see the dot. -%>
     <% if row[:unread] %>
       <span class="unread-dot" aria-hidden="true"></span>
-      <span class="sr-only">belum dibaca</span>
+      <span class="sr-only"><%= h(I18n.t("web.sessions.unread")) %></span>
     <% end %>
     <span class="label"><%= h(row[:label]) %></span>
   </a>
@@ -39,8 +39,8 @@
       <input type="hidden" name="page" value="<%= h(page) %>">
       <input type="hidden" name="current" value="<%= h(current) %>">
       <button type="submit"
-              title="<%= row[:pinned] ? "Lepas pin" : "Pin sesi" %>"
-              aria-label="<%= row[:pinned] ? "Lepas pin" : "Pin sesi" %>"
+              title="<%= h(row[:pinned] ? I18n.t("web.sessions.unpin") : I18n.t("web.sessions.pin")) %>"
+              aria-label="<%= h(row[:pinned] ? I18n.t("web.sessions.unpin") : I18n.t("web.sessions.pin")) %>"
               aria-pressed="<%= row[:pinned] ? "true" : "false" %>"><%= pin_icon(pinned: row[:pinned]) %></button>
     </form>
   <% end %>
@@ -48,7 +48,7 @@
   <form class="session-delete"
         method="post"
         action="/s/<%= h(row[:id]) %>/delete<%= h(token_query) %>"
-        onsubmit="return confirm('Hapus sesi ini? Seluruh percakapannya ikut hilang.')">
-    <button type="submit" title="Hapus sesi" aria-label="Hapus sesi">&times;</button>
+        onsubmit="return confirm('<%= js_text(I18n.t("web.sessions.delete_confirm")) %>')">
+    <button type="submit" title="<%= h(I18n.t("web.sessions.delete")) %>" aria-label="<%= h(I18n.t("web.sessions.delete")) %>">&times;</button>
   </form>
 </div>

@@ -404,6 +404,274 @@ module Rubot
         # rows of a form, not rows of a conversation, and the page draws every
         # one of them through this dictionary rather than in place.
         "web" => {
+          # The conversation's own chrome: the header that names the persona
+          # and the conversation, and the field a person types into. These are
+          # drawn on the one page a reader lives in, so they are the first thing
+          # a language switch has to move.
+          "chathead" => {
+            "menu" => "Persona and conversations",
+            "rename" => "Rename this conversation",
+            "rename_named" => "Rename this conversation: %{name}",
+            "name_field" => "Conversation name",
+            "save_name" => "Save the name",
+            "cancel" => "Cancel"
+          },
+          # The composer's words live in `title` and `aria-label` rather than in
+          # the page: both buttons are icons, so the label is the only place the
+          # word exists. `send_waiting` and `send_busy` are what the send button
+          # says instead of `send` while it cannot do its usual thing.
+          "composer" => {
+            "message" => "Message",
+            "placeholder" => "Write a message… Enter sends, Shift+Enter starts a new line",
+            "send" => "Send",
+            "send_busy" => "Send as guidance to the running turn",
+            "send_waiting" => "Waiting for the compaction to finish",
+            "unquote" => "Remove the quote",
+            "stop" => "Stop",
+            "stop_pending" => "Stopping…"
+          },
+          "emoji" => {
+            "label" => "Emoji",
+            "pick" => "Pick an emoji",
+            "search" => "Search emoji",
+            "search_placeholder" => "Search emoji…",
+            "other" => "Another emoji",
+            "other_placeholder" => "Another emoji…"
+          },
+          # The card that asks before a dangerous action runs. The tool's own
+          # name and reason arrive from the turn; the frame around them is here.
+          "confirm" => {
+            "title" => "Confirm: %{name}",
+            "continue" => "Continue",
+            "cancel" => "Cancel"
+          },
+          # The archive dialog. Its hint is the same sentence the results pane
+          # opens with, so the two share one key rather than drifting apart.
+          "search" => {
+            "label" => "Search conversations",
+            "placeholder" => "Search every conversation…",
+            "hint" => "Search every conversation, including the ones no longer in the sidebar.",
+            "close" => "Close (esc)",
+            "open" => "Search conversations (⌘K)",
+            "results" => "Search results",
+            "no_match" => "Nothing matches “%{query}”."
+          },
+          # The persona roster and the two forms that write one: the drawer's
+          # leftmost column, the panel that adds a persona and the panel that
+          # edits the one already open. A slug is a key and a directory name, so
+          # its example stays as it is in both languages.
+          "personas" => {
+            "rail_label" => "Personas",
+            "new" => "New persona",
+            "edit" => "Edit persona",
+            "slug" => "Slug",
+            "slug_placeholder" => "kanyaah",
+            "slug_hint" => "slug:",
+            "name" => "Name",
+            "name_placeholder" => "Kanyaah",
+            "default_model" => "Default model",
+            "follow_default" => "Use the default",
+            "default_thinking" => "Default thinking",
+            "system_prompt" => "System prompt",
+            "prompt_placeholder" => "What are you a specialist in…",
+            "prompt_keep" => "Leave it empty to keep the built-in prompt",
+            "create" => "Create",
+            "new_session" => "New session",
+            "fact_persona" => "persona",
+            "fact_model" => "model",
+            "fact_session" => "session",
+            "empty" => "%{name} has a SOUL, skills and a memory of its own. Everything it runs through a tool is drawn above its answer. A new session starts from an empty conversation, with the same persona."
+          },
+          # The two lists in the drawer, and the one row each conversation gets.
+          # `unread` is the dot's label for a reader who cannot see the dot;
+          # `unread_count` is the same news carried by the drawer's handle.
+          "sessions" => {
+            "pinned" => "Pinned",
+            "recent" => "Recent",
+            "pin_limit" => "At most 10 pinned sessions per persona",
+            "empty_pinned" => "No pinned sessions yet.",
+            "empty_recent" => "No sessions yet.",
+            "unread" => "unread",
+            "unread_count" => "%{count} unread conversations",
+            "pin" => "Pin this session",
+            "unpin" => "Unpin this session",
+            "delete" => "Delete this session",
+            "delete_confirm" => "Delete this session? Its whole conversation goes with it.",
+            # The name a conversation wears until its first prompt has been
+            # saved. A label, not the button that starts one
+            # (`web.personas.new_session`), so the two can be worded apart.
+            "untitled" => "New session",
+            "more" => "Load more"
+          },
+          # The files a turn sends back. The name is the turn's, the verb is the
+          # dictionary's: the card is a button or a link, and what pressing it
+          # does has to be said in the reader's language.
+          "attachments" => {
+            "group" => "Attachments from Rubot",
+            "play" => "Play %{name}",
+            "download" => "Download %{name}",
+            "open" => "Open %{name}",
+            "file" => "FILE"
+          },
+          # What the field answers when a prompt cannot be started. The whole
+          # notice is the sentence, drawn above the composer.
+          "turn" => {
+            "empty_message" => "The message is empty.",
+            "busy" => "A turn is still running. Wait a moment, or press Stop.",
+            "compacting" => "The conversation is being summarised. Wait a moment, then send again."
+          },
+          # The mark a rendered block carries: taking it back to the field as
+          # context, and how much of the block the chip says it carries.
+          "markdown" => {
+            "quote_paragraph" => "Quote this paragraph",
+            "quote_list" => "Quote this list",
+            "list_kind" => "List · %{count} items"
+          },
+          # The status row, the report it opens, and the facts in that report.
+          # The row is three figures whose names live in a tooltip; the report is
+          # the same numbers written out, so the two share this namespace.
+          "usage" => {
+            "row_cost" => "Total cost of this session, cumulative since its first request",
+            "row_cache" => "The share of the prompt taken from cache on the last request — not an average over the session",
+            "row_context" => "The share of the model's context window the next request will use",
+            "sheet" => "Usage",
+            "prompt" => "Prompt",
+            "repin" => "Rebuild",
+            "repin_note" => "Memory, skills and AGENTS.md that change mid-session only come in after a compaction — or here, at the cost of one request with no cache.",
+            "facts" => {
+              "model" => "model",
+              "cost" => "cost",
+              "requests" => "requests",
+              "messages" => "%{count} messages",
+              "tokens" => "tokens",
+              "split" => "%{input} in · %{output} out",
+              "reasoning" => "%{tokens} reasoning",
+              "reread" => "read again",
+              "reread_value" => "%{tokens} tokens",
+              "reread_title" => "The part of the last request paid at full price: that is what a shift in the prompt's prefix ate into.",
+              "cache" => "cache",
+              "saved" => "saved",
+              "saved_title" => "The difference between the full input price and the cache read price for the tokens that came from cache. Not part of the cost — this is money that did not leave.",
+              "cache_history" => "cache history",
+              "cache_history_title" => "The cache share of each request, oldest first. A run of 0% means the prompt's prefix keeps changing; a single 0% after a compaction is normal.",
+              "context" => "context",
+              "unknown" => "unknown",
+              "cost_in" => "in %{value}",
+              "cost_cache_read" => "cache read %{value}",
+              "cost_cache_write" => "cache write %{value}",
+              "cost_out" => "out %{value}",
+              "cache_from" => "%{tokens} tokens from cache",
+              "cache_shares" => "%{last}% last request · %{session}% session average · %{tokens} tokens total"
+            }
+          },
+          # The allowance the provider has left, in a sheet of its own because
+          # it is asked of a different party than the report above.
+          "quota" => {
+            "label" => "Allowance",
+            "checking" => "Checking the allowance…",
+            "used" => "%{percent}% used",
+            "reset_in" => "resets in %{when}",
+            # A provider that sells tokens by the drink has no subscription to
+            # run out of, and that is not a failure to report as one.
+            "unavailable" => "This provider has no subscription allowance; it bills per token.",
+            "error" => "The allowance could not be checked — %{error}.",
+            "check_failed" => "The allowance could not be checked right now.",
+            # The windows a meter measures. `rolling` is the provider's own
+            # window and keeps its length, so the label says the hours.
+            "meters" => {
+              "rolling" => "5 hours",
+              "weekly" => "weekly",
+              "monthly" => "monthly"
+            }
+          },
+          # The model and the effort a session runs on, under the composer.
+          # `thinking` is the name of the setting, not a word to translate.
+          "session_settings" => {
+            "trigger" => "Model and thinking level of this session: %{model}, %{thinking}",
+            "dialog" => "Model and thinking level",
+            "search" => "Search models",
+            "search_placeholder" => "Search models…",
+            "models" => "Model",
+            "no_match" => "No model matches.",
+            "thinking" => "thinking",
+            "choose_model" => "choose a model",
+            "count" => "%{count} models"
+          },
+          # The delegated runs of this conversation, at the same edge as the
+          # usage row. `toggle` is the word on the control; `title` heads the
+          # panel it opens.
+          "subagents" => {
+            "title" => "Subagents",
+            "toggle" => "subagent",
+            "empty" => "No subagents in this conversation yet.",
+            "running" => "%{count} subagents running",
+            "running_one" => "1 subagent running",
+            "failed" => "subagent failed",
+            "done" => "subagent finished"
+          },
+          "skills" => {
+            "title" => "Skills",
+            "empty" => "No skills installed yet",
+            "empty_in" => "in",
+            "required" => " · required"
+          },
+          "tool_output" => {
+            "label" => "Tool output",
+            "verbose" => "Verbose — every tool call stays on screen",
+            "compact" => "Compact — only the newest tool calls stay on screen"
+          },
+          "theme" => {
+            "everforest" => "Everforest",
+            "everforest_title" => "Everforest, dark green",
+            "dark" => "Dark",
+            "dark_title" => "Neutral dark",
+            "light" => "Light"
+          },
+          # The speaker's name in front of a message, for a screen reader. The
+          # bubble itself already says which side it is on.
+          "message" => {
+            "you" => "You: ",
+            "rubot" => "Rubot: "
+          },
+          "working" => "Working…",
+          "gate" => {
+            "title" => "rubot · sign in",
+            "brand" => "rubot",
+            "no_token" => "This address carries no token. Enter the access token to go on.",
+            "token" => "Token",
+            "submit" => "Sign in",
+            "token_mismatch" => "That token does not match."
+          },
+          "document" => {
+            "title" => "rubot · %{title}"
+          },
+          "repin" => {
+            "rebuilt" => "The prompt is rebuilt on the next message — memory, skills and AGENTS.md that changed come along.",
+            "busy" => "A turn is still running. Send it again once that finishes: the prompt is built before the next message, not in the middle of an answer.",
+            "none" => "The prompt is not pinned yet — the next message already builds it from the newest."
+          },
+          "compact" => {
+            "now" => "Summarize the context now"
+          },
+          # The card the instagram tool asks for. Each button says what it is
+          # doing while it does it, so both halves of the branch are named here.
+          "instagram_connect" => {
+            "prompt" => "Connect your Instagram Business/Creator account",
+            "connect" => "Connect with Instagram",
+            "connecting" => "Connecting…",
+            "default" => "(default)",
+            "disconnect" => "Disconnect",
+            "disconnecting" => "Disconnecting…",
+            "disconnect_confirm" => "Disconnect the Instagram account @%{account}?",
+            "existing" => "(existing account)",
+            "link" => "Link this account"
+          },
+          "lightbox" => {
+            "label" => "Attachment preview",
+            "download" => "Download",
+            "close" => "Close",
+            "close_label" => "Close the preview"
+          },
           "settings" => {
             "title" => "rubot · settings",
             "back" => "back",
@@ -446,6 +714,14 @@ module Rubot
               "theme" => "Theme",
               "font" => "Font",
               "font_note" => "Serif is the default. Georgia and Palatino use the device's own faces, so they can look a little different. The machine name stays monospace.",
+              # The tooltip on each face: what the stack behind the name is.
+              "font_titles" => {
+                "serif" => "The default: Source Serif 4, with Charter and Georgia as fallbacks",
+                "sans" => "A system face without serifs: Segoe UI, Roboto, or SF on an Apple device",
+                "mono" => "Martian Mono, the fixed-width face the machine names are set in",
+                "georgia" => "The device's own Georgia, with Times as a fallback",
+                "palatino" => "The device's own Palatino, with the system serif as a fallback"
+              },
               "notifications" => "Notifications",
               "push_title" => "Notifications while the app is closed",
               "push_loading" => "loading…",
@@ -971,6 +1247,227 @@ module Rubot
           }
         },
         "web" => {
+          "chathead" => {
+            "menu" => "Persona dan sesi",
+            "rename" => "Ubah nama sesi",
+            "rename_named" => "Ubah nama sesi: %{name}",
+            "name_field" => "Nama sesi",
+            "save_name" => "Simpan nama",
+            "cancel" => "Batal"
+          },
+          "composer" => {
+            "message" => "Pesan",
+            "placeholder" => "Tulis pesan… Enter mengirim, Shift+Enter baris baru",
+            "send" => "Kirim",
+            "send_busy" => "Kirim sebagai arahan ke turn yang berjalan",
+            "send_waiting" => "Menunggu compaction selesai",
+            "unquote" => "Hapus kutipan",
+            "stop" => "Batal",
+            "stop_pending" => "Membatalkan…"
+          },
+          "emoji" => {
+            "label" => "Emoji",
+            "pick" => "Pilih emoji",
+            "search" => "Cari emoji",
+            "search_placeholder" => "Cari emoji…",
+            "other" => "Emoji lain",
+            "other_placeholder" => "Emoji lain…"
+          },
+          "confirm" => {
+            "title" => "Konfirmasi: %{name}",
+            "continue" => "Lanjutkan",
+            "cancel" => "Batalkan"
+          },
+          "search" => {
+            "label" => "Cari percakapan",
+            "placeholder" => "Cari di seluruh percakapan…",
+            "hint" => "Cari di seluruh percakapan, termasuk yang sudah tidak ada di sidebar.",
+            "close" => "Tutup (esc)",
+            "open" => "Cari percakapan (⌘K)",
+            "results" => "Hasil pencarian",
+            "no_match" => "Tidak ada yang cocok dengan “%{query}”."
+          },
+          "personas" => {
+            "rail_label" => "Persona",
+            "new" => "Persona baru",
+            "edit" => "Ubah persona",
+            "slug" => "Slug",
+            "slug_placeholder" => "kanyaah",
+            "slug_hint" => "slug:",
+            "name" => "Nama",
+            "name_placeholder" => "Kanyaah",
+            "default_model" => "Model default",
+            "follow_default" => "Ikut default",
+            "default_thinking" => "Thinking default",
+            "system_prompt" => "System prompt",
+            "prompt_placeholder" => "Kamu spesialis …",
+            "prompt_keep" => "Kosongkan untuk memakai prompt bawaan",
+            "create" => "Buat",
+            "new_session" => "Sesi baru",
+            "fact_persona" => "persona",
+            "fact_model" => "model",
+            "fact_session" => "sesi",
+            "empty" => "%{name} punya SOUL, skills, dan memory sendiri. Apa pun yang dijalankannya lewat tool tampil di atas jawabannya. Sesi baru mulai dari percakapan kosong, dengan persona yang sama."
+          },
+          "sessions" => {
+            "pinned" => "Di-pin",
+            "recent" => "Terbaru",
+            "pin_limit" => "Maksimal 10 sesi di-pin per persona",
+            "empty_pinned" => "Belum ada sesi yang di-pin.",
+            "empty_recent" => "Belum ada sesi.",
+            "unread" => "belum dibaca",
+            "unread_count" => "%{count} percakapan belum dibaca",
+            "pin" => "Pin sesi",
+            "unpin" => "Lepas pin",
+            "delete" => "Hapus sesi",
+            "delete_confirm" => "Hapus sesi ini? Seluruh percakapannya ikut hilang.",
+            "untitled" => "Sesi baru",
+            "more" => "Muat lebih banyak"
+          },
+          "attachments" => {
+            "group" => "Lampiran dari Rubot",
+            "play" => "Putar %{name}",
+            "download" => "Unduh %{name}",
+            "open" => "Buka %{name}",
+            "file" => "BERKAS"
+          },
+          "turn" => {
+            "empty_message" => "Pesan kosong.",
+            "busy" => "Masih ada giliran yang berjalan. Tunggu sebentar atau tekan Stop.",
+            "compacting" => "Sedang meringkas percakapan. Tunggu sebentar, lalu kirim lagi."
+          },
+          "markdown" => {
+            "quote_paragraph" => "Kutip paragraf ini",
+            "quote_list" => "Kutip daftar ini",
+            "list_kind" => "Daftar · %{count} butir"
+          },
+          "usage" => {
+            "row_cost" => "Total biaya sesi ini, akumulatif sejak permintaan pertama",
+            "row_cache" => "Porsi prompt yang diambil dari cache pada permintaan terakhir — bukan rata-rata sesi",
+            "row_context" => "Porsi context window model yang terpakai permintaan berikutnya",
+            "sheet" => "Pemakaian",
+            "prompt" => "Prompt",
+            "repin" => "Bangun ulang",
+            "repin_note" => "Memory, skill, dan AGENTS.md yang berubah di tengah sesi baru masuk setelah compaction — atau di sini, dengan ongkos satu request tanpa cache.",
+            "facts" => {
+              "model" => "model",
+              "cost" => "biaya",
+              "requests" => "permintaan",
+              "messages" => "%{count} pesan",
+              "tokens" => "token",
+              "split" => "%{input} masuk · %{output} keluar",
+              "reasoning" => "%{tokens} penalaran",
+              "reread" => "dibaca ulang",
+              "reread_value" => "%{tokens} token",
+              "reread_title" => "Bagian dari permintaan terakhir yang dibayar dengan harga penuh: itulah yang dimakan pergeseran prefix.",
+              "cache" => "cache",
+              "saved" => "dihemat",
+              "saved_title" => "Selisih harga input penuh dengan harga baca cache untuk token yang terbaca dari cache. Bukan bagian dari biaya — ini uang yang tidak keluar.",
+              "cache_history" => "riwayat cache",
+              "cache_history_title" => "Porsi cache tiap permintaan, terlama dulu. Deretan 0% berarti prefix prompt berubah terus; satu 0% setelah compaction itu wajar.",
+              "context" => "konteks",
+              "unknown" => "belum diketahui",
+              "cost_in" => "masuk %{value}",
+              "cost_cache_read" => "cache baca %{value}",
+              "cost_cache_write" => "cache tulis %{value}",
+              "cost_out" => "keluar %{value}",
+              "cache_from" => "%{tokens} token dari cache",
+              "cache_shares" => "%{last}% permintaan terakhir · %{session}% rata-rata sesi · %{tokens} token total"
+            }
+          },
+          "quota" => {
+            "label" => "Kuota",
+            "checking" => "Memeriksa kuota…",
+            "used" => "%{percent}% terpakai",
+            "reset_in" => "reset dalam %{when}",
+            "unavailable" => "Provider ini tidak punya kuota langganan; biayanya dihitung per token.",
+            "error" => "Kuota tidak bisa diperiksa — %{error}.",
+            "check_failed" => "Kuota tidak bisa diperiksa sekarang.",
+            "meters" => {
+              "rolling" => "5 jam",
+              "weekly" => "mingguan",
+              "monthly" => "bulanan"
+            }
+          },
+          "session_settings" => {
+            "trigger" => "Model dan level thinking sesi ini: %{model}, %{thinking}",
+            "dialog" => "Model dan level thinking",
+            "search" => "Cari model",
+            "search_placeholder" => "Cari model…",
+            "models" => "Model",
+            "no_match" => "Tidak ada model yang cocok.",
+            "thinking" => "thinking",
+            "choose_model" => "pilih model",
+            "count" => "%{count} model"
+          },
+          "subagents" => {
+            "title" => "Subagent",
+            "toggle" => "subagent",
+            "empty" => "Belum ada subagent di percakapan ini.",
+            "running" => "%{count} subagent berjalan",
+            "running_one" => "1 subagent berjalan",
+            "failed" => "subagent gagal",
+            "done" => "subagent selesai"
+          },
+          "skills" => {
+            "title" => "Skill",
+            "empty" => "Belum ada skill terpasang",
+            "empty_in" => "di",
+            "required" => " · wajib"
+          },
+          "tool_output" => {
+            "label" => "Tampilan tool",
+            "verbose" => "Verbose — semua panggilan tool tetap tampil",
+            "compact" => "Compact — hanya panggilan tool terbaru yang tampil"
+          },
+          "theme" => {
+            "everforest" => "Everforest",
+            "everforest_title" => "Everforest, hijau gelap",
+            "dark" => "Gelap",
+            "dark_title" => "Gelap netral",
+            "light" => "Terang"
+          },
+          "message" => {
+            "you" => "Kamu: ",
+            "rubot" => "Rubot: "
+          },
+          "working" => "Bekerja…",
+          "gate" => {
+            "title" => "rubot · masuk",
+            "brand" => "rubot",
+            "no_token" => "Alamat ini tidak membawa token. Masukkan token akses untuk melanjutkan.",
+            "token" => "Token",
+            "submit" => "Masuk",
+            "token_mismatch" => "Token tidak cocok."
+          },
+          "document" => {
+            "title" => "rubot · %{title}"
+          },
+          "repin" => {
+            "rebuilt" => "Prompt akan dibangun ulang pada pesan berikutnya — memory, skill, dan AGENTS.md yang berubah ikut masuk.",
+            "busy" => "Turn masih berjalan. Kirim ulang setelah selesai: prompt dibangun sebelum pesan berikutnya, bukan di tengah jawaban.",
+            "none" => "Prompt belum di-pin — pesan berikutnya memang sudah membangunnya dari yang terbaru."
+          },
+          "compact" => {
+            "now" => "Ringkas konteks sekarang"
+          },
+          "instagram_connect" => {
+            "prompt" => "Hubungkan akun Instagram Business/Creator kamu",
+            "connect" => "Connect dengan Instagram",
+            "connecting" => "Menghubungkan…",
+            "default" => "(default)",
+            "disconnect" => "Putuskan",
+            "disconnecting" => "Memutus…",
+            "disconnect_confirm" => "Putuskan akun Instagram @%{account}?",
+            "existing" => "(akun existing)",
+            "link" => "Link akun ini"
+          },
+          "lightbox" => {
+            "label" => "Pratinjau lampiran",
+            "download" => "Unduh",
+            "close" => "Tutup",
+            "close_label" => "Tutup pratinjau"
+          },
           "settings" => {
             "title" => "rubot · pengaturan",
             "back" => "kembali",
@@ -1011,6 +1508,13 @@ module Rubot
               "theme" => "Tema",
               "font" => "Font",
               "font_note" => "Serif adalah bawaan. Georgia dan Palatino memakai huruf milik perangkat, jadi tampilannya bisa sedikit berbeda. Nama mesin tetap monospace.",
+              "font_titles" => {
+                "serif" => "Bawaan: Source Serif 4, dengan Charter dan Georgia sebagai cadangan",
+                "sans" => "Huruf sistem tanpa kait: Segoe UI, Roboto, atau SF di perangkat Apple",
+                "mono" => "Martian Mono, huruf berjarak tetap yang dipakai nama mesin",
+                "georgia" => "Georgia milik perangkat, dengan Times sebagai cadangan",
+                "palatino" => "Palatino milik perangkat, dengan serif sistem sebagai cadangan"
+              },
               "notifications" => "Notifikasi",
               "push_title" => "Notifikasi saat app sedang ditutup",
               "push_loading" => "memuat…",

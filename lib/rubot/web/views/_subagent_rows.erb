@@ -8,7 +8,7 @@
     a run (see Web::SubagentLine). The task rides on the row as a tooltip too,
     where a long one is still readable after the line has been cut. -%>
 <% if subagents.empty? -%>
-  <p class="usage-note">Belum ada subagent di percakapan ini.</p>
+  <p class="usage-note"><%= h(I18n.t("web.subagents.empty")) %></p>
 <% else -%>
   <ul class="subagent-rows">
 <% subagents.each do |s| -%>

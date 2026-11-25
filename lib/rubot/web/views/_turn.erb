@@ -4,7 +4,7 @@
     for one prompt is exactly the double render this avoids. -%>
 <% if text -%>
 <div class="msg user">
-  <div class="bubble text"><span class="sr-only">Kamu: </span><%= fmt_prompt(text) %></div>
+  <div class="bubble text"><span class="sr-only"><%= h(I18n.t("web.message.you")) %></span><%= fmt_prompt(text) %></div>
 </div>
 <% end -%>
 

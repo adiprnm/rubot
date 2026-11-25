@@ -9,7 +9,7 @@
       <a class="rail-item<%= row[:active] ? " is-active" : "" %>"
          href="/p/<%= h(row[:slug]) %><%= h(token_query) %>"
          title="<%= h(row[:label]) %>"
-         aria-label="<%= h(row[:label]) %><%= row[:unread].to_i.positive? ? ", #{row[:unread]} percakapan belum dibaca" : "" %>"
+         aria-label="<%= h(row[:label]) %><%= row[:unread].to_i.positive? ? ", #{I18n.t("web.sessions.unread_count", count: row[:unread].to_i)}" : "" %>"
          <%= row[:active] ? 'aria-current="page"' : "" %>>
         <span class="avatar" aria-hidden="true"><%= h(row[:emoji]) %></span>
         <%# The count is per persona, unlike the dot on a session row: the

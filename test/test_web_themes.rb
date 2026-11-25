@@ -174,9 +174,14 @@ module Rubot
         assert_includes html, "9,120"
         assert_includes html, "74.8%", "the cache share of the latest request"
         assert_includes html, "95.3%", "the session-wide share sits beside it"
-        assert_includes html, "rata-rata sesi", "and says which one it is"
+        assert_includes html, Rubot::I18n.t("web.usage.facts.cache_shares",
+                                            last: "74.8", session: "95.3", tokens: "96,000"),
+                        "and says which one it is"
         assert_includes html, "41,200 / 200,000"
-        assert_includes html, "cache baca", "the breakdown answers \"why this cost\""
+        assert_includes html,
+                        Rubot::I18n.t("web.usage.facts.cost_cache_read",
+                                      value: Rubot::UsageReport.money(0.0028)),
+                        "the breakdown answers \"why this cost\""
       end
 
       # The panel is where a broken cache becomes visible. One figure cannot
@@ -194,9 +199,9 @@ module Rubot
         })
         html = View.render("_usage_facts", **facts)
 
-        assert_includes html, "riwayat cache"
+        assert_includes html, Rubot::I18n.t("web.usage.facts.cache_history")
         assert_includes html, "0% 0% 0% 9%", "oldest first, so the shape is readable"
-        assert_includes html, "prefix prompt berubah terus",
+        assert_includes html, CGI.escapeHTML(Rubot::I18n.t("web.usage.facts.cache_history_title")),
                         "the line explains what a run of zeros means"
       end
 
@@ -213,7 +218,7 @@ module Rubot
         })
         html = View.render("_usage_facts", **facts)
 
-        refute_includes html, "riwayat cache"
+        refute_includes html, Rubot::I18n.t("web.usage.facts.cache_history")
       end
 
       # A launch has spent nothing and knows nothing yet. It says so rather
@@ -223,7 +228,7 @@ module Rubot
         channel = Rubot::Channels::Web.new(channel_config: {})
         html = View.render("_usage_facts", **channel.usage_facts({}))
 
-        assert_includes html, "belum diketahui"
+        assert_includes html, Rubot::I18n.t("web.usage.facts.unknown")
         assert_includes html, %(id="usage-facts")
         refute_includes html, "$0.0000"
       end
@@ -262,9 +267,9 @@ module Rubot
         })
         html = View.render("_usage_facts", **facts)
 
-        assert_includes html, "dibaca ulang"
+        assert_includes html, Rubot::I18n.t("web.usage.facts.reread")
         assert_includes html, "12,400"
-        assert_includes html, "dihemat"
+        assert_includes html, Rubot::I18n.t("web.usage.facts.saved")
         assert_includes html, "$0.0153"
       end
 
@@ -282,7 +287,7 @@ module Rubot
         html = View.render("_usage_facts", **facts)
 
         assert_includes html, "≤"
-        refute_includes html, "dihemat"
+        refute_includes html, Rubot::I18n.t("web.usage.facts.saved")
       end
 
       # The panel lives inside the page from the first paint — it is a
@@ -337,11 +342,12 @@ module Rubot
         html = View.render("_quota", meters: meters, note: "")
 
         assert_equal 2, meters.size, "only the windows the provider reported"
-        assert_includes html, "5 jam", "the provider's window, in the reader's words"
-        assert_includes html, "12.5% terpakai"
+        assert_includes html, Rubot::I18n.t("web.quota.meters.rolling"),
+                        "the provider's window, in the reader's words"
+        assert_includes html, Rubot::I18n.t("web.quota.used", percent: "12.5")
         assert_includes html, %(style="width: 12.5%")
         assert_includes html, "is-limited", "an allowance that is gone is not green"
-        assert_includes html, "reset dalam"
+        assert_includes html, Rubot::I18n.t("web.quota.reset_in", when: "").strip
       end
 
       # The panel is about the account's allowances only. The context window
@@ -365,8 +371,9 @@ module Rubot
                            meters: channel.quota_meters({ "rolling" => { "percent" => 25.0 } }),
                            note: "")
 
-        assert_includes html, "25.0% terpakai"
-        refute_includes html, "sisa", "the panel counts towards the limit, not away from it"
+        assert_includes html, Rubot::I18n.t("web.quota.used", percent: "25.0")
+        refute_includes html, Rubot::I18n.t("web.quota.used", percent: "75.0"),
+                        "the panel counts towards the limit, not away from it"
       end
 
       # The bar is coloured by how much of the allowance is gone: quiet while
@@ -385,7 +392,8 @@ module Rubot
 
         html = View.render("_quota", meters: channel.quota_meters({ "weekly" => { "percent" => 62.0 } }), note: "")
         assert_includes html, "usage-meter is-warm", "the class the colour hangs on"
-        assert_includes html, "62.0% terpakai", "the number is still there to be read"
+        assert_includes html, Rubot::I18n.t("web.quota.used", percent: "62.0"),
+                        "the number is still there to be read"
       end
 
       # A provider that sells tokens by the drink has no allowance at all. That
@@ -397,10 +405,10 @@ module Rubot
                                               note: channel.quota_note({ unavailable: true }))
 
         refute_includes html, "usage-meters"
-        assert_includes html, "tidak punya kuota langganan"
+        assert_includes html, Rubot::I18n.t("web.quota.unavailable")
 
         error = View.render("_quota", meters: [], note: channel.quota_note({ error: "HTTP 500" }))
-        assert_includes error, "HTTP 500"
+        assert_includes error, Rubot::I18n.t("web.quota.error", error: "HTTP 500")
       end
 
       # The panel's facts ride along with the row: a reader watching an open
@@ -591,13 +599,14 @@ module Rubot
         assert_includes html, %(name="skill" value="writing")
         assert_includes html, %(name="skill" value="opencode-usage")
         assert_match(/value="writing"\s+checked\s+disabled/, html, "a required skill is on and locked")
-        assert_includes html, "writing · wajib", "the box says why it cannot be unticked"
+        assert_includes html, "writing#{Rubot::I18n.t("web.skills.required")}",
+                        "the box says why it cannot be unticked"
       end
 
       def test_the_picker_says_so_when_no_skill_is_installed
         html = View.render("_skill_picker", skill_choices: [], skills_dir: "~/.rubot/skills")
 
-        assert_includes html, "Belum ada skill terpasang"
+        assert_includes html, Rubot::I18n.t("web.skills.empty")
         assert_includes html, %(name="skills_present" value="1"),
                        "an empty list still arrives as a choice, not as an absent form field"
       end

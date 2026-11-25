@@ -240,7 +240,7 @@ module Rubot
         html = View.render("_confirm", prompt: { name: "shell_exec", reason: "rm" }, turn_id: "tabc")
 
         assert_includes html, "/turns/tabc/confirm"
-        assert_includes html, "Lanjutkan"
+        assert_includes html, Rubot::I18n.t("web.confirm.continue")
       end
 
       def test_confirm_view_is_empty_without_a_prompt
@@ -435,7 +435,7 @@ module Rubot
         channel.create_turn(turn_request("halo"), res, "web_kanyaah")
 
         assert_equal 409, res.status
-        assert_includes res.body, "Sedang meringkas percakapan"
+        assert_includes res.body, Rubot::I18n.t("web.turn.compacting")
         refute channel.instance_variable_get(:@turns).any? { |_id, turn| turn.session_id == "web_kanyaah" },
                "no turn may be created against a transcript being rewritten"
       end
@@ -760,7 +760,7 @@ module Rubot
 
         html = View.render("_turn", turn: turn, text: "hi", token_query: "")
 
-        assert_includes html, "Lanjutkan"
+        assert_includes html, Rubot::I18n.t("web.confirm.continue")
         assert_includes html, "rm -rf build"
       end
 
@@ -881,7 +881,10 @@ module Rubot
 
         refute_nil button, "the stop button is the one that ends the turn"
         assert_includes button, %(x-bind:disabled="stopping")
-        assert_includes button, "stopLabel"
+        # The word is the dictionary's, so the button that says it in English
+        # says it in Indonesian the moment the language moves.
+        assert_includes button, Rubot::I18n.t("web.composer.stop_pending")
+        assert_includes button, Rubot::I18n.t("web.composer.stop")
 
         js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
 

@@ -55,7 +55,7 @@ module Rubot
       def test_the_search_dialog_opens_with_the_hint
         html = render_page
 
-        assert_includes html, %(<p class="search-hint">Cari di seluruh percakapan)
+        assert_includes html, %(<p class="search-hint">#{Rubot::I18n.t("web.search.hint")}</p>)
       end
 
       # The sidebar lists forty conversations and the page draws twenty entries
@@ -235,7 +235,7 @@ module Rubot
         channel.send(:dispatch, FakeRequest.new("/search", query: { "q" => "zebra" }), res)
 
         assert_equal 200, res.status
-        assert_includes res.body, "Tidak ada yang cocok"
+        assert_includes res.body, Rubot::I18n.t("web.search.no_match", query: "zebra")
       end
 
       # The link a hit writes is a page that already lands there: the entry is
@@ -426,7 +426,7 @@ module Rubot
                            page: 1, current: "web_rubot~x", token_query: "")
 
         assert_includes html, "unread-dot"
-        assert_includes html, "belum dibaca"
+        assert_includes html, Rubot::I18n.t("web.sessions.unread")
         assert_includes html, "is-unread"
       end
 
@@ -493,7 +493,7 @@ module Rubot
         html = View.render("_nav_badge", total: 12)
 
         assert_includes html, "9+"
-        assert_includes html, "12 percakapan belum dibaca"
+        assert_includes html, Rubot::I18n.t("web.sessions.unread_count", count: 12)
       end
 
 
@@ -520,7 +520,7 @@ module Rubot
 
         assert_includes html, ">3</span>"
         assert_includes html, "9+"
-        assert_includes html, "3 percakapan belum dibaca"
+        assert_includes html, Rubot::I18n.t("web.sessions.unread_count", count: 3)
       end
     end
   end

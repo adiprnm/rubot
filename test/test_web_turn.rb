@@ -340,7 +340,7 @@ module Rubot
 
         html = Rubot::Web::View.render("_subagent_sheet", subagents: jobs.runs("web_rubot"))
         assert_includes html, %(<span class="subagent-run")
-        assert_includes html, %(1 subagent berjalan)
+        assert_includes html, Rubot::I18n.t("web.subagents.running_one")
 
         jobs.finish(session_id: "web_rubot", run_id: "r1", status: "done", result: "puisi")
         html = Rubot::Web::View.render("_subagent_sheet", subagents: jobs.runs("web_rubot"))

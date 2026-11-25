@@ -454,7 +454,7 @@ module Rubot
       def test_the_working_band_does_not_carry_subagents
         html = Rubot::Web::View.render("_working", since: 12.5)
 
-        assert_includes html, "Working…"
+        assert_includes html, Rubot::I18n.t("web.working")
         refute_includes html, "subagent"
       end
 
@@ -657,7 +657,7 @@ module Rubot
 
         assert_includes html, "ig-connect-card"
         assert_includes html, "/instagram/connect?token=abc"
-        assert_includes html, "Connect dengan Instagram"
+        assert_includes html, Rubot::I18n.t("web.instagram_connect.connect")
       end
 
       def test_connect_button_disables_and_shows_a_spinner_while_connecting
@@ -668,7 +668,8 @@ module Rubot
         assert_includes html, "@submit=\"busy = true\"", "pressing the button marks it busy"
         assert_includes html, ":disabled=\"busy\"", "the button goes disabled while connecting"
         assert_includes html, "ig-spinner", "a loading indicator is present"
-        assert_includes html, "Menghubungkan…", "the label says it is connecting"
+        assert_includes html, Rubot::I18n.t("web.instagram_connect.connecting"),
+                        "the label says it is connecting"
         assert_includes html, "target=\"_blank\"", "the OAuth dialog opens in a new tab"
       end
 
@@ -684,10 +685,11 @@ module Rubot
 
         # The button stays so a second (or third) account can still be added.
         assert_includes html, "/instagram/connect", "Connect stays available for another account"
-        assert_includes html, "Connect dengan Instagram"
+        assert_includes html, Rubot::I18n.t("web.instagram_connect.connect")
         assert_includes html, "@adipurnm"
         assert_includes html, "@kanyaahweb"
-        assert_includes html, "(default)", "the default account is marked"
+        assert_includes html, Rubot::I18n.t("web.instagram_connect.default"),
+                        "the default account is marked"
         assert_equal 2, html.scan('name="account"').length, "each account has its own Putuskan"
         assert_includes html, "name=\"account\" value=\"adipurnm\"", "the right account is named"
         # The buttons answer for the card they sit in, not for the first
@@ -711,9 +713,11 @@ module Rubot
         refute ig.connected?, "the account is gone from this persona"
         assert_equal 200, res.status
         assert_includes res.body, "ig-connect-card"
-        assert_includes res.body, "Connect dengan Instagram", "the card is back in the connect state"
+        assert_includes res.body, Rubot::I18n.t("web.instagram_connect.connect"),
+                        "the card is back in the connect state"
         refute_includes res.body, "ig-account-name\">\n          <span class=\"ig-check\"", "no linked account is listed"
-        assert_includes res.body, "Link akun ini", "the token survives install-wide, so it can be re-linked without OAuth"
+        assert_includes res.body, Rubot::I18n.t("web.instagram_connect.link"),
+                        "the token survives install-wide, so it can be re-linked without OAuth"
       end
 
       def test_connect_button_has_no_underline
@@ -746,7 +750,7 @@ module Rubot
         markup = channel.send(:instagram_card_markup, persona: "rubot")
         assert_includes markup, "/instagram/link", "another persona's account can be linked here"
         assert_includes markup, "@kanyaahweb"
-        assert_includes markup, "Link akun ini"
+        assert_includes markup, Rubot::I18n.t("web.instagram_connect.link")
       end
 
       def test_instagram_link_route_grants_access_without_oauth

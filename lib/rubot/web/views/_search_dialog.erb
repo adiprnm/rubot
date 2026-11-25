@@ -9,17 +9,17 @@
     what the pane says before the first keystroke asks anything — the first
     answer replaces it, which is why the empty state is markup here rather than
     a branch in the fragment. -%>
-<dialog id="search-dialog" class="search-dialog" aria-label="Cari percakapan">
+<dialog id="search-dialog" class="search-dialog" aria-label="<%= h(I18n.t("web.search.label")) %>">
   <div class="search-top">
     <input class="search-input" type="search" name="q" autocomplete="off"
-           placeholder="Cari di seluruh percakapan…" aria-label="Cari percakapan"
+           placeholder="<%= h(I18n.t("web.search.placeholder")) %>" aria-label="<%= h(I18n.t("web.search.label")) %>"
            hx-get="/search<%= h(token_query) %>"
            hx-trigger="input changed delay:220ms, search"
            hx-target="#search-results"
            hx-swap="innerHTML">
-    <button class="search-close" type="button" data-search-close title="Tutup (esc)">esc</button>
+    <button class="search-close" type="button" data-search-close title="<%= h(I18n.t("web.search.close")) %>">esc</button>
   </div>
   <div id="search-results" class="search-results-pane" aria-live="polite">
-    <p class="search-hint">Cari di seluruh percakapan, termasuk yang sudah tidak ada di sidebar.</p>
+    <p class="search-hint"><%= h(I18n.t("web.search.hint")) %></p>
   </div>
 </dialog>

@@ -23,12 +23,12 @@
     stays on screen, or an open panel would close under the reader's cursor. -%>
 <%- hidden = !Rubot::Web::SubagentJobs.visible?(subagents) -%>
 <details class="usage-sheet usage-sheet-subagents" id="subagent-sheet"<%= " hidden" if hidden %>>
-  <summary class="usage-toggle" title="Subagent" aria-label="Subagent">
-    <%= usage_icon(:subagent) %><span class="subagent-label">subagent</span><span class="subagent-state" id="subagent-state"><%= View.render("_subagent_state", subagents: subagents) %></span>
+  <summary class="usage-toggle" title="<%= h(I18n.t("web.subagents.title")) %>" aria-label="<%= h(I18n.t("web.subagents.title")) %>">
+    <%= usage_icon(:subagent) %><span class="subagent-label"><%= h(I18n.t("web.subagents.toggle")) %></span><span class="subagent-state" id="subagent-state"><%= View.render("_subagent_state", subagents: subagents) %></span>
   </summary>
 
-  <div class="usage-panel" role="group" aria-label="Subagent">
-    <p class="panel-title">Subagent</p>
+  <div class="usage-panel" role="group" aria-label="<%= h(I18n.t("web.subagents.title")) %>">
+    <p class="panel-title"><%= h(I18n.t("web.subagents.title")) %></p>
     <div id="subagent-sheet-body">
       <%= View.render("_subagent_rows", subagents: subagents) %>
     </div>

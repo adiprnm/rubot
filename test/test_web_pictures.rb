@@ -828,7 +828,7 @@ module Rubot
         channel.create_turn(turn_request("   "), res, "web_kanyaah")
 
         assert_equal 400, res.status
-        assert_includes res.body, "Pesan kosong"
+        assert_includes res.body, Rubot::I18n.t("web.turn.empty_message")
       end
 
       # "Still working" sits between the conversation and the field, so the room

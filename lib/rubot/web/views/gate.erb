@@ -17,14 +17,14 @@
   <%= View.render("_appearance_head") %>
   <meta name="color-scheme" content="dark light">
   <meta name="theme-color" content="#2b332f">
-  <title>rubot · masuk</title>
+  <title><%= h(I18n.t("web.gate.title")) %></title>
   <link rel="stylesheet" href="/assets/app.css?v=<%= h(asset_version) %>">
 </head>
 <body>
 <form class="gate-card" method="post" action="/unlock">
-  <h1>rubot</h1>
-  <p>Alamat ini tidak membawa token. Masukkan token akses untuk melanjutkan.</p>
-  <label>Token
+  <h1><%= h(I18n.t("web.gate.brand")) %></h1>
+  <p><%= h(I18n.t("web.gate.no_token")) %></p>
+  <label><%= h(I18n.t("web.gate.token")) %>
     <input type="password" name="token" autocomplete="current-password"
            autocapitalize="off" autocorrect="off" spellcheck="false"
            required autofocus>
@@ -32,7 +32,7 @@
   <input type="hidden" name="next" value="<%= h(next_path) %>">
   <div class="gate-row">
     <% if error %><p class="gate-error"><%= h(error) %></p><% else %><span></span><% end %>
-    <button class="btn primary" type="submit">Masuk</button>
+    <button class="btn primary" type="submit"><%= h(I18n.t("web.gate.submit")) %></button>
   </div>
 </form>
 </body>

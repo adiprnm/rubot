@@ -10,17 +10,17 @@
     `aria-pressed` is the state, and it is the only thing the script changes
     besides the `data-theme` on <html> — the dots are pure CSS on that same
     attribute, so the labels cannot drift out of step with the page. -%>
-<div class="theme-picker" role="group" aria-label="Tema">
+<div class="theme-picker" role="group" aria-label="<%= h(I18n.t("web.settings.appearance.theme")) %>">
   <button type="button" class="theme-swatch" data-theme-choice="everforest"
-          aria-pressed="false" title="Everforest, hijau gelap">
-    <span class="swatch-dot" aria-hidden="true"></span>Everforest
+          aria-pressed="false" title="<%= h(I18n.t("web.theme.everforest_title")) %>">
+    <span class="swatch-dot" aria-hidden="true"></span><%= h(I18n.t("web.theme.everforest")) %>
   </button>
   <button type="button" class="theme-swatch" data-theme-choice="dark"
-          aria-pressed="false" title="Gelap netral">
-    <span class="swatch-dot" aria-hidden="true"></span>Gelap
+          aria-pressed="false" title="<%= h(I18n.t("web.theme.dark_title")) %>">
+    <span class="swatch-dot" aria-hidden="true"></span><%= h(I18n.t("web.theme.dark")) %>
   </button>
   <button type="button" class="theme-swatch" data-theme-choice="light"
-          aria-pressed="false" title="Terang">
-    <span class="swatch-dot" aria-hidden="true"></span>Terang
+          aria-pressed="false" title="<%= h(I18n.t("web.theme.light")) %>">
+    <span class="swatch-dot" aria-hidden="true"></span><%= h(I18n.t("web.theme.light")) %>
   </button>
 </div>

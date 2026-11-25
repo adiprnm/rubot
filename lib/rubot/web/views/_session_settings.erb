@@ -27,8 +27,8 @@
       hx-swap="outerHTML">
   <button class="session-trigger" type="button" data-settings-open
           aria-haspopup="dialog" aria-controls="session-settings-dialog"
-          aria-label="Model dan level thinking sesi ini: <%= h(model_label) %>, <%= h(session_thinking) %>">
-    <span class="session-trigger-model"><%= h(model_label.empty? ? "pilih model" : model_label) %></span>
+          aria-label="<%= h(I18n.t("web.session_settings.trigger", model: model_label, thinking: session_thinking)) %>">
+    <span class="session-trigger-model"><%= h(model_label.empty? ? I18n.t("web.session_settings.choose_model") : model_label) %></span>
     <span class="session-trigger-dot" aria-hidden="true">·</span>
     <span class="session-trigger-thinking"><%= h(session_thinking) %></span>
   </button>
@@ -37,14 +37,15 @@
       escape to close and an inert page behind it. The field stays put and only
       the list under it scrolls: the query is the thing being edited. -%>
   <dialog id="session-settings-dialog" class="settings-dialog"
-          aria-label="Model dan level thinking">
+          aria-label="<%= h(I18n.t("web.session_settings.dialog")) %>">
     <div class="search-top">
       <input class="search-input" type="search" autocomplete="off"
-             data-model-search placeholder="Cari model…" aria-label="Cari model">
-      <button class="search-close" type="button" data-settings-close title="Tutup (esc)">esc</button>
+             data-model-search placeholder="<%= h(I18n.t("web.session_settings.search_placeholder")) %>"
+             aria-label="<%= h(I18n.t("web.session_settings.search")) %>">
+      <button class="search-close" type="button" data-settings-close title="<%= h(I18n.t("web.search.close")) %>">esc</button>
     </div>
 
-    <div class="model-list" data-model-list role="radiogroup" aria-label="Model">
+    <div class="model-list" data-model-list role="radiogroup" aria-label="<%= h(I18n.t("web.session_settings.models")) %>">
       <% model_choices.each do |choice| %>
         <%# The row says the name; the id stays in the search text, so a reader
             who knows the id can still find the model by typing it. -%>
@@ -64,11 +65,11 @@
           <span class="model-choice-name"><%= h(session_model) %></span>
         </label>
       <% end %>
-      <p class="model-empty" data-model-empty hidden>Tidak ada model yang cocok.</p>
+      <p class="model-empty" data-model-empty hidden><%= h(I18n.t("web.session_settings.no_match")) %></p>
     </div>
 
     <div class="thinking-row">
-      <span class="thinking-row-label">thinking</span>
+      <span class="thinking-row-label"><%= h(I18n.t("web.session_settings.thinking")) %></span>
       <% Persona::THINKING_LEVELS.each do |level| %>
         <label class="thinking-chip">
           <input type="radio" name="thinking" value="<%= h(level) %>"<%= " checked" if level == session_thinking %>>
@@ -78,8 +79,8 @@
     </div>
 
     <div class="settings-actions">
-      <span class="model-count" data-model-count aria-live="polite"><%= model_choices.size %> model</span>
-      <button class="btn settings-apply" type="submit">Simpan</button>
+      <span class="model-count" data-model-count aria-live="polite"><%= h(I18n.t("web.session_settings.count", count: model_choices.size)) %></span>
+      <button class="btn settings-apply" type="submit"><%= h(I18n.t("web.settings.save")) %></button>
     </div>
   </dialog>
 </form>

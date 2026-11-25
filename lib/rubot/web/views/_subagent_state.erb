@@ -13,13 +13,14 @@
     when it runs out, so the channel schedules the swap that takes the sheet
     away (see Web#hide_subagents_later). -%>
 <%- running = subagents.count { |s| %w[started thinking tool].include?(s[:phase]) } -%>
-<%- if running.positive? -%><span class="subagent-run" title="<%= running %> subagent berjalan" aria-label="<%= running %> subagent berjalan">⟡</span><%- else -%>
+<%- running_label = I18n.t(running == 1 ? "web.subagents.running_one" : "web.subagents.running", count: running) -%>
+<%- if running.positive? -%><span class="subagent-run" title="<%= h(running_label) %>" aria-label="<%= h(running_label) %>">⟡</span><%- else -%>
 <%-   last = subagents.find { |s| %w[done failed].include?(s[:phase]) && s[:finished_at] } -%>
 <%-   fresh = last && (Time.now - last[:finished_at]).to_f <= Rubot::Web::SubagentJobs::DONE_MARK_SECONDS -%>
 <%-   if fresh -%>
 <%-     failed = last[:phase] == "failed" -%>
 <span class="subagent-settled<%= " subagent-settled-failed" if failed %>"
-      title="<%= failed ? "subagent gagal" : "subagent selesai" %>"
-      aria-label="<%= failed ? "subagent gagal" : "subagent selesai" %>"><%= failed ? "✗" : "✓" %></span>
+      title="<%= h(I18n.t(failed ? "web.subagents.failed" : "web.subagents.done")) %>"
+      aria-label="<%= h(I18n.t(failed ? "web.subagents.failed" : "web.subagents.done")) %>"><%= failed ? "✗" : "✓" %></span>
 <%-   end -%>
 <%- end -%>

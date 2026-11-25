@@ -8,7 +8,7 @@
   <%# The drawer's handle. It lives here rather than beside the drawer so that
       it is reachable from the one screen a phone has, and it is re-rendered
       with the header after a turn so the two never disagree about state. -%>
-  <button class="nav-toggle" type="button" aria-label="Persona dan sesi"
+  <button class="nav-toggle" type="button" aria-label="<%= h(I18n.t("web.chathead.menu")) %>"
           :aria-expanded="nav ? 'true' : 'false'" @click="nav = !nav">
     <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none"
          stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
@@ -29,8 +29,8 @@
         Escape leaves it as it was. The answer swaps the header and the sidebar
         in place, so the tab and the list follow without a reload. -%>
     <span class="session-rename" x-data="{ editing: false }" @keydown.escape="editing = false">
-      <button class="session-name" type="button" title="Ubah nama sesi"
-              aria-label="Ubah nama sesi: <%= h(session_label) %>"
+      <button class="session-name" type="button" title="<%= h(I18n.t("web.chathead.rename")) %>"
+              aria-label="<%= h(I18n.t("web.chathead.rename_named", name: session_label)) %>"
               x-show="!editing"
               @click="editing = true; $nextTick(() => $refs.field.select())"><%= h(session_label) %></button>
       <form class="session-rename-form" x-show="editing" x-cloak
@@ -42,14 +42,14 @@
         <input class="session-rename-field" name="name" x-ref="field" required
                value="<%= h(session_label) %>"
                maxlength="<%= Rubot::SessionNamer::MAX_TITLE_CHARS %>"
-               autocomplete="off" aria-label="Nama sesi" enterkeyhint="done">
-        <button type="submit" title="Simpan nama" aria-label="Simpan nama">✓</button>
-        <button type="button" title="Batal" aria-label="Batal"
+               autocomplete="off" aria-label="<%= h(I18n.t("web.chathead.name_field")) %>" enterkeyhint="done">
+        <button type="submit" title="<%= h(I18n.t("web.chathead.save_name")) %>" aria-label="<%= h(I18n.t("web.chathead.save_name")) %>">✓</button>
+        <button type="button" title="<%= h(I18n.t("web.chathead.cancel")) %>" aria-label="<%= h(I18n.t("web.chathead.cancel")) %>"
                 @click="editing = false">×</button>
       </form>
     </span>
   <% end -%>
-  <a class="chat-settings-link" href="/settings<%= h(token_query) %>" aria-label="pengaturan" title="pengaturan">
+  <a class="chat-settings-link" href="/settings<%= h(token_query) %>" aria-label="<%= h(I18n.t("web.settings.topbar")) %>" title="<%= h(I18n.t("web.settings.topbar")) %>">
     <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none"
      stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
   <path d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 0 1 0 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 0 1 0-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281Z" />

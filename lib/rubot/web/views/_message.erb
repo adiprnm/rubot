@@ -8,8 +8,8 @@
     simply carries no id and no mark. -%>
 <% if role == "user" -%>
 <div class="msg user<%= " is-landed" unless defined?(landed).nil? || !landed %>"<% if defined?(anchor) && anchor %> id="<%= h(anchor) %>"<% end %>>
-  <div class="bubble text"><span class="sr-only">Kamu: </span><%= fmt_prompt(text) %></div>
+  <div class="bubble text"><span class="sr-only"><%= h(I18n.t("web.message.you")) %></span><%= fmt_prompt(text) %></div>
 </div>
 <% else -%>
-<div class="text"<% if defined?(anchor) && anchor %> id="<%= h(anchor) %>"<% end %>><span class="sr-only">Rubot: </span><%= fmt(text) %></div>
+<div class="text"<% if defined?(anchor) && anchor %> id="<%= h(anchor) %>"<% end %>><span class="sr-only"><%= h(I18n.t("web.message.rubot")) %></span><%= fmt(text) %></div>
 <% end -%>

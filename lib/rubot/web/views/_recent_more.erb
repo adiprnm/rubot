@@ -8,5 +8,5 @@
      href="/s/<%= h(current) %>?page=<%= h(page) %><%= h(token_query.sub("?", "&")) %>"
      hx-get="/s/<%= h(current) %>/recent?page=<%= h(page) %><%= h(token_query.sub("?", "&")) %>"
      hx-target="#recent-more"
-     hx-swap="outerHTML">Muat lebih banyak</a>
+     hx-swap="outerHTML"><%= h(I18n.t("web.sessions.more")) %></a>
 </div>

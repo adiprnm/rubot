@@ -9,34 +9,34 @@
   <%# The leftmost column is a roster, not a menu: one round avatar per
       persona, named on hover, the way a chat app lists the places you can be.
       It stays narrow because a persona is a face, not a row of text. -%>
-  <nav class="rail" aria-label="Persona">
+  <nav class="rail" aria-label="<%= h(I18n.t("web.personas.rail_label")) %>">
     <%= View.render("_rail", personas: personas, token_query: token_query) %>
 
     <%# The form opens as a dialog in the middle of the screen rather than
         inside the rail: a persona needs a slug, a name and a prompt, and none
         of those fit in five rems. -%>
     <details class="rail-new">
-      <summary title="Persona baru" aria-label="Persona baru">
+      <summary title="<%= h(I18n.t("web.personas.new")) %>" aria-label="<%= h(I18n.t("web.personas.new")) %>">
         <span class="avatar" aria-hidden="true">+</span>
       </summary>
       <form class="rail-panel" hx-post="/personas<%= h(token_query) %>" hx-target=".form-error" hx-swap="innerHTML">
-        <p class="panel-title">Persona baru</p>
-        <label>Slug
-          <input name="slug" placeholder="kanyaah" pattern="[a-z0-9][a-z0-9_-]{0,31}" required>
+        <p class="panel-title"><%= h(I18n.t("web.personas.new")) %></p>
+        <label><%= h(I18n.t("web.personas.slug")) %>
+          <input name="slug" placeholder="<%= h(I18n.t("web.personas.slug_placeholder")) %>" pattern="[a-z0-9][a-z0-9_-]{0,31}" required>
         </label>
-        <label>Nama
-          <input name="name" placeholder="Kanyaah">
+        <label><%= h(I18n.t("web.personas.name")) %>
+          <input name="name" placeholder="<%= h(I18n.t("web.personas.name_placeholder")) %>">
         </label>
         <%= View.render("_emoji_picker", choices: emoji_choices, selected: emoji_choices.first) %>
-        <label>Model default
+        <label><%= h(I18n.t("web.personas.default_model")) %>
           <select name="model">
-            <option value="">Ikut default</option>
+            <option value=""><%= h(I18n.t("web.personas.follow_default")) %></option>
             <% model_choices.each do |choice| %>
               <option value="<%= h(choice[:value]) %>"><%= h(choice[:label]) %></option>
             <% end %>
           </select>
         </label>
-        <label>Thinking default
+        <label><%= h(I18n.t("web.personas.default_thinking")) %>
           <select name="thinking">
             <% Persona::THINKING_LEVELS.each do |level| %>
               <option value="<%= h(level) %>"<%= " selected" if level == Rubot::Channels::Web::DEFAULT_THINKING %>><%= h(level) %></option>
@@ -44,11 +44,11 @@
           </select>
         </label>
         <%= View.render("_tool_output_picker", selected: Persona::DEFAULT_TOOL_OUTPUT) %>
-        <label>System prompt
-          <textarea name="system_prompt" rows="3" placeholder="Kamu spesialis …"></textarea>
+        <label><%= h(I18n.t("web.personas.system_prompt")) %>
+          <textarea name="system_prompt" rows="3" placeholder="<%= h(I18n.t("web.personas.prompt_placeholder")) %>"></textarea>
         </label>
         <%= View.render("_skill_picker", skill_choices: skill_choices, skills_dir: skills_dir) %>
-        <button class="btn primary" type="submit">Buat</button>
+        <button class="btn primary" type="submit"><%= h(I18n.t("web.personas.create")) %></button>
         <p class="form-error"></p>
       </form>
     </details>
@@ -64,25 +64,25 @@
           what a persona is from this side. The slug stays out — it is the key
           and the workspace directory's name. -%>
       <details class="side-edit">
-        <summary title="Edit persona" aria-label="Edit persona">✎</summary>
+        <summary title="<%= h(I18n.t("web.personas.edit")) %>" aria-label="<%= h(I18n.t("web.personas.edit")) %>">✎</summary>
         <form class="rail-panel" hx-post="/p/<%= h(slug) %>/edit<%= h(token_query) %>"
               hx-target=".edit-error" hx-swap="innerHTML">
-          <p class="panel-title">Edit persona</p>
-          <p class="panel-hint">slug: <code><%= h(slug) %></code></p>
-          <label>Nama
+          <p class="panel-title"><%= h(I18n.t("web.personas.edit")) %></p>
+          <p class="panel-hint"><%= h(I18n.t("web.personas.slug_hint")) %> <code><%= h(slug) %></code></p>
+          <label><%= h(I18n.t("web.personas.name")) %>
             <input name="name" value="<%= h(persona_label) %>" placeholder="<%= h(slug) %>">
           </label>
           <%= View.render("_emoji_picker", choices: emoji_choices, selected: persona_emoji) %>
-          <label>Model default
+          <label><%= h(I18n.t("web.personas.default_model")) %>
             <select name="model">
-              <option value=""<%= " selected" if persona_model_value.empty? %>>Ikut default</option>
+              <option value=""<%= " selected" if persona_model_value.empty? %>><%= h(I18n.t("web.personas.follow_default")) %></option>
               <% model_choices.each do |choice| %>
                 <option value="<%= h(choice[:value]) %>"<%= " selected" if choice[:value] == persona_model_value %>><%= h(choice[:label]) %></option>
               <% end %>
             </select>
           </label>
 
-          <label>Thinking default
+          <label><%= h(I18n.t("web.personas.default_thinking")) %>
             <select name="thinking">
               <% Persona::THINKING_LEVELS.each do |level| %>
                 <option value="<%= h(level) %>"<%= " selected" if level == persona_thinking %>><%= h(level) %></option>
@@ -90,13 +90,13 @@
             </select>
           </label>
           <%= View.render("_tool_output_picker", selected: persona_tool_output) %>
-          <label>System prompt
+          <label><%= h(I18n.t("web.personas.system_prompt")) %>
             <textarea name="system_prompt" rows="6"
-                      placeholder="Kosongkan untuk memakai prompt bawaan"><%= h(persona_prompt) %></textarea>
+                      placeholder="<%= h(I18n.t("web.personas.prompt_keep")) %>"><%= h(persona_prompt) %></textarea>
           </label>
           <%= View.render("_skill_picker", skill_choices: skill_choices, skills_dir: skills_dir) %>
           <input type="hidden" name="session_id" value="<%= h(session_id) %>">
-          <button class="btn primary" type="submit">Simpan</button>
+          <button class="btn primary" type="submit"><%= h(I18n.t("web.settings.save")) %></button>
           <p class="form-error edit-error"></p>
         </form>
       </details>
@@ -111,10 +111,10 @@
         sidebar's flow, and the top layer it opens into is not either. -%>
     <div class="side-actions">
       <form class="new-session" method="post" action="/p/<%= h(slug) %>/sessions<%= h(token_query) %>">
-        <button class="btn primary" type="submit"><span aria-hidden="true">+</span> Sesi baru</button>
+        <button class="btn primary" type="submit"><span aria-hidden="true">+</span> <%= h(I18n.t("web.personas.new_session")) %></button>
       </form>
       <button class="search-open" type="button" data-search-open
-              aria-label="Cari percakapan" title="Cari percakapan (⌘K)"><%= search_icon %></button>
+              aria-label="<%= h(I18n.t("web.search.label")) %>" title="<%= h(I18n.t("web.search.open")) %>"><%= search_icon %></button>
     </div>
 
     <%# Two lists, not one: what the reader chose to keep, and the rest of the
@@ -160,11 +160,11 @@
 
     <div class="sidebar-foot">
       <dl>
-        <dt>persona</dt>
+        <dt><%= h(I18n.t("web.personas.fact_persona")) %></dt>
         <dd><%= h(slug) %></dd>
-        <dt>model</dt>
+        <dt><%= h(I18n.t("web.personas.fact_model")) %></dt>
         <dd><%= h(persona_model) %></dd>
-        <dt>sesi</dt>
+        <dt><%= h(I18n.t("web.personas.fact_session")) %></dt>
         <dd title="<%= h(session_id) %>"><%= h(session_short) %></dd>
       </dl>
 
@@ -206,9 +206,7 @@
                                   ig_persona: ig_persona) %>
       <% if page[:entries].empty? && live_turn.nil? %>
         <p class="empty">
-          <%= h(persona_label) %> punya SOUL, skills, dan memory sendiri.
-          Apa pun yang dijalankannya lewat tool tampil di atas jawabannya.
-          Sesi baru mulai dari percakapan kosong, dengan persona yang sama.
+          <%= h(I18n.t("web.personas.empty", name: persona_label)) %>
         </p>
       <% end %>
       <%# A turn still in flight is drawn after the history and opens its own
@@ -306,13 +304,13 @@
     emptied so a closed sheet holds no decoded picture or playing video.
     `hidden` keeps it out of the page — and out of the tab order — until
     something opens it. -%>
-<div id="lightbox" class="lightbox" hidden role="dialog" aria-modal="true" aria-label="Pratinjau lampiran">
+<div id="lightbox" class="lightbox" hidden role="dialog" aria-modal="true" aria-label="<%= h(I18n.t("web.lightbox.label")) %>">
   <figure class="lightbox-figure">
     <img class="lightbox-image" alt="">
     <video class="lightbox-video" controls playsinline hidden></video>
     <figcaption class="lightbox-actions">
-      <a class="btn lightbox-download" href="#" download>Unduh</a>
-      <button type="button" class="btn lightbox-close" aria-label="Tutup pratinjau">Tutup</button>
+      <a class="btn lightbox-download" href="#" download><%= h(I18n.t("web.lightbox.download")) %></a>
+      <button type="button" class="btn lightbox-close" aria-label="<%= h(I18n.t("web.lightbox.close_label")) %>"><%= h(I18n.t("web.lightbox.close")) %></button>
     </figcaption>
   </figure>
 </div>

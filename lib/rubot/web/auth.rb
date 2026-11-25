@@ -135,7 +135,7 @@ module Rubot
         return redirect_to(res, nxt) if @token.nil?
 
         unless given == @token
-          error = given.empty? ? nil : "Token tidak cocok."
+          error = given.empty? ? nil : I18n.t("web.gate.token_mismatch")
           return gate(res, req, error: error, next_path: nxt)
         end
 

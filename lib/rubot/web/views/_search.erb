@@ -10,11 +10,11 @@
     long session would leave them scrolling for it. The snippet is the store's
     own, already escaped and already marked — see Store#snippet_html. -%>
 <% if query.empty? -%>
-<p class="search-hint">Cari di seluruh percakapan, termasuk yang sudah tidak ada di sidebar.</p>
+<p class="search-hint"><%= h(I18n.t("web.search.hint")) %></p>
 <% elsif groups.empty? -%>
-<p class="search-hint">Tidak ada yang cocok dengan “<%= h(query) %>”.</p>
+<p class="search-hint"><%= h(I18n.t("web.search.no_match", query: query)) %></p>
 <% else -%>
-<nav class="search-results" aria-label="Hasil pencarian">
+<nav class="search-results" aria-label="<%= h(I18n.t("web.search.results")) %>">
   <% groups.each do |session_id, hits| -%>
   <% first = hits.first -%>
   <div class="search-group">

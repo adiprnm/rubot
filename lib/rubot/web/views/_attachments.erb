@@ -17,7 +17,7 @@
     addresses it by id and replaces it whole (see View#item_attrs). The cards
     inside carry their stored id and ask htmx to keep the node it already has:
     the file stays exactly as drawn instead of being fetched again. -%>
-<div class="attachments"<%= defined?(attrs) ? attrs : "" %> role="group" aria-label="Lampiran dari Rubot">
+<div class="attachments"<%= defined?(attrs) ? attrs : "" %> role="group" aria-label="<%= h(I18n.t("web.attachments.group")) %>">
   <% attachments.each do |file| -%>
   <% if file[:kind] == :video -%>
   <figure class="attachment attachment--video"
@@ -27,7 +27,7 @@
             data-lightbox="<%= h(file[:url]) %>"
             data-lightbox-kind="video"
             data-name="<%= h(file[:name]) %>"
-            aria-label="Putar <%= h(file[:name]) %>">
+            aria-label="<%= h(I18n.t("web.attachments.play", name: file[:name])) %>">
       <video class="attachment-video"
              src="<%= h(file[:url]) %>"
              preload="metadata"
@@ -39,8 +39,8 @@
     <a class="attachment-download"
        href="<%= h(file[:url]) %>"
        download="<%= h(file[:name]) %>"
-       title="Unduh <%= h(file[:name]) %>"
-       aria-label="Unduh <%= h(file[:name]) %>">↓</a>
+       title="<%= h(I18n.t("web.attachments.download", name: file[:name])) %>"
+       aria-label="<%= h(I18n.t("web.attachments.download", name: file[:name])) %>">↓</a>
   </figure>
   <% elsif file[:kind] == :document -%>
   <figure class="attachment attachment--document"
@@ -49,20 +49,20 @@
        href="<%= h(file[:url]) %>"
        target="_blank"
        rel="noopener"
-       title="Buka <%= h(file[:name]) %>"
-       aria-label="Buka <%= h(file[:name]) %>">
+       title="<%= h(I18n.t("web.attachments.open", name: file[:name])) %>"
+       aria-label="<%= h(I18n.t("web.attachments.open", name: file[:name])) %>">
       <% if File.extname(file[:name].to_s).casecmp?(".pdf") -%>
       <%= pdf_icon %>
       <% else -%>
-      <span class="attachment-label" aria-hidden="true"><%= h(file[:label] || "FILE") %></span>
+      <span class="attachment-label" aria-hidden="true"><%= h(file[:label] || I18n.t("web.attachments.file")) %></span>
       <% end -%>
       <span class="attachment-name"><%= h(file[:name]) %></span>
     </a>
     <a class="attachment-download"
        href="<%= h(file[:url]) %>"
        download="<%= h(file[:name]) %>"
-       title="Unduh <%= h(file[:name]) %>"
-       aria-label="Unduh <%= h(file[:name]) %>">↓</a>
+       title="<%= h(I18n.t("web.attachments.download", name: file[:name])) %>"
+       aria-label="<%= h(I18n.t("web.attachments.download", name: file[:name])) %>">↓</a>
   </figure>
   <% else -%>
   <figure class="attachment"
@@ -71,14 +71,14 @@
             class="attachment-open"
             data-lightbox="<%= h(file[:url]) %>"
             data-name="<%= h(file[:name]) %>"
-            aria-label="Buka <%= h(file[:name]) %>">
+            aria-label="<%= h(I18n.t("web.attachments.open", name: file[:name])) %>">
       <img src="<%= h(file[:url]) %>" alt="<%= h(file[:name]) %>" loading="lazy">
     </button>
     <a class="attachment-download"
        href="<%= h(file[:url]) %>"
        download="<%= h(file[:name]) %>"
-       title="Unduh <%= h(file[:name]) %>"
-       aria-label="Unduh <%= h(file[:name]) %>">↓</a>
+       title="<%= h(I18n.t("web.attachments.download", name: file[:name])) %>"
+       aria-label="<%= h(I18n.t("web.attachments.download", name: file[:name])) %>">↓</a>
   </figure>
   <% end -%>
   <% end -%>

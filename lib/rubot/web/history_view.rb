@@ -46,11 +46,17 @@ module Rubot
       # whole and no reach is added at all.
       HISTORY_SNAP_LIMIT = 12
       HISTORY_SNAP_MESSAGES = HISTORY_PAGE_MESSAGES * 2
-      # The provider names its windows by period; a reader asks by length. The
-      # provider's own words stay on the wire — this is only how the panel says
-      # them.
-      QUOTA_METER_LABELS = { "rolling" => "5 jam", "weekly" => "mingguan",
-                             "monthly" => "bulanan" }.freeze
+      # The provider names its windows by period. The keys are spelled out
+      # rather than built from the provider's word, so the guard in
+      # test_i18n.rb can see that each one is rendered by this file.
+      QUOTA_METER_KEYS = { "rolling" => "web.quota.meters.rolling",
+                           "weekly" => "web.quota.meters.weekly",
+                           "monthly" => "web.quota.meters.monthly" }.freeze
+      # The channel aliases this constant, so it stays defined; but a constant
+      # is read once, at load, in the language the process booted in, so
+      # nothing a reader sees may use it — the drawing asks
+      # `quota_meter_label`, which reads the language of the moment.
+      QUOTA_METER_LABELS = QUOTA_METER_KEYS.transform_values { |key| Rubot::I18n.t(key) }.freeze
 
       # The conversation as the thread draws it: a prompt, then the turn it
       # produced — including the tool rows. Without replaying the calls a
@@ -440,7 +446,7 @@ module Rubot
       # cannot be exact must not look exact.
       def cost_fact(report)
         cost = report[:cost]
-        return "belum diketahui" unless cost.is_a?(Hash)
+        return I18n.t("web.usage.facts.unknown") unless cost.is_a?(Hash)
 
         total = format("$%s", Rubot::UsageReport.money(cost["total"]))
         cost["cache_price_unknown"] ? "#{total} ≤" : total
@@ -451,25 +457,33 @@ module Rubot
         return "" unless %w[input cached_input cache_creation output].any? { |key| cost[key].to_f.positive? }
 
         parts = []
-        parts << "masuk #{Rubot::UsageReport.money(cost['input'])}"
-        parts << "cache baca #{Rubot::UsageReport.money(cost['cached_input'])}" if cost["cached_input"].to_f.positive?
-        parts << "cache tulis #{Rubot::UsageReport.money(cost['cache_creation'])}" if cost["cache_creation"].to_f.positive?
-        parts << "keluar #{Rubot::UsageReport.money(cost['output'])}"
+        parts << I18n.t("web.usage.facts.cost_in", value: Rubot::UsageReport.money(cost["input"]))
+        if cost["cached_input"].to_f.positive?
+          parts << I18n.t("web.usage.facts.cost_cache_read",
+                          value: Rubot::UsageReport.money(cost["cached_input"]))
+        end
+        if cost["cache_creation"].to_f.positive?
+          parts << I18n.t("web.usage.facts.cost_cache_write",
+                          value: Rubot::UsageReport.money(cost["cache_creation"]))
+        end
+        parts << I18n.t("web.usage.facts.cost_out", value: Rubot::UsageReport.money(cost["output"]))
         parts.join(" · ")
       end
 
       def cache_fact(report)
         total = Rubot::UsageReport.tokens(report[:cached_tokens])
-        return "#{total} token dari cache" if report[:prompt_tokens].to_i.zero?
+        if report[:prompt_tokens].to_i.zero?
+          return I18n.t("web.usage.facts.cache_from", tokens: total)
+        end
 
         # Two shares, both labelled. The cost above this line is cumulative,
         # so a lone latest-request figure under it reads as if the session had
         # never cached anything — which is how a $2 bill next to "cache 4%"
         # came to look like a bug in the arithmetic.
-        format("%.1f%% permintaan terakhir · %.1f%% rata-rata sesi · %s token total",
-               report[:cache_hit_rate].to_f * 100,
-               report[:cache_hit_rate_session].to_f * 100,
-               total)
+        I18n.t("web.usage.facts.cache_shares",
+               last: format("%.1f", report[:cache_hit_rate].to_f * 100),
+               session: format("%.1f", report[:cache_hit_rate_session].to_f * 100),
+               tokens: total)
       end
 
       def context_fact(report)
@@ -541,13 +555,22 @@ module Rubot
         View.render("_quota", meters: quota_meters(report), note: quota_note(report))
       rescue StandardError => e
         warn "[web] quota: #{e.class}: #{e.message}"
-        View.render("_quota", meters: [], note: "Kuota tidak bisa diperiksa sekarang.")
+        View.render("_quota", meters: [], note: I18n.t("web.quota.check_failed"))
       end
 
       # One row per meter the provider reports: how much is spent, and when it
       # comes back. The provider's `percent` is already the spent share, so the
       # panel states it as it is — an allowance reads in the direction of the
       # thing a reader is asking about, which is how much of it is gone.
+      # The window a meter measures, in the active language. A window the
+      # dictionary has not learned yet keeps the provider's own word,
+      # capitalised: an unseen meter should still read as something.
+      def quota_meter_label(name)
+        I18n.t("web.quota.meters.#{name}")
+      rescue Rubot::I18n::MissingTranslation
+        name.capitalize
+      end
+
       def quota_meters(report)
         meters = Rubot::OpencodeUsage::METERS.filter_map do |name|
           next unless report.is_a?(Hash)
@@ -557,9 +580,9 @@ module Rubot
 
           used = meter["percent"].to_f.clamp(0.0, 100.0)
           {
-            name: QUOTA_METER_LABELS.fetch(name) { name.capitalize },
+            name: quota_meter_label(name),
             used: format("%.1f", used),
-            used_label: "#{format('%.1f', used)}% terpakai",
+            used_label: I18n.t("web.quota.used", percent: format("%.1f", used)),
             band: quota_band(used),
             reset: quota_reset(meter),
             limited: meter["limited"] ? true : false
@@ -582,15 +605,15 @@ module Rubot
         time = Rubot::OpencodeUsageReport.parse_time(meter["resets_at"])
         return "" unless time
 
-        "reset dalam #{Rubot::OpencodeUsageReport.relative(time)}"
+        I18n.t("web.quota.reset_in", when: Rubot::OpencodeUsageReport.relative(time))
       end
 
       # Why there is nothing to draw, in words a reader can act on: a provider
       # that sells tokens by the drink has no allowance at all, and that is not
       # a failure.
       def quota_note(report)
-        return "Provider ini tidak punya kuota langganan — biayanya dihitung per token." if report[:unavailable]
-        return "Kuota tidak bisa diperiksa — #{report[:error]}." if report[:error]
+        return I18n.t("web.quota.unavailable") if report[:unavailable]
+        return I18n.t("web.quota.error", error: report[:error]) if report[:error]
 
         ""
       rescue StandardError

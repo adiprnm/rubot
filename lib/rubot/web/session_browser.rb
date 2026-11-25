@@ -24,7 +24,17 @@ module Rubot
       # not turn the sidebar into an endless scroll.
       RECENT_PAGE = 20
       # What a conversation is called before its first prompt has been saved.
-      UNTITLED_SESSION = "Sesi baru"
+      #
+      # The channel aliases this constant, so it stays defined; but a constant
+      # is read once, at load, in the language the process booted in, so nothing
+      # a reader sees may use it. Every drawing asks `untitled_session`, which
+      # reads the language of the moment.
+      UNTITLED_SESSION = Rubot::I18n.t("web.sessions.untitled")
+
+      # The name of a conversation that has none yet, in the active language.
+      def untitled_session
+        Rubot::I18n.t("web.sessions.untitled")
+      end
 
       def session_id(slug = default_slug)
         "web_#{slug}"
@@ -194,7 +204,7 @@ module Rubot
         title = entry[:title].to_s.strip
         {
           id: entry[:id],
-          label: title.empty? ? UNTITLED_SESSION : title,
+          label: title.empty? ? untitled_session : title,
           pinned: pinned_entry?(entry),
           # A conversation with no archive row yet has no stamp and nothing to
           # pin; the row is drawn for the reader who just opened it.
@@ -219,17 +229,21 @@ module Rubot
       # looking at depends on the sidebar's state, and the header does not.
       def session_label(slug, sid)
         entry = sessions_for(slug).find { |candidate| candidate[:id] == sid }
-        return UNTITLED_SESSION if entry.nil?
+        return untitled_session if entry.nil?
 
         title = entry[:title].to_s.strip
-        title.empty? ? UNTITLED_SESSION : title
+        title.empty? ? untitled_session : title
       end
 
       # The name a session carries once it has one; nil while it is still
-      # untouched, so callers can fall back to the persona alone.
+      # untouched, so callers can fall back to the persona alone. Decided from
+      # the title itself rather than by comparing with the drawing above: two
+      # languages word that label two ways, and a prompt a reader really wrote
+      # must not be mistaken for the placeholder.
       def named_session_label(slug, sid)
-        label = session_label(slug, sid)
-        label == UNTITLED_SESSION ? nil : label
+        entry = sessions_for(slug).find { |candidate| candidate[:id] == sid }
+        title = entry && entry[:title].to_s.strip
+        title.nil? || title.empty? ? nil : title
       end
 
       def elapsed_label(epoch)

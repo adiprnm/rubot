@@ -80,7 +80,7 @@ module Rubot
         text = form(req, "message").strip
         if text.empty?
           res.status = 400
-          res.body = %(<div class="notice"><div class="error">Pesan kosong.</div></div>)
+          res.body = %(<div class="notice"><div class="error">#{CGI.escapeHTML(I18n.t("web.turn.empty_message"))}</div></div>)
           return
         end
 
@@ -92,7 +92,7 @@ module Rubot
           # the browser is expected to steer or stop instead.
           if @active[sid]
             res.status = 409
-            res.body = %(<div class="notice"><div class="error">Masih ada giliran yang berjalan. Tunggu sebentar atau tekan Stop.</div></div>)
+            res.body = %(<div class="notice"><div class="error">#{CGI.escapeHTML(I18n.t("web.turn.busy"))}</div></div>)
             return
           end
           # A compaction rewrites the transcript this prompt would be appended
@@ -101,7 +101,7 @@ module Rubot
           # let go early; the truth is kept here, where the transcript is.
           if @compacting[sid]
             res.status = 409
-            res.body = %(<div class="notice"><div class="error">Sedang meringkas percakapan. Tunggu sebentar, lalu kirim lagi.</div></div>)
+            res.body = %(<div class="notice"><div class="error">#{CGI.escapeHTML(I18n.t("web.turn.compacting"))}</div></div>)
             return
           end
 

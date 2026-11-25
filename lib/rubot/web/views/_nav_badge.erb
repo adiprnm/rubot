@@ -9,4 +9,4 @@
     so the number arrives with the markup around it instead of on its own.
     Written without whitespace inside, so that the empty case is really empty
     and `:empty` can hide the background. -%>
-<span class="nav-badge" id="nav-badge"<% if total.to_i.positive? %> data-total="<%= total.to_i %>"<% end %>><% if total.to_i.positive? %><span aria-hidden="true"><%= total.to_i > 9 ? "9+" : total.to_i %></span><span class="sr-only"> <%= total.to_i %> percakapan belum dibaca</span><% end %></span>
+<span class="nav-badge" id="nav-badge"<% if total.to_i.positive? %> data-total="<%= total.to_i %>"<% end %>><% if total.to_i.positive? %><span aria-hidden="true"><%= total.to_i > 9 ? "9+" : total.to_i %></span><span class="sr-only"> <%= h(I18n.t("web.sessions.unread_count", count: total.to_i)) %></span><% end %></span>

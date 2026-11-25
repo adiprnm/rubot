@@ -9,12 +9,12 @@
     after a pin moves one, both sections can change at once. -%>
 <nav class="sessions" id="sessions">
   <details class="session-group" open>
-    <summary class="group-head" title="Maksimal 10 sesi di-pin per persona">
-      <span class="group-name">Pinned</span>
+    <summary class="group-head" title="<%= h(I18n.t("web.sessions.pin_limit")) %>">
+      <span class="group-name"><%= h(I18n.t("web.sessions.pinned")) %></span>
       <span class="group-count"><%= groups[:pinned].size %>/<%= groups[:pinned_limit] %></span>
     </summary>
     <% if groups[:pinned].empty? %>
-      <p class="group-empty">Belum ada sesi yang di-pin.</p>
+      <p class="group-empty"><%= h(I18n.t("web.sessions.empty_pinned")) %></p>
     <% else %>
       <% groups[:pinned].each do |row| %>
         <%= View.render("_session_row", row: row, token_query: token_query,
@@ -25,11 +25,11 @@
 
   <details class="session-group" open>
     <summary class="group-head">
-      <span class="group-name">Recent</span>
+      <span class="group-name"><%= h(I18n.t("web.sessions.recent")) %></span>
       <span class="group-count"><%= groups[:recent_total] %></span>
     </summary>
     <% if groups[:recent].empty? %>
-      <p class="group-empty">Belum ada sesi.</p>
+      <p class="group-empty"><%= h(I18n.t("web.sessions.empty_recent")) %></p>
     <% else %>
       <% groups[:recent].each do |row| %>
         <%= View.render("_session_row", row: row, token_query: token_query,

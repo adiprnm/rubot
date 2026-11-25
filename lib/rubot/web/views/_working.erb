@@ -19,7 +19,7 @@
 <div class="working-band" id="working">
   <p class="row working" data-since="<%= h(since) %>" data-threshold="0">
     <span class="mark working" aria-hidden="true"><%= mark(:working) %></span>
-    <span class="label">Working…</span>
+    <span class="label"><%= h(I18n.t("web.working")) %></span>
     <span class="live-clock"></span>
   </p>
 </div>

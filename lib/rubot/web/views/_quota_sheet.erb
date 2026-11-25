@@ -15,13 +15,13 @@
          hx-target="#usage-quota"
          hx-swap="innerHTML"
          hx-trigger="toggle[this.open]">
-  <summary class="usage-toggle" title="Kuota" aria-label="Kuota">
+  <summary class="usage-toggle" title="<%= h(I18n.t("web.quota.label")) %>" aria-label="<%= h(I18n.t("web.quota.label")) %>">
     <%= usage_icon(:quota) %>
   </summary>
 
-  <div class="usage-panel" role="group" aria-label="Kuota">
+  <div class="usage-panel" role="group" aria-label="<%= h(I18n.t("web.quota.label")) %>">
     <div id="usage-quota" class="usage-quota">
-      <p class="usage-note">Memeriksa kuota…</p>
+      <p class="usage-note"><%= h(I18n.t("web.quota.checking")) %></p>
     </div>
   </div>
 </details>

@@ -26,12 +26,12 @@
   listed = choices.include?(face)
 -%>
 <fieldset class="emoji-picker" data-emoji-picker data-emoji-recent="<%= h(choices.join(" ")) %>">
-  <legend>Emoji</legend>
+  <legend><%= h(I18n.t("web.emoji.label")) %></legend>
   <div class="emoji-head">
     <button type="button" class="emoji-face" data-emoji-toggle aria-expanded="false"
-            aria-label="Pilih emoji" title="Pilih emoji"><%= h(face) %></button>
-    <input type="search" class="emoji-search" data-emoji-search placeholder="Cari emoji…"
-           aria-label="Cari emoji" autocomplete="off" spellcheck="false">
+            aria-label="<%= h(I18n.t("web.emoji.pick")) %>" title="<%= h(I18n.t("web.emoji.pick")) %>"><%= h(face) %></button>
+    <input type="search" class="emoji-search" data-emoji-search placeholder="<%= h(I18n.t("web.emoji.search_placeholder")) %>"
+           aria-label="<%= h(I18n.t("web.emoji.search")) %>" autocomplete="off" spellcheck="false">
   </div>
   <input type="hidden" name="emoji" value="<%= h(face) %>" data-emoji-input>
   <div class="emoji-panel" data-emoji-panel hidden>
@@ -41,7 +41,7 @@
   </div>
   <label class="emoji-other">
     <input type="text" name="emoji_custom" value="<%= listed ? "" : h(face) %>"
-           maxlength="16" placeholder="Emoji lain…" aria-label="Emoji lain"
+           maxlength="16" placeholder="<%= h(I18n.t("web.emoji.other_placeholder")) %>" aria-label="<%= h(I18n.t("web.emoji.other")) %>"
            autocomplete="off" spellcheck="false">
   </label>
 </fieldset>

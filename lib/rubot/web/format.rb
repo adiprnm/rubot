@@ -99,8 +99,8 @@ module Rubot
           # context the list carries, and a nested item is quoted with it.
           items = @list[:html].scan("<li").length
           @paragraphs << (@quotable ? Format.quotable_block("div", "para-list", @list[:html], @list[:source],
-                                                            label: LIST_QUOTE_LABEL,
-                                                            kind: "Daftar · #{items} butir") : @list[:html])
+                                                            label: Format.list_quote_label,
+                                                            kind: I18n.t("web.markdown.list_kind", count: items)) : @list[:html])
           @list = nil
         end
 
@@ -408,9 +408,16 @@ module Rubot
         %(aria-hidden="true" focusable="false">) +
         %(<path d="M6 17h3l2-4V7H5v6h3zm8 0h3l2-4V7h-6v6h3z"/></svg>)
 
-      QUOTE_LABEL = "Kutip paragraf ini"
-      LIST_QUOTE_LABEL = "Kutip daftar ini"
+      # The mark's own label, read when a block is drawn rather than at load: a
+      # constant would be worded in the language the process booted in, and the
+      # page can be drawn in another one.
+      def quote_label
+        I18n.t("web.markdown.quote_paragraph")
+      end
 
+      def list_quote_label
+        I18n.t("web.markdown.quote_list")
+      end
       # A block the reader can take back to the field as context. The mark
       # carries the block's own Markdown in `data-quote` — the source, not the
       # rendered text — so quoting a paragraph full of `code` and **emphasis**
@@ -426,7 +433,8 @@ module Rubot
       # pushed onto a line of its own on a phone. On a pointer device the page
       # moves it out into the right gutter, where its order in the DOM does not
       # show. What it does is the composer's business (see app.js).
-      def quotable_block(tag, class_name, html, source, label: QUOTE_LABEL, kind: nil)
+      def quotable_block(tag, class_name, html, source, label: nil, kind: nil)
+        label ||= quote_label
         attrs = %( class="#{class_name}")
         attrs << quotable_attribute(source.join("\n").strip)
         # What the block is, said in the chip: a list states its size there,
@@ -705,8 +713,10 @@ module Rubot
             # The picture is a button (open it larger) with a download beside
             # it, the same pair the composer's attachments carry.
             name = match[:img_alt]
-            %(<span class="md-image"><button type="button" class="md-image-open" data-lightbox="#{url}" data-name="#{name}" aria-label="Buka #{name}"><img src="#{url}" alt="#{name}" loading="lazy"></button>) +
-              %(<a class="md-image-download" href="#{url}" download="#{name}" title="Unduh #{name}" aria-label="Unduh #{name}">↓</a></span>)
+            open_label = I18n.t("web.attachments.open", name: name)
+            download_label = I18n.t("web.attachments.download", name: name)
+            %(<span class="md-image"><button type="button" class="md-image-open" data-lightbox="#{url}" data-name="#{name}" aria-label="#{open_label}"><img src="#{url}" alt="#{name}" loading="lazy"></button>) +
+              %(<a class="md-image-download" href="#{url}" download="#{name}" title="#{download_label}" aria-label="#{download_label}">↓</a></span>)
           else
             match[0]
           end

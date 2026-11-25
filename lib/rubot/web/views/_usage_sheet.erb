@@ -14,23 +14,23 @@
     These facts are drawn with the page, then kept current by the same
     out-of-band swap that moves the row. -%>
 <details class="usage-sheet usage-sheet-facts">
-  <summary class="usage-toggle" title="Pemakaian" aria-label="Pemakaian">
+  <summary class="usage-toggle" title="<%= h(I18n.t("web.usage.sheet")) %>" aria-label="<%= h(I18n.t("web.usage.sheet")) %>">
     <%= usage_icon(:usage) %>
   </summary>
 
-  <div class="usage-panel" role="group" aria-label="Pemakaian">
+  <div class="usage-panel" role="group" aria-label="<%= h(I18n.t("web.usage.sheet")) %>">
     <%= View.render("_usage_facts", **facts) %>
 
     <%# The door out of the pinned prompt. It sits behind a panel rather than in
         the row because it is not a reading: it is something a reader does once
         in a while, and it costs one request without a cache. The note says so
         before the press, not after. -%>
-    <p class="panel-title">Prompt</p>
+    <p class="panel-title"><%= h(I18n.t("web.usage.prompt")) %></p>
     <div class="usage-repin">
       <button type="button" class="btn"
               hx-post="/s/<%= h(session_id) %>/repin<%= h(token_query) %>"
-              hx-target="#repin-note" hx-swap="innerHTML">Bangun ulang</button>
-      <p class="usage-note" id="repin-note">Memory, skill, dan AGENTS.md yang berubah di tengah sesi baru masuk setelah compaction — atau di sini, dengan ongkos satu request tanpa cache.</p>
+              hx-target="#repin-note" hx-swap="innerHTML"><%= h(I18n.t("web.usage.repin")) %></button>
+      <p class="usage-note" id="repin-note"><%= h(I18n.t("web.usage.repin_note")) %></p>
     </div>
   </div>
 </details>

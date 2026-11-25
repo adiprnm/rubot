@@ -91,17 +91,22 @@ module Rubot
       # name and a block there are the pair that has to stay in step. Two of
       # these are the device's own fonts — on a phone without Georgia the
       # button still works, it just sets the text in the serif it falls back to.
+      #
+      # The name is the font's own and reads the same in every language; only
+      # the tooltip is prose, so it is a key and is resolved when the page is
+      # drawn, never at load — a constant would be worded in the language the
+      # process booted in.
       FONT_CHOICES = [
         { value: "serif", label: "Serif",
-          title: "Bawaan: Source Serif 4, dengan Charter dan Georgia sebagai cadangan" },
+          title_key: "web.settings.appearance.font_titles.serif" },
         { value: "sans", label: "Sans serif",
-          title: "Huruf sistem tanpa kait: Segoe UI, Roboto, atau SF di perangkat Apple" },
+          title_key: "web.settings.appearance.font_titles.sans" },
         { value: "mono", label: "Mono",
-          title: "Martian Mono, huruf berjarak tetap yang dipakai nama mesin" },
+          title_key: "web.settings.appearance.font_titles.mono" },
         { value: "georgia", label: "Georgia",
-          title: "Georgia milik perangkat, dengan Times sebagai cadangan" },
+          title_key: "web.settings.appearance.font_titles.georgia" },
         { value: "palatino", label: "Palatino",
-          title: "Palatino milik perangkat, dengan serif sistem sebagai cadangan" }
+          title_key: "web.settings.appearance.font_titles.palatino" }
       ].freeze
 
       class Scope
@@ -125,6 +130,17 @@ module Rubot
 
         def h(text)
           CGI.escapeHTML(text.to_s)
+        end
+
+        # A translated word that ends up inside a single-quoted JavaScript
+        # string, which itself sits in a double-quoted HTML attribute — the
+        # shape an Alpine expression carrying a label takes (`compacting ?
+        # 'menunggu' : 'kirim'`). `h` alone is not enough: it writes `&#39;` for
+        # an apostrophe, the parser hands the attribute back its `'`, and the
+        # JavaScript string ends early. So the escapes JavaScript reads as the
+        # same characters are written first, and HTML-escaping runs after them.
+        def js_text(text)
+          h(text.to_s.gsub("\\") { "\\\\" }.gsub("'") { "\\u0027" })
         end
 
         # The attributes a live turn's row carries so the stream can address it:
@@ -307,7 +323,7 @@ module Rubot
         # drawn by a test still has to offer every choice. The names are also
         # what app.js accepts, so there is one list rather than two.
         def font_choices
-          View::FONT_CHOICES
+          View::FONT_CHOICES.map { |choice| choice.merge(title: I18n.t(choice[:title_key])) }
         end
 
         # The persona a device-wide control speaks for — the notification test

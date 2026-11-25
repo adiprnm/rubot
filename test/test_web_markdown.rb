@@ -87,7 +87,7 @@ module Rubot
 
         assert_includes html, %(<p class="para" data-quote="Halo **dunia** &amp; `kode`.")
         assert_includes html, %(<button type="button" class="para-quote")
-        assert_includes html, %(aria-label="Kutip paragraf ini")
+        assert_includes html, %(aria-label="#{I18n.t("web.markdown.quote_paragraph")}")
       end
 
       def test_the_quote_mark_is_opt_in_so_plain_markdown_stays_plain
@@ -110,8 +110,8 @@ module Rubot
         html = Format.markdown("- satu\n- dua", quotable: true)
 
         assert_includes html, %(<div class="para-list" data-quote="- satu\n- dua")
-        assert_includes html, %(data-quote-kind="Daftar · 2 butir")
-        assert_includes html, %(aria-label="Kutip daftar ini")
+        assert_includes html, %(data-quote-kind="#{I18n.t("web.markdown.list_kind", count: 2)}")
+        assert_includes html, %(aria-label="#{I18n.t("web.markdown.quote_list")}")
         assert_includes html, "<ul><li data-quote=\"- satu\">satu</li>"
       end
 
