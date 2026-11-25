@@ -26,6 +26,12 @@ module Rubot
       # @param options [Hash] CLI options that may override channel selection
       # @return [Array<Rubot::Channel>] The started channel instances
       def self.start_channels(data:, config: nil, agent: nil, options: {})
+        # The language is settled once, before a single channel is built: the
+        # per-channel rescue below turns a failure into "Skipping channel", and
+        # a language nobody speaks must not be skipped into a fallback. Here it
+        # reaches the launch as the error it is.
+        config&.apply_locale!
+
         channel_configs = build_channel_list(data, options)
         return channel_configs if channel_configs.empty?
 

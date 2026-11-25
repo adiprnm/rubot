@@ -306,8 +306,9 @@ module Rubot
         @app_config.apply_settings(store.settings)
         # The new language is live before this request returns: the redirected
         # page, the next turn and every row after it are drawn in it. No
-        # restart, and no second place that has to remember to do it.
-        Rubot::I18n.locale = @app_config.bahasa
+        # restart, and no second place that has to remember to do it — the same
+        # boot step a channel runs is the one a save runs.
+        @app_config.apply_locale!
         return unless @pool
 
         @pool.refresh_config(@app_config)

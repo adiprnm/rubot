@@ -118,6 +118,22 @@ module Rubot
       I18n.normalize!(raw)
     end
 
+    # Put this config's language in front of the running process, and answer
+    # with the locale now in force.
+    #
+    # This is the one boot step every channel shares: the terminal, the browser
+    # and Telegram all reach it from `Channel#initialize`, so `bahasa: id` is
+    # the language of the first row drawn instead of something that only
+    # happens after a trip through the settings page. The CLI's one-shot path
+    # calls it too, because it never builds a channel.
+    #
+    # An unknown value raises here (see I18n.normalize!), before any row is
+    # drawn, so a typo stops the launch rather than leaving the interface half
+    # in one language.
+    def apply_locale!
+      I18n.locale = bahasa
+    end
+
     def models
       data["models"] || []
     end

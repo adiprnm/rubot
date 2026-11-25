@@ -414,6 +414,18 @@ config = Rubot::Config.new(options[:config])
 # one-off `-m` still overrides the saved default for this run.
 config.apply_settings(Rubot::Store.saved_settings(config.sessions_dir))
 
+# The language, settled before anything is drawn: config.yml first, the saved
+# settings laid over it above. `rubot -m` never builds a channel, so this is
+# where the one-shot path takes its language from; a channel path then picks
+# the same value up again in its own boot. A language this build does not speak
+# is refused here, with the choices, instead of half-translating the interface.
+begin
+  config.apply_locale!
+rescue Rubot::I18n::UnknownLocale => e
+  $stderr.puts "Error: #{e.message}"
+  exit 1
+end
+
 # Override with CLI options
 config.data["debug"] = true if options[:debug]
 config.data["tools"] = false if options[:no_tools]

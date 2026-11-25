@@ -46,6 +46,12 @@ module Rubot
       @learning_mutex = Mutex.new
       @learning = nil
 
+      # The language comes before anything else this channel ever draws, and
+      # this constructor is the funnel TUI, web and Telegram all pass through.
+      # An unknown `bahasa:` raises here, on the way in, rather than on the
+      # first translated row.
+      @app_config&.apply_locale!
+
       build_pool_if_needed
     end
 
