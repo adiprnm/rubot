@@ -4,6 +4,7 @@ require "yaml"
 require "fileutils"
 require "pathname"
 require "digest"
+require_relative "i18n"
 require_relative "provider"
 require_relative "config/model_presets"
 require_relative "config/providers"
@@ -79,7 +80,7 @@ module Rubot
     # provider, the one key for it, and the default model. A page that could
     # reach the rest of the file would be a config editor wearing a form's
     # labels, with none of the review.
-    SETTINGS = { "provider" => "provider", "api_key" => "api_key", "default_model" => "model", "auxiliary_model" => "auxiliary_model", "subagent_model" => "subagent_model" }.freeze
+    SETTINGS = { "provider" => "provider", "api_key" => "api_key", "default_model" => "model", "auxiliary_model" => "auxiliary_model", "subagent_model" => "subagent_model", "bahasa" => "bahasa" }.freeze
 
     # Lay saved settings over what config.yml says.
     #
@@ -99,6 +100,22 @@ module Rubot
 
     def agent_defaults
       data.dig("agents", "defaults") || {}
+    end
+
+    # The language of everything a person reads: the tool rows, the thinking
+    # block, the compaction lines, the status and footer text. `en` unless the
+    # config says otherwise, and `en`/`id` only — a value this build does not
+    # speak raises with the list instead of half-translating the interface.
+    #
+    # Read through Rubot::I18n, which holds the dictionary (lib/rubot/i18n.rb);
+    # a channel sets I18n.locale from this value, so the whole process answers
+    # in one language and a settings change takes effect on the next row drawn.
+    def bahasa
+      raw = data[I18n::CONFIG_KEY]
+      raw = agent_defaults[I18n::CONFIG_KEY] if raw.nil?
+      return I18n::DEFAULT_LOCALE if raw.nil?
+
+      I18n.normalize!(raw)
     end
 
     def models

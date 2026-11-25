@@ -10,6 +10,17 @@ module Rubot
   class TestTUI < Minitest::Test
     include TuiSupport
 
+    # These tests pin the Indonesian wording the channels were written in
+    # before the dictionary existed (see lib/rubot/i18n.rb); the English default
+    # and the switch itself are covered in test_i18n.rb.
+    def setup
+      Rubot::I18n.locale = "id"
+    end
+
+    def teardown
+      Rubot::I18n.locale = Rubot::I18n::DEFAULT_LOCALE
+    end
+
     def test_frame_renders_banner_prompt_and_status
       repl = build_repl
       lines = repl.instance_variable_get(:@app).render_lines

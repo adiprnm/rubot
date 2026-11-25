@@ -1,6 +1,12 @@
 # Rubot Configuration
 # Copy this file to ~/.rubot/config.yml and edit it.
 
+# Language of everything the channels show a person: tool rows, the thinking
+# block, compaction lines, status and footer text. `en` (default) or `id`.
+# It can also be changed from the settings page of the web channel, which
+# takes effect without a restart.
+# bahasa: en
+
 agents:
   defaults:
     workspace: ~/.rubot/workspace

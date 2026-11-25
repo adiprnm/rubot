@@ -10,6 +10,16 @@ module Rubot
   class TestTUI < Minitest::Test
     include TuiSupport
 
+    # These tests pin the Indonesian wording the channels were written in
+    # before the dictionary existed (see lib/rubot/i18n.rb).
+    def setup
+      Rubot::I18n.locale = "id"
+    end
+
+    def teardown
+      Rubot::I18n.locale = Rubot::I18n::DEFAULT_LOCALE
+    end
+
     def test_a_cancelled_turn_skips_the_footer_and_the_blank_above_it
       repl = build_repl
       agent = repl.instance_variable_get(:@agent)

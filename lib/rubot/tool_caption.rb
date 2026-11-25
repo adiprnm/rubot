@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "i18n"
+
 module Rubot
   # What a call is doing, in one sentence a reader who never saw the arguments
   # can follow.
@@ -101,13 +103,13 @@ module Rubot
       when "search" then search_caption(args)
       when "web_fetch" then fetch_caption(args)
       when "delegate" then delegate_caption(args)
-      when "subagent_results" then "Membaca hasil kerja subagent"
+      when "subagent_results" then I18n.t("tool.subagent_results")
       when "send_files" then send_caption(args)
       when "memory" then operation_caption("Memori", MEMORY_VERBS, args)
       when "cron" then operation_caption("Tugas terjadwal", CRON_VERBS, args)
       when "loop" then loop_caption(args)
       when "instagram" then INSTAGRAM_VERBS.fetch(args["operation"].to_s, "Mengurus Instagram")
-      when "notify" then "Bersiap memberi kabar begitu selesai"
+      when "notify" then I18n.t("tool.notify")
       else unknown_caption(name, args)
       end
     end
@@ -138,9 +140,9 @@ module Rubot
 
     def self.command_caption(args)
       command = args["command"].to_s.split("\n").first.to_s.strip
-      return "Menjalankan perintah di terminal" if command.empty?
+      return I18n.t("tool.shell.command") if command.empty?
 
-      shell_intent(command) || "Menjalankan perintah di terminal"
+      shell_intent(command) || I18n.t("tool.shell.command")
     end
 
     # The first command of a line, with the wrappers peeled off: what is left
@@ -390,7 +392,7 @@ module Rubot
     def self.search_caption(args)
       pattern = args["pattern"].to_s.strip
       files = args["operation"].to_s == "files"
-      return files ? "Mencari berkas" : "Mencari di dalam kode" if pattern.empty?
+      return I18n.t(files ? "tool.search.files" : "tool.search.code") if pattern.empty?
 
       label = clip(pattern, PATTERN_CHARS)
       files ? "Mencari berkas bernama \"#{label}\"" : "Mencari \"#{label}\" di dalam kode"
@@ -398,24 +400,24 @@ module Rubot
 
     def self.fetch_caption(args)
       url = args["url"].to_s.strip
-      return "Membuka sebuah halaman" if url.empty?
+      return I18n.t("tool.fetch") if url.empty?
 
       "Membuka halaman #{clip(url, URL_CHARS)}"
     end
 
     def self.delegate_caption(args)
       agent = args["agent"].to_s.strip
-      return "Meminta bantuan subagent" if agent.empty?
+      return I18n.t("tool.delegate") if agent.empty?
 
-      "Meminta bantuan #{agent}"
+      I18n.t("tool.delegate_named", agent: agent)
     end
 
     def self.send_caption(args)
       count = Array(args["paths"]).map(&:to_s).reject(&:empty?).size
-      return "Mengirim berkas" if count.zero?
-      return "Mengirim satu berkas" if count == 1
+      return I18n.t("tool.send.none") if count.zero?
+      return I18n.t("tool.send.one") if count == 1
 
-      "Mengirim #{count} berkas"
+      I18n.t("tool.send.many", count: count)
     end
 
     # A loop is started for a goal, and the goal is the only part of that call a

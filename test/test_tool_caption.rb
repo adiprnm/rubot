@@ -15,6 +15,17 @@ module Rubot
   class TestToolCaption < Minitest::Test
     LONG_PATH = "/home/adipurnm/Projects/oss/rubot/lib/rubot/web/turn.rb"
 
+    # These tests pin the Indonesian table, the language this module was
+    # written in before the dictionary existed. The default (en) is covered in
+    # test_i18n.rb, where the same call is read in both languages.
+    def setup
+      Rubot::I18n.locale = "id"
+    end
+
+    def teardown
+      Rubot::I18n.locale = Rubot::I18n::DEFAULT_LOCALE
+    end
+
     # --- the sentence ----------------------------------------------------
 
     # The row reads as something that happened, not as a command line: the

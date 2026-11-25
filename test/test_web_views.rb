@@ -1012,7 +1012,13 @@ module Rubot
         channel = Rubot::Channels::Web.new(channel_config: {})
         call = { "id" => "c1", "function" => { "name" => "shell_exec", "arguments" => "bukan json" } }
 
-        assert_equal "Menjalankan perintah di terminal", channel.history_tool_items(call, {}, {}, "web_rubot").first[:detail]
+        # The Indonesian label, pinned: this test is about unreadable arguments
+        # still getting the tool's own sentence, not about which language.
+        detail = Rubot::I18n.with_locale("id") do
+          channel.history_tool_items(call, {}, {}, "web_rubot").first[:detail]
+        end
+
+        assert_equal "Menjalankan perintah di terminal", detail
       end
 
       # --- diff -----------------------------------------------------------
