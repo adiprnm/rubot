@@ -73,21 +73,30 @@ class TestLoopStore < Minitest::Test
     assert_equal Rubot::LoopStore::State::DEFAULT_MAX_TOKENS, @store.load(state.id).max_tokens
   end
 
-  # The default cap is a fact about the file, so a loop created without one
-  # records it and reads it back: five, because a real iteration costs about
-  # 85,000 tokens and the 500,000 budget has to be the brake that does not fire
-  # first. The numbers are asserted, not described.
-  def test_a_loop_created_without_a_cap_gets_five_and_five_iterations_fit_the_budget
+  # The defaults are facts about the file, so a loop created without them
+  # records them and reads them back: three iterations and twelve million
+  # tokens, because one measured iteration is two full turns of about 2.8M to
+  # 5.8M tokens -- every request inside a turn re-sends the conversation -- and
+  # not the 85k a toy loop spends. The numbers are asserted, not described:
+  # three cheap iterations (3 * 2.8M = 8.4M) fit under the budget, so the cap
+  # can fire first, while three expensive ones (3 * 5.8M = 17.4M) do not, so
+  # the budget still brakes a loop that costs too much to reach its cap.
+  def test_a_loop_created_without_a_cap_gets_three_iterations_inside_twelve_million_tokens
     state = create_loop
 
-    assert_equal 5, Rubot::LoopStore::State::DEFAULT_MAX_ITERATIONS
-    assert_equal 5, @store.load(state.id).max_iterations
-    assert_includes File.read(@store.path(state.id)), "max_iterations: 5"
+    assert_equal 3, Rubot::LoopStore::State::DEFAULT_MAX_ITERATIONS
+    assert_equal 3, @store.load(state.id).max_iterations
+    assert_includes File.read(@store.path(state.id)), "max_iterations: 3"
 
-    assert_operator 85_112 * 5, :<=, Rubot::LoopStore::State::DEFAULT_MAX_TOKENS,
-                    "five real iterations of 85,112 tokens fit under the 500,000 budget"
-    refute_operator 85_112 * 8, :<=, Rubot::LoopStore::State::DEFAULT_MAX_TOKENS,
-                    "the cap of eight this replaces was never reached: the budget always fired first"
+    assert_equal 12_000_000, Rubot::LoopStore::State::DEFAULT_MAX_TOKENS
+    assert_includes File.read(@store.path(state.id)), "max_tokens: 12000000"
+
+    assert_operator 2_800_000 * 3, :<=, Rubot::LoopStore::State::DEFAULT_MAX_TOKENS,
+                    "three cheap iterations of 2.8M tokens fit under the budget, so the cap can fire first"
+    refute_operator 5_800_000 * 3, :<=, Rubot::LoopStore::State::DEFAULT_MAX_TOKENS,
+                    "three expensive iterations of 5.8M must not fit, or the budget brakes nothing"
+    refute_operator 2_800_000, :>, Rubot::LoopStore::State::DEFAULT_MAX_TOKENS,
+                    "the budget has to be above one iteration: 500,000 was below it and stopped every loop on its first one"
   end
 
   # A file written before the cap was a fact falls back to the same default as a

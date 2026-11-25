@@ -148,6 +148,42 @@ class TestLoopTool < Minitest::Test
     assert_empty @store.ids
   end
 
+  # -- the budget a start names ----------------------------------------------
+
+  def test_start_records_the_budget_it_was_given
+    @tool.loop_runner = @runner
+
+    result = start_loop("max_tokens" => 750_000)
+
+    assert_ok result
+    state = @store.load(@store.ids.first)
+    assert_equal 750_000, state.max_tokens
+    assert_includes File.read(@store.path(state.id)), "max_tokens: 750000"
+    assert_includes @tool.execute("operation" => "status", "id" => state.id), "tokens: 0/750000",
+                    "the budget is what a reader meets in the status"
+  end
+
+  def test_start_without_a_budget_gets_the_default
+    result = start_loop
+
+    assert_ok result
+    assert_equal Rubot::LoopStore::State::DEFAULT_MAX_TOKENS, @store.load(@store.ids.first).max_tokens
+  end
+
+  # Refused rather than coerced: a budget of zero stops the loop before its
+  # first iteration, and "a lot" silently becoming twelve million is a loop
+  # spending more than the reader meant to allow.
+  def test_start_rejects_a_budget_that_is_not_a_whole_number_above_zero
+    [ "0", "-5", "12.5", "a lot" ].each do |budget|
+      result = start_loop("max_tokens" => budget)
+
+      assert_error result
+      assert_includes result, "max_tokens must be a whole number of tokens above zero"
+      assert_includes result, budget.inspect
+      assert_empty @store.ids, "#{budget.inspect} must not create a loop"
+    end
+  end
+
   # -- list ------------------------------------------------------------------
 
   def test_list_with_no_loops
@@ -167,37 +203,43 @@ class TestLoopTool < Minitest::Test
     assert_equal 2, lines.size
     line = lines.find { |candidate| candidate.start_with?(first.id) }
     refute_nil line, lines.inspect
-    assert_includes line, "it=0/5"
+    assert_includes line, "it=0/3"
     assert_includes line, "active"
 
     line = lines.find { |candidate| candidate.start_with?(second.id) }
     refute_nil line, lines.inspect
-    assert_includes line, "it=3/5"
+    assert_includes line, "it=3/3"
     assert_includes line, "paused"
   end
 
   # The listing is where a reader meets the cap, and the loop was created here
-  # with no cap of its own: five is the default a loop actually gets.
-  def test_a_loop_started_without_a_cap_gets_five_iterations
+  # with no cap of its own: three is the default a loop actually gets.
+  def test_a_loop_started_without_a_cap_gets_three_iterations
     @tool.loop_runner = @runner
 
     result = start_loop
 
     assert_ok result
-    assert_equal 5, @store.load(@store.ids.first).max_iterations
-    assert_includes @tool.execute("operation" => "list"), "it=0/5"
+    assert_equal 3, @store.load(@store.ids.first).max_iterations
+    assert_includes @tool.execute("operation" => "list"), "it=0/3"
   end
 
-  # Two places state the number -- the store a start falls back to and this
-  # tool's own constant -- and they may not drift apart: the cap the tool writes
-  # and the cap a loop gets without it are the same fact. Five, because a real
-  # iteration costs about 85k tokens and the 500k budget has to outlast the cap.
-  def test_the_tools_default_cap_is_the_stores_and_fits_the_budget
-    assert_equal 5, Rubot::Tools::Loop::DEFAULT_MAX_ITERATIONS
+  # Two places state the numbers -- the store a start falls back to and this
+  # tool's own constants -- and they may not drift apart: the cap and the budget
+  # the tool writes are the ones a loop gets without asking. Three iterations
+  # inside twelve million tokens, because one measured iteration is two full
+  # turns of 2.8M to 5.8M tokens: an 85k iteration is the toy loop that made the
+  # old 500,000 budget look generous while it was smaller than one real turn.
+  def test_the_tools_defaults_are_the_stores_and_fit_the_measured_iteration
+    assert_equal 3, Rubot::Tools::Loop::DEFAULT_MAX_ITERATIONS
     assert_equal Rubot::LoopStore::State::DEFAULT_MAX_ITERATIONS, Rubot::Tools::Loop::DEFAULT_MAX_ITERATIONS
-    assert_operator 85_112 * Rubot::Tools::Loop::DEFAULT_MAX_ITERATIONS, :<=,
-                    Rubot::LoopStore::State::DEFAULT_MAX_TOKENS,
-                    "five real iterations must fit under the budget, or the cap is decorative"
+    assert_equal Rubot::LoopStore::State::DEFAULT_MAX_TOKENS, Rubot::Tools::Loop::DEFAULT_MAX_TOKENS
+    assert_operator 2_800_000 * Rubot::Tools::Loop::DEFAULT_MAX_ITERATIONS, :<=,
+                    Rubot::Tools::Loop::DEFAULT_MAX_TOKENS,
+                    "three real iterations must fit under the budget, or the cap is decorative"
+    refute_operator 5_800_000 * Rubot::Tools::Loop::DEFAULT_MAX_ITERATIONS, :<=,
+                    Rubot::Tools::Loop::DEFAULT_MAX_TOKENS,
+                    "three expensive iterations must not fit: the budget is the brake for those"
   end
 
   # -- status ----------------------------------------------------------------

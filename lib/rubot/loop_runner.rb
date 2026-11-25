@@ -48,6 +48,12 @@ module Rubot
       @store = store
       @worktree_root = worktree_root
       @session_runner = session_runner
+      # Whether the door can be told about the budget. A channel's runner takes
+      # it (that is the whole point of it: it is what stops a turn mid-flight),
+      # while a lambda written before it existed -- a test's, or another
+      # channel's -- only knows a session, a prompt and a workspace, and asking
+      # it for a fourth keyword is an ArgumentError before the turn even starts.
+      @budget_aware = accepts?(:budget, :spent, :id)
       # The session boundary takes no persona, so the name reaches the verifier
       # in its prompt: the only place a channel can see it.
       @verifier_persona = verifier_persona
@@ -140,16 +146,22 @@ module Rubot
         # anything: an agent may run `git commit` itself, and the worktree it
         # leaves behind is then clean.
         before = worktree.head(id)
-        text, tokens = ask("loop-#{id}~it#{iteration}", iteration_prompt(context, dir, branch), dir)
+        answer = ask("loop-#{id}~it#{iteration}", iteration_prompt(context, dir, branch), dir,
+                     id: id, budget: context[:budget], spent: context[:spent])
         # Charged here, before the commit, because the commit can fail: a stale
         # index.lock or a refused commit would otherwise throw away a turn the
         # provider already billed. The report hands back zero, since the run
         # charges what a runner reports and this one has already paid.
-        charge(id, tokens)
-        commit = commit_iteration(worktree, id, commit_message(iteration, text))
+        charge(id, answer[:tokens])
+        commit = commit_iteration(worktree, id, commit_message(iteration, answer[:text]))
         after = worktree.head(id)
         progress, reported = progress_report(commit, before, after)
-        { text: text, tokens: 0, commit: reported, progress: progress }
+        # A turn the budget stopped is reported, never raised: the work it left
+        # behind is committed like any other, and the run decides what a spent
+        # budget means -- it is the one that knows whether a verdict is still
+        # worth buying.
+        { text: answer[:text], tokens: 0, commit: reported, progress: progress,
+          budget_stopped: answer[:budget_stopped] }
       end
     end
 
@@ -181,9 +193,10 @@ module Rubot
       lambda do |context|
         iteration = context[:iteration].to_i
         files = worktree.changed_files(id, base)
-        text, tokens = ask("loop-#{id}~verify#{iteration}", verifier_prompt(context, dir, branch, files), dir)
-        charge(id, tokens)
-        verdict, reason = parse_verdict(text)
+        answer = ask("loop-#{id}~verify#{iteration}", verifier_prompt(context, dir, branch, files), dir,
+                     id: id, budget: context[:budget], spent: context[:spent])
+        charge(id, answer[:tokens])
+        verdict, reason = parse_verdict(answer[:text])
         { verdict: verdict, reason: reason }
       end
     end
@@ -191,12 +204,41 @@ module Rubot
     # The one door to an agent: a session id, a prompt, and the worktree as its
     # workspace. A session that raises is left to the run, which already turns a
     # failure into a log entry and an :error stop.
-    def ask(session_id, prompt, workspace)
+    #
+    # The loop's id and budget ride along when the runner takes them. They are
+    # what makes a turn stoppable from the inside: a channel that knows the
+    # budget cancels the turn it is running the moment the spend reaches it,
+    # instead of finishing the turn and discovering the loop was already spent.
+    def ask(session_id, prompt, workspace, id: nil, budget: nil, spent: nil)
       log("#{session_id}: #{prompt.lines.size} prompt lines in #{workspace}")
-      answer = @session_runner.call(session_id: session_id, prompt: prompt, workspace: workspace)
+      call = { session_id: session_id, prompt: prompt, workspace: workspace }
+      call.merge!(id: id, budget: budget, spent: spent) if @budget_aware
+      answer = @session_runner.call(**call)
       raise TypeError, "session runner returned #{answer.class}" unless answer.is_a?(Hash)
-      [ (answer[:text] || answer["text"]).to_s, (answer[:tokens] || answer["tokens"]).to_i ]
+
+      { text: (answer[:text] || answer["text"]).to_s,
+        tokens: (answer[:tokens] || answer["tokens"]).to_i,
+        # Only a runner that watched the budget says this, and only when it
+        # stopped the turn for it.
+        budget_stopped: truthy?(answer[:budget_stopped] || answer["budget_stopped"]) }
     end
+
+    # What a keyword-only callable agrees to be called with. A lambda says so
+    # in its own parameters; an object says it in `call`'s. A `**rest` accepts
+    # everything, which is what a runner that forwards its options looks like.
+    def accepts?(*names)
+      params = begin
+        @session_runner.respond_to?(:parameters) ? @session_runner.parameters : @session_runner.method(:call).parameters
+      rescue NameError
+        []
+      end
+      return true if params.any? { |kind, _| kind == :keyrest }
+
+      taken = params.filter_map { |kind, name| name if %i[key keyreq].include?(kind) }
+      names.all? { |name| taken.include?(name) }
+    end
+
+    def truthy?(value) = value == true || value == "true"
 
     # In the order an iteration needs it: what is wanted, how it is judged, where
     # to work, what was already tried, and only then one instruction. The log is
@@ -296,9 +338,13 @@ module Rubot
     end
 
     # The run names the status for done, stalled and for a pause it woke up to. A
-    # budget stop is the one it leaves active, and a loop that will not iterate
-    # again until somebody resumes it must not read "active" in the file. Totals are
-    # already there -- every iteration charged itself before the next one started.
+    # budget stop found at the boundary is the one it leaves active, and a loop
+    # that will not iterate again until somebody resumes it must not read
+    # "active" in the file. Totals are already there -- every iteration charged
+    # itself before the next one started, and a turn stopped for its budget
+    # charged itself as each usage report arrived. The note goes down once either
+    # way; a budget stop that the run already paused (the one a turn reports from
+    # the inside) is paused here again, which is the same write.
     def settle(outcome)
       return outcome unless outcome.stop_reason == :budget && outcome.state
 

@@ -118,8 +118,15 @@ bundle exec rubocop                # lint (RuboCop Rails Omakase, Rails cops off
   writes exactly two log entries -- the work (iteration number, commit sha, and
   what the worker and the verifier each spent) and the verdict -- and the token
   split is read off the store's one total rather than counted again. The cap is
-  5 by default and the budget 500,000 tokens, chosen so a real iteration (~85k)
-  lets the cap fire first instead of the budget. A loop that ends
+  3 by default and the budget 12,000,000 tokens: one measured iteration is two
+  full turns (the work and the verdict) of 2.8M to 5.8M tokens, because every
+  request inside a turn re-sends the conversation. Three cheap iterations fit
+  under the budget so the cap can fire first; three expensive ones do not, so
+  the budget still brakes a loop that costs too much to reach its cap. The
+  budget is the one stop that reaches inside a turn: the channel's
+  `loop_session_runner` debits each usage report as it arrives and cancels the
+  turn at the budget, the run commits what that turn left behind, and no verdict
+  is bought for it. A loop that ends
   `done` has its worktree removed and keeps its branch, because the branch is
   the record; one that stops any other way keeps its worktree, because the next
   resume continues in it. A loop that stopped as stalled or stuck is reported,

@@ -400,26 +400,93 @@ module Rubot
       # throwaway: it gets an id of its own per iteration, it is not a
       # conversation the roster lists, and nothing in it is marked unread --
       # a loop's sessions are not places a reader can open.
+      #
+      # The budget is enforced here because this is the only place that can.
+      # `usage.total_tokens` is everything the turn has been charged so far, and
+      # a request re-sends the whole conversation, so one turn of one iteration
+      # can spend several million tokens. Waiting for the turn to end and then
+      # charging it -- which is what the run does with whatever a runner reports
+      # -- made the budget a report on money already spent. Here each report is
+      # debited as it arrives and the turn is cancelled the moment the loop's
+      # budget is reached.
       def loop_session_runner(sid)
         slug = owner_slug(sid) || default_slug
+        ledger = loop_ledger(sid)
 
-        lambda do |session_id:, prompt:, workspace:|
+        lambda do |session_id:, prompt:, workspace:, id: nil, budget: nil, spent: nil|
           handle = @pool&.delegate(parent_session: "loop", slug: slug, run_id: session_id,
                                    workspace: workspace, session_id: session_id)
           # Two different causes reach this branch, and the log is the only
           # place a reader can tell them apart later.
           raise "no session pool is running and no persona '#{slug}' is known, so the loop cannot reach an agent" unless handle
 
-          tokens = 0
+          total = 0
+          paid = 0
+          halted = false
+          # A report carries the turn's running total, so what is new is the
+          # difference from the last one. Debited as it arrives rather than at
+          # the end, because a turn stopped for its budget never reaches the end
+          # of the turn to hand its total back: what the provider already billed
+          # has to be on the loop's file before the cancellation lands.
+          on_usage = lambda do |report|
+            total = report[:total_tokens].to_i
+            # A caller that knows no budget keeps the old answer and charges it
+            # itself, which is what every caller written before this did.
+            next if budget.nil?
+
+            debit(ledger, id, total - paid)
+            paid = total
+            next if halted || spent.to_i + total < budget.to_i
+
+            halted = true
+            handle.cancel!
+          end
+
+          text = ""
           begin
-            text = handle.process(prompt, stream: false,
-                                  on_usage: ->(report) { tokens = report[:total_tokens].to_i })
-            { text: text.to_s, tokens: tokens }
+            text = handle.process(prompt, stream: false, on_usage: on_usage)
+          rescue StandardError
+            # The cancellation this turn asked for comes back as an exception
+            # from the turn that was still running. That is the stop working,
+            # not a failure to report: what stopped the loop is its budget.
+            raise unless halted
           ensure
             # The iteration is over, so its actor has nothing left to do.
             @pool&.invalidate(session_id)
           end
+
+          # Zero back to a caller that knows the budget: this turn has already
+          # paid every token it reported, and a total charged a second time by
+          # the run is one turn billed twice.
+          next { text: text.to_s, tokens: total } if budget.nil?
+
+          { text: text.to_s, tokens: 0, spent: total, budget_stopped: halted }
         end
+      end
+
+      # What a turn is spending, written the moment it is known. A loop's tokens
+      # are its budget, so a debit that never lands is money spent that nothing
+      # notices; `update` is the store's own charge path, the one the run uses
+      # for a whole iteration, so the two cannot disagree about the total.
+      def debit(ledger, id, tokens)
+        return unless ledger && id && tokens.positive?
+
+        ledger.update(id) { |loop| loop.tokens = loop.tokens.to_i + tokens }
+      rescue StandardError => e
+        # A file that cannot be written is the run's to report at the end of the
+        # iteration, never a reason to lose the turn still arriving.
+        warn "[loop] #{id}: could not debit #{tokens} tokens: #{e.message}"
+      end
+
+      # The store a turn pays into: the same directory the run counts, reached
+      # the way #loop_runner_for reaches it, so a debit during a turn and the
+      # budget read at an iteration boundary are the same file. nil when the
+      # channel knows no workspace, because then there is nothing to pay into.
+      def loop_ledger(sid)
+        base = workspace_for_session(sid).to_s
+        return nil if base.empty?
+
+        LoopStore.new(dir: File.join(base, LOOPS_DIR))
       end
 
       # Called from the channel's stop path, before the pool goes down.

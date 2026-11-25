@@ -33,12 +33,23 @@ module Rubot
       # The cap lives in the file, not in whoever happens to construct the run:
       # a resumed run, a cron retry or a second process must not be able to hand
       # a spent loop a fresh budget just by forgetting an argument.
-      DEFAULT_MAX_TOKENS = 500_000
-      # Five, because a real iteration costs about 85k tokens of worker and
-      # verifier together: at eight the budget above was always spent first and
-      # the cap decided nothing. Five of them fit under it (5 * 85k = 425k) and
-      # leave room for the one iteration a budget stop can overshoot by.
-      DEFAULT_MAX_ITERATIONS = 5
+      #
+      # A real iteration is two full turns -- the work and the verdict -- and
+      # every request inside a turn re-sends the whole conversation, so what
+      # `usage.total_tokens` accumulates for one turn is far more than the
+      # context it carried: measured on a real repository, one iteration cost
+      # 2.8M to 5.8M tokens, not the 85k a toy loop spends. Three of them at
+      # 4M each is 12M, which is the budget below: a cheap loop (3 * 2.8M =
+      # 8.4M) reaches its cap with room to spare, and an expensive one
+      # (3 * 5.8M = 17.4M) is stopped by the budget instead of by a cap it
+      # would have blown through. The old 500,000 was below one iteration,
+      # which is why every loop ended on its first one.
+      DEFAULT_MAX_TOKENS = 12_000_000
+      # Three, because the point of a loop is that it stops early when the
+      # verifier is satisfied, and three measured iterations are the most the
+      # budget above can be trusted to cover: the cap is the ceiling, and the
+      # budget the brake for a loop too expensive to reach it.
+      DEFAULT_MAX_ITERATIONS = 3
 
       attr_reader :id, :goal, :done_criteria, :repo, :created_at, :log
       # `base` is the commit the worktree was created from, nil for a file

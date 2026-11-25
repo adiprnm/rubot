@@ -52,23 +52,44 @@ class TestWebLoops < Minitest::Test
   end
 
   # One turn of one iteration, answered from a script. It records how it was
-  # called, because the session id and the workspace are the contract.
+  # called, because the session id and the workspace are the contract, and it
+  # can report its usage in several steps -- a turn makes many requests, and
+  # each one re-sends the conversation -- which is what makes the budget a
+  # moving number rather than one figure at the end.
   class FakeHandle
-    attr_reader :calls
+    attr_reader :calls, :cancelled
 
-    def initialize(tokens: 1_234, text: "wrote step.txt", raise_with: nil)
+    def initialize(tokens: 1_234, text: "wrote step.txt", raise_with: nil, usage: nil)
       @tokens = tokens
       @text = text
       @raise_with = raise_with
+      # Cumulative totals, the way a turn reports them: the last one is the
+      # whole turn's spend.
+      @usage = usage
       @calls = []
+      @cancelled = 0
     end
 
     def process(prompt, stream: true, on_usage: nil, **)
       @calls << { prompt: prompt, stream: stream }
       raise @raise_with if @raise_with
 
-      on_usage&.call({ total_tokens: @tokens })
+      if @usage.nil?
+        on_usage&.call({ total_tokens: @tokens })
+      else
+        @usage.each { |total| on_usage&.call({ total_tokens: total }) }
+      end
+      # A turn stopped from the outside never returns: the actor raises into
+      # the session that asked for it (see SessionHandle#process).
+      raise Rubot::Cancelled, "stopped for its budget" if @cancelled.positive?
+
       @text
+    end
+
+    # What SessionHandle#cancel! does: a :stop on the port of the turn running.
+    def cancel!
+      @cancelled += 1
+      true
     end
   end
 
@@ -103,6 +124,12 @@ class TestWebLoops < Minitest::Test
 
   def harness(pool: nil, tool: Rubot::Tools::Loop.new)
     Harness.new(pool: pool, base: @base, tool: tool)
+  end
+
+  # A loop file in the store the harness pays into, with the budget under test.
+  def loop_state(max_tokens: nil)
+    @store.create(goal: "make the demo honest", done_criteria: "the demo test is green",
+                  repo: @base, **(max_tokens ? { max_tokens: max_tokens } : {}))
   end
 
   # -- binding ---------------------------------------------------------------
@@ -144,6 +171,10 @@ class TestWebLoops < Minitest::Test
 
   # -- one iteration ---------------------------------------------------------
 
+  # A caller that names no budget is the one that pays: it gets the turn's total
+  # back and charges it itself, which is the contract every caller written
+  # before the budget knew about had. No debit happens on this path, so the
+  # number is reported and not spent twice.
   def test_an_iteration_answers_with_the_text_and_the_tokens_the_callback_reported
     handle = FakeHandle.new(tokens: 1_234, text: "wrote step.txt")
     pool = FakePool.new(handle)
@@ -201,6 +232,83 @@ class TestWebLoops < Minitest::Test
                                              prompt: "do one step", workspace: "/tmp/wt")
     end
     assert_equal [ "loop-abc~it5" ], pool.invalidated
+  end
+
+  # -- the budget, inside the turn -------------------------------------------
+
+  # The whole bug, in one turn. The budget used to be checked between
+  # iterations only, so one turn -- many requests, each re-sending the
+  # conversation -- could spend a loop's entire allowance before anything
+  # looked. Here the turn is stopped from the inside at the budget, and what it
+  # spent is on the loop's file before the cancellation lands.
+  def test_a_turn_is_cancelled_the_moment_its_usage_reaches_the_budget
+    state = loop_state(max_tokens: 50_000)
+    handle = FakeHandle.new(text: "half a step", usage: [ 20_000, 40_000, 60_000 ])
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = channel.loop_session_runner("s1").call(session_id: "loop-#{state.id}~it1",
+                                                    prompt: "do one step", workspace: "/tmp/wt",
+                                                    id: state.id, budget: 50_000, spent: 0)
+
+    assert_equal 1, handle.cancelled, "the turn is stopped from the inside, once"
+    assert_equal true, answer[:budget_stopped]
+    assert_equal "", answer[:text], "a cancelled turn has no answer to hand back; its stop is the report"
+
+    reread = @store.load(state.id)
+    assert_equal 60_000, reread.tokens, "every report debited as it arrived, and only once"
+    assert_operator reread.tokens, :<=, 50_000 + 20_000,
+                    "a stop may overshoot by one usage report, never by a whole turn"
+  end
+
+  # The cancellation the turn asked for comes back as an exception from the
+  # turn that was still running. That is the stop working, not a failure: the
+  # loop stopped because it ran out of budget, and a runner that turned it into
+  # an error would end the loop as broken work instead of as spent money.
+  def test_a_cancelled_turn_is_a_budget_stop_and_not_an_error
+    state = loop_state(max_tokens: 10_000)
+    handle = FakeHandle.new(usage: [ 30_000 ])
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = channel.loop_session_runner("s1").call(session_id: "loop-#{state.id}~it1",
+                                                    prompt: "do one step", workspace: "/tmp/wt",
+                                                    id: state.id, budget: 10_000, spent: 0)
+
+    refute answer.key?(:error), answer.inspect
+    assert_equal true, answer[:budget_stopped]
+    assert_equal 30_000, @store.load(state.id).tokens
+  end
+
+  # Under the budget nothing is cancelled, and the turn still pays the store as
+  # it goes: the answer says nothing is left to charge, so the run cannot count
+  # the same tokens a second time, and `spent` is there for the log.
+  def test_a_turn_under_the_budget_pays_the_store_and_reports_nothing_left_to_charge
+    state = loop_state(max_tokens: 100_000)
+    handle = FakeHandle.new(text: "a step", usage: [ 10_000, 12_000 ])
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = channel.loop_session_runner("s1").call(session_id: "loop-#{state.id}~it1",
+                                                    prompt: "do one step", workspace: "/tmp/wt",
+                                                    id: state.id, budget: 100_000, spent: 0)
+
+    assert_equal 0, handle.cancelled
+    assert_equal 0, answer[:tokens], "the turn has already paid, so there is nothing to charge"
+    assert_equal 12_000, answer[:spent], "the last report is the turn's total"
+    assert_equal false, answer[:budget_stopped]
+    assert_equal 12_000, @store.load(state.id).tokens
+  end
+
+  # A second turn of the same iteration -- the verdict -- counts from what the
+  # loop had already spent, not from zero: the budget belongs to the loop.
+  def test_a_turn_already_past_the_budget_is_stopped_on_its_first_report
+    state = loop_state(max_tokens: 100_000)
+    handle = FakeHandle.new(usage: [ 10_000 ])
+    channel = harness(pool: FakePool.new(handle))
+
+    channel.loop_session_runner("s1").call(session_id: "loop-#{state.id}~verify1",
+                                           prompt: "judge it", workspace: "/tmp/wt",
+                                           id: state.id, budget: 100_000, spent: 95_000)
+
+    assert_equal 1, handle.cancelled, "5,000 left is not enough for a report of 10,000"
   end
 
   # -- a handed-off request --------------------------------------------------

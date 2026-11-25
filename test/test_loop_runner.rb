@@ -436,6 +436,73 @@ class TestLoopRunner < Minitest::Test
     assert_equal 1_000, @store.load(state.id).tokens
   end
 
+  # The budget has to reach the door, not only the run: a channel's session
+  # runner is the only thing that can stop a turn that is already spending.
+  def test_the_session_runner_is_told_the_budget_and_the_spend_so_far
+    state = @store.create(goal: GOAL, done_criteria: CRITERIA, repo: @repo,
+                          max_iterations: 1, max_tokens: 40_000)
+    seen = []
+    session = lambda do |session_id:, prompt:, workspace:, id: nil, budget: nil, spent: nil|
+      seen << { id: id, budget: budget, spent: spent, session_id: session_id }
+      session_id.include?("~verify") ? { text: "NOT_YET red", tokens: 100 } : { text: "a step", tokens: 1_000 }
+    end
+
+    loop_runner(session: session).start(state.id)
+
+    assert_equal [ state.id, state.id ], seen.map { |call| call[:id] }
+    assert_equal [ 40_000, 40_000 ], seen.map { |call| call[:budget] }
+    assert_equal [ 0, 1_000 ], seen.map { |call| call[:spent] },
+                 "the verdict is told what the work turn cost"
+  end
+
+  # A session runner written before the budget existed takes three keywords and
+  # nothing else. Asking it for a fourth is an ArgumentError before the turn
+  # starts, so it is never asked: the loop still runs, with the budget checked
+  # at the boundaries it has.
+  def test_a_session_runner_without_the_budget_keywords_is_still_called
+    state = new_loop(max_iterations: 1)
+    calls = []
+    session = lambda do |session_id:, prompt:, workspace:|
+      calls << session_id
+      { text: "NOT_YET red", tokens: 100 }
+    end
+
+    result = loop_runner(session: session).start(state.id)
+
+    assert_equal :max_iterations, result.stop_reason
+    assert_equal [ "loop-#{state.id}~it1", "loop-#{state.id}~verify1" ], calls,
+                 "the work turn and the verdict, on the three keywords it declared"
+  end
+
+  # A turn the channel stopped for its budget, end to end: the store is paid as
+  # the turn reports, the runner hands the stop on, and the loop settles paused
+  # with the work committed and nothing charged twice. This is the shape a real
+  # session produces, driven here by a lambda.
+  def test_a_turn_cancelled_for_its_budget_pauses_the_loop_without_double_charging
+    state = @store.create(goal: GOAL, done_criteria: CRITERIA, repo: @repo, max_tokens: 5_000)
+    verdicts = 0
+    session = lambda do |session_id:, prompt:, workspace:, id: nil, budget: nil, spent: nil|
+      if session_id.include?("~verify")
+        verdicts += 1
+        { text: "NOT_YET red", tokens: 100 }
+      else
+        File.write(File.join(workspace, "step1.txt"), "1\n")
+        # The turn reports 6,000 against a budget of 5,000 and is cancelled there.
+        @store.update(id) { |loop| loop.tokens = loop.tokens.to_i + 6_000 }
+        { text: "half a step", tokens: 0, budget_stopped: true }
+      end
+    end
+
+    result = loop_runner(session: session).start(state.id)
+
+    assert_equal :budget, result.stop_reason
+    assert_equal 0, verdicts, "the verdict is a second turn the loop cannot afford"
+    assert_equal "paused", @store.load(state.id).status
+    assert_equal 6_000, @store.load(state.id).tokens,
+                 "charged once: the turn paid the store, and the run charged nothing on top"
+    assert_equal 2, commits(state.id), "the init commit plus the one the stopped turn made"
+  end
+
   # -- the verdict -----------------------------------------------------------
 
   def test_an_answer_without_a_verdict_line_is_not_a_done

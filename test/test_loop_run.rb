@@ -307,6 +307,13 @@ class TestLoopRun < Minitest::Test
 
     assert_equal :budget, first.stop_reason
     assert_equal 60_000, @store.load(state.id).tokens
+    # A spent budget is a pause, the same status a cap stop leaves: nothing is
+    # iterating, and the loop is still resumable.
+    assert_equal "paused", @store.load(state.id).status
+
+    # Woken up with the budget already spent, which is what a resume after one
+    # looks like: the run reads the budget from the file, so nothing is bought.
+    @store.update(state.id) { |loop| loop.status = "active" }
 
     again = loop_run(
       runner: runner { |ctx| write_file(ctx, "later.txt", "x\n"); { text: "another go", tokens: 30_000 } },
@@ -317,6 +324,96 @@ class TestLoopRun < Minitest::Test
     assert_equal 2, again.iterations_run
     assert_equal 60_000, @store.load(state.id).tokens
     assert_equal 2, @contexts.size, "the second run must spend nothing"
+  end
+
+  # The channel's runner pays the store as each usage report arrives and cancels
+  # the turn the moment the loop's budget is reached, so the run is handed a
+  # finished turn that says where it stopped. What is locked here: the work the
+  # stopped turn left behind is still committed, the reason is the budget, the
+  # total it reports is not charged a second time, and the verdict -- a second
+  # turn of the same size -- is never bought.
+  def test_a_runner_stopped_by_the_budget_commits_its_work_and_buys_no_verdict
+    budget = 50_000
+    state = @store.create(goal: "make the demo honest", done_criteria: "the demo test is green",
+                          repo: @repo, max_tokens: budget)
+    reports = []
+    run = loop_run(
+      runner: runner do |ctx|
+        write_file(ctx, "step1.txt", "1\n")
+        # Four requests of 20k inside one turn, each report the turn's running
+        # total, debited as the difference -- what the channel does, and why the
+        # last report is the total rather than their sum.
+        paid = 0
+        [ 20_000, 40_000, 60_000, 80_000 ].each do |total|
+          @store.update(ctx[:id]) { |loop| loop.tokens = loop.tokens.to_i + (total - paid) }
+          paid = total
+          reports << total
+          break if total >= budget # the turn is cancelled here, and reports no more
+        end
+        { text: "half a step", tokens: 0, budget_stopped: true }
+      end,
+      verifier: verdicts({ verdict: :not_yet, reason: "red one" })
+    )
+
+    result = run.call(state.id)
+
+    assert_equal :budget, result.stop_reason
+    assert_equal 1, result.iterations_run
+    reread = @store.load(state.id)
+    assert_equal "paused", reread.status, "a spent budget pauses the loop, the same status a cap stop leaves"
+    assert_equal reports.last, reread.tokens,
+                 "the store holds the turn's own total, not the total plus the reports that made it"
+    assert_operator reread.tokens, :<=, budget + 20_000,
+                    "a turn stopped from the inside overshoots by one report at most"
+    assert_equal 2, commits_in(state.id), "the work the stopped turn left behind is on the branch, on top of the init one"
+    assert_empty @verify_contexts, "a verdict is a whole turn the loop can no longer afford"
+    assert(reread.log.any? { |entry| entry.text.include?("budget spent") },
+           reread.log.map(&:text).inspect)
+    refute(reread.log.any? { |entry| entry.text.include?("cap") },
+           "a budget stop must not borrow the cap's note")
+  end
+
+  # The verifier is a second full turn, and the run used to buy one with a
+  # budget that was already spent. Counted here: once the work turn has finished
+  # the loop's budget, the verifier lambda is never called -- and the work is
+  # committed anyway, because stopping short costs the loop its verdict, never
+  # the work it paid for.
+  def test_the_verifier_is_not_asked_once_the_budget_is_spent
+    state = @store.create(goal: "make the demo honest", done_criteria: "the demo test is green",
+                          repo: @repo, max_tokens: 50_000)
+    n = 0
+    run = loop_run(
+      runner: runner { |ctx| n += 1; write_file(ctx, "step#{n}.txt", "#{n}\n"); { text: "step #{n}", tokens: 60_000 } },
+      verifier: verdicts({ verdict: :not_yet, reason: "red one" })
+    )
+
+    result = run.call(state.id)
+
+    assert_equal :budget, result.stop_reason
+    assert_empty @verify_contexts, "the verdict costs a full turn the loop cannot afford"
+    assert_equal 60_000, @store.load(state.id).tokens
+    assert_equal 2, commits_in(state.id), "the turn's work is on the branch, on top of the init one, even though it was never judged"
+  end
+
+  # What the run tells its runner, and the whole point of it: the budget and
+  # what the loop had spent when the turn began. A runner that respects them can
+  # stop a turn in flight; waiting for the turn to end is what let one spend a
+  # whole budget and more.
+  def test_the_runner_is_told_the_budget_and_what_was_spent_before_the_turn
+    state = @store.create(goal: "make the demo honest", done_criteria: "the demo test is green",
+                          repo: @repo, max_tokens: 80_000)
+    n = 0
+    run = loop_run(
+      runner: runner { |ctx| n += 1; write_file(ctx, "step#{n}.txt", "#{n}\n"); { text: "step #{n}", tokens: 30_000 } },
+      verifier: verdicts
+    )
+
+    result = run.call(state.id)
+
+    assert_equal :budget, result.stop_reason
+    assert_equal [ 80_000, 80_000, 80_000 ], @contexts.map { |ctx| ctx[:budget] }
+    assert_equal [ 0, 30_000, 60_000 ], @contexts.map { |ctx| ctx[:spent] },
+                 "each turn is told what the ones before it cost"
   end
 
   def test_a_loop_bound_to_another_repository_is_refused

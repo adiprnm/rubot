@@ -18,11 +18,13 @@ module Rubot
       OPERATIONS = %w[start status list pause resume stop undo].freeze
       GOAL_CHARS = 60 # a listing is one line per loop
       LOG_LINES = 5   # the tail of the log is the state; the rest is not worth the tokens
-      # The store owns the number: a loop created without a cap and a call that
-      # falls back to this one must record the same five. At eight the token
-      # budget was always spent first, so the cap never decided anything (a real
-      # iteration costs about 85k).
+      # The store owns the numbers: a loop created without a cap and a call that
+      # falls back to this one must record the same three, and a loop created
+      # without a budget must get the same twelve million. Two places stating
+      # one fact is how the old 500,000 became a budget smaller than the
+      # iteration it was meant to brake.
       DEFAULT_MAX_ITERATIONS = LoopStore::State::DEFAULT_MAX_ITERATIONS
+      DEFAULT_MAX_TOKENS = LoopStore::State::DEFAULT_MAX_TOKENS
 
       # Arguments the channel may stamp as fallbacks (a repo, a cap), and the handle.
       attr_accessor :defaults, :loop_runner
@@ -64,7 +66,13 @@ module Rubot
             "repo" => { "type" => "string", "description" => "Path of the git repository the loop works in (start)" },
             "max_iterations" => {
               "type" => "integer",
-              "description" => "Iteration cap (start, default 5); resume raises it above the iterations already spent"
+              "description" => "Iteration cap (start, default #{DEFAULT_MAX_ITERATIONS}); " \
+                               "resume raises it above the iterations already spent"
+            },
+            "max_tokens" => {
+              "type" => "integer",
+              "description" => "Token budget for the whole loop (start, default #{DEFAULT_MAX_TOKENS}); " \
+                               "the run stops a turn that spends it rather than waiting for an iteration to end"
             }
           },
           "required" => [ "operation" ]
@@ -104,7 +112,11 @@ module Rubot
         path = File.expand_path(repo)
         return "ERROR: repo is not an existing directory: #{path}" unless File.directory?(path)
 
-        state = store.create(goal: goal, done_criteria: criteria, repo: path, max_iterations: max_iterations(args))
+        budget, refusal = max_tokens_for_start(args)
+        return refusal if refusal
+
+        state = store.create(goal: goal, done_criteria: criteria, repo: path,
+                             max_iterations: max_iterations(args), max_tokens: budget)
         if @loop_runner
           @loop_runner.start(state.id)
           return "OK: loop #{state.id} started in a worktree of its own: #{truncated(state.goal)}"
@@ -138,7 +150,8 @@ module Rubot
           [ "id", state.id ], [ "status", state.status ], [ "goal", one_line(state.goal) ],
           [ "done_criteria", one_line(state.done_criteria) ], [ "repo", state.repo ],
           [ "worktree", state.worktree || "-" ], [ "branch", state.branch || "-" ],
-          [ "iterations", "#{state.iterations}/#{state.max_iterations}" ], [ "tokens", state.tokens ],
+          [ "iterations", "#{state.iterations}/#{state.max_iterations}" ],
+          [ "tokens", "#{state.tokens}/#{state.max_tokens}" ],
           [ "created_at", stamp(state.created_at) ], [ "updated_at", stamp(state.updated_at) ]
         ].map { |key, value| "#{key}: #{value}" }.join("\n")
       end
@@ -316,6 +329,22 @@ module Rubot
       end
 
       def max_iterations(args) = args["max_iterations"].to_i.positive? ? args["max_iterations"].to_i : DEFAULT_MAX_ITERATIONS
+
+      # The budget a start names, nil for the store's own default. Refused rather
+      # than coerced: "0", "12.5" and "a lot" are numbers somebody meant
+      # something else by, and a loop created with a budget of zero stops before
+      # its first iteration and reads as a bug nobody can trace. The message says
+      # what was wrong with the value, because the caller can only retry what it
+      # can see.
+      def max_tokens_for_start(args)
+        raw = text(args["max_tokens"])
+        return [ nil, nil ] if raw.empty?
+
+        budget = Integer(raw, exception: false)
+        return [ nil, "ERROR: max_tokens must be a whole number of tokens above zero; got #{raw.inspect}" ] if budget.nil? || budget <= 0
+
+        [ budget, nil ]
+      end
 
       def text(value) = value.to_s.strip
       def one_line(value) = value.to_s.gsub(/\s+/, " ").strip

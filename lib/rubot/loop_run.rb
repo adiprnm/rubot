@@ -21,6 +21,14 @@ module Rubot
   # paid for, never in the middle of a turn -- and a resumed run continues from
   # the file, not from a fresh budget.
   #
+  # A budget is the one thing that does stop a turn already in flight, because a
+  # turn is where the tokens go: one iteration is two full turns and each request
+  # inside one re-sends the conversation, so a turn can cost millions. The runner
+  # is told the budget and the spend so far (see #runner_context), debits what it
+  # reports, and answers `budget_stopped` when it cancelled the turn for it. What
+  # that changes here is small and exact: the work is committed, and no verdict is
+  # bought for it -- the verifier is a second turn of the same size.
+  #
   # Two stops are worth telling apart. A *stall* is an agent that produced
   # nothing new twice in a row, judged by what the runner reported rather than by
   # the worktree, which is clean again once the work is committed, so iterating
@@ -200,8 +208,18 @@ module Rubot
       iteration = state.iterations.to_i + 1
       before = tokens_of(state.id)
       record = call_runner(runner_context(state, iteration))
+      # Zero from a runner that watched the budget and paid the store itself as
+      # each usage report arrived: charging its total here as well would count
+      # one turn twice.
       charge(state.id, iteration, record[:tokens].to_i)
-      fail_iteration(state.id, "iteration #{iteration} failed: #{record[:error]}") if record[:error]
+
+      # A turn the budget stopped on purpose reports the stop, not a failure:
+      # the cancellation it caused is the stop, and what it already spent is on
+      # the file, so nothing here raises for it.
+      budget_stop = record[:budget] == true
+      if record[:error] && !budget_stop
+        fail_iteration(state.id, "iteration #{iteration} failed: #{record[:error]}")
+      end
 
       text = one_line(record[:text])
       begin
@@ -222,7 +240,23 @@ module Rubot
       # iteration cannot make the split negative.
       worker = [ tokens_of(state.id) - before, 0 ].max
 
-      verdict = ask_verifier(state, iteration, text, commit, diff)
+      # Read back from the file, never from the state this iteration began
+      # with: the turn just paid it. The verifier is a second turn of the same
+      # size, and one iteration that reaches this point with nothing left is how
+      # a loop spent five million tokens against a five-hundred-thousand budget
+      # -- half of it on judgement nobody could afford. What the turn produced is
+      # committed above, so stopping here costs the loop its verdict, not its
+      # work.
+      spent = tokens_of(state.id)
+      if budget_stop || spent >= budget_for(state)
+        @store.update(state.id) do |s|
+          s.add_entry(entry(iteration_note(iteration, commit, worker, 0, text)))
+        end
+        fail_iteration(state.id, "budget spent at iteration #{iteration}: " \
+                                 "#{spent} of #{budget_for(state)} tokens", reason: :budget)
+      end
+
+      verdict = ask_verifier(state, iteration, text, commit, diff, spent)
       verifier = [ tokens_of(state.id) - before - worker, 0 ].max
 
       @store.update(state.id) do |s|
@@ -283,12 +317,23 @@ module Rubot
         goal: state.goal,
         done_criteria: state.done_criteria,
         worktree: state.worktree,
-        log: state.log.first(LOG_WINDOW).map(&:text)
+        log: state.log.first(LOG_WINDOW).map(&:text),
+        # The two facts a runner needs to stop a turn that is already spending:
+        # what the loop may spend in all, and what it had spent when this
+        # iteration began. A runner that only respects them at the boundary is
+        # the bug this exists to fix -- one turn can spend a loop's whole budget
+        # and more.
+        budget: budget_for(state),
+        spent: state.tokens.to_i
       }
     end
 
-    def verifier_context(state, iteration, text, commit, diff)
-      runner_context(state, iteration).merge(text: text, commit: commit, diff_stat: diff)
+    # `spent` is passed rather than read off the state, because by now the work
+    # turn has paid and the state this iteration began with is stale: the verdict
+    # is a second turn charged against the same budget, so a runner told zero
+    # would let it spend the whole allowance again.
+    def verifier_context(state, iteration, text, commit, diff, spent)
+      runner_context(state, iteration).merge(text: text, commit: commit, diff_stat: diff, spent: spent)
     end
 
     # Both callables return plain hashes and may fail in three ways: raise,
@@ -297,18 +342,31 @@ module Rubot
     # in a terminal nobody is watching. What the runner produced is read from
     # its own report: a clean worktree is not evidence of anything, because the
     # runner may have committed what it did.
+    #
+    # A fourth answer is `budget_stopped`: the runner watched the spend during
+    # the turn, cancelled it when it reached the budget, and paid the store
+    # before returning. It is not an error and it is not a report to charge
+    # again, which is why it travels as a fact of its own.
     def call_runner(context)
       record = @runner.call(context)
       return { error: "runner returned #{record.class}" } unless record.is_a?(Hash)
 
       tokens = (record[:tokens] || record["tokens"]).to_i
       error = record[:error] || record["error"]
-      return { error: error.to_s, tokens: tokens } if error
+      budget = flag_of(record, :budget_stopped) || flag_of(record, :budget)
+      return { error: error.to_s, tokens: tokens, budget: budget } if error
 
-      { text: (record[:text] || record["text"]).to_s, tokens: tokens,
+      { text: (record[:text] || record["text"]).to_s, tokens: tokens, budget: budget,
         commit: sha_of(record), progress: progress_of(record) }
     rescue StandardError => e
       { error: "#{e.class}: #{e.message}", tokens: 0 }
+    end
+
+    # Whether the report carries a fact, under the symbol or the string key: a
+    # runner may be handed a context and answer in either spelling.
+    def flag_of(record, key)
+      value = record[key].nil? ? record[key.to_s] : record[key]
+      value == true || value == "true"
     end
 
     def sha_of(record) = (record[:commit] || record["commit"]).to_s.strip.then { |sha| sha.empty? ? nil : sha }
@@ -320,8 +378,8 @@ module Rubot
       value.nil? ? nil : value != false
     end
 
-    def ask_verifier(state, iteration, text, commit, diff)
-      record = @verifier.call(verifier_context(state, iteration, text, commit, diff))
+    def ask_verifier(state, iteration, text, commit, diff, spent)
+      record = @verifier.call(verifier_context(state, iteration, text, commit, diff, spent))
       return { error: "verifier returned #{record.class}" } unless record.is_a?(Hash)
 
       verdict = verdict_of(record[:verdict] || record["verdict"])
