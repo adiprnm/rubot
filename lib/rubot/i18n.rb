@@ -614,18 +614,7 @@ module Rubot
             "toggle" => "loop",
             "empty" => "No loop running.",
             "iterations" => "%{done}/%{max} iterations",
-            "tokens" => "%{used} tokens used",
-            "remaining" => "%{left} of %{total} left",
-            "updated" => "updated %{when} ago",
-            # One wording per state the store writes. Only `active` reaches the
-            # panel (see Web::Loops#loop_rows), but the row template names the
-            # status it reads rather than assuming which one it got.
-            "statuses" => {
-              "active" => "running",
-              "paused" => "paused",
-              "done" => "done",
-              "stalled" => "stalled"
-            }
+            "remaining" => "%{left} of %{total} left"
           },
           "skills" => {
             "title" => "Skills",
@@ -1432,15 +1421,7 @@ module Rubot
             "toggle" => "loop",
             "empty" => "Tidak ada loop berjalan.",
             "iterations" => "%{done}/%{max} iterasi",
-            "tokens" => "%{used} token terpakai",
-            "remaining" => "sisa %{left} dari %{total}",
-            "updated" => "diperbarui %{when} lalu",
-            "statuses" => {
-              "active" => "berjalan",
-              "paused" => "dijeda",
-              "done" => "selesai",
-              "stalled" => "mandek"
-            }
+            "remaining" => "sisa %{left} dari %{total}"
           },
           "skills" => {
             "title" => "Skill",

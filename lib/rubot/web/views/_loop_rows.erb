@@ -3,11 +3,17 @@
 
     A loop is not a thing this conversation can watch the way it watches a
     turn: its progress is a file on disk, written by a run in a worktree of its
-    own. So each card states the four facts that answer "where did it get to?"
-    -- how many iterations of how many it has spent, what it has cost, what is
-    left of its budget, and when it last moved -- and nothing else. The goal is
-    cut to one line because a card is a glance, and the whole of it is on the
-    tooltip.
+    own. So a card says the two things a reader opens it for -- how many
+    iterations of how many it has spent, and what is left of its budget -- and
+    nothing else. The goal is cut to one line above them, because a card is a
+    glance, and the whole of it is on the tooltip.
+
+    There was more here, and every line of it was a word repeating what the
+    reader already knew: the loop's id (they asked for one loop), its status
+    (the panel draws only what is running), what it has spent (the same fact as
+    what is left, said twice) and when it last moved (a clock ticking on a panel
+    nobody leaves open). Two figures answer the question; the rest was noise
+    around them.
 
     The rows are drawn on the page and then again by the poll in _loop_sheet,
     which is why nothing here talks to the store: it is handed the rows
@@ -17,17 +23,11 @@
 <% else -%>
   <ul class="loop-rows">
 <% loops.each do |loop| -%>
-    <li class="loop loop-<%= h(loop[:status]) %>">
-      <div class="loop-head">
-        <span class="loop-id"><%= h(loop[:id]) %></span>
-        <span class="loop-status"><%= h(I18n.t(loop[:status_key])) %></span>
-      </div>
+    <li class="loop">
       <span class="loop-goal" title="<%= h(loop[:goal]) %>"><%= h(loop[:goal]) %></span>
       <span class="loop-facts">
         <%= h(I18n.t("web.loops.iterations", done: loop[:iterations], max: loop[:max_iterations])) %>
-        · <%= h(I18n.t("web.loops.tokens", used: num(loop[:tokens]))) %>
         · <%= h(I18n.t("web.loops.remaining", left: num(loop[:remaining]), total: num(loop[:max_tokens]))) %>
-        · <%= h(I18n.t("web.loops.updated", when: dur(loop[:age_seconds]))) %>
       </span>
     </li>
 <% end -%>

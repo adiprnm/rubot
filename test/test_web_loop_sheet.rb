@@ -63,8 +63,9 @@ class TestWebLoopSheet < Minitest::Test
 
   # -- what a card says ------------------------------------------------------
 
-  # The four figures a reader opens this panel for: how far the loop got, what
-  # it spent, what is left of its budget, and when it last moved.
+  # The two figures a reader opens this panel for: how far the loop got, and
+  # what is left of its budget. Everything else a card used to carry was one of
+  # these facts said twice, or a word about the panel itself.
   def test_an_active_loop_states_its_iterations_and_remaining_budget
     state = loop_state
     rows = @harness.loop_rows("web_rubot")
@@ -72,12 +73,13 @@ class TestWebLoopSheet < Minitest::Test
     assert_equal 1, rows.size
     html = Rubot::Web::View.render("_loop_rows", loops: rows)
 
-    assert_includes html, state.id
     assert_includes html, "make the demo honest"
     assert_includes html, "2/3 iterations"
-    assert_includes html, "8,400,000 tokens used"
     assert_includes html, "3,600,000 of 12,000,000 left"
-    assert_includes html, "updated"
+
+    refute_includes html, state.id, "the card names a loop the reader already asked for"
+    refute_includes html, "tokens used", "spent and left are the same fact"
+    refute_includes html, "updated", "a clock on a panel nobody leaves open"
   end
 
   # The turn that crosses the line can be charged past the budget, and a
@@ -101,7 +103,7 @@ class TestWebLoopSheet < Minitest::Test
     rows = @harness.loop_rows("web_rubot")
 
     assert_equal 1, rows.size
-    assert_equal "active", rows.first[:status]
+    assert_includes Rubot::Web::View.render("_loop_rows", loops: rows), "still running"
     refute_includes Rubot::Web::View.render("_loop_rows", loops: rows), paused.goal
   end
 
@@ -160,9 +162,8 @@ class TestWebLoopSheet < Minitest::Test
 
   # Both languages, and the one that is not the process default.
   def test_the_panel_speaks_the_chosen_language
-    rows = [ { id: "loop-1", status: "active", status_key: "web.loops.statuses.active",
-              goal: "make the demo honest", iterations: 2,
-              max_iterations: 3, tokens: 8_400_000, max_tokens: 12_000_000,
+    rows = [ { goal: "make the demo honest", iterations: 2,
+              max_iterations: 3, max_tokens: 12_000_000,
               remaining: 3_600_000, age_seconds: 125 } ]
 
     en = Rubot::Web::View.render("_loop_rows", loops: rows)

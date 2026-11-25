@@ -654,31 +654,25 @@ module Rubot
       # One row of it. Everything the panel shows is decided here, in numbers
       # and words the template only has to place: a row is never half-assembled
       # in ERB, so the page and the poll cannot word the same loop differently.
+      #
+      # Two figures and a name. What a loop has spent is the same fact as what
+      # is left of it, and the rest -- the id, the status word, the clock -- was
+      # the panel repeating the reader's own question back at them.
       def loop_row(state)
         max_tokens = state.max_tokens.to_i
         used = state.tokens.to_i
         updated = state.updated_at
         {
-          id: state.id,
-          status: state.status.to_s,
-          # The word the card calls the state. Named here rather than built from
-          # the status at draw time, so the status the row carries and the
-          # sentence a reader reads are chosen in one place.
-          status_key: case state.status.to_s
-                      when "active" then "web.loops.statuses.active"
-                      when "paused" then "web.loops.statuses.paused"
-                      when "done" then "web.loops.statuses.done"
-                      else "web.loops.statuses.stalled"
-                      end,
           goal: LoopStore.one_line(state.goal),
           iterations: state.iterations.to_i,
           max_iterations: state.max_iterations.to_i,
-          tokens: used,
           max_tokens: max_tokens,
           # Never negative: the turn that crosses the line can be charged past
           # the budget, and "-12,000 left" is not a figure a reader should have
           # to reason about at the end of a long day.
           remaining: [ max_tokens - used, 0 ].max,
+          # Not drawn: this is what orders the cards, so the loop that moved last
+          # is the one at the top.
           age_seconds: updated ? [ (Time.now - updated.to_time).to_i, 0 ].max : 0
         }
       end
