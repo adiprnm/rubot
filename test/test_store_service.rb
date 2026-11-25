@@ -78,7 +78,7 @@ class TestStoreService < Minitest::Test
       Rubot::StoreService.request(
         service_port,
         operation: :append_messages,
-        arguments: { session_id: "dari_ractor", messages: [{ "role" => "user", "content" => "hai" }] }
+        arguments: { session_id: "dari_ractor", messages: [ { "role" => "user", "content" => "hai" } ] }
       )
       Rubot::StoreService.request(service_port, operation: :message_count, arguments: { session_id: "dari_ractor" })
     end

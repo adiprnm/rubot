@@ -88,8 +88,8 @@ module Rubot
     def identity
       return "" unless persona
 
-      [persona.name, persona.system_prompt, Array(persona.skills).join(","),
-       Array(persona.disabled_skills).join(",")].join("\u0000")
+      [ persona.name, persona.system_prompt, Array(persona.skills).join(","),
+       Array(persona.disabled_skills).join(",") ].join("\u0000")
     end
 
     # Stable identity for a piece of text across restarts: String#hash is

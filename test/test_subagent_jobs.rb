@@ -75,12 +75,12 @@ class TestSubagentJobs < Minitest::Test
 
   def test_the_sheet_is_only_in_the_row_when_there_is_something_to_say
     refute Rubot::Web::SubagentJobs.visible?([])
-    assert Rubot::Web::SubagentJobs.visible?([{ phase: "tool" }])
-    assert Rubot::Web::SubagentJobs.visible?([{ phase: "done", finished_at: Time.now }])
-    assert Rubot::Web::SubagentJobs.visible?([{ phase: "failed", finished_at: Time.now }])
+    assert Rubot::Web::SubagentJobs.visible?([ { phase: "tool" } ])
+    assert Rubot::Web::SubagentJobs.visible?([ { phase: "done", finished_at: Time.now } ])
+    assert Rubot::Web::SubagentJobs.visible?([ { phase: "failed", finished_at: Time.now } ])
 
     stale = Time.now - (Rubot::Web::SubagentJobs::DONE_MARK_SECONDS + 60)
-    refute Rubot::Web::SubagentJobs.visible?([{ phase: "done", finished_at: stale }])
+    refute Rubot::Web::SubagentJobs.visible?([ { phase: "done", finished_at: stale } ])
   end
 
   # The row's subject is the task, never the calls: what a delegated agent

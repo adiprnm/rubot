@@ -125,7 +125,7 @@ class TestDelegate < Minitest::Test
   # keeps it for the length of the turn, and the delegate tool finds it there.
   def test_process_installs_the_delegate_callback_for_the_turn
     agent = build_agent
-    seen = ->(_request) {}
+    seen = ->(_request) { }
 
     agent.process("halo", on_delegate: seen)
 
@@ -313,7 +313,7 @@ class TestDelegate < Minitest::Test
   def test_enabling_delegate_also_enables_reading_its_results
     File.write(@config_path, {
       "agents" => { "defaults" => { "workspace" => @workspace, "name" => "model-a" } },
-      "models" => [{ "name" => "model-a", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" }],
+      "models" => [ { "name" => "model-a", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ],
       "tools" => { "shell_exec" => { "enabled" => true }, "delegate" => { "enabled" => true } },
       "delegation" => { "enabled" => true }
     }.to_yaml)
@@ -329,7 +329,7 @@ class TestDelegate < Minitest::Test
   def test_a_config_without_delegation_gets_no_results_tool
     File.write(@config_path, {
       "agents" => { "defaults" => { "workspace" => @workspace, "name" => "model-a" } },
-      "models" => [{ "name" => "model-a", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" }],
+      "models" => [ { "name" => "model-a", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ],
       "tools" => { "shell_exec" => { "enabled" => true } }
     }.to_yaml)
     agent = Rubot::Agent.new(config: Rubot::Config.new(@config_path),
@@ -426,7 +426,7 @@ class TestDelegate < Minitest::Test
                      "researcher", "abc123", nil)
     names = sub.send(:tool_definitions).map(&:name)
 
-    assert_equal ["web_fetch"], names
+    assert_equal [ "web_fetch" ], names
   end
 
   def test_internal_persona_in_file_is_hidden_from_user_lists

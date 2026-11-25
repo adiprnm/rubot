@@ -90,7 +90,7 @@ module Rubot
       def record(migration)
         @db.execute(
           "INSERT OR IGNORE INTO #{TABLE}(version, name, applied_at) VALUES(?, ?, ?)",
-          [migration.version, migration.name, Time.now.iso8601]
+          [ migration.version, migration.name, Time.now.iso8601 ]
         )
       end
 

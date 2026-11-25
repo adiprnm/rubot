@@ -371,7 +371,7 @@ module Rubot
           start = 1 if start < 1
           count = limit.to_i
           count = 1 if count < 1
-          ending = [start - 1 + count, total].min
+          ending = [ start - 1 + count, total ].min
           prefix = lines[0...(start - 1)].join
           suffix = (ending < total) ? lines[ending..].join : ""
           replacement = new_string.to_s
@@ -384,7 +384,7 @@ module Rubot
           updated = prefix + replacement + suffix
           File.write(p, updated, encoding: "UTF-8")
           verify_written!(p, updated)
-          return "Edited #{p}: replaced lines #{start}-#{[start + count - 1, total].min} "                  "with #{new_string.to_s.length} chars"
+          return "Edited #{p}: replaced lines #{start}-#{[ start + count - 1, total ].min} "                  "with #{new_string.to_s.length} chars"
         end
 
         if old_text.empty?

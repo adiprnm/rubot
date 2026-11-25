@@ -114,10 +114,10 @@ class TestStore < Minitest::Test
       "role" => "assistant",
       "content" => "",
       "reasoning_content" => "pikir dulu",
-      "tool_calls" => [{ "id" => "call_1", "function" => { "name" => "shell", "arguments" => "{}" } }],
+      "tool_calls" => [ { "id" => "call_1", "function" => { "name" => "shell", "arguments" => "{}" } } ],
       "timestamp" => "2026-11-10T03:07:00Z"
     }
-    @store.append_messages("web_rubot", [build_message("user", "halo"), tool_call])
+    @store.append_messages("web_rubot", [ build_message("user", "halo"), tool_call ])
 
     loaded = @store.load_session("web_rubot")[:messages]
 
@@ -128,25 +128,25 @@ class TestStore < Minitest::Test
   end
 
   def test_append_is_idempotent
-    @store.append_messages("s1", [build_message("user", "satu"), build_message("assistant", "dua")])
-    again = @store.append_messages("s1", [build_message("user", "satu"), build_message("assistant", "dua")])
+    @store.append_messages("s1", [ build_message("user", "satu"), build_message("assistant", "dua") ])
+    again = @store.append_messages("s1", [ build_message("user", "satu"), build_message("assistant", "dua") ])
 
     assert_equal 0, again
     assert_equal 2, @store.message_count("s1")
   end
 
   def test_start_index_places_messages_at_their_position
-    @store.append_messages("s1", [build_message("user", "satu")], start_index: 0)
-    @store.append_messages("s1", [build_message("assistant", "dua")], start_index: 1)
+    @store.append_messages("s1", [ build_message("user", "satu") ], start_index: 0)
+    @store.append_messages("s1", [ build_message("assistant", "dua") ], start_index: 1)
 
     assert_equal 1, @store.last_index("s1")
     assert_equal %w[satu dua], @store.load_session("s1")[:messages].map { |m| m["content"] }
   end
 
   def test_sidebar_returns_metadata_newest_first
-    @store.append_messages("lama", [build_message("user", "lama")])
+    @store.append_messages("lama", [ build_message("user", "lama") ])
     @store.upsert_session(id: "lama", title: "Percakapan lama", updated_at: "2026-11-09T10:00:00Z")
-    @store.append_messages("baru", [build_message("user", "baru")])
+    @store.append_messages("baru", [ build_message("user", "baru") ])
     @store.upsert_session(id: "baru", title: "Percakapan baru", updated_at: "2026-11-10T10:00:00Z")
 
     rows = @store.sidebar(limit: 10)
@@ -156,14 +156,14 @@ class TestStore < Minitest::Test
   end
 
   def test_unread_mark_lives_on_the_row_until_it_is_opened
-    @store.append_messages("s1", [build_message("user", "halo")])
+    @store.append_messages("s1", [ build_message("user", "halo") ])
     @store.upsert_session(id: "s1", title: "Satu", updated_at: "2026-11-10T10:00:00Z")
 
     @store.mark_unread("s1")
 
     row = @store.sidebar(limit: 10).first
     refute_nil row[:unread_at], "the sidebar must be able to draw the mark"
-    assert_equal ["s1"], @store.unread_sessions.map { |entry| entry[:id] }
+    assert_equal [ "s1" ], @store.unread_sessions.map { |entry| entry[:id] }
 
     @store.clear_unread("s1")
 
@@ -173,13 +173,13 @@ class TestStore < Minitest::Test
 
   def test_unread_mark_is_kept_apart_per_session
     %w[a b].each do |id|
-      @store.append_messages(id, [build_message("user", "pesan")])
+      @store.append_messages(id, [ build_message("user", "pesan") ])
       @store.upsert_session(id: id, title: id, updated_at: "2026-11-10T10:00:00Z")
     end
 
     @store.mark_unread("a")
 
-    assert_equal ["a"], @store.unread_sessions.map { |entry| entry[:id] }
+    assert_equal [ "a" ], @store.unread_sessions.map { |entry| entry[:id] }
     assert_nil @store.sidebar(limit: 10).find { |row| row[:id] == "b" }[:unread_at]
   end
 
@@ -231,7 +231,7 @@ class TestStore < Minitest::Test
 
   def test_sidebar_limit
     5.times do |i|
-      @store.append_messages("s#{i}", [build_message("user", "pesan #{i}")])
+      @store.append_messages("s#{i}", [ build_message("user", "pesan #{i}") ])
       @store.upsert_session(id: "s#{i}", title: "s#{i}", updated_at: "2026-11-0#{i + 1}T10:00:00Z")
     end
 
@@ -240,7 +240,7 @@ class TestStore < Minitest::Test
 
   def test_sidebar_reads_every_row_when_the_limit_is_nil
     25.times do |i|
-      @store.append_messages("s#{i}", [build_message("user", "pesan #{i}")])
+      @store.append_messages("s#{i}", [ build_message("user", "pesan #{i}") ])
       @store.upsert_session(id: "s#{i}", title: "s#{i}", updated_at: "2026-11-10T10:00:#{format("%02d", i)}Z")
     end
 
@@ -251,7 +251,7 @@ class TestStore < Minitest::Test
   # A pin is a stamp, not a flag: the pinned section is ordered by it, and the
   # sidebar cap needs an oldest pin to drop.
   def test_pin_and_unpin_round_trip
-    @store.append_messages("s1", [build_message("user", "halo")])
+    @store.append_messages("s1", [ build_message("user", "halo") ])
     @store.upsert_session(id: "s1", title: "satu", updated_at: "2026-11-10T10:00:00Z")
 
     assert @store.pin_session("s1", at: "2026-11-10T09:00:00Z")
@@ -264,12 +264,12 @@ class TestStore < Minitest::Test
   # The limited query is the one the sidebar uses to bound the chronological
   # list. A pin must not fall off the end of it, however old it is.
   def test_a_pinned_session_survives_the_sidebar_limit
-    @store.append_messages("tua", [build_message("user", "lama")])
+    @store.append_messages("tua", [ build_message("user", "lama") ])
     @store.upsert_session(id: "tua", title: "lama", updated_at: "2020-01-01T10:00:00Z")
     @store.pin_session("tua", at: "2026-11-10T09:00:00Z")
 
     5.times do |i|
-      @store.append_messages("baru#{i}", [build_message("user", "baru #{i}")])
+      @store.append_messages("baru#{i}", [ build_message("user", "baru #{i}") ])
       @store.upsert_session(id: "baru#{i}", title: "baru #{i}", updated_at: "2026-11-1#{i}T10:00:00Z")
     end
 
@@ -280,14 +280,14 @@ class TestStore < Minitest::Test
   end
 
   def test_upsert_session_counts_messages
-    @store.append_messages("s1", [build_message("user", "a"), build_message("assistant", "b")])
+    @store.append_messages("s1", [ build_message("user", "a"), build_message("assistant", "b") ])
     @store.upsert_session(id: "s1", title: "judul")
 
     assert_equal 2, @store.sidebar.first[:messages]
   end
 
   def test_messages_are_never_deleted
-    @store.append_messages("s1", [build_message("user", "a"), build_message("assistant", "b")])
+    @store.append_messages("s1", [ build_message("user", "a"), build_message("assistant", "b") ])
     # Re-adding a title, then appending nothing, must not clear the transcript.
     @store.upsert_session(id: "s1", title: "judul baru")
 
@@ -295,7 +295,7 @@ class TestStore < Minitest::Test
   end
 
   def test_import_directory_skips_empty_sessions_and_is_idempotent
-    write_session("s1", [build_message("user", "halo"), build_message("assistant", "hai")])
+    write_session("s1", [ build_message("user", "halo"), build_message("assistant", "hai") ])
     write_session("kosong", [])
 
     stats = @store.import_directory(@sessions)
@@ -313,7 +313,7 @@ class TestStore < Minitest::Test
   end
 
   def test_import_keeps_the_title_the_sidebar_shows
-    write_session("s1", [build_message("user", "cara pasang tailscale"), build_message("assistant", "begini")], title: nil)
+    write_session("s1", [ build_message("user", "cara pasang tailscale"), build_message("assistant", "begini") ], title: nil)
 
     @store.import_directory(@sessions)
 
@@ -325,7 +325,7 @@ class TestStore < Minitest::Test
   end
 
   def test_store_reopens_without_losing_rows
-    @store.append_messages("s1", [build_message("user", "a")])
+    @store.append_messages("s1", [ build_message("user", "a") ])
     @store.close
     @store = Rubot::Store.new(@db_path)
 
@@ -334,7 +334,7 @@ class TestStore < Minitest::Test
 
   def test_append_creates_the_sidebar_row
     # A conversation with messages but no row would be invisible in the sidebar.
-    @store.append_messages("s1", [build_message("user", "halo")])
+    @store.append_messages("s1", [ build_message("user", "halo") ])
 
     rows = @store.sidebar
 
@@ -344,14 +344,14 @@ class TestStore < Minitest::Test
   end
 
   def test_append_moves_the_session_forward_and_never_back
-    @store.append_messages("s1", [build_message("user", "satu", "timestamp" => "2026-11-10T03:00:00Z")])
-    @store.append_messages("s1", [build_message("assistant", "dua", "timestamp" => "2026-11-10T05:00:00Z")], start_index: 1)
+    @store.append_messages("s1", [ build_message("user", "satu", "timestamp" => "2026-11-10T03:00:00Z") ])
+    @store.append_messages("s1", [ build_message("assistant", "dua", "timestamp" => "2026-11-10T05:00:00Z") ], start_index: 1)
 
     assert_equal "2026-11-10T05:00:00Z", @store.sidebar.first[:updated_at]
 
     # An append carrying an older timestamp (a replayed turn) must not drag the
     # conversation down the list.
-    @store.append_messages("s1", [build_message("user", "tiga", "timestamp" => "2026-11-10T01:00:00Z")], start_index: 2)
+    @store.append_messages("s1", [ build_message("user", "tiga", "timestamp" => "2026-11-10T01:00:00Z") ], start_index: 2)
 
     assert_equal "2026-11-10T05:00:00Z", @store.sidebar.first[:updated_at]
   end
@@ -359,7 +359,7 @@ class TestStore < Minitest::Test
   def test_ui_diff_round_trips_through_its_own_column
     diff = { "path" => "lib/rubot/store.rb", "before" => "a\nb\n", "after" => "a\nc\n" }
     tool_message = build_message("tool", "[ok] edit", "ui_diff" => diff)
-    @store.append_messages("s1", [tool_message])
+    @store.append_messages("s1", [ tool_message ])
 
     loaded = @store.load_session("s1")[:messages].first
 
@@ -369,7 +369,7 @@ class TestStore < Minitest::Test
 
   def test_payload_does_not_contain_the_diff
     diff = { "path" => "x.rb", "before" => "y" * 500, "after" => "z" * 500 }
-    @store.append_messages("s1", [build_message("tool", "hasil", "ui_diff" => diff)])
+    @store.append_messages("s1", [ build_message("tool", "hasil", "ui_diff" => diff) ])
 
     payload = @store.instance_variable_get(:@db).get_first_value("SELECT payload FROM messages")
     blob = @store.instance_variable_get(:@db).get_first_value("SELECT diff FROM messages")
@@ -380,7 +380,7 @@ class TestStore < Minitest::Test
   end
 
   def test_message_without_diff_stores_no_blob
-    @store.append_messages("s1", [build_message("user", "biasa saja")])
+    @store.append_messages("s1", [ build_message("user", "biasa saja") ])
 
     blob = @store.instance_variable_get(:@db).get_first_value("SELECT diff FROM messages")
 
@@ -395,7 +395,7 @@ class TestStore < Minitest::Test
     db = @store.instance_variable_get(:@db)
     db.execute(
       "INSERT INTO messages(session_id, idx, role, text, created_at, payload) VALUES(?,?,?,?,?,?)",
-      ["s1", 0, "tool", "hasil lama", "2026-11-10T03:00:00Z", legacy]
+      [ "s1", 0, "tool", "hasil lama", "2026-11-10T03:00:00Z", legacy ]
     )
 
     loaded = @store.load_session("s1")[:messages].first
@@ -404,8 +404,8 @@ class TestStore < Minitest::Test
   end
 
   def test_corrupt_diff_blob_does_not_stop_the_transcript
-    @store.append_messages("s1", [build_message("tool", "hasil")])
-    @store.instance_variable_get(:@db).execute("UPDATE messages SET diff = ?", ["bukan zlib"])
+    @store.append_messages("s1", [ build_message("tool", "hasil") ])
+    @store.instance_variable_get(:@db).execute("UPDATE messages SET diff = ?", [ "bukan zlib" ])
 
     loaded = @store.load_session("s1")[:messages].first
 
@@ -414,7 +414,7 @@ class TestStore < Minitest::Test
   end
 
   def test_session_meta_round_trips
-    @store.append_messages("s1", [build_message("user", "halo")])
+    @store.append_messages("s1", [ build_message("user", "halo") ])
     meta = {
       "summary" => "ringkasan",
       "system_prompt" => "PROMPT",
@@ -453,7 +453,7 @@ class TestStore < Minitest::Test
   end
 
   def test_import_can_skip_sessions_already_archived
-    write_session("s1", [build_message("user", "lama")])
+    write_session("s1", [ build_message("user", "lama") ])
     @store.import_directory(@sessions)
 
     # Unchanged file: skipped without parsing.
@@ -464,7 +464,7 @@ class TestStore < Minitest::Test
   end
 
   def test_import_tops_up_a_session_whose_file_grew
-    write_session("s1", [build_message("user", "lama")])
+    write_session("s1", [ build_message("user", "lama") ])
     @store.import_directory(@sessions)
 
     # What a still-running old process does: the file keeps growing after the
@@ -504,7 +504,7 @@ class TestStore < Minitest::Test
   def test_a_binary_session_id_writes_to_the_text_row
     binary = "web_rubot~20261110-030626".dup.force_encoding(Encoding::ASCII_8BIT)
 
-    @store.append_messages(binary, [build_message("user", "halo")])
+    @store.append_messages(binary, [ build_message("user", "halo") ])
     @store.upsert_session(id: binary, title: "Konsumsi memori rubot web", updated_at: "2026-11-10T03:06:00Z")
 
     assert_equal 1, @store.message_count("web_rubot~20261110-030626")
@@ -516,9 +516,9 @@ class TestStore < Minitest::Test
   end
 
   def test_a_session_is_written_once_under_either_encoding
-    @store.append_messages("web_rubot", [build_message("user", "halo")])
+    @store.append_messages("web_rubot", [ build_message("user", "halo") ])
     binary = "web_rubot".dup.force_encoding(Encoding::ASCII_8BIT)
-    @store.append_messages(binary, [build_message("assistant", "hai")], start_index: 1)
+    @store.append_messages(binary, [ build_message("assistant", "hai") ], start_index: 1)
 
     assert_equal 1, @store.session_ids.length, "one conversation, one row"
     assert_equal 2, @store.message_count("web_rubot")
@@ -528,7 +528,7 @@ class TestStore < Minitest::Test
   # archive answered instead of the files: the sidebar row had the timestamp and
   # the title, but the entry handed to the channels dropped them.
   def test_index_entries_carry_the_name_and_the_timestamp
-    @store.append_messages("web_rubot~1", [build_message("user", "halo")])
+    @store.append_messages("web_rubot~1", [ build_message("user", "halo") ])
     @store.upsert_session(id: "web_rubot~1", title: "Konsumsi memori rubot web",
                           updated_at: "2026-11-10T03:06:00Z")
     Rubot::Session.store = @store
@@ -548,7 +548,7 @@ class TestStore < Minitest::Test
   end
 
   def test_saving_without_a_field_does_not_clear_it
-    @store.append_messages("s1", [build_message("user", "halo")])
+    @store.append_messages("s1", [ build_message("user", "halo") ])
     @store.upsert_session(id: "s1", title: "nama", updated_at: "2026-11-10T03:00:00Z",
                           cwd: "/tmp/x", bytes: 1234)
 
@@ -565,7 +565,7 @@ class TestStore < Minitest::Test
   end
 
   def test_a_saved_session_keeps_its_updated_at
-    @store.append_messages("s1", [build_message("user", "halo")])
+    @store.append_messages("s1", [ build_message("user", "halo") ])
     first = @store.sidebar.first[:updated_at]
 
     refute_nil first, "a session that was appended to must have a timestamp"
@@ -577,7 +577,7 @@ class TestStore < Minitest::Test
   # archive's write pattern that can be hours of turns. VACUUM INTO writes what a
   # query would see, so the copy opens as the same archive.
   def test_a_backup_is_a_copy_the_archive_can_be_opened_from
-    @store.append_messages("s1", [build_message("user", "halo"), build_message("assistant", "hai")])
+    @store.append_messages("s1", [ build_message("user", "halo"), build_message("assistant", "hai") ])
     destination = File.join(@dir, "backups", "sessions.db")
 
     @store.backup(destination)
@@ -597,7 +597,7 @@ class TestStore < Minitest::Test
   def test_a_backup_replaces_an_existing_file
     destination = File.join(@dir, "sessions.db")
     File.write(destination, "not a database")
-    @store.append_messages("s1", [build_message("user", "halo")])
+    @store.append_messages("s1", [ build_message("user", "halo") ])
 
     @store.backup(destination)
 
@@ -641,7 +641,7 @@ class TestStore < Minitest::Test
   # readable by SQLite, and a backup you cannot read is not a backup. What is
   # written has to be what the importer already reads.
   def test_the_json_export_imports_back_into_an_empty_archive
-    @store.append_messages("s1", [build_message("user", "halo"), build_message("assistant", "hai")])
+    @store.append_messages("s1", [ build_message("user", "halo"), build_message("assistant", "hai") ])
     @store.upsert_session(id: "s1", title: "judul", updated_at: "2026-11-10T03:05:00Z",
                           cwd: "/tmp/x", meta: { "summary" => "ringkas" })
     exported = File.join(@dir, "export")
@@ -666,8 +666,8 @@ class TestStore < Minitest::Test
   # window is still searchable, because the archive keeps what the model no
   # longer sees.
   def test_search_finds_a_message_that_was_archived
-    @store.append_messages("s1", [build_message("user", "kenapa cache hit anjlok?")])
-    @store.append_messages("s2", [build_message("user", "halo, apa kabar")])
+    @store.append_messages("s1", [ build_message("user", "kenapa cache hit anjlok?") ])
+    @store.append_messages("s2", [ build_message("user", "halo, apa kabar") ])
 
     hits = @store.search("cache")
 
@@ -679,7 +679,7 @@ class TestStore < Minitest::Test
   # The weights are the ranking: a conversation where the person asked is worth
   # more than the twenty where the words appeared inside a tool result.
   def test_the_person_s_words_outrank_a_tool_result
-    @store.append_messages("asked", [build_message("user", "bagaimana cara membaca diff queued?")])
+    @store.append_messages("asked", [ build_message("user", "bagaimana cara membaca diff queued?") ])
     @store.append_messages("printed", [ build_message("user", "cek file"),
                                         build_message("tool", "grep: queued ada di 12 tempat") ])
 
@@ -691,7 +691,7 @@ class TestStore < Minitest::Test
   # A prefix index is what makes typing three letters useful: the word does not
   # have to be finished to be found.
   def test_a_half_typed_word_still_matches
-    @store.append_messages("s1", [build_message("user", "the compaction ran")])
+    @store.append_messages("s1", [ build_message("user", "the compaction ran") ])
 
     refute_empty @store.search("compact")
   end
@@ -699,7 +699,7 @@ class TestStore < Minitest::Test
   # What a person types is not an FTS5 query, and it must never be one: a stray
   # quote or a `-` would raise instead of returning nothing.
   def test_a_query_that_would_be_a_syntax_error_returns_nothing_instead
-    @store.append_messages("s1", [build_message("user", "halo")])
+    @store.append_messages("s1", [ build_message("user", "halo") ])
 
     assert_equal [], @store.search(%(he said "hi AND))
     assert_equal [], @store.search("   ")
@@ -708,7 +708,7 @@ class TestStore < Minitest::Test
   # The snippet is the model's own text wrapped in markers of our choosing, so it
   # has to be escaped before it is marked up.
   def test_the_snippet_is_escaped_before_the_match_is_marked
-    @store.append_messages("s1", [build_message("user", "cari <script> jahat")])
+    @store.append_messages("s1", [ build_message("user", "cari <script> jahat") ])
 
     hit = @store.search("script").first
     refute_nil hit
@@ -736,8 +736,8 @@ class TestStore < Minitest::Test
   # The index follows the table it mirrors; an external-content FTS5 table does
   # not do that on its own.
   def test_a_message_written_after_the_index_was_built_is_searchable
-    @store.append_messages("s1", [build_message("user", "satu")])
-    @store.append_messages("s1", [build_message("user", "dua tentang wanderer")], start_index: 1)
+    @store.append_messages("s1", [ build_message("user", "satu") ])
+    @store.append_messages("s1", [ build_message("user", "dua tentang wanderer") ], start_index: 1)
 
     assert_equal 1, @store.search("wanderer").size
   end
@@ -746,9 +746,9 @@ class TestStore < Minitest::Test
   # conversations. The scope has to be part of the query rather than a filter on
   # the answer: twenty rows cut down to two would answer with two.
   def test_search_can_be_scoped_to_a_prefix
-    @store.append_messages("web_kanyaah", [build_message("user", "cache hit anjlok")])
-    @store.append_messages("tg_12345", [build_message("user", "cache hit juga")])
-    @store.append_messages("web_other", [build_message("user", "cache hit ketiga")])
+    @store.append_messages("web_kanyaah", [ build_message("user", "cache hit anjlok") ])
+    @store.append_messages("tg_12345", [ build_message("user", "cache hit juga") ])
+    @store.append_messages("web_other", [ build_message("user", "cache hit ketiga") ])
 
     assert_equal 3, @store.search("cache").size
     assert_equal %w[web_kanyaah web_other],
@@ -760,7 +760,7 @@ class TestStore < Minitest::Test
   def test_a_scoped_search_spends_its_limit_inside_the_scope
     @store.append_messages("tg_1", [ build_message("user", "wanderer satu"),
                                      build_message("user", "wanderer dua") ])
-    @store.append_messages("web_1", [build_message("user", "wanderer tiga")])
+    @store.append_messages("web_1", [ build_message("user", "wanderer tiga") ])
 
     hits = @store.search("wanderer", limit: 1, prefix: "web_")
 

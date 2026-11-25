@@ -550,7 +550,6 @@ module Rubot
       def shorten(text, limit)
         Rubot::Formatting.shorten(text, limit)
       end
-
     end
   end
 end

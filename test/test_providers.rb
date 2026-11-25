@@ -435,7 +435,7 @@ class TestProviders < Minitest::Test
 
   def test_with_retry_succeeds_after_rate_limit
     config = make_retry_config
-    provider = RetryTestProvider.new(config, [:rate_limit, "success"])
+    provider = RetryTestProvider.new(config, [ :rate_limit, "success" ])
 
     result = provider.stub(:sleep, nil) do
       provider.send(:with_retry) { provider.chat([]) }
@@ -446,7 +446,7 @@ class TestProviders < Minitest::Test
 
   def test_with_retry_raises_after_max_retries
     config = make_retry_config
-    provider = RetryTestProvider.new(config, [:rate_limit, :rate_limit, :rate_limit, :rate_limit])
+    provider = RetryTestProvider.new(config, [ :rate_limit, :rate_limit, :rate_limit, :rate_limit ])
 
     error = assert_raises(Rubot::RateLimitError) do
       provider.stub(:sleep, nil) do
@@ -464,7 +464,7 @@ class TestProviders < Minitest::Test
     config = make_retry_config
     provider = RetryTestProvider.new(
       config,
-      [:rate_limit, :rate_limit, :rate_limit, :rate_limit, :rate_limit, "success"]
+      [ :rate_limit, :rate_limit, :rate_limit, :rate_limit, :rate_limit, "success" ]
     )
 
     waits = []
@@ -540,7 +540,7 @@ class TestProviders < Minitest::Test
 
   def test_with_retry_succeeds_after_read_timeout
     config = make_retry_config
-    provider = RetryTestProvider.new(config, [:read_timeout, "success"])
+    provider = RetryTestProvider.new(config, [ :read_timeout, "success" ])
 
     result = provider.stub(:sleep, nil) do
       provider.send(:with_retry) { provider.chat([]) }
@@ -551,7 +551,7 @@ class TestProviders < Minitest::Test
 
   def test_with_retry_raises_after_max_network_retries
     config = make_retry_config
-    provider = RetryTestProvider.new(config, [:read_timeout, :read_timeout, :read_timeout])
+    provider = RetryTestProvider.new(config, [ :read_timeout, :read_timeout, :read_timeout ])
 
     assert_raises(Net::ReadTimeout) do
       provider.stub(:sleep, nil) do
@@ -563,7 +563,7 @@ class TestProviders < Minitest::Test
 
   def test_with_retry_skips_retry_when_retryable_returns_false
     config = make_retry_config
-    provider = RetryTestProvider.new(config, [:read_timeout, "success"])
+    provider = RetryTestProvider.new(config, [ :read_timeout, "success" ])
 
     assert_raises(Net::ReadTimeout) do
       provider.stub(:sleep, nil) do
@@ -586,7 +586,7 @@ class TestProviders < Minitest::Test
 
   def test_with_retry_succeeds_immediately_without_rate_limit
     config = make_retry_config
-    provider = RetryTestProvider.new(config, ["ok"])
+    provider = RetryTestProvider.new(config, [ "ok" ])
 
     result = provider.send(:with_retry) { provider.chat([]) }
     assert_equal "ok", result

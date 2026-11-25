@@ -27,7 +27,7 @@ module Rubot
         /\A\s*(jangan|jangan begitu|jangan lakukan)/i,
         /\A\s*(udah saya bilang|sudah saya bilang|udah saya katakan|sudah saya katakan|udah saya kasih tahu|sudah saya kasih tahu)/i,
         /\A\s*(kamu lupa|kamu salah|kau lupa|kau salah|lo salah|elo salah)/i,
-        /\A\s*(tidak|nggak|enggak|gak|gk)[,!.\s]+(bukan|salah|tepat|benar|begitu|itu)/i,
+        /\A\s*(tidak|nggak|enggak|gak|gk)[,!.\s]+(bukan|salah|tepat|benar|begitu|itu)/i
       ].freeze
 
       # Messages that are too short to be meaningful corrections

@@ -38,7 +38,7 @@ module Rubot
           anchored_tokens = usage_tokens + trailing
           # Never report less than the transcript we are actually about to send:
           # a stale anchor must not freeze the context size.
-          tokens = [anchored_tokens, fallback_tokens].max
+          tokens = [ anchored_tokens, fallback_tokens ].max
           {
             tokens: tokens.ceil,
             usage_tokens: usage_tokens,

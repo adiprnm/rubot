@@ -279,7 +279,7 @@ class TestMemoryToolProtection < Minitest::Test
     result = @tool.execute({
       "operation" => "update_section",
       "section" => "Facts",
-      "items" => ["Updated fact 1", "Updated fact 2"]
+      "items" => [ "Updated fact 1", "Updated fact 2" ]
     })
     assert_includes result, "Updated"
     content = @memory.read

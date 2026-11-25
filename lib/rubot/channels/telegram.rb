@@ -106,7 +106,7 @@ module Rubot
         # @status_messages because a narration deletes the message but the
         # step numbering and the elapsed clock must survive it.
         @status_state = {}      # chat_thread_key => { tool_name:, emoji:, preview:, step:,
-                                #                     started_at:, finished:, round:, hint_sent: }
+        #                     started_at:, finished:, round:, hint_sent: }
         # Delegated work in flight, keyed by run id, so the status card can say
         # how many sub agents are running and what each is doing.
         @subagents = {}         # chat_thread_key => { run_id => { agent:, phase:, detail: } }

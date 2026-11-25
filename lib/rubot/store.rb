@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+
 require "json"
 require "fileutils"
 require "digest"
@@ -187,8 +188,8 @@ module Rubot
       meta_json = meta.nil? ? nil : JSON.generate(meta)
       # meta and messages_start appear twice: once for the insert, once for the
       # conflict update, where a nil must keep what is already stored.
-      args = [id.to_s, title.to_s, created_at, updated_at, cwd, bytes,
-              meta_json, messages_start, meta_json, messages_start]
+      args = [ id.to_s, title.to_s, created_at, updated_at, cwd, bytes,
+              meta_json, messages_start, meta_json, messages_start ]
       @db.execute(<<~SQL, args)
         INSERT INTO sessions(id, title, created_at, updated_at, cwd, bytes, meta, messages_start)
         VALUES(?, ?, ?, ?, ?, ?, COALESCE(?, '{}'), COALESCE(?, 0))
@@ -215,8 +216,8 @@ module Rubot
     def delete_session(session_id)
       id = text_id(session_id)
       in_transaction do
-        @db.execute("DELETE FROM messages WHERE session_id = ?", [id])
-        @db.execute("DELETE FROM sessions WHERE id = ?", [id])
+        @db.execute("DELETE FROM messages WHERE session_id = ?", [ id ])
+        @db.execute("DELETE FROM sessions WHERE id = ?", [ id ])
         @db.execute("DELETE FROM request_cache WHERE session_id = ?", [ id ])
       end
       true
@@ -330,7 +331,7 @@ module Rubot
       id = text_id(session_id)
       return false if id.empty?
 
-      !@db.get_first_value("SELECT 1 FROM sessions WHERE id = ? LIMIT 1", [id]).nil?
+      !@db.get_first_value("SELECT 1 FROM sessions WHERE id = ? LIMIT 1", [ id ]).nil?
     end
 
     # What the sidebar shows, newest first. Three columns and no JSON parsing:
@@ -381,7 +382,7 @@ module Rubot
     # is nothing for the sidebar to mark.
     def mark_unread(session_id, at: Time.now.utc.iso8601)
       id = text_id(session_id)
-      @db.execute("UPDATE sessions SET unread_at = ? WHERE id = ?", [at, id])
+      @db.execute("UPDATE sessions SET unread_at = ? WHERE id = ?", [ at, id ])
       # Whether there was a row to mark, so a caller can tell "new mark" from
       # "nothing was written yet" without asking again.
       @db.changes.positive?
@@ -389,7 +390,7 @@ module Rubot
 
     def clear_unread(session_id)
       id = text_id(session_id)
-      @db.execute("UPDATE sessions SET unread_at = NULL WHERE id = ? AND unread_at IS NOT NULL", [id])
+      @db.execute("UPDATE sessions SET unread_at = NULL WHERE id = ? AND unread_at IS NOT NULL", [ id ])
       # Whether a mark was really taken off. A page opened with nothing waiting
       # changes no badge anywhere, so the caller can skip telling the others.
       @db.changes.positive?
@@ -419,12 +420,12 @@ module Rubot
     def load_session(session_id, all: false)
       id = text_id(session_id)
       row = @db.execute(
-        "SELECT meta, messages_start FROM sessions WHERE id = ?", [id]
+        "SELECT meta, messages_start FROM sessions WHERE id = ?", [ id ]
       ).first
       cut = row ? row[1].to_i : 0
       start = all ? 0 : cut
 
-      rows = @db.execute(<<~SQL, [id, start])
+      rows = @db.execute(<<~SQL, [ id, start ])
         SELECT payload, diff, text, role, created_at FROM messages
         WHERE session_id = ? AND idx >= ? ORDER BY idx
       SQL
@@ -449,7 +450,7 @@ module Rubot
     # composer from here, because a turn may be running in the actor that owns
     # the session and the page must render without waiting for it.
     def session_meta(session_id)
-      row = @db.get_first_row("SELECT meta FROM sessions WHERE id = ?", [text_id(session_id)])
+      row = @db.get_first_row("SELECT meta FROM sessions WHERE id = ?", [ text_id(session_id) ])
       decode_meta(row && row[0])
     end
 
@@ -458,14 +459,14 @@ module Rubot
     end
 
     def message_count(session_id)
-      @db.get_first_value("SELECT COUNT(*) FROM messages WHERE session_id = ?", [text_id(session_id)]).to_i
+      @db.get_first_value("SELECT COUNT(*) FROM messages WHERE session_id = ?", [ text_id(session_id) ]).to_i
     end
 
     # Index of the newest message stored for a session, or -1 when there is none.
     # The actor uses it to append only what is new instead of rewriting the whole
     # transcript every turn.
     def last_index(session_id)
-      @db.get_first_value("SELECT COALESCE(MAX(idx), -1) FROM messages WHERE session_id = ?", [text_id(session_id)]).to_i
+      @db.get_first_value("SELECT COALESCE(MAX(idx), -1) FROM messages WHERE session_id = ?", [ text_id(session_id) ]).to_i
     end
 
     def counts
@@ -732,7 +733,7 @@ module Rubot
 
     def refresh_count(session_id)
       id = text_id(session_id)
-      @db.execute(<<~SQL, [id, id])
+      @db.execute(<<~SQL, [ id, id ])
         UPDATE sessions
         SET msg_count = (SELECT COUNT(*) FROM messages WHERE session_id = ?)
         WHERE id = ?
@@ -749,8 +750,8 @@ module Rubot
       newest = messages.filter_map { |m| m.is_a?(Hash) ? m["timestamp"] : nil }.max
       newest = newest.to_s.empty? ? Time.now.iso8601 : newest.to_s
 
-      @db.execute("INSERT OR IGNORE INTO sessions(id, updated_at) VALUES(?, ?)", [id, newest])
-      @db.execute(<<~SQL, [newest, id, newest])
+      @db.execute("INSERT OR IGNORE INTO sessions(id, updated_at) VALUES(?, ?)", [ id, newest ])
+      @db.execute(<<~SQL, [ newest, id, newest ])
         UPDATE sessions SET updated_at = ? WHERE id = ? AND (updated_at IS NULL OR updated_at < ?)
       SQL
     end

@@ -147,7 +147,7 @@ module Rubot
       /\|\s*cat\s+>\(\s*(?:sudo\s+)?(?:ba)?sh\b/,
       # Environment variable manipulation
       /\b(?:PATH|LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|LD_BIND_NOW)\s*=/,
-      /\bexport\s+(?:PATH|LD_PRELOAD|LD_LIBRARY_PATH)\s*=/,
+      /\bexport\s+(?:PATH|LD_PRELOAD|LD_LIBRARY_PATH)\s*=/
       # Debugger arbitrary code execution (command names live in
       # DANGEROUS_COMMANDS)
     ].freeze
@@ -182,7 +182,7 @@ module Rubot
       /\Abatch\b/,
       /\Agdb\b.*(?:-ex|-batch)/,
       /\Apython3?\s+-m\s+pdb\b/,
-      /\Alldb\b.*-o\b/,
+      /\Alldb\b.*-o\b/
     ].freeze
 
     # Sensitive paths blocked in permissive mode.
@@ -203,7 +203,7 @@ module Rubot
       %r{\.ssh/id_},
       %r{\.aws/credentials},
       %r{\.kube/config},
-      %r{\.env\z},
+      %r{\.env\z}
     ].freeze
 
     BLOCK_DEVICE_PATTERNS = %r{
@@ -378,7 +378,7 @@ module Rubot
     # the "pipe to shell" patterns). `echo x | at now` -> ["echo x | at now",
     # "echo x", "at now"].
     def command_positions(fragment)
-      [fragment, *fragment.to_s.split("|")].map { |part| command_position(part) }
+      [ fragment, *fragment.to_s.split("|") ].map { |part| command_position(part) }
     end
 
     # Locate the command a fragment actually runs: skip leading variable

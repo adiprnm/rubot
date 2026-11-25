@@ -17,7 +17,7 @@ module Rubot
           "file_ops"    => "📄",
           "web_fetch"   => "🌐",
           "memory"      => "🧠",
-          "cron"        => "⏰",
+          "cron"        => "⏰"
         }.freeze
 
         # Telegram accepts roughly one message per second per chat and an edit

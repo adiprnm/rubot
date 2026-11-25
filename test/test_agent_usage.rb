@@ -347,7 +347,7 @@ class TestAgentThinkingLevel < Minitest::Test
     assert_equal "gpt-4", @agent.active_model_name
   end
 
-  def test_clearing_the_session_level_falls_back_to_the_preset    config_data = {
+  def test_clearing_the_session_level_falls_back_to_the_preset(config_data = {
       "agents" => { "defaults" => { "workspace" => @workspace, "model_preset" => "primary" } },
       "models" => [
         { "name" => "model-a", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" }
@@ -355,7 +355,7 @@ class TestAgentThinkingLevel < Minitest::Test
       "model_presets" => {
         "primary" => { "model" => "model-a", "reasoning_effort" => "high" }
       }
-    }
+    })
     File.write(@config_path, config_data.to_yaml)
     config = Rubot::Config.new(@config_path)
     agent = Rubot::Agent.new(config: config, session_id: "default", tools: @tools)

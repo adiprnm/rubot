@@ -75,7 +75,7 @@ module Rubot
         ids = Array(run_ids).map { |id| text_id(id) }.reject(&:empty?)
         return 0 if ids.empty?
 
-        marks = (["?"] * ids.size).join(", ")
+        marks = ([ "?" ] * ids.size).join(", ")
         @db.execute(
           "UPDATE subagent_runs SET reported_at = ? WHERE run_id IN (#{marks})",
           [ at.to_s ] + ids
@@ -91,7 +91,7 @@ module Rubot
         ids = Array(run_ids).map { |id| text_id(id) }.reject(&:empty?)
         return 0 if ids.empty?
 
-        marks = (["?"] * ids.size).join(", ")
+        marks = ([ "?" ] * ids.size).join(", ")
         @db.execute(
           "UPDATE subagent_runs SET reported_at = NULL WHERE run_id IN (#{marks})",
           ids

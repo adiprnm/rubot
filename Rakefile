@@ -30,7 +30,7 @@ end
 def test_workers(count)
   requested = ENV["JOBS"] || ENV["PARALLEL_WORKERS"]
   workers = requested ? Integer(requested, exception: false) || 1 : Etc.nprocessors
-  [[workers, 1].max, count].min
+  [ [ workers, 1 ].max, count ].min
 end
 
 # [file, nil, n] means "run the whole file"; [file, [names], n] means "run only
@@ -52,22 +52,22 @@ def work_units(files, per_shard)
     # Small files tend to be the ones made of slow tests (test_actors.rb has 22
     # tests but takes ~21s serially), so give them more shards than the size
     # alone would suggest.
-    shards = [shards, 4].max if methods.size <= 30
-    shards = [shards, methods.size].min
+    shards = [ shards, 4 ].max if methods.size <= 30
+    shards = [ shards, methods.size ].min
     if shards < 2
-      units << [file, nil, methods.size]
+      units << [ file, nil, methods.size ]
     else
       buckets = Array.new(shards) { [] }
       methods.each_with_index { |m, i| buckets[i % shards] << m }
-      buckets.each { |b| units << [file, b, b.size] unless b.empty? }
+      buckets.each { |b| units << [ file, b, b.size ] unless b.empty? }
     end
   end
   units
 end
 
 def run_unit(file, methods, timeout: nil)
-  args = ["-Ilib", "-Itest", file]
-  args += ["-n", "/^(#{methods.map { |m| Regexp.escape(m) }.join('|')})$/"] if methods
+  args = [ "-Ilib", "-Itest", file ]
+  args += [ "-n", "/^(#{methods.map { |m| Regexp.escape(m) }.join('|')})$/" ] if methods
   return Open3.capture2e(RbConfig.ruby, *args) unless timeout
 
   # Timeout.timeout around Open3.capture2e closes its pipes from another
@@ -157,7 +157,7 @@ task :test do
         output, status, timed_out = run_unit(file, methods, timeout: shard_timeout)
         elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0
         ok = !timed_out && status.success?
-        results << [label, ok, output, elapsed]
+        results << [ label, ok, output, elapsed ]
         printf("%-58s %6.2fs  %s\n", label, elapsed, ok ? "ok" : (timed_out ? "TIMEOUT" : "FAILED"))
         $stdout.flush
       end
@@ -172,7 +172,7 @@ task :test do
     summary = output.scan(/(\d+) runs, (\d+) assertions/).last
     runs += summary[0].to_i if summary
     assertions += summary[1].to_i if summary
-    failures << [label, output] unless ok
+    failures << [ label, output ] unless ok
   end
 
   total = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started

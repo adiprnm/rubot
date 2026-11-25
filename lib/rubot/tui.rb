@@ -613,10 +613,10 @@ module Rubot
 
       rest = if streamed.empty?
                text
-             elsif text.start_with?(streamed)
+      elsif text.start_with?(streamed)
                # The reader has the prefix already; only the tail is news.
                text[streamed.length..]
-             end
+      end
       # nil means the streamed pieces were not this answer: a steered turn
       # streams one message and returns the next, and both are wanted as they
       # came.

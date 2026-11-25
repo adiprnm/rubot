@@ -31,7 +31,7 @@ module Rubot
       /\A\s*\d+\s*\z/,                                          # just a number
       /\A\s*[!?.,;:]+\s*\z/,                                    # just punctuation
       # Indonesian acknowledgments
-      /\A\s*(iya|oh|wah|waduh|sip|oke|okeh|siap|mantap|keren|makasih|terima kasih|tidak|nggak|enggak|bisa|tidak bisa|ngerti|paham|tidak paham)\s*\z/i,
+      /\A\s*(iya|oh|wah|waduh|sip|oke|okeh|siap|mantap|keren|makasih|terima kasih|tidak|nggak|enggak|bisa|tidak bisa|ngerti|paham|tidak paham)\s*\z/i
     ].freeze
 
     # System prompt for extraction — returns structured JSON.

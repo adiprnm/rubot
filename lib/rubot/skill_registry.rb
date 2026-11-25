@@ -130,7 +130,7 @@ module Rubot
     # where new skills are installed; the rest are fallbacks, and a name found
     # in an earlier directory wins.
     def skill_dirs
-      roots = [@workspace, *@extra_workspaces].compact.uniq
+      roots = [ @workspace, *@extra_workspaces ].compact.uniq
       roots.map { |root| File.join(root, SKILLS_DIR_NAME) }.select { |dir| Dir.exist?(dir) }
     end
 

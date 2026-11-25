@@ -433,7 +433,7 @@ module Rubot
       # Meta may need a moment to finish processing the upload. A short poll
       # keeps a scheduled post from failing on a race with their CDN.
       ready = wait_for_media(media_id, token)
-      raise Error, "Gagal mengunggah gambar ke Instagram: #{ready["status"].to_s}" unless %w[FINISHED].include?(ready["status"].to_s)
+      raise Error, "Gagal mengunggah gambar ke Instagram: #{ready["status"]}" unless %w[FINISHED].include?(ready["status"].to_s)
 
       result = api_post("/#{acc["ig_user_id"]}/media_publish", {
         "creation_id" => media_id,

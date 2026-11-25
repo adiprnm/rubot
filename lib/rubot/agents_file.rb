@@ -76,7 +76,7 @@ module Rubot
     def rules
       # FIX (VULN-15): Sanitize rules to remove potential prompt injection markers.
       # Strips XML/HTML-like tags, excessive markdown fences, and control characters.
-      @body.strip.gsub(/<[\/]?[a-zA-Z][a-zA-Z0-9]*[^>]*>/, '').gsub(/\x00/, '')
+      @body.strip.gsub(/<[\/]?[a-zA-Z][a-zA-Z0-9]*[^>]*>/, "").gsub(/\x00/, "")
     end
 
     private

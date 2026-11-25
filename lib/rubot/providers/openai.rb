@@ -18,7 +18,6 @@ module Rubot
         if @config.respond_to?(:extra_headers) && @config.extra_headers.is_a?(Hash)
           @extra_headers.merge!(@config.extra_headers)
         end
-
       end
 
 
