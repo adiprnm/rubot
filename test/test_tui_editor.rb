@@ -124,7 +124,7 @@ module Rubot
 
       assert agent.auto_approve?, "the agent must be told"
       view = plain(repl.instance_variable_get(:@app).render_lines)
-      assert_includes view.join("\n"), "Auto mode on"
+      assert_includes view.join("\n"), "Mode auto aktif"
       assert_includes view.join("\n"), "AUTO", "the status row must say AUTO"
     end
 
@@ -159,7 +159,7 @@ module Rubot
 
       refute agent.auto_approve?
       view = plain(repl.instance_variable_get(:@app).render_lines)
-      assert_includes view.join("\n"), "Auto mode off"
+      assert_includes view.join("\n"), "Mode auto mati"
       refute_includes view.join("\n"), "AUTO ·"
     end
 
@@ -1032,11 +1032,11 @@ module Rubot
         repl.instance_variable_set(:@tui, false)
         out, _err = capture_io { repl.handle_command("/resume") }
 
-        assert_includes out, "Saved sessions:"
+        assert_includes out, "Sesi tersimpan:"
         assert_includes out, "work"
-        assert_includes out, "2 msgs"
+        assert_includes out, "2 pesan"
         assert_includes out, "fix the parser"
-        assert_includes out, "/resume <number>"
+        assert_includes out, "/resume <nomor>"
       end
     end
 
@@ -1057,7 +1057,7 @@ module Rubot
 
         assert_equal [ "work" ], agent.switched, "a path never resolves to a session"
         view = plain(repl.instance_variable_get(:@app).render_lines).join("\n")
-        assert_includes view, "not found"
+        assert_includes view, "tidak ditemukan"
       end
     end
 
@@ -1158,7 +1158,7 @@ module Rubot
         repl.pump
 
         view = plain(repl.instance_variable_get(:@app).render_lines).join("\n")
-        assert_includes view, "No saved sessions yet."
+        assert_includes view, "Belum ada sesi tersimpan."
       end
     end
 
@@ -1190,7 +1190,7 @@ module Rubot
       assert_same model_list, prompt.list, "the list owns the keyboard"
 
       view = plain(app.render_lines).join("\n")
-      assert_includes view, "Models supported by openai (2)"
+      assert_includes view, "Model yang didukung openai (2)"
       assert_includes view, "gpt-5"
       assert_includes view, "GPT-5 mini"
       assert_includes view, "↑/↓ choose · enter select · esc cancel"
@@ -1265,7 +1265,7 @@ module Rubot
 
       assert_equal [ "gpt-5-mini" ], agent.used
       view = plain(app.render_lines).join("\n")
-      assert_includes view, "Switched to model: gpt-5-mini"
+      assert_includes view, "Berpindah ke model: gpt-5-mini"
       refute_includes view, "↑/↓ choose", "the list is taken back out"
     end
 
@@ -1361,7 +1361,7 @@ module Rubot
       repl.pump
 
       view = plain(app.render_lines)
-      header_ix = view.index { |line| line.include?("Models supported by") }
+      header_ix = view.index { |line| line.include?("Model yang didukung") }
       search_ix = view.index { |line| line.include?("search:") }
       row_ix = view.index { |line| line.include?("gpt-5") }
       hint_ix = view.index { |line| line.include?("↑/↓ choose") }

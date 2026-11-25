@@ -222,6 +222,172 @@ module Rubot
           "delegate" => "Asking a sub agent for help",
           "delegate_named" => "Asking %{agent} for help"
         },
+        # What the terminal's slash commands answer with. One group per
+        # command family, since the lines a command prints travel together and
+        # a translator reads them better side by side than scattered by wording.
+        "tui" => {
+          "commands" => {
+            "available" => "Available commands:",
+            "keys" => "Keys:",
+            "unknown" => "Unknown command: %{command}.",
+            "unknown_hint" => "Type /help for available commands.",
+            "stop_requested" => "Stop requested."
+          },
+          "session" => {
+            "cleared" => "Session cleared.",
+            "switched" => "Session switched to: %{name}",
+            "current" => "Current session: %{id}",
+            "model" => "Model: %{model}",
+            "browse_hint" => "Type /resume to browse saved sessions.",
+            "not_found" => "Session '%{query}' not found.",
+            "see_hint" => "Type /resume to see saved sessions.",
+            "none" => "No saved sessions yet.",
+            "none_hint" => "Conversations are saved as they happen; /resume brings one back later.",
+            "other_dirs" => "%{count} conversation(s) from other directories · /resume all",
+            "list_title" => "Saved sessions:",
+            "messages_unit" => "msgs",
+            "resume_hint" => "Resume one with /resume <number> or /resume <id>.",
+            "other_dirs_more" => "%{count} more from other directories · /resume all"
+          },
+          "prompt" => {
+            "repinned" => "System prompt will be rebuilt on the next message.",
+            "repinned_detail" => "Memory, skills and AGENTS.md changed since this session started are picked up.",
+            "repinned_cost" => "Cost: the next request pays in full — the prefix moved, so the cache is gone once.",
+            "not_pinned" => "The prompt is not pinned; the next message builds it from the latest files anyway."
+          },
+          "info" => {
+            "title" => "Agent info:"
+          },
+          "context" => {
+            "live" => "live — the request in flight is not in these totals yet"
+          },
+          # The two tables /help prints. One entry per row of the tables in
+          # tui.rb, keyed by the row itself (see Commands#help_slug).
+          "help" => {
+            "cmd" => {
+              "help" => "Show this help message",
+              "new" => "Clear conversation and start a new session",
+              "stop" => "Stop the task that is running",
+              "compact" => "Summarize older messages to free context",
+              "repin" => "Rebuild the system prompt on the next message (picks up memory and skills, costs one uncached request)",
+              "clear" => "Clear conversation history",
+              "session" => "Show current session ID",
+              "session_name" => "Switch to a new session",
+              "resume" => "Pick a saved session to resume",
+              "resume_n_name" => "Resume a saved session",
+              "search_kata" => "Search every stored message, including compacted turns",
+              "info" => "Show agent info (provider, model, tools)",
+              "context" => "Show context usage, cache hit rate, and estimated cost",
+              "usage" => "Show OpenCode Go subscription usage",
+              "timing" => "Where provider requests spend their time (needs RUBOT_TIMING=1 on launch)",
+              "models" => "List the models the provider supports",
+              "model" => "Show current active model",
+              "use_model_name" => "Switch to a model for this session",
+              "tools" => "List available tools",
+              "soul" => "Show the bot's soul (SOUL.md)",
+              "memory" => "Show persistent memory (MEMORY.md)",
+              "agents" => "Show agent rules (AGENTS.md)",
+              "delegates" => "List personas available for sub-agent delegation",
+              "cron" => "List scheduled cron jobs",
+              "web_restart" => "Restart the web channel (bin/rubot web)",
+              "auto_on_off" => "Auto mode: run non-destructive actions without asking (remembered)",
+              "stream_on_off" => "Toggle streaming output",
+              "use_skill" => "Force a specific skill for the next message",
+              "unuse" => "Clear the forced skill",
+              "quit" => "Exit rubot"
+            },
+            "key" => {
+              "enter" => "Send the prompt, or take the highlighted /command",
+              "enter_running" => "Steer the turn that is running instead of waiting",
+              "shift_enter" => "Insert a newline (the box grows)",
+              "ctrl_g" => "Edit the prompt in $EDITOR, then take it back",
+              "tab" => "Complete a /command",
+              "up_down" => "Pick a /command, move between lines, or browse history",
+              "ctrl_left_right" => "Move the caret one word left or right",
+              "esc" => "Cancel the running turn, clear a selection, dismiss the list",
+              "pgup_pgdn" => "Scroll the conversation",
+              "ctrl_c" => "Quit rubot"
+            }
+          },
+          "model" => {
+            "current" => "Current model: %{model} (%{id})",
+            "override" => "Session override — cleared on /new.",
+            "none" => "No models available.",
+            "none_hint" => "The provider returned no model catalog, and config.yml has no models.",
+            "no_match" => "No model matches '%{filter}'.",
+            "list_title" => "Models supported by %{provider}",
+            "list_header" => "Models supported by %{provider}:",
+            "provider_fallback" => "the provider",
+            "catalog_failed" => "Could not read the model catalog: %{message}",
+            "usage" => "Usage: /use-model <model-name>",
+            "switched" => "Switched to model: %{model}",
+            "switched_label" => "Switched to model: %{model} (%{label})",
+            "provider" => "Provider: %{provider}",
+            "session_only" => "Persists for this session (cleared on /new).",
+            "not_found" => "Model '%{name}' not found in config.yml or the provider catalog."
+          },
+          "tools" => {
+            "title" => "Available tools:"
+          },
+          "soul" => {
+            "title" => "Soul (SOUL.md):",
+            "none" => "No soul file (SOUL.md) found in workspace."
+          },
+          "memory" => {
+            "global" => "Memory — global: %{path}",
+            "workspace" => "Memory — this workspace: %{path}",
+            "title" => "Memory (MEMORY.md):",
+            "none" => "Memory not available (no workspace configured)."
+          },
+          "agents" => {
+            "title" => "Agent rules (AGENTS.md):",
+            "none" => "No AGENTS.md found in workspace."
+          },
+          "cron" => {
+            "none" => "Cron tool not available."
+          },
+          "stream" => {
+            "state" => "Streaming %{state}.",
+            "on" => "on",
+            "off" => "off"
+          },
+          "skill" => {
+            "cleared" => "Forced skill cleared.",
+            "none" => "No forced skill is set.",
+            "usage" => "Usage: /use <skill-name>",
+            "available" => "Available skills: %{skills}",
+            "empty" => "(none)",
+            "off" => "Skill '%{name}' is switched off for this persona.",
+            "off_hint" => "Turn it back on from the persona's skills list.",
+            "forced" => "Skill '%{name}' will be used for the next message.",
+            "not_found" => "Skill '%{name}' not found or not enabled."
+          },
+          "web" => {
+            "restarted" => "Web server restarted.",
+            "restart_failed" => "Web server restart failed."
+          },
+          "delegates" => {
+            "off" => "Delegation is off. Set delegation.enabled: true in config.yml.",
+            "none" => "No personas to delegate to yet.",
+            "title" => "Delegates (%{count}):",
+            "failed" => "Could not list delegates: %{error}"
+          },
+          "auto" => {
+            "usage" => "Usage: /auto on|off (no argument flips it).",
+            "on" => "Auto mode on — non-destructive actions run without asking.",
+            "on_detail" => "Destructive patterns (rm -rf /, mkfs, dd onto a device, …) are still refused.",
+            "off" => "Auto mode off — every dangerous action asks first."
+          },
+          "search" => {
+            "title" => "Search the archive:",
+            "hint" => "/search <query> — every stored message, including compacted turns",
+            "no_archive" => "The archive is not open, so there is nothing to search.",
+            "no_archive_hint" => "Search reads the SQLite archive; without it, conversations are files and /resume lists them.",
+            "nothing" => "Nothing matches %{query}.",
+            "hits" => "%{count} hit(s) for %{query}:",
+            "resume_hint" => "Resume one with /resume <id>."
+          }
+        },
         # The settings page's own language field. It reads through the same
         # function as everything else, so the field that picks the language is
         # itself evidence of the language it picked.
@@ -633,6 +799,167 @@ module Rubot
           "fetch_page" => "Membuka halaman %{url}",
           "delegate" => "Meminta bantuan subagent",
           "delegate_named" => "Meminta bantuan %{agent}"
+        },
+        "tui" => {
+          "commands" => {
+            "available" => "Perintah yang tersedia:",
+            "keys" => "Tombol pintas:",
+            "unknown" => "Perintah tidak dikenal: %{command}.",
+            "unknown_hint" => "Ketik /help untuk melihat daftar perintah.",
+            "stop_requested" => "Permintaan berhenti dikirim."
+          },
+          "session" => {
+            "cleared" => "Sesi dibersihkan.",
+            "switched" => "Sesi dialihkan ke: %{name}",
+            "current" => "Sesi saat ini: %{id}",
+            "model" => "Model: %{model}",
+            "browse_hint" => "Ketik /resume untuk menelusuri sesi tersimpan.",
+            "not_found" => "Sesi '%{query}' tidak ditemukan.",
+            "see_hint" => "Ketik /resume untuk melihat daftar sesi tersimpan.",
+            "none" => "Belum ada sesi tersimpan.",
+            "none_hint" => "Percakapan disimpan begitu terjadi; /resume mengembalikannya nanti.",
+            "other_dirs" => "%{count} percakapan dari direktori lain · /resume all",
+            "list_title" => "Sesi tersimpan:",
+            "messages_unit" => "pesan",
+            "resume_hint" => "Lanjutkan satu dengan /resume <nomor> atau /resume <id>.",
+            "other_dirs_more" => "%{count} lagi dari direktori lain · /resume all"
+          },
+          "prompt" => {
+            "repinned" => "System prompt akan dibangun ulang pada pesan berikutnya.",
+            "repinned_detail" => "Memori, skill, dan AGENTS.md yang berubah sejak sesi ini dimulai ikut terpakai.",
+            "repinned_cost" => "Biayanya: permintaan berikutnya dibayar penuh — awalan prompt bergeser, jadi cache-nya hilang sekali.",
+            "not_pinned" => "Prompt tidak dipin; pesan berikutnya tetap membangunnya dari berkas terbaru."
+          },
+          "info" => {
+            "title" => "Info agen:"
+          },
+          "context" => {
+            "live" => "live — permintaan yang sedang berjalan belum masuk hitungan ini"
+          },
+          "help" => {
+            "cmd" => {
+              "help" => "Tampilkan bantuan ini",
+              "new" => "Bersihkan percakapan dan mulai sesi baru",
+              "stop" => "Hentikan tugas yang sedang berjalan",
+              "compact" => "Ringkas pesan lama untuk mengosongkan konteks",
+              "repin" => "Bangun ulang system prompt pada pesan berikutnya (memori dan skill ikut terbaca, biayanya satu permintaan tanpa cache)",
+              "clear" => "Bersihkan riwayat percakapan",
+              "session" => "Tampilkan ID sesi saat ini",
+              "session_name" => "Pindah ke sesi baru",
+              "resume" => "Pilih sesi tersimpan untuk dilanjutkan",
+              "resume_n_name" => "Lanjutkan sesi tersimpan",
+              "search_kata" => "Cari di setiap pesan tersimpan, termasuk giliran yang sudah diringkas",
+              "info" => "Tampilkan info agen (provider, model, tool)",
+              "context" => "Tampilkan pemakaian konteks, cache hit rate, dan perkiraan biaya",
+              "usage" => "Tampilkan pemakaian langganan OpenCode Go",
+              "timing" => "Ke mana permintaan ke provider menghabiskan waktu (perlu RUBOT_TIMING=1 saat start)",
+              "models" => "Daftar model yang didukung provider",
+              "model" => "Tampilkan model yang sedang aktif",
+              "use_model_name" => "Pindah model untuk sesi ini",
+              "tools" => "Daftar tool yang tersedia",
+              "soul" => "Tampilkan soul bot (SOUL.md)",
+              "memory" => "Tampilkan memori permanen (MEMORY.md)",
+              "agents" => "Tampilkan aturan agen (AGENTS.md)",
+              "delegates" => "Daftar persona yang bisa menerima delegasi subagent",
+              "cron" => "Daftar tugas cron terjadwal",
+              "web_restart" => "Jalankan ulang kanal web (bin/rubot web)",
+              "auto_on_off" => "Mode auto: jalankan aksi yang tidak merusak tanpa bertanya (diingat)",
+              "stream_on_off" => "Alihkan keluaran streaming",
+              "use_skill" => "Paksa satu skill untuk pesan berikutnya",
+              "unuse" => "Hapus skill yang dipaksa",
+              "quit" => "Keluar dari rubot"
+            },
+            "key" => {
+              "enter" => "Kirim prompt, atau ambil /command yang disorot",
+              "enter_running" => "Arahkan giliran yang sedang berjalan, bukan menunggunya",
+              "shift_enter" => "Sisipkan baris baru (kotak ikut tumbuh)",
+              "ctrl_g" => "Sunting prompt di $EDITOR, lalu ambil kembali",
+              "tab" => "Lengkapi sebuah /command",
+              "up_down" => "Pilih /command, pindah antar baris, atau telusuri riwayat",
+              "ctrl_left_right" => "Geser kursor satu kata ke kiri atau kanan",
+              "esc" => "Batalkan giliran yang berjalan, hapus pilihan, tutup daftar",
+              "pgup_pgdn" => "Gulir percakapan",
+              "ctrl_c" => "Keluar dari rubot"
+            }
+          },
+          "model" => {
+            "current" => "Model saat ini: %{model} (%{id})",
+            "override" => "Override sesi — hilang saat /new.",
+            "none" => "Tidak ada model yang tersedia.",
+            "none_hint" => "Provider tidak memberi katalog model, dan config.yml tidak punya daftar model.",
+            "no_match" => "Tidak ada model yang cocok dengan '%{filter}'.",
+            "list_title" => "Model yang didukung %{provider}",
+            "list_header" => "Model yang didukung %{provider}:",
+            "provider_fallback" => "provider",
+            "catalog_failed" => "Gagal membaca katalog model: %{message}",
+            "usage" => "Pakai: /use-model <nama-model>",
+            "switched" => "Berpindah ke model: %{model}",
+            "switched_label" => "Berpindah ke model: %{model} (%{label})",
+            "provider" => "Provider: %{provider}",
+            "session_only" => "Berlaku untuk sesi ini saja (hilang saat /new).",
+            "not_found" => "Model '%{name}' tidak ada di config.yml maupun katalog provider."
+          },
+          "tools" => {
+            "title" => "Tool yang tersedia:"
+          },
+          "soul" => {
+            "title" => "Soul (SOUL.md):",
+            "none" => "Berkas soul (SOUL.md) tidak ditemukan di workspace."
+          },
+          "memory" => {
+            "global" => "Memori — global: %{path}",
+            "workspace" => "Memori — workspace ini: %{path}",
+            "title" => "Memori (MEMORY.md):",
+            "none" => "Memori tidak tersedia (workspace belum diatur)."
+          },
+          "agents" => {
+            "title" => "Aturan agen (AGENTS.md):",
+            "none" => "AGENTS.md tidak ditemukan di workspace."
+          },
+          "cron" => {
+            "none" => "Tool cron tidak tersedia."
+          },
+          "stream" => {
+            "state" => "Streaming %{state}.",
+            "on" => "aktif",
+            "off" => "nonaktif"
+          },
+          "skill" => {
+            "cleared" => "Skill paksa dihapus.",
+            "none" => "Tidak ada skill paksa yang aktif.",
+            "usage" => "Pakai: /use <nama-skill>",
+            "available" => "Skill yang tersedia: %{skills}",
+            "empty" => "(tidak ada)",
+            "off" => "Skill '%{name}' dimatikan untuk persona ini.",
+            "off_hint" => "Nyalakan lagi dari daftar skill persona.",
+            "forced" => "Skill '%{name}' akan dipakai untuk pesan berikutnya.",
+            "not_found" => "Skill '%{name}' tidak ditemukan atau tidak aktif."
+          },
+          "web" => {
+            "restarted" => "Server web dijalankan ulang.",
+            "restart_failed" => "Server web gagal dijalankan ulang."
+          },
+          "delegates" => {
+            "off" => "Delegasi mati. Set delegation.enabled: true di config.yml.",
+            "none" => "Belum ada persona yang bisa menerima delegasi.",
+            "title" => "Delegasi (%{count}):",
+            "failed" => "Gagal membaca daftar delegasi: %{error}"
+          },
+          "auto" => {
+            "usage" => "Pakai: /auto on|off (tanpa argumen membaliknya).",
+            "on" => "Mode auto aktif — aksi yang tidak merusak berjalan tanpa bertanya.",
+            "on_detail" => "Pola berbahaya (rm -rf /, mkfs, dd ke perangkat, …) tetap ditolak.",
+            "off" => "Mode auto mati — setiap aksi berbahaya ditanya dulu."
+          },
+          "search" => {
+            "title" => "Cari di arsip:",
+            "hint" => "/search <kata> — setiap pesan tersimpan, termasuk giliran yang sudah diringkas",
+            "no_archive" => "Arsip tidak terbuka, jadi tidak ada yang bisa dicari.",
+            "no_archive_hint" => "Pencarian membaca arsip SQLite; tanpa itu percakapan berupa berkas dan /resume yang menampilkannya.",
+            "nothing" => "Tidak ada yang cocok dengan %{query}.",
+            "hits" => "%{count} hasil untuk %{query}:",
+            "resume_hint" => "Lanjutkan satu dengan /resume <id>."
+          }
         },
         "settings" => {
           "language" => {

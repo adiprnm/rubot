@@ -63,22 +63,39 @@ module Rubot
       # every command answers through.
       def command_help
         blank
-        say("Available commands:", :info)
-        COMMANDS.each do |syntax, desc|
-          say_text(format("  %-20s %s", syntax, desc))
+        say(I18n.t("tui.commands.available"), :info)
+        COMMANDS.each_key do |syntax|
+          say_text(format("  %-20s %s", syntax, I18n.t("tui.help.cmd.#{help_slug(syntax)}")))
         end
         blank
-        say("Keys:", :info)
-        KEYS.each do |keys, desc|
-          say_text(format("  %-20s %s", keys, desc))
+        say(I18n.t("tui.commands.keys"), :info)
+        KEYS.each_key do |keys|
+          say_text(format("  %-20s %s", keys, I18n.t("tui.help.key.#{help_slug(keys)}")))
         end
         blank
       end
 
+      # The dictionary name of one /help row: the command or the keystroke the
+      # reader sees, spelled out (an arrow becomes its direction), so the table
+      # in tui.rb and the dictionary cannot be keyed by two different words.
+      def help_slug(text)
+        text.to_s.downcase
+            .gsub("↑", "up").gsub("↓", "down")
+            .gsub("←", "left").gsub("→", "right")
+            .gsub(/[^a-z0-9]+/, "_")
+            .gsub(/\A_+|_+\z/, "")
+      end
+
+      # The seam a test holds the two /help tables against the dictionary with:
+      # the row a reader sees decides the key, so the check is this method and
+      # not a second copy of the spelling rules. Everything else here stays
+      # private.
+      public :help_slug
+
       def command_clear
         agent.clear_session
         @events << [ :reset_turn_totals ]
-        say("Session cleared.", :ok)
+        say(I18n.t("tui.session.cleared"), :ok)
         refresh_usage
       end
 
@@ -92,7 +109,7 @@ module Rubot
 
       def command_stop
         agent.cancel!
-        say("Stop requested.", :ok)
+        say(I18n.t("tui.commands.stop_requested"), :ok)
       end
 
       def command_compact
@@ -114,29 +131,29 @@ module Rubot
         # moves. This is the door, and the price is on the tin: one request paid
         # in full, because the prefix moves with the prompt.
         if agent.repin_system_prompt
-          say("System prompt will be rebuilt on the next message.", :ok)
-          say_text("Memory, skills and AGENTS.md changed since this session started are picked up.")
-          say_text("Cost: the next request pays in full — the prefix moved, so the cache is gone once.")
+          say(I18n.t("tui.prompt.repinned"), :ok)
+          say_text(I18n.t("tui.prompt.repinned_detail"))
+          say_text(I18n.t("tui.prompt.repinned_cost"))
         else
-          say("The prompt is not pinned; the next message builds it from the latest files anyway.", :info)
+          say(I18n.t("tui.prompt.not_pinned"), :info)
         end
       end
 
       def command_session(name)
         if name
           switch_session(name)
-          say("Session switched to: #{name}", :ok)
+          say(I18n.t("tui.session.switched", name: name), :ok)
           refresh_status
           refresh_usage
         else
-          say("Current session: #{agent.session.id}", :info)
-          say_text("Model: #{agent.active_model_name}")
-          say_text("Type /resume to browse saved sessions.")
+          say(I18n.t("tui.session.current", id: agent.session.id), :info)
+          say_text(I18n.t("tui.session.model", model: agent.active_model_name))
+          say_text(I18n.t("tui.session.browse_hint"))
         end
       end
 
       def command_info
-        say("Agent info:", :info)
+        say(I18n.t("tui.info.title"), :info)
         agent.startup_info.each { |k, v| say_text("#{k}: #{v}") }
       end
 
@@ -147,7 +164,7 @@ module Rubot
         # is moving.
         report = @live_report || agent.usage_report
         say_text(Rubot::UsageReport.render(report))
-        say_text("live — the request in flight is not in these totals yet") if @live_report
+        say_text(I18n.t("tui.context.live")) if @live_report
         blank
       end
 
@@ -166,12 +183,12 @@ module Rubot
       def command_model
         active = agent.active_model_name
         entry = agent.config.model_entry_by_name(active) || agent.config.active_model_entry
-        say("Current model: #{active} (#{entry["model"]})", :info)
-        say("Session override — cleared on /new.", :warn) if agent.session.model_override
+        say(I18n.t("tui.model.current", model: active, id: entry["model"]), :info)
+        say(I18n.t("tui.model.override"), :warn) if agent.session.model_override
       end
 
       def command_tools
-        say("Available tools:", :info)
+        say(I18n.t("tui.tools.title"), :info)
         agent.tools.all.each do |tool|
           say_text("  - #{tool.name}: #{tool.description.lines.first.strip}")
         end
@@ -179,10 +196,10 @@ module Rubot
 
       def command_soul
         if agent.soul.enabled?
-          say("Soul (SOUL.md):", :info)
+          say(I18n.t("tui.soul.title"), :info)
           say_text(agent.soul.read, :text)
         else
-          say("No soul file (SOUL.md) found in workspace.", :warn)
+          say(I18n.t("tui.soul.none"), :warn)
         end
       end
 
@@ -190,23 +207,23 @@ module Rubot
         if agent.memory.enabled?
           memory = agent.memory
           if memory.respond_to?(:global_path)
-            say("Memory — global: #{memory.global_path}", :info)
-            say("Memory — this workspace: #{memory.workspace_path}", :info)
+            say(I18n.t("tui.memory.global", path: memory.global_path), :info)
+            say(I18n.t("tui.memory.workspace", path: memory.workspace_path), :info)
           else
-            say("Memory (MEMORY.md):", :info)
+            say(I18n.t("tui.memory.title"), :info)
           end
           say_text(memory.read, :text)
         else
-          say("Memory not available (no workspace configured).", :warn)
+          say(I18n.t("tui.memory.none"), :warn)
         end
       end
 
       def command_agents
         if agent.agents_file.enabled?
-          say("Agent rules (AGENTS.md):", :info)
+          say(I18n.t("tui.agents.title"), :info)
           say_text(agent.agents_file.raw, :text)
         else
-          say("No AGENTS.md found in workspace.", :warn)
+          say(I18n.t("tui.agents.none"), :warn)
         end
       end
 
@@ -215,22 +232,23 @@ module Rubot
         if cron_tool
           say_text(cron_tool.execute({ "operation" => "list" }).to_s, :text)
         else
-          say("Cron tool not available.", :warn)
+          say(I18n.t("tui.cron.none"), :warn)
         end
       end
 
       def command_stream(argument)
         @stream = argument.downcase == "on" if argument
-        say("Streaming #{@stream ? "on" : "off"}.", :info)
+        state = I18n.t(@stream ? "tui.stream.on" : "tui.stream.off")
+        say(I18n.t("tui.stream.state", state: state), :info)
       end
 
       def command_unuse
         if agent.session.forced_skill
           agent.session.forced_skill = nil
           agent.session.save! if agent.session.respond_to?(:save!)
-          say("Forced skill cleared.", :ok)
+          say(I18n.t("tui.skill.cleared"), :ok)
         else
-          say("No forced skill is set.", :info)
+          say(I18n.t("tui.skill.none"), :info)
         end
       end
 
@@ -239,8 +257,8 @@ module Rubot
       end
 
       def command_unknown(cmd)
-        say("Unknown command: #{cmd}.", :err)
-        say_text("Type /help for available commands.")
+        say(I18n.t("tui.commands.unknown", command: cmd), :err)
+        say_text(I18n.t("tui.commands.unknown_hint"))
       end
 
       # /auto with no argument flips the current mode, so the common case is one
@@ -257,12 +275,12 @@ module Rubot
       def restart_web_channel
         output, status = Open3.capture2e(*web_restart_command)
         if status.success?
-          say("Web server restarted.", :ok)
+          say(I18n.t("tui.web.restarted"), :ok)
           # The script reports one line on success: the pid and the address.
           line = output.lines.map(&:strip).reject(&:empty?).last
           say_text(line) if line
         else
-          say("Web server restart failed.", :err)
+          say(I18n.t("tui.web.restart_failed"), :err)
           output.lines.map(&:strip).reject(&:empty?).last(3).each { |line| say_text(line) }
         end
       end
@@ -273,18 +291,18 @@ module Rubot
       def handle_delegates_command
         config = agent.config
         unless config.respond_to?(:delegation_enabled?) && config.delegation_enabled?
-          say("Delegation is off. Set delegation.enabled: true in config.yml.", :warn)
+          say(I18n.t("tui.delegates.off"), :warn)
           return
         end
 
         store = Rubot::PersonaStore.from_config(config, dir: File.dirname(config.personas_file))
         specialists = store.specialists
         if specialists.empty?
-          say("No personas to delegate to yet.", :warn)
+          say(I18n.t("tui.delegates.none"), :warn)
           return
         end
 
-        say("Delegates (#{specialists.size}):", :info)
+        say(I18n.t("tui.delegates.title", count: specialists.size), :info)
         specialists.each do |slug, persona|
           model = persona.model.to_s
           label = "#{persona.emoji_or} #{persona.label} (#{slug})"
@@ -292,7 +310,7 @@ module Rubot
           say_text("  - #{label}")
         end
       rescue StandardError => e
-        say("Could not list delegates: #{e.class}: #{e.message}", :err)
+        say(I18n.t("tui.delegates.failed", error: "#{e.class}: #{e.message}"), :err)
       end
 
       def handle_auto_command(argument)
@@ -304,7 +322,7 @@ module Rubot
         end
 
         if wanted.nil?
-          say("Usage: /auto on|off (no argument flips it).", :err)
+          say(I18n.t("tui.auto.usage"), :err)
           return
         end
 
@@ -318,10 +336,10 @@ module Rubot
         if wanted
           # The same amber as the status badge, so the colour means one thing:
           # this agent acts without asking.
-          say("Auto mode on — non-destructive actions run without asking.", :warn)
-          say_text("Destructive patterns (rm -rf /, mkfs, dd onto a device, …) are still refused.")
+          say(I18n.t("tui.auto.on"), :warn)
+          say_text(I18n.t("tui.auto.on_detail"))
         else
-          say("Auto mode off — every dangerous action asks first.", :info)
+          say(I18n.t("tui.auto.off"), :info)
         end
       end
 
@@ -358,8 +376,8 @@ module Rubot
         # when it is named exactly.
         entry ||= Rubot::Session.find(nil, text, dir: sessions_dir)
         unless entry
-          say("Session '#{text}' not found.", :err)
-          say_text("Type /resume to see saved sessions.")
+          say(I18n.t("tui.session.not_found", query: text), :err)
+          say_text(I18n.t("tui.session.see_hint"))
           return
         end
 
@@ -390,26 +408,27 @@ module Rubot
 
       def list_sessions(sessions)
         if sessions.empty?
-          say("No saved sessions yet.", :info)
-          say_text("Conversations are saved as they happen; /resume brings one back later.")
+          say(I18n.t("tui.session.none"), :info)
+          say_text(I18n.t("tui.session.none_hint"))
           others = other_dir_sessions
-          say_text("#{others} conversation(s) from other directories · /resume all") if others.positive?
+          say_text(I18n.t("tui.session.other_dirs", count: others)) if others.positive?
           return
         end
 
         current = agent.session.id
         blank
-        say("Saved sessions:", :info)
+        say(I18n.t("tui.session.list_title"), :info)
         sessions.each_with_index do |session, index|
           marker = session[:id] == current ? MARK[:ok] : " "
-          say_text(format("  %s %-2d %-28s %4d msgs · %-10s %s",
+          say_text(format("  %s %-2d %-28s %4d %-5s · %-10s %s",
                           marker, index + 1, session[:id], session[:messages],
+                          I18n.t("tui.session.messages_unit"),
                           relative_time(session[:updated_at]), Rubot::Session.label(session)))
         end
         blank
-        say_text("Resume one with /resume <number> or /resume <id>.")
+        say_text(I18n.t("tui.session.resume_hint"))
         others = other_dir_sessions
-        say_text("#{others} more from other directories · /resume all") if others.positive?
+        say_text(I18n.t("tui.session.other_dirs_more", count: others)) if others.positive?
       end
 
       # /search asks the archive, not the session on screen: every message ever
@@ -420,26 +439,26 @@ module Rubot
       def handle_search(query)
         text = query.to_s.strip
         if text.empty?
-          say("Search the archive:", :info)
-          say_text("/search <kata> — every stored message, including compacted turns")
+          say(I18n.t("tui.search.title"), :info)
+          say_text(I18n.t("tui.search.hint"))
           return
         end
 
         store = Rubot::Archive.current
         if store.nil?
-          say("The archive is not open, so there is nothing to search.", :warn)
-          say_text("Search reads the SQLite archive; without it, conversations are files and /resume lists them.")
+          say(I18n.t("tui.search.no_archive"), :warn)
+          say_text(I18n.t("tui.search.no_archive_hint"))
           return
         end
 
         hits = store.search(text, limit: SEARCH_RESULTS)
         if hits.empty?
-          say("Nothing matches #{text.inspect}.", :info)
+          say(I18n.t("tui.search.nothing", query: text.inspect), :info)
           return
         end
 
         blank
-        say("#{hits.size} hit(s) for #{text.inspect}:", :info)
+        say(I18n.t("tui.search.hits", count: hits.size, query: text.inspect), :info)
         hits.each_with_index do |hit, index|
           say_text(format("  %-2d %-26s %-9s %s", index + 1, hit[:session_id], hit[:role],
                           relative_time(hit[:created_at])))
@@ -448,7 +467,7 @@ module Rubot
           say_text("     #{snippet_line(hit[:snippet])}")
         end
         blank
-        say_text("Resume one with /resume <id>.")
+        say_text(I18n.t("tui.search.resume_hint"))
       end
 
       # A snippet arrives with the archive's own newlines and runs of spaces
@@ -505,15 +524,15 @@ module Rubot
       def handle_models_command(query = nil)
         entries = provider_model_entries
         if entries.empty?
-          say("No models available.", :warn)
-          say_text("The provider returned no model catalog, and config.yml has no models.")
+          say(I18n.t("tui.model.none"), :warn)
+          say_text(I18n.t("tui.model.none_hint"))
           return
         end
 
         filter = query.to_s.strip
         shown = entries.select { |entry| Rubot::TUI::ModelList.matches?(entry, filter) }
         if shown.empty?
-          say("No model matches '#{filter}'.", :warn)
+          say(I18n.t("tui.model.no_match", filter: filter), :warn)
           return
         end
 
@@ -521,7 +540,7 @@ module Rubot
           @command_owns_blank = true
           @events << [ :model_list, entries, model_list_title(entries), filter ]
         else
-          say("Models supported by #{provider_name}:", :info)
+          say(I18n.t("tui.model.list_header", provider: provider_name), :info)
           shown.each do |entry|
             marker = entry[:active] ? MARK[:ok] : " "
             label = entry[:label].to_s
@@ -532,13 +551,13 @@ module Rubot
       end
 
       def model_list_title(entries)
-        "Models supported by #{provider_name}"
+        I18n.t("tui.model.list_title", provider: provider_name)
       end
 
       def provider_name
         agent.provider.name
       rescue StandardError
-        "the provider"
+        I18n.t("tui.model.provider_fallback")
       end
 
       # The models the provider supports, as picker entries. Each entry has an
@@ -585,7 +604,7 @@ module Rubot
           { "id" => id, "name" => (model["name"] || id).to_s.strip }
         end
       rescue StandardError => e
-        say("Could not read the model catalog: #{e.message}", :warn)
+        say(I18n.t("tui.model.catalog_failed", message: e.message), :warn)
         []
       end
 
@@ -639,7 +658,7 @@ module Rubot
 
       def handle_use_model(model_name)
         if model_name.nil?
-          say("Usage: /use-model <model-name>", :warn)
+          say(I18n.t("tui.model.usage"), :warn)
           agent.config.models.each { |m| say_text("  - #{m["name"]}") }
           return
         end
@@ -650,13 +669,17 @@ module Rubot
           entry = agent.config.model_entry_by_name(model_name)
           label = entry.is_a?(Hash) && entry["model"] ? entry["model"].to_s : ""
           label = "" if label == result.to_s
-          say("Switched to model: #{result}#{label.empty? ? "" : " (#{label})"}", :ok)
-          say_text("Provider: #{agent.provider.name}")
-          say_text("Persists for this session (cleared on /new).")
+          if label.empty?
+            say(I18n.t("tui.model.switched", model: result), :ok)
+          else
+            say(I18n.t("tui.model.switched_label", model: result, label: label), :ok)
+          end
+          say_text(I18n.t("tui.model.provider", provider: agent.provider.name))
+          say_text(I18n.t("tui.model.session_only"))
           refresh_status
           refresh_usage
         else
-          say("Model '#{model_name}' not found in config.yml or the provider catalog.", :err)
+          say(I18n.t("tui.model.not_found", name: model_name), :err)
           agent.config.models.each { |m| say_text("  - #{m["name"]}") }
         end
       end
@@ -664,8 +687,8 @@ module Rubot
       def handle_use_skill(skill_name)
         skills = agent.skill_registry
         if skill_name.nil?
-          say("Usage: /use <skill-name>", :warn)
-          say_text("Available skills: #{available_skills_text}")
+          say(I18n.t("tui.skill.usage"), :warn)
+          say_text(I18n.t("tui.skill.available", skills: available_skills_text))
           return
         end
 
@@ -674,18 +697,18 @@ module Rubot
         # A skill this persona switched off is not loaded into the turn, and
         # saying so beats letting the model quietly answer without it.
         if skill && persona_skill_off?(skill_name)
-          say("Skill '#{skill_name}' is switched off for this persona.", :err)
-          say_text("Turn it back on from the persona's skills list.")
+          say(I18n.t("tui.skill.off", name: skill_name), :err)
+          say_text(I18n.t("tui.skill.off_hint"))
           return
         end
 
         if skill&.enabled?
           agent.session.forced_skill = skill_name
           agent.session.save! if agent.session.respond_to?(:save!)
-          say("Skill '#{skill_name}' will be used for the next message.", :ok)
+          say(I18n.t("tui.skill.forced", name: skill_name), :ok)
         else
-          say("Skill '#{skill_name}' not found or not enabled.", :err)
-          say_text("Available skills: #{available_skills_text}")
+          say(I18n.t("tui.skill.not_found", name: skill_name), :err)
+          say_text(I18n.t("tui.skill.available", skills: available_skills_text))
         end
       end
 
@@ -698,7 +721,7 @@ module Rubot
 
       def available_skills_text
         names = available_skill_names
-        names.empty? ? "(none)" : names.join(", ")
+        names.empty? ? I18n.t("tui.skill.empty") : names.join(", ")
       end
 
       def persona_skill_off?(name)

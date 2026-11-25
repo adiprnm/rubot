@@ -27,6 +27,9 @@ class TestI18n < Minitest::Test
             "cache_creation" => 0.0, "output" => 0.0021, "saved" => 0.0 }
   }.freeze
 
+  # The id /session reads off the agent's session, in the shape it reads it.
+  OpenSession = Struct.new(:id)
+
   def setup
     @tmpdir = Dir.mktmpdir
     @config_path = File.join(@tmpdir, "config.yml")
@@ -204,6 +207,70 @@ class TestI18n < Minitest::Test
     assert_includes indonesian, ">48000 → 9000 token<"
   end
 
+  # --- the commands a reader types ---------------------------------------
+
+  # What five different slash commands answer with, in both languages. Each is
+  # typed into the same REPL a reader types into and the screen is read back
+  # row by row, so a command that writes its own wording fails here instead of
+  # passing on the dictionary alone.
+  TUI_COMMAND_ANSWERS = {
+    "/help" => [ "Available commands:", "Perintah yang tersedia:" ],
+    "/clear" => [ "Session cleared.", "Sesi dibersihkan." ],
+    "/stop" => [ "Stop requested.", "Permintaan berhenti dikirim." ],
+    "/session" => [ "Current session: s-1", "Sesi saat ini: s-1" ],
+    "/compact" => [ "Compaction complete.", "Compact selesai." ]
+  }.freeze
+
+  def test_five_tui_commands_answer_in_the_chosen_language
+    # Five commands, not one: a switch that reaches only the newest sentence
+    # is the failure this guards against.
+    assert_equal 5, TUI_COMMAND_ANSWERS.size
+
+    TUI_COMMAND_ANSWERS.each do |command, (english_answer, indonesian_answer)|
+      english = tui_command_output("en", command)
+      indonesian = tui_command_output("id", command)
+
+      assert_includes english, english_answer, "#{command} has to answer in English"
+      assert_includes indonesian, indonesian_answer, "#{command} has to answer in Indonesian"
+      refute_equal english, indonesian, "#{command} has to change language"
+      refute_includes english, indonesian_answer, "#{command} leaves no Indonesian behind"
+      refute_includes indonesian, english_answer, "#{command} leaves no English behind"
+    end
+  end
+
+  # /help reads both of its tables from the dictionary row by row, not only
+  # their two headers: a switch that stopped at the title would pass the test
+  # above and still leave an English table on an Indonesian screen.
+  def test_every_help_row_speaks_the_chosen_language
+    english = tui_command_output("en", "/help")
+    indonesian = tui_command_output("id", "/help")
+
+    assert_includes english, "Clear conversation history"
+    assert_includes indonesian, "Bersihkan riwayat percakapan"
+    assert_includes english, "Complete a /command"
+    assert_includes indonesian, "Lengkapi sebuah /command"
+    refute_includes indonesian, "Clear conversation history"
+    refute_includes english, "Bersihkan riwayat percakapan"
+  end
+
+  # A key nothing reads is a row that can rot. Every tui.* entry is either
+  # spelled out in the command module or one row of the two /help tables,
+  # which are looked up by the row a reader sees; a row with no entry fails
+  # here instead of as an empty line on the screen.
+  def test_every_tui_key_is_read_at_least_once
+    source = File.read(File.expand_path("../lib/rubot/tui/commands.rb", __dir__))
+    repl = build_repl
+
+    help_rows = Rubot::TUI::COMMANDS.keys.map { |row| "help.cmd.#{repl.help_slug(row)}" } +
+                Rubot::TUI::KEYS.keys.map { |row| "help.key.#{repl.help_slug(row)}" }
+    keys = tui_keys.map { |path| path.join(".") }
+
+    orphaned = (keys - help_rows).reject { |key| source.include?("tui.#{key}") }
+
+    assert_empty orphaned, "every tui key is read at least once"
+    assert_empty help_rows - keys, "every /help row has an entry"
+  end
+
   # --- the compaction answer, drawn by each channel ---------------------
 
   # /compact typed into a real TUI: the lines come back through the same
@@ -365,19 +432,50 @@ class TestI18n < Minitest::Test
 
   private
 
+  # One command typed into a real TUI, with only the agent's answers stubbed:
+  # the rows are what say/say_text drew, read back row by row from the log
+  # rather than the viewport, so a long answer is compared whole instead of
+  # being cut at the height of the screen.
+  def tui_command_output(locale, command, compact_result: COMPACT_RESULT)
+    Rubot::I18n.with_locale(locale) do
+      repl = build_repl
+      stub_command_agent(repl.agent, compact_result: compact_result)
+
+      repl.handle_command(command)
+      repl.pump
+
+      drawn_rows(repl).join("\n")
+    end
+  end
+
+  # The text of every row the log holds, in the order it was drawn.
+  def drawn_rows(repl)
+    log = repl.instance_variable_get(:@log)
+    log.instance_variable_get(:@entries).map { |segments| segments.map(&:first).join }
+  end
+
+  # The smallest agent these commands need: /clear, /stop and /compact answer
+  # with a sentence of their own, and /session reads an id and a model name.
+  def stub_command_agent(agent, compact_result: COMPACT_RESULT)
+    agent.define_singleton_method(:clear_session) { nil }
+    agent.define_singleton_method(:cancel!) { nil }
+    agent.define_singleton_method(:compact_session) { compact_result }
+    agent.define_singleton_method(:session) { OpenSession.new("s-1") }
+    agent.define_singleton_method(:active_model_name) { "gpt-test" }
+  end
+
+  # Every leaf key under the tui namespace, as dotted paths.
+  def tui_keys(prefix = [], hash = Rubot::I18n::DICTIONARY["en"]["tui"], out = [])
+    hash.each do |key, value|
+      value.is_a?(Hash) ? tui_keys(prefix + [ key ], value, out) : out << (prefix + [ key ])
+    end
+    out
+  end
+
   # One /compact in a real TUI, with only the agent's answer stubbed: the rows
   # are what say/say_text drew, read back the way a terminal would show them.
   def tui_compact_output(locale, result: COMPACT_RESULT)
-    Rubot::I18n.with_locale(locale) do
-      repl = build_repl
-      repl.agent.define_singleton_method(:compact_session) { result }
-      app = repl.instance_variable_get(:@app)
-
-      repl.handle_command("/compact")
-      repl.pump
-
-      plain(app.render_lines).join("\n")
-    end
+    tui_command_output(locale, "/compact", compact_result: result)
   end
 
   # The Telegram handler, reached the way an update reaches it. Only the agent

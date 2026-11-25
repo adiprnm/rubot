@@ -214,12 +214,12 @@ module Rubot
           rows = repl.instance_variable_get(:@log).instance_variable_get(:@lines).map do |line|
             line.map { |(text, _style)| text }.join
           end
-          break if rows.any? { |row| row.include?("Available commands") }
+          break if rows.any? { |row| row.include?("Perintah yang tersedia") }
 
           sleep 0.02
         end
 
-        assert rows.any? { |row| row.include?("Available commands") },
+        assert rows.any? { |row| row.include?("Perintah yang tersedia") },
                "the lane's output lands mid-turn: #{rows.map(&:strip).first(5).inspect}"
         assert repl.instance_variable_get(:@busy), "the turn is still running"
       ensure

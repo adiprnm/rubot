@@ -166,7 +166,13 @@ module Rubot
       repl.pump
 
       lines = plain(repl.instance_variable_get(:@app).render_lines)
-      workspace_ix = lines.index { |l| l.include?(line.label) }
+      # The row is truncated to the terminal width, so a workspace path longer
+      # than the screen is found by the directory it opens with: what this test
+      # is about is the order of the three rows, not the width they are drawn
+      # at, and a deep worktree must not fail it.
+      label = line.label
+      head = label[0, 24]
+      workspace_ix = lines.index { |l| l.include?(head) }
       prompt_ix = lines.index { |l| l.include?("\u256d") }
       usage_ix = lines.index { |l| l.include?("$0.001") }
 
@@ -308,8 +314,8 @@ def test_repin_command_rebuilds_the_prompt_and_says_what_it_costs
 
   assert_equal 1, asked, "the command has to ask the agent, not just describe it"
   texts = log.instance_variable_get(:@entries).map { |segments| segments.map(&:first).join }
-  assert texts.any? { |text| text.include?("rebuilt on the next message") }
-  assert texts.any? { |text| text.include?("pays in full") },
+  assert texts.any? { |text| text.include?("dibangun ulang pada pesan berikutnya") }
+  assert texts.any? { |text| text.include?("dibayar penuh") },
          "the price is part of the answer, not a surprise on the next request"
 end
 
@@ -323,7 +329,7 @@ def test_repin_command_reports_nothing_to_rebuild
   repl.pump
 
   texts = log.instance_variable_get(:@entries).map { |segments| segments.map(&:first).join }
-  assert texts.any? { |text| text.include?("not pinned") }
+  assert texts.any? { |text| text.include?("tidak dipin") }
 end
 
 # A turn that ends with nothing on the screen is the worst failure this
@@ -404,7 +410,7 @@ end
       repl.pump
 
       texts = log.instance_variable_get(:@entries).map { |segments| segments.map(&:first).join }
-      ix = texts.index { |text| text.include?("Session cleared.") }
+      ix = texts.index { |text| text.include?("Sesi dibersihkan.") }
 
       assert ix, "the command printed its message"
       assert_equal "", texts[ix - 1], "one blank line above"
@@ -425,8 +431,8 @@ end
       repl.pump
 
       texts = log.instance_variable_get(:@entries).map { |segments| segments.map(&:first).join }
-      first = texts.index { |text| text.include?("Session cleared.") }
-      second = texts.index { |text| text.include?("Stop requested.") }
+      first = texts.index { |text| text.include?("Sesi dibersihkan.") }
+      second = texts.index { |text| text.include?("Permintaan berhenti dikirim.") }
 
       assert_equal first + 2, second, "only the shared blank line sits between them"
     end
@@ -445,7 +451,7 @@ end
         repl.pump
 
         texts = log_texts(repl)
-        assert_includes texts, "#{TUI::MARK[:ok]} Web server restarted."
+        assert_includes texts, "#{TUI::MARK[:ok]} Server web dijalankan ulang."
         assert_includes texts, "[web-restart] up: pid 4343 on http://127.0.0.1:4567"
         refute texts.any? { |text| text.include?("stopping 1 process") },
                "only the last line is quoted, not the whole log"
@@ -466,7 +472,7 @@ end
         repl.pump
 
         texts = log_texts(repl)
-        assert_includes texts, "#{TUI::MARK[:err]} Web server restart failed."
+        assert_includes texts, "#{TUI::MARK[:err]} Server web gagal dijalankan ulang."
         assert(texts.any? { |text| text.include?("still in use by another process") },
                "the reason is quoted: #{texts.inspect}")
       end
@@ -478,7 +484,7 @@ end
         repl.instance_variable_set(:@tui, false)
         out, _err = capture_io { repl.handle_command("/resume") }
 
-        assert_includes out, "\n  · No saved sessions yet.\n"
+        assert_includes out, "\n  · Belum ada sesi tersimpan.\n"
       end
     end
 
@@ -526,7 +532,7 @@ end
 
         out, _err = capture_io { repl.handle_command("/resume") }
 
-        assert_includes out, "1 conversation(s) from other directories · /resume all"
+        assert_includes out, "1 percakapan dari direktori lain · /resume all"
       end
     end
 
