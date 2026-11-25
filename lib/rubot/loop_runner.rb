@@ -46,6 +46,12 @@ module Rubot
     # and the notice the agent appends to a stopped turn ("Stopped by user") is
     # not one: it would become the history of a loop nobody stopped.
     BUDGET_SUBJECT = "stopped for its budget"
+    # What an iteration that reached its context ceiling says in its commit
+    # subject and its log entry. Its notice names the two numbers, which is the
+    # right thing for a reader and the wrong thing for a subject: the subject is
+    # the one line `git log` shows, and it should say what stopped the work, not
+    # repeat the ceiling. The run's own entry carries the numbers.
+    CONTEXT_SUBJECT = "stopped at its context ceiling"
     # The first words of the one entry a spent loop gets when it is woken: it is
     # the marker that says the refusal is already in the log, so a schedule that
     # fires every five minutes writes it once instead of forever.
@@ -201,8 +207,16 @@ module Rubot
                      id: id, budget: context[:budget], spent: context[:spent])
         # A turn the budget stopped has no answer to name: what stopped it is the
         # entry and the commit subject, so the agent's own "stopped" notice never
-        # becomes either.
-        note = answer[:budget_stopped] ? BUDGET_SUBJECT : answer[:text]
+        # becomes either. A turn that hit its context ceiling is the same case one
+        # step later: its answer is the notice that says so, and the subject says
+        # the short version instead.
+        note = if answer[:budget_stopped]
+          BUDGET_SUBJECT
+        elsif answer[:context_ceiling]
+          CONTEXT_SUBJECT
+        else
+          answer[:text]
+        end
         # Charged here, before the commit, because the commit can fail: a stale
         # index.lock or a refused commit would otherwise throw away a turn the
         # provider already billed. The report hands back zero, since the run
@@ -216,7 +230,8 @@ module Rubot
         # budget means -- it is the one that knows whether a verdict is still
         # worth buying.
         { text: note, tokens: 0, commit: reported, progress: progress,
-          budget_stopped: answer[:budget_stopped] }
+          budget_stopped: answer[:budget_stopped], metrics: answer[:metrics],
+          round_cap: answer[:round_cap], context_ceiling: answer[:context_ceiling] }
       end
     end
 
@@ -302,7 +317,19 @@ module Rubot
         tokens: (answer[:tokens] || answer["tokens"]).to_i,
         # Only a runner that watched the budget says this, and only when it
         # stopped the turn for it.
-        budget_stopped: truthy?(answer[:budget_stopped] || answer["budget_stopped"]) }
+        budget_stopped: truthy?(answer[:budget_stopped] || answer["budget_stopped"]),
+        # The cap the iteration reached, when it reached one: reported by the
+        # agent, carried here, written into the entry by the run.
+        round_cap: (answer[:round_cap] || answer["round_cap"]),
+        # The other ceiling it can reach, in the same shape and for the same
+        # reason: a turn that stopped because its context grew past what is worth
+        # sending again is not a failure, and the run is what says so.
+        context_ceiling: (answer[:context_ceiling] || answer["context_ceiling"]),
+        # The shape of the turn's requests, when the door measured it (see
+        # Web#loop_session_runner). Passed through untouched and never
+        # invented here: a session runner that reports none leaves the entry
+        # without that part, which is what the log then says.
+        metrics: (answer[:metrics] || answer["metrics"]) }
     end
 
     # A turn whose spend never reached the file says so where the loop is read:
@@ -336,9 +363,14 @@ module Rubot
     def truthy?(value) = value == true || value == "true"
 
     # In the order an iteration needs it: what is wanted, how it is judged, where
-    # to work, what was already tried, and only then one instruction. The log is
+    # to work, what was already tried, and only then the instructions. The log is
     # trimmed from its oldest end, because the newest entry is the one that says
     # where the last turn stopped.
+    #
+    # The batching line is about the bill: a request carries the whole
+    # conversation, so five dependent calls written one per round pay for the
+    # same growing context five times, while two independent calls made together
+    # pay for it once. Measured iterations were 76% one-call rounds.
     def iteration_prompt(context, dir, branch)
       lines = [
         "Goal:", clip(context[:goal], GOAL_LINES),
@@ -346,9 +378,15 @@ module Rubot
         "", "Worktree: #{dir}", "Branch: #{branch}",
         "", "Log, newest first:"
       ]
-      room = [ [ PROMPT_LINES - 3 - lines.size, LOG_WINDOW ].min, 0 ].max
+      tail = [
+        "",
+        "Batch independent tool calls: when two or more calls do not need each",
+        "other's output, make them together in one round instead of one per round.",
+        "Make one step of progress toward the done criteria, then stop."
+      ]
+      room = [ [ PROMPT_LINES - lines.size - tail.size, LOG_WINDOW ].min, 0 ].max
       Array(context[:log]).first(room).each { |entry| lines << "- #{LoopStore.one_line(entry)}" }
-      lines.push("", "Make one step of progress toward the done criteria, then stop.")
+      lines.concat(tail)
       lines.join("\n")
     end
 

@@ -37,6 +37,14 @@ module Rubot
   # "The same reason" is judged on a normalised key, not on the raw sentence: a
   # verifier names the file and the count it just looked at, and those move every
   # iteration (see #reason_key).
+  #
+  # A *context ceiling* is the third: an iteration stopped because its transcript
+  # grew past what is worth sending again. Unlike the budget, which reaches
+  # inside a turn, this one happens at a round boundary and costs nothing -- the
+  # request that would have re-sent the transcript is never made. The work is
+  # committed like any other iteration's, no verdict is bought for it, and the
+  # loop pauses because a step that cannot finish under the ceiling is a step the
+  # user has to split or raise the ceiling for.
   class LoopRun
     Result = Struct.new(:state, :stop_reason, :iterations_run, :message, keyword_init: true)
 
@@ -66,7 +74,7 @@ module Rubot
     # case over the result instead of grepping for the symbols.
     STOP_REASONS = %i[
       done_by_verifier max_iterations budget stalled verifier_stuck paused not_active
-      missing error worktree_missing repo_mismatch
+      context_ceiling missing error worktree_missing repo_mismatch
     ].freeze
 
     # Raised only to leave an iteration that cannot go on: the note is on disk
@@ -247,20 +255,49 @@ module Rubot
       # -- half of it on judgement nobody could afford. What the turn produced is
       # committed above, so stopping here costs the loop its verdict, not its
       # work.
+      #
+      # What the turn's own reports said about its shape, read off the report
+      # before anything is written: the note is the only place a reader finds
+      # out whether this iteration was expensive because the work was, or
+      # because every request re-sent a conversation that had grown (see
+      # #request_facts). A runner that reports none leaves it nil.
+      metrics = record[:metrics]
+      # The ceiling this iteration reached, if it reached one: the agent reports
+      # it, and the entry is the only place it becomes history.
+      round_cap = record[:round_cap]
+      ceiling = record[:context_ceiling]
       spent = tokens_of(state.id)
       if budget_stop || spent >= budget_for(state)
         @store.update(state.id) do |s|
-          s.add_entry(entry(iteration_note(iteration, commit, worker, 0, text)))
+          s.add_entry(entry(iteration_note(iteration, commit, worker, 0, text, metrics, round_cap, ceiling)))
         end
         fail_iteration(state.id, "budget spent at iteration #{iteration}: " \
                                  "#{spent} of #{budget_for(state)} tokens", reason: :budget)
+      end
+
+      # The iteration stopped because its context grew past what is worth
+      # sending again. Its work is committed above, and no verdict is bought for
+      # it: the turn stopped before the request, so the iteration has no answer
+      # to judge -- judging the notice would spend a second turn on the same
+      # transcript. The loop pauses rather than starting another iteration blind,
+      # because a goal that needs more than the ceiling in one step is a goal the
+      # user has to look at: raise the ceiling, or split the step.
+      if ceiling
+        numbers = ceiling_tokens(ceiling)
+        @store.update(state.id) do |s|
+          s.add_entry(entry(iteration_note(iteration, commit, worker, 0, text, metrics, round_cap, ceiling)))
+        end
+        fail_iteration(state.id, "context ceiling reached at iteration #{iteration}: " \
+                                 "#{kilo(numbers[:tokens])} of #{kilo(numbers[:limit])} tokens; " \
+                                 "its work is committed and no verdict was bought for it",
+                       reason: :context_ceiling)
       end
 
       verdict = ask_verifier(state, iteration, text, commit, diff, spent)
       verifier = [ tokens_of(state.id) - before - worker, 0 ].max
 
       @store.update(state.id) do |s|
-        s.add_entry(entry(iteration_note(iteration, commit, worker, verifier, text)))
+        s.add_entry(entry(iteration_note(iteration, commit, worker, verifier, text, metrics, round_cap, ceiling)))
       end
       fail_iteration(state.id, "verifier failed: #{verdict[:error]}") if verdict[:error]
       @store.update(state.id) { |s| s.add_entry(entry("verifier: #{verdict[:reason]}")) }
@@ -354,10 +391,14 @@ module Rubot
       tokens = (record[:tokens] || record["tokens"]).to_i
       error = record[:error] || record["error"]
       budget = flag_of(record, :budget_stopped) || flag_of(record, :budget)
-      return { error: error.to_s, tokens: tokens, budget: budget } if error
+      metrics = (record[:metrics] || record["metrics"])
+      round_cap = (record[:round_cap] || record["round_cap"])
+      ceiling = (record[:context_ceiling] || record["context_ceiling"])
+      return { error: error.to_s, tokens: tokens, budget: budget, metrics: metrics } if error
 
       { text: (record[:text] || record["text"]).to_s, tokens: tokens, budget: budget,
-        commit: sha_of(record), progress: progress_of(record) }
+        commit: sha_of(record), progress: progress_of(record), metrics: metrics,
+        round_cap: round_cap, context_ceiling: ceiling }
     rescue StandardError => e
       { error: "#{e.class}: #{e.message}", tokens: 0 }
     end
@@ -480,12 +521,81 @@ module Rubot
     # the same order. The sha cannot be in the subject of the commit it names,
     # which is why the parenthetical sits between the number and the text rather
     # than being part of the subject git records.
-    def iteration_note(iteration, commit, worker, verifier, text)
+    #
+    # `metrics` is what the turn's own usage reports said about its shape: how
+    # many requests it made, how big the context was at the first and the last of
+    # them, and the cache hit rate. Those three are what tells a reader whether a
+    # loop is expensive because the work is, or because every request re-sends a
+    # conversation that grew. It is nil for a runner that reports none -- there
+    # is then nothing honest to say, and a fabricated "req 0" would read as a turn
+    # that made no request at all.
+    def iteration_note(iteration, commit, worker, verifier, text, metrics = nil, round_cap = nil, ceiling = nil)
       facts = []
       facts << "sha #{commit[0, 7]}" if commit
       facts << "worker #{kilo(worker)}"
       facts << "verifier #{kilo(verifier)}"
+      facts.concat(request_facts(metrics))
+      facts.concat(round_facts(round_cap))
+      facts.concat(ceiling_facts(ceiling))
       "iteration #{iteration} (#{facts.join(', ')}): #{text}"
+    end
+
+    # The context ceiling an iteration stopped at, and what it weighed when it
+    # did. The other ceiling, in the same shape: an entry that says
+    # `ceiling 100k/100k` is an iteration that ended because the transcript had
+    # grown, not because the work had.
+    def ceiling_facts(ceiling)
+      ceiling = ceiling.is_a?(Hash) ? ceiling : {}
+      tokens = read_metric(ceiling, :tokens).to_i
+      limit = read_metric(ceiling, :limit).to_i
+      return [] unless tokens.positive? && limit.positive?
+
+      [ "ceiling #{kilo(tokens)}/#{kilo(limit)}" ]
+    end
+
+    # The two numbers off a reported ceiling, read once for the note and once for
+    # the message the stop is announced with.
+    def ceiling_tokens(ceiling)
+      ceiling = ceiling.is_a?(Hash) ? ceiling : {}
+      { tokens: read_metric(ceiling, :tokens).to_i, limit: read_metric(ceiling, :limit).to_i }
+    end
+
+    # The one fact that says the iteration stopped at its own ceiling rather
+    # than on its own: a reader who sees a thin entry needs to know whether the
+    # work ran out or the turn did. Present only when the agent reported it, so a
+    # runner that cannot is not accused of a cap it never reached.
+    def round_facts(cap)
+      cap = cap.is_a?(Hash) ? cap : {}
+      rounds = read_metric(cap, :rounds).to_i
+      limit = read_metric(cap, :limit).to_i
+      return [] unless rounds.positive? && limit.positive?
+
+      [ "rounds #{rounds}/#{limit}" ]
+    end
+
+    # The three facts of a turn's own shape, each only when the report carried
+    # it: a metric that never arrived is left out rather than guessed, so the
+    # parenthetical is exactly as long as what the turn measured. The cache
+    # share arrives the way a usage report states it, as a fraction of the last
+    # request's prompt tokens, and is written as the reader's percentage.
+    def request_facts(metrics)
+      metrics = metrics.is_a?(Hash) ? metrics : {}
+      requests = read_metric(metrics, :requests).to_i
+      first = read_metric(metrics, :context_first)
+      last = read_metric(metrics, :context_last)
+      cache = read_metric(metrics, :cache_hit_rate)
+      facts = []
+      facts << "req #{requests}" if requests.positive?
+      facts << "ctx #{kilo(first)}->#{kilo(last)}" if first && last && first.to_i.positive?
+      facts << "cache #{(cache.to_f * 100).round}%" unless cache.nil?
+      facts
+    end
+
+    # A report may arrive under symbol or string keys; the loop only ever writes
+    # symbol ones, and a runner written by somebody else may not.
+    def read_metric(metrics, key)
+      value = metrics[key]
+      value.nil? ? metrics[key.to_s] : value
     end
 
     # Tokens as a reader adds them up: a thousand at a time, because the exact

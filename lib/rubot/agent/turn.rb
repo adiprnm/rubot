@@ -21,10 +21,16 @@ module Rubot
       attr_reader :answer
 
       attr_accessor :rounds, :tool_rounds, :continuations, :reasked, :truncated,
-                    :silent_answer, :stopped, :limit_hit
+                    :silent_answer, :stopped, :limit_hit, :closed_out
 
-      def initialize(limit:)
+      # `close_out` is for a turn whose ceiling is a cost, not a runaway: a loop
+      # iteration. Reaching its cap does not cut the turn off mid-sentence --
+      # the agent gets one last round with no tools to say where it stopped, so
+      # the next iteration starts from words instead of from a truncated call.
+      def initialize(limit:, close_out: false)
         @limit = limit
+        @close_out = close_out
+        @closed_out = false
         @answer = +""
         @rounds = 0
         @tool_rounds = 0
@@ -34,6 +40,11 @@ module Rubot
         @silent_answer = false
         @stopped = false
         @limit_hit = false
+      end
+
+      # Whether this turn is allowed the one closing round when its cap is hit.
+      def close_out?
+        @close_out
       end
 
       # One more provider round would be one more than the turn was allowed.

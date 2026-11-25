@@ -45,7 +45,7 @@ module Rubot
       # that stops short of the goal and says nothing is a loop the reader has
       # to ask `status` about -- which is the whole reason this exists.
       ANNOUNCED_STOPS = %i[
-        done_by_verifier stalled budget max_iterations verifier_stuck
+        done_by_verifier stalled budget max_iterations verifier_stuck context_ceiling
         error worktree_error worktree_missing
       ].freeze
       # The model's cue that this arrived on its own, shaped like the one a
@@ -501,9 +501,14 @@ module Rubot
           seen = 0
           stopped = false
           stop_failures = 0
+          # What the turn's requests looked like, from the reports that
+          # measured them. It travels back with the answer so the loop's own
+          # entry can say it (see #note_request_shape).
+          shape = {}
 
           on_usage = lambda do |report|
             seen = usage_field(report, :total_tokens).to_i
+            note_request_shape(shape, report) unless provisional?(report)
             # A caller that knows no budget keeps the old answer and charges it
             # itself, which is what every caller written before this did.
             next if budget.nil?
@@ -545,16 +550,61 @@ module Rubot
           # must not become the loop's log entry or the commit's subject.
           text = "" if stopped
 
+          # The iteration's own ceilings, when it reached one. The agent is the
+          # only side that knows them, and the run is the only side with the log
+          # to write them into, so they ride back with the answer. Two of them,
+          # because an iteration stops either when it has had its rounds or when
+          # its context has grown past what is worth sending again.
+          cap = handle.last_round_cap if handle.respond_to?(:last_round_cap)
+          ceiling = handle.last_context_ceiling if handle.respond_to?(:last_context_ceiling)
+
           # Zero back to a caller that knows the budget: this turn has already
           # paid every token it reported, and a total charged a second time by
           # the run is one turn billed twice.
-          next { text: text.to_s, tokens: seen } if budget.nil?
+          if budget.nil?
+            report = { text: text.to_s, tokens: seen }
+            report[:round_cap] = cap if cap
+            report[:context_ceiling] = ceiling if ceiling
+            next with_shape(report, shape)
+          end
 
           owed = outstanding(ledger, id, measured, paid)
-          report = { text: text.to_s, tokens: 0, spent: measured, budget_stopped: stopped }
+          report = with_shape({ text: text.to_s, tokens: 0, spent: measured, budget_stopped: stopped }, shape)
+          report[:round_cap] = cap if cap
+          report[:context_ceiling] = ceiling if ceiling
           report[:unwritten] = owed if owed.positive?
           report
         end
+      end
+
+      # The metrics ride only when something was measured: a turn whose reports
+      # said nothing leaves the answer exactly as it was, and the loop's entry
+      # then carries no request part at all rather than a made-up zero.
+      def with_shape(report, shape)
+        report[:metrics] = shape.dup unless shape.empty?
+        report
+      end
+
+      # The shape of the turn's requests, folded from the reports that measured
+      # them: how many requests it made, how big the context was at the first
+      # and the last of them, and the cache share of the latest. This is what
+      # tells a reader whether an iteration is expensive because the work is or
+      # because every request re-sends a conversation that grew. Only measured
+      # reports reach here; an estimate of a request that has not come back is
+      # not a figure to write down.
+      def note_request_shape(shape, report)
+        requests = usage_field(report, :requests).to_i
+        shape[:requests] = requests if requests.positive?
+        # The prompt of the latest measured request: the first one seen is the
+        # turn's opening context, the last is what the final request carried.
+        prompt = usage_field(report, :last_prompt_tokens).to_i
+        if prompt.positive?
+          shape[:context_first] ||= prompt
+          shape[:context_last] = prompt
+        end
+        cache = usage_field(report, :cache_hit_rate)
+        shape[:cache_hit_rate] = cache.to_f unless cache.nil?
+        shape
       end
 
       # What the store is still owed, after one last attempt at the end of the
@@ -767,6 +817,7 @@ module Rubot
         when :done_by_verifier then "kriteria yang kamu tetapkan sudah terpenuhi"
         when :stalled then "tidak ada kemajuan baru, jadi iterasi lagi hanya akan membakar token"
         when :budget then "jatah token untuk loop ini habis"
+        when :context_ceiling then "satu iterasinya sudah mencapai plafon konteks, jadi request berikutnya cuma akan mengirim ulang transkrip yang sama"
         when :max_iterations then "batas iterasinya tercapai sebelum kriterianya terpenuhi"
         when :verifier_stuck then "verifier terus menolak dengan alasan yang sama, jadi iterasi lagi tidak mengubah apa pun"
         when :worktree_error, :worktree_missing then "worktree-nya bermasalah, jadi iterasinya tidak bisa jalan"

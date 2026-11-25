@@ -64,11 +64,19 @@ class TestWebLoops < Minitest::Test
     STOP_NOTICE = "⏹️ Stopped by user."
 
     attr_reader :calls, :cancelled
+    # What the agent reports after a turn that reached its round cap; nil for
+    # every other turn, which is what the runner then leaves out of its answer.
+    attr_reader :last_round_cap
+    # The same for the context ceiling (see Agent#last_context_ceiling).
+    attr_reader :last_context_ceiling
 
     def initialize(tokens: 1_234, text: "wrote step.txt", raise_with: nil, usage: nil, reports: nil,
-                   cancel_ok: true, cancel_raises: false, cancel_results: [], between: nil)
+                   cancel_ok: true, cancel_raises: false, cancel_results: [], between: nil, round_cap: nil,
+                   context_ceiling: nil)
       @tokens = tokens
       @text = text
+      @last_round_cap = round_cap
+      @last_context_ceiling = context_ceiling
       @raise_with = raise_with
       # Cumulative totals, the way a turn reports them, oldest first; `reports`
       # is the same thing with the provisional flag each report carries.
@@ -256,6 +264,94 @@ class TestWebLoops < Minitest::Test
                                              prompt: "do one step", workspace: "/tmp/wt")
     end
     assert_equal [ "loop-abc~it5" ], pool.invalidated
+  end
+
+  # The shape of a turn is measured where the usage reports arrive, because that
+  # is the only place the numbers exist: how many requests the turn made, how
+  # big the context was at the first and the last of them, and the cache share
+  # of the latest. It rides back with the answer and the loop writes it into the
+  # iteration's own entry.
+  def test_an_iteration_reports_the_shape_of_its_requests_from_the_usage_reports
+    handle = FakeHandle.new(reports: [
+      { total_tokens: 20_000, requests: 1, last_prompt_tokens: 19_000, cache_hit_rate: 0.0 },
+      { total_tokens: 55_000, requests: 60, last_prompt_tokens: 48_000, cache_hit_rate: 0.95 },
+      { total_tokens: 90_000, requests: 110, last_prompt_tokens: 76_000, cache_hit_rate: 0.96 }
+    ])
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = channel.loop_session_runner("s1").call(session_id: "loop-abc~it1",
+                                                    prompt: "do one step", workspace: "/tmp/wt")
+
+    assert_equal({ requests: 110, context_first: 19_000, context_last: 76_000, cache_hit_rate: 0.96 },
+                 answer[:metrics], "the first request's context and the last one's, from the reports themselves")
+  end
+
+  # An estimate describes a request that has not come back yet, so it is not a
+  # figure to write into a log that reads as a measurement.
+  def test_an_estimate_is_not_folded_into_the_shape_of_the_requests
+    handle = FakeHandle.new(reports: [
+      { total_tokens: 20_000, requests: 1, last_prompt_tokens: 19_000, cache_hit_rate: 0.96 },
+      { total_tokens: 140_000, requests: 2, last_prompt_tokens: 120_000, cache_hit_rate: 0.1,
+        provisional: true }
+    ])
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = channel.loop_session_runner("s1").call(session_id: "loop-abc~it1",
+                                                    prompt: "do one step", workspace: "/tmp/wt")
+
+    assert_equal({ requests: 1, context_first: 19_000, context_last: 19_000, cache_hit_rate: 0.96 },
+                 answer[:metrics])
+  end
+
+  # A turn nobody measured answers exactly as it did before this existed: no
+  # metrics key at all, rather than a made-up zero the loop would print.
+  def test_a_turn_with_no_usage_numbers_carries_no_shape
+    handle = FakeHandle.new(tokens: 1_234, text: "wrote step.txt")
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = channel.loop_session_runner("s1").call(session_id: "loop-abc~it1",
+                                                    prompt: "do one step", workspace: "/tmp/wt")
+
+    assert_equal({ text: "wrote step.txt", tokens: 1_234 }, answer)
+  end
+
+  # The iteration's own ceiling rides back with the answer, because the run is
+  # the side with the log to write it into: a reader of `loop status` has to be
+  # able to tell a thin iteration from one that hit its cap.
+  def test_an_iteration_that_reached_its_round_cap_says_so_in_the_answer
+    handle = FakeHandle.new(text: "a step", round_cap: { rounds: 40, limit: 40 })
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = channel.loop_session_runner("s1").call(session_id: "loop-abc~it1",
+                                                    prompt: "do one step", workspace: "/tmp/wt")
+
+    assert_equal({ rounds: 40, limit: 40 }, answer[:round_cap])
+    assert_equal "a step", answer[:text]
+  end
+
+  def test_an_iteration_that_ended_on_its_own_carries_no_cap
+    handle = FakeHandle.new(text: "a step")
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = channel.loop_session_runner("s1").call(session_id: "loop-abc~it1",
+                                                    prompt: "do one step", workspace: "/tmp/wt")
+
+    refute answer.key?(:round_cap), "nothing was cut, so nothing is claimed"
+    refute answer.key?(:context_ceiling), "and nothing reached a ceiling"
+  end
+
+  # The context ceiling travels the same road as the round cap, because the
+  # agent is the only side that knows it and the run is the only side with the
+  # log to write it into.
+  def test_an_iteration_that_reached_its_context_ceiling_says_so_in_the_answer
+    handle = FakeHandle.new(text: "a step", context_ceiling: { tokens: 101_400, limit: 100_000 })
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = channel.loop_session_runner("s1").call(session_id: "loop-abc~it1",
+                                                    prompt: "do one step", workspace: "/tmp/wt")
+
+    assert_equal({ tokens: 101_400, limit: 100_000 }, answer[:context_ceiling])
+    assert_equal "a step", answer[:text]
   end
 
   # -- the budget, inside the turn -------------------------------------------
