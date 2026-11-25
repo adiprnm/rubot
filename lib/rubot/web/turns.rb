@@ -360,6 +360,11 @@ module Rubot
       def event_stream_opening(sid)
         opening = [[:sidebar, sidebar_markup(sid)]]
         opening << [:"subagent-sheet", subagent_sheet_markup(subagent_runs_for_page(sid))] unless sid.to_s.empty?
+        # The loop panel is the other one that only ever arrives as a diff: a
+        # loop begins on a thread nobody is watching, and a page that dropped
+        # its stream while that happened would keep a footer without the toggle
+        # that watches it until someone reloaded.
+        opening << [:"loop-sheet", loop_sheet_markup(sid)] unless sid.to_s.empty?
         opening << [:"compact-done", "done"] unless compacting?(sid)
         opening
       end
@@ -401,6 +406,11 @@ module Rubot
           # Same trick for the footer's delegated runs: they outlive the turn,
           # so they cannot ride on the turn event.
           sse(out, "subagent-sheet", payload.to_s)
+        when :"loop-sheet"
+          # And for the loop panel, which is drawn from files a turn can change
+          # without telling the channel: pausing a loop is one write to its
+          # state file.
+          sse(out, "loop-sheet", payload.to_s)
         when :sidebar
           # Same trick for the sidebar and the header: what the conversation is
           # called is only known after the first turn has been saved.
@@ -420,6 +430,14 @@ module Rubot
           # already reported itself through the jobs registry, and a synchronous
           # one has no footer row at all. Writing it from the turn as well would
           # put two sources on one element.
+          #
+          # The loop panel is the one footer fact a turn can change without
+          # telling anyone: pausing a loop is a single write to its state file,
+          # and a panel left open would keep drawing a loop the reader had
+          # already stopped. Once per turn is the cheap, certain moment, and the
+          # sheet redraws only its rows when the toggle's visibility has not
+          # changed, so an open panel keeps its place.
+          push_loop_sheet(turn.session_id)
           sse(out, "done", " ")
         end
       end

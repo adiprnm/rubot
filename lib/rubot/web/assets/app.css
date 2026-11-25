@@ -2767,7 +2767,8 @@ select:focus-visible { outline: none; }
    figures they are spending. It is one more sheet in that row, so it borrows
    the toggle face and the panel from `.usage-sheet` and only says what is
    different about it. */
-.usage-sheet-subagents .usage-panel {
+.usage-sheet-subagents .usage-panel,
+.usage-sheet-loops .usage-panel {
   width: min(22rem, 82vw);
   /* This sheet is the leftmost control in the row, so a panel anchored to its
      right edge grew leftwards and off the screen — the panel looked closed
@@ -2780,7 +2781,8 @@ select:focus-visible { outline: none; }
 /* The word beside the glyph. The icon alone said "something with agents"; a
    figure beside it said nothing at all to a reader who had not opened it yet.
    A word names it, and the count is inside, where the runs are. */
-.subagent-label {
+.subagent-label,
+.loop-label {
   margin-left: 0.28rem;
   color: var(--fg-faint);
   font-size: 10px;

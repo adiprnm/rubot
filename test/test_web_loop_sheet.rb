@@ -18,10 +18,19 @@ class TestWebLoopSheet < Minitest::Test
   class Harness
     include Rubot::Web::Loops
 
-    def initialize(base:) = @base = base
+    # What the channel would have written to the page. A panel that only
+    # appears on the next reload is the bug this records against.
+    attr_reader :pushed
+
+    def initialize(base:)
+      @base = base
+      @pushed = []
+    end
 
     def workspace_for_session(_sid) = @base
     def owner_slug(_sid) = "implementer"
+    def token_query = "?token=t"
+    def push_to_session(_sid, type, markup) = @pushed << [ type, markup ]
   end
 
   def setup
@@ -165,5 +174,49 @@ class TestWebLoopSheet < Minitest::Test
     assert_includes id, "2/3 iterasi"
 
     assert_equal [], Rubot::I18n.missing_keys
+  end
+
+  # -- arriving without a reload ---------------------------------------------
+
+  # The reason the panel is pushed at all: a loop is started by a turn, and the
+  # toggle that watches it did not exist when the page was drawn. Waiting for a
+  # reload is the bug.
+  def test_a_loop_beginning_redraws_the_sheet_out_of_band
+    loop_state
+    @harness.push_loop_sheet("web_rubot")
+
+    type, markup = @harness.pushed.last
+    assert_equal :"loop-sheet", type
+    assert_includes markup, %(id="loop-sheet" hx-swap-oob="true")
+    refute_includes markup, %(id="loop-sheet" hidden)
+    assert_includes markup, %(id="loop-sheet-body")
+  end
+
+  # A second loop starting is not a reason to close the panel a reader has
+  # open: the sheet stays where it is and only its rows are replaced.
+  def test_a_second_loop_redraws_only_the_rows
+    loop_state(goal: "first")
+    @harness.push_loop_sheet("web_rubot")
+    loop_state(goal: "second")
+    @harness.push_loop_sheet("web_rubot")
+
+    _type, markup = @harness.pushed.last
+    assert_includes markup, %(<div id="loop-sheet-body" hx-swap-oob="innerHTML">)
+    refute_includes markup, "<details"
+    assert_includes markup, "second"
+  end
+
+  # A loop that stops is no longer something to watch, and the toggle has to go
+  # the same way it came: without a reload.
+  def test_a_loop_ending_hides_the_toggle
+    state = loop_state
+    @harness.push_loop_sheet("web_rubot")
+    @store.update(state.id) { |loop| loop.status = "paused" }
+    @harness.push_loop_sheet("web_rubot")
+
+    _type, markup = @harness.pushed.last
+    assert_includes markup, %(id="loop-sheet" hx-swap-oob="true")
+    assert_match(/id="loop-sheet"[^>]*\shidden>/, markup)
+    assert_includes markup, "No loop running."
   end
 end

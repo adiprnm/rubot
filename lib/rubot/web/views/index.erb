@@ -152,6 +152,11 @@
           orphaned and its events go nowhere. -%>
       <span sse-swap="compact-note"></span>
       <span sse-swap="subagent-sheet"></span>
+      <%# The loop panel arrives the same way, and for a sharper reason: whether
+          its toggle exists at all is decided by what a turn did, so a reader
+          who started a loop had to reload the page to find the panel that was
+          watching it. A loop that begins or ends redraws the sheet here. -%>
+      <span sse-swap="loop-sheet"></span>
       <%# A reply that arrives while the page is open — a batch of sub agents
           reporting back — is appended to the thread here rather than painted by
           a reload. The payload carries the entry itself, marked out of band. -%>

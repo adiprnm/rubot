@@ -64,7 +64,8 @@ module Rubot
       class SessionRunner
         attr_reader :base
 
-        def initialize(base:, store:, session_runner:, logger: nil, async: true, on_finish: nil)
+        def initialize(base:, store:, session_runner:, logger: nil, async: true, on_finish: nil,
+                       on_change: nil)
           @base = base
           @store = store
           @async = async
@@ -73,6 +74,11 @@ module Rubot
           # it, so a thread that has nobody reading it is the one place left to
           # say where the loop got; the channel closes its session id into this.
           @on_finish = on_finish
+          # Where a run beginning or ending goes. The footer's panel draws only
+          # what is running, so both moments change whether it is on the page at
+          # all -- and a reader who had to reload to see the toggle would not
+          # call that watching a loop.
+          @on_change = on_change
           # One run per loop at a time. Two runs on one id share a worktree, an
           # iteration number and a session file, and a session's token total
           # already contains the other run's spend, so the same budget would be
@@ -139,6 +145,7 @@ module Rubot
         # loop -- after the iteration in flight, never in the middle of one.
         def abort(id)
           @store.update(id) { |loop| loop.status = "paused" if loop.status.to_s == "active" }
+          notify_change
           "OK: loop #{id} stops after the iteration in flight, which is still paid for"
         rescue LoopStore::Corrupt
           raise
@@ -204,6 +211,7 @@ module Rubot
           end
 
           @mutex.synchronize { @threads << thread }
+          notify_change
           thread
         end
 
@@ -232,9 +240,25 @@ module Rubot
         # conversation, and a loop that finished cannot be undone by one that
         # failed to say so. The loop's file is left exactly as the run wrote it.
         def announce(id, outcome)
+          notify_change
           @on_finish&.call(id, outcome)
         rescue StandardError => e
           @logger&.call("loop #{id}: could not be reported: #{e.class}: #{e.message}")
+        end
+
+        # The footer's panel is drawn from the state file, so a run that begins
+        # or ends changes whether it belongs on the page at all. Saying so here
+        # rather than from the turn is what makes the toggle appear while the
+        # turn that started the loop is still being read.
+        #
+        # Nothing escapes: a panel that did not redraw is a stale icon, and a
+        # loop that is already on its own thread must not be broken by one.
+        def notify_change
+          @on_change&.call
+          true
+        rescue StandardError => e
+          @logger&.call("loop: could not redraw the panel: #{e.class}: #{e.message}")
+          false
         end
 
         # An exception is a run that broke before it could answer with a reason,
@@ -361,7 +385,11 @@ module Rubot
             # The conversation is closed into the report rather than handed to
             # the runner as an argument: a run reports where it was created, and
             # that is fixed the moment the tool is bound.
-            on_finish: ->(id, outcome) { report_loop_finished(sid, id, outcome) }
+            on_finish: ->(id, outcome) { report_loop_finished(sid, id, outcome) },
+            # The panel draws only what is running, so a run beginning or
+            # ending is a fact its page has to hear about: the toggle it never
+            # drew is the one a reader would have to reload to find.
+            on_change: -> { push_loop_sheet(sid) }
           )
         end
       end
@@ -658,7 +686,61 @@ module Rubot
       # The rows on their own, for the poll the sheet makes while it is open:
       # the same partial the page drew, so the panel and the answer to its poll
       # can never disagree about a loop.
-      def loop_rows_markup(sid) = View.render("_loop_rows", loops: loop_rows(sid))
+      def loop_rows_markup(sid, rows = loop_rows(sid)) = View.render("_loop_rows", loops: rows)
+
+      # The sheet whole, drawn for a page that is already open. A loop
+      # beginning or ending changes whether the toggle exists at all, and a
+      # reader who had to reload to find the panel watching their loop would not
+      # call that live. Marked out of band because it travels on the idle
+      # stream, where there is no request of its own to answer.
+      def loop_sheet_markup(sid, rows = loop_rows(sid))
+        # Outside the channel there is no token to carry; a page drawn by a test
+        # still has to render.
+        query = respond_to?(:token_query) ? token_query.to_s : ""
+        markup = View.render("_loop_sheet", loops: rows, session_id: sid, token_query: query)
+        markup.sub(%(<details class="usage-sheet usage-sheet-loops" id="loop-sheet"),
+                   %(<details class="usage-sheet usage-sheet-loops" id="loop-sheet" hx-swap-oob="true"))
+      end
+
+      # Only the rows, for the case where the panel's own existence has not
+      # changed: replacing the whole sheet would close an open panel under the
+      # reader's cursor, and a second loop starting is no reason to lose their
+      # place in the first.
+      def loop_body_markup(sid, rows = loop_rows(sid))
+        %(<div id="loop-sheet-body" hx-swap-oob="innerHTML">#{loop_rows_markup(sid, rows)}</div>)
+      end
+
+      # Told to the conversation's open pages, if it has any: with none open
+      # this is one read of the state file and nothing else, and the page that
+      # opens next draws the same rows from the same place.
+      def push_loop_sheet(sid)
+        return if sid.to_s.empty?
+
+        rows = loop_rows(sid)
+        markup = if remember_loop_sheet(sid, rows.empty?)
+                   loop_sheet_markup(sid, rows)
+                 else
+                   loop_body_markup(sid, rows)
+                 end
+        push_to_session(sid, :"loop-sheet", markup)
+      rescue StandardError => e
+        # A stale icon, never a broken loop: the run is on a thread of its own
+        # and its file is already written.
+        warn "[loop] #{sid}: could not redraw the panel: #{e.class}: #{e.message}"
+      end
+
+      # Whether the toggle should be on the page right now, as of the last thing
+      # this channel said. Unsynced, a turn's thread and a loop's own thread are
+      # both allowed here, and the panel would be redrawn whole every time.
+      def remember_loop_sheet(sid, hidden)
+        @loop_sheet_states ||= {}
+        @loop_sheet_lock ||= Mutex.new
+        @loop_sheet_lock.synchronize do
+          changed = !@loop_sheet_states.key?(sid) || @loop_sheet_states[sid] != hidden
+          @loop_sheet_states[sid] = hidden
+          changed
+        end
+      end
 
       # Called from the channel's stop path, before the pool goes down.
       def stop_loop_threads(timeout: 5)
@@ -711,7 +793,12 @@ module Rubot
              # panel against real state files has to be able to ask what the
              # channel would have drawn, and a route answers with exactly these
              # rows. Only these two: how one row is built stays private.
-             :loop_rows, :loop_rows_markup
+             :loop_rows, :loop_rows_markup,
+             # The panel redrawn for a page that is already open. Public for the
+             # same reason: what a loop beginning does to the footer is a fact
+             # about the channel, and the test can only see it if the push is
+             # callable.
+             :loop_sheet_markup, :loop_body_markup, :push_loop_sheet
     end
   end
 end
