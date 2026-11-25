@@ -10,9 +10,10 @@
 <% case item[:kind] -%>
 <% when :thinking -%>
 <% if item[:closed_at] -%>
-<p class="row thinking done"<%= item_attrs(item) %>><span class="label">Thought for <%= dur(item[:elapsed]) %></span></p>
+<p class="row thinking done"<%= item_attrs(item) %>><span class="label"><%= I18n.t("thinking.done", duration: dur(item[:elapsed])) %></span></p>
 <% else -%>
-<p class="row thinking" data-since="<%= item[:epoch] %>" data-threshold="<%= Turn::THINKING_SECONDS %>"<%= item_attrs(item) %>><span class="label glow"<%= glow_step("Thinking…") %> aria-label="Thinking…"><%= glow("Thinking…") %></span><span class="live-clock"></span></p>
+<% live_label = I18n.t("thinking.live") -%>
+<p class="row thinking" data-since="<%= item[:epoch] %>" data-threshold="<%= Turn::THINKING_SECONDS %>"<%= item_attrs(item) %>><span class="label glow"<%= glow_step(live_label) %> aria-label="<%= h(live_label) %>"><%= glow(live_label) %></span><span class="live-clock"></span></p>
 <% end -%>
 <% when :tool -%>
 <% slow = item[:elapsed] && item[:elapsed] >= Turn::SLOW_TOOL_SECONDS -%>
@@ -39,14 +40,15 @@
 <% when :diff -%>
 <%= item[:html] %>
 <% when :compaction -%>
-<div class="compaction-row<%= " is-running" if item[:state] == :running %><%= " is-done" unless item[:state] %>" role="status" title="Ringkasan otomatis: percakapan lama diringkas untuk mengosongkan konteks"<%= item_attrs(item) %>>
+<div class="compaction-row<%= " is-running" if item[:state] == :running %><%= " is-done" unless item[:state] %>" role="status" title="<%= h(I18n.t("compaction.row_title")) %>"<%= item_attrs(item) %>>
 <% if item[:state] == :running -%>
-  <span class="compaction-label glow"<%= glow_step("Compaction sedang berlangsung…") %> aria-label="Compaction sedang berlangsung"><%= glow("Compaction sedang berlangsung…") %></span>
+<% running_label = I18n.t("compaction.running") -%>
+  <span class="compaction-label glow"<%= glow_step(running_label) %> aria-label="<%= h(running_label) %>"><%= glow(running_label) %></span>
 <% elsif item[:state] == :failed -%>
-  <span class="compaction-label">Ringkasan tidak berhasil dibuat</span>
+  <span class="compaction-label"><%= I18n.t("compaction.failed") %></span>
 <% else -%>
-  <span class="compaction-label">Konteks diringkas.</span>
-  <span class="compaction-detail"><%= item[:before] %> → <%= item[:after] %> token<% if item[:elapsed].to_f.positive? %> · <%= dur(item[:elapsed]) %><% end %></span>
+  <span class="compaction-label"><%= I18n.t("compaction.row_done") %></span>
+  <span class="compaction-detail"><%= I18n.t("compaction.row_detail", before: item[:before], after: item[:after]) %><% if item[:elapsed].to_f.positive? %> · <%= dur(item[:elapsed]) %><% end %></span>
 <% end -%>
 </div>
 <% when :subagent -%>

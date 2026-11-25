@@ -96,7 +96,7 @@ module Rubot
       def render_status(canvas)
         y = @rect.y + 1
         x = @rect.x + 2
-        label = @mode == :cancel ? "cancelling" : "working"
+        label = @mode == :cancel ? I18n.t("status.cancelling") : I18n.t("status.working")
         canvas.put(x, y, "#{spin} ", :accent)
         canvas.put(x + 2, y, label, :accent)
         x += 2 + label.length
@@ -107,7 +107,7 @@ module Rubot
           x += clock.length + 3
         end
 
-        canvas.put(x, y, " · esc cancels", :hint)
+        canvas.put(x, y, " · #{I18n.t("status.cancels")}", :hint)
         render_subagents(canvas) unless @subagents.empty?
       end
 

@@ -50,6 +50,9 @@ module Rubot
           "done" => "Summarized %{count} messages · ~%{before} → ~%{after} tokens",
           "empty" => "Nothing to compact yet",
           "note" => "Conversation summarized. Its seam is marked below, where the compaction happened.",
+          "row_title" => "Automatic summary: older turns summarized to free up context",
+          "row_done" => "Context summarized.",
+          "row_detail" => "%{before} → %{after} tokens",
           "complete" => "Compaction complete.",
           "summarized" => "Summarized: %{count} messages",
           "kept" => "Kept: %{count} messages",
@@ -62,6 +65,7 @@ module Rubot
         },
         "status" => {
           "working" => "working",
+          "cancelling" => "cancelling",
           "cancels" => "esc cancels",
           "empty_message" => "Nothing to send.",
           "stop_requested" => "Stop requested."
@@ -97,6 +101,9 @@ module Rubot
           "done" => "Meringkas %{count} pesan · ~%{before} → ~%{after} token",
           "empty" => "Belum ada yang perlu dipadatkan",
           "note" => "Percakapan berhasil diringkas. Baris penandanya ada di bawah, di tempat compaction terjadi.",
+          "row_title" => "Ringkasan otomatis: percakapan lama diringkas untuk mengosongkan konteks",
+          "row_done" => "Konteks diringkas.",
+          "row_detail" => "%{before} → %{after} token",
           "complete" => "Compact selesai.",
           "summarized" => "Pesan diringkas: %{count}",
           "kept" => "Pesan dipertahankan: %{count}",
@@ -109,6 +116,7 @@ module Rubot
         },
         "status" => {
           "working" => "bekerja",
+          "cancelling" => "membatalkan",
           "cancels" => "esc membatalkan",
           "empty_message" => "Tidak ada yang dikirim.",
           "stop_requested" => "Permintaan berhenti dikirim."

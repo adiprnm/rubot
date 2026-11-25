@@ -1,11 +1,13 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require_relative "support/tui_support"
 
 # The language switch, tested where a reader meets it: the config key that
 # chooses it, the dictionary both languages are written in, and the rows the
 # channels draw through the one translation function.
 class TestI18n < Minitest::Test
+  include Rubot::TuiSupport
   def setup
     @tmpdir = Dir.mktmpdir
     @config_path = File.join(@tmpdir, "config.yml")
@@ -114,6 +116,51 @@ class TestI18n < Minitest::Test
                  Rubot::ToolCaption.caption("shell_exec", { "command" => "" })
   end
 
+  # --- the rows a channel draws -----------------------------------------
+
+  # A turn in the TUI, read the way a reader reads it: the live thinking label
+  # while the model waits, the block that label collapses to once the answer
+  # starts, and the footer that closes the turn. Drawn twice, once per
+  # language, so the switch is checked at the row and not at the dictionary.
+  def test_a_tui_turn_writes_its_thinking_block_and_footer_in_the_chosen_language
+    english = tui_turn_in("en")
+    indonesian = tui_turn_in("id")
+
+    assert_includes english[:live], "Thinking…"
+    assert_includes english[:rows], "Thought for 12s"
+    assert_includes english[:rows], "Turn took 2m 25s (Total time 2m 25s · 1 turn)"
+
+    assert_includes indonesian[:live], "Berpikir…"
+    assert_includes indonesian[:rows], "Berpikir 12s"
+    assert_includes indonesian[:rows], "2m 25s giliran (total waktu 2m 25s · 1 giliran)"
+
+    refute_includes indonesian[:rows], "Turn took", "the footer is not half English"
+    refute_includes english[:rows], "giliran", "the footer is not half Indonesian"
+  end
+
+  # The same two rows in the web timeline, plus the seam a compaction leaves:
+  # the label a reader watches, the block it leaves behind, and its detail.
+  def test_the_web_timeline_writes_its_thinking_label_and_compaction_seam_in_the_chosen_language
+    live = { kind: :thinking, epoch: 1.0, started_at: 0.0, closed_at: nil, elapsed: nil }
+    done = { kind: :thinking, epoch: 1.0, started_at: 0.0, closed_at: 2.0, elapsed: 12.0 }
+    seam = { kind: :compaction, epoch: 1.0, before: 48_000, after: 9_000 }
+
+    english = Rubot::Web::View.render("_timeline", items: [ live, done, seam ])
+    indonesian = Rubot::I18n.with_locale("id") do
+      Rubot::Web::View.render("_timeline", items: [ live, done, seam ])
+    end
+
+    assert_includes english, 'aria-label="Thinking…"'
+    assert_includes english, "Thought for 12s"
+    assert_includes english, "Context summarized."
+    assert_includes english, ">48000 → 9000 tokens<"
+
+    assert_includes indonesian, 'aria-label="Berpikir…"'
+    assert_includes indonesian, "Berpikir 12s"
+    assert_includes indonesian, "Konteks diringkas."
+    assert_includes indonesian, ">48000 → 9000 token<"
+  end
+
   private
 
   def config_with(data)
@@ -131,6 +178,32 @@ class TestI18n < Minitest::Test
         thinking: Rubot::I18n.t("thinking.done", duration: "5s"),
         compaction: Rubot::I18n.t("compaction.done", count: 12, before: 48_000, after: 9_000)
       }
+    end
+  end
+
+  # One whole turn of the TUI in one language: the label while the model is
+  # still thinking, then the collapsed block and the footer once the answer
+  # lands. The rows come off the app's own renderer, so a string that never
+  # reaches the screen is not counted as translated.
+  def tui_turn_in(locale)
+    Rubot::I18n.with_locale(locale) do
+      repl = build_repl
+      app = repl.instance_variable_get(:@app)
+      events = repl.instance_variable_get(:@events)
+
+      events << [ :stream_start ]
+      events << [ :thinking, "let me look" ]
+      repl.pump
+      live = plain(app.render_lines).join("\n")
+
+      # A pause long enough to keep a row: 12s of thinking, then an answer.
+      age_thinking(repl, 12)
+      repl.instance_variable_set(:@turn_started_at, repl.monotonic_now - 145)
+      events << [ :chunk, "the answer" ]
+      events << [ :stream_end ]
+      repl.pump
+
+      { live: live, rows: plain(app.render_lines).join("\n") }
     end
   end
 end

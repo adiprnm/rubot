@@ -176,7 +176,7 @@ module Rubot
         html = View.render("_timeline", items: [ item ])
 
         assert_includes html, "compaction-row"
-        assert_includes html, "Konteks diringkas."
+        assert_includes html, "Context summarized."
         assert_includes html, "2029 → 1565 token"
         # The counted messages were dropped from the seam: the figures are what
         # a reader checks, and the count only made the line longer.
@@ -210,7 +210,7 @@ module Rubot
         html = View.render("_timeline", items: [ item ])
 
         assert_includes html, "compaction-row is-running"
-        assert_includes html, "Compaction sedang berlangsung"
+        assert_includes html, "Summarizing the conversation"
         assert_includes html, "compaction-label glow"
         refute_includes html, "compaction-mark", "the seam has no mark left"
         refute_includes html, "mark-svg", "a compaction is not a spinner of its own"

@@ -488,14 +488,14 @@ module Rubot
         running = Rubot::Web::View.turn_body(turn, token_query: "")
 
         assert_includes running, "compaction-row is-running"
-        assert_includes running, "Compaction sedang berlangsung"
+        assert_includes running, "Summarizing the conversation"
         refute_includes running, "2029 → 1565 token"
 
         turn.compaction(summarized_messages: 8, context_before: 2029, context_after: 1565)
         done = Rubot::Web::View.turn_body(turn, token_query: "")
 
         refute_includes done, "is-running"
-        assert_includes done, "Konteks diringkas."
+        assert_includes done, "Context summarized."
         assert_includes done, "2029 → 1565 token"
         refute_includes done, "pesan diringkas"
         assert_equal 1, turn.items.count { |item| item[:kind] == :compaction }
@@ -505,14 +505,14 @@ module Rubot
         turn = Rubot::Web::Turn.new(id: "t1", session_id: "web_rubot")
         turn.compaction_start
         running = Rubot::Web::View.turn_body(turn, token_query: "")
-        assert_includes running, "Compaction sedang berlangsung"
+        assert_includes running, "Summarizing the conversation"
 
         turn.compaction_failed
         failed = Rubot::Web::View.turn_body(turn, token_query: "")
 
         refute_includes failed, "is-running"
-        refute_includes failed, "Compaction sedang berlangsung"
-        assert_includes failed, "Ringkasan tidak berhasil dibuat"
+        refute_includes failed, "Summarizing the conversation"
+        assert_includes failed, "Compaction failed"
         assert_equal 1, turn.items.count { |item| item[:kind] == :compaction }
       end
 
