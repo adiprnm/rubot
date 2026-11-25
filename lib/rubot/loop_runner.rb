@@ -216,7 +216,7 @@ module Rubot
         # budget means -- it is the one that knows whether a verdict is still
         # worth buying.
         { text: note, tokens: 0, commit: reported, progress: progress,
-          budget_stopped: answer[:budget_stopped] }
+          budget_stopped: answer[:budget_stopped], metrics: answer[:metrics] }
       end
     end
 
@@ -302,7 +302,12 @@ module Rubot
         tokens: (answer[:tokens] || answer["tokens"]).to_i,
         # Only a runner that watched the budget says this, and only when it
         # stopped the turn for it.
-        budget_stopped: truthy?(answer[:budget_stopped] || answer["budget_stopped"]) }
+        budget_stopped: truthy?(answer[:budget_stopped] || answer["budget_stopped"]),
+        # The shape of the turn's requests, when the door measured it (see
+        # Web#loop_session_runner). Passed through untouched and never
+        # invented here: a session runner that reports none leaves the entry
+        # without that part, which is what the log then says.
+        metrics: (answer[:metrics] || answer["metrics"]) }
     end
 
     # A turn whose spend never reached the file says so where the loop is read:

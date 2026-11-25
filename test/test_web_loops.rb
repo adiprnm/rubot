@@ -258,6 +258,55 @@ class TestWebLoops < Minitest::Test
     assert_equal [ "loop-abc~it5" ], pool.invalidated
   end
 
+  # The shape of a turn is measured where the usage reports arrive, because that
+  # is the only place the numbers exist: how many requests the turn made, how
+  # big the context was at the first and the last of them, and the cache share
+  # of the latest. It rides back with the answer and the loop writes it into the
+  # iteration's own entry.
+  def test_an_iteration_reports_the_shape_of_its_requests_from_the_usage_reports
+    handle = FakeHandle.new(reports: [
+      { total_tokens: 20_000, requests: 1, last_prompt_tokens: 19_000, cache_hit_rate: 0.0 },
+      { total_tokens: 55_000, requests: 60, last_prompt_tokens: 48_000, cache_hit_rate: 0.95 },
+      { total_tokens: 90_000, requests: 110, last_prompt_tokens: 76_000, cache_hit_rate: 0.96 }
+    ])
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = channel.loop_session_runner("s1").call(session_id: "loop-abc~it1",
+                                                    prompt: "do one step", workspace: "/tmp/wt")
+
+    assert_equal({ requests: 110, context_first: 19_000, context_last: 76_000, cache_hit_rate: 0.96 },
+                 answer[:metrics], "the first request's context and the last one's, from the reports themselves")
+  end
+
+  # An estimate describes a request that has not come back yet, so it is not a
+  # figure to write into a log that reads as a measurement.
+  def test_an_estimate_is_not_folded_into_the_shape_of_the_requests
+    handle = FakeHandle.new(reports: [
+      { total_tokens: 20_000, requests: 1, last_prompt_tokens: 19_000, cache_hit_rate: 0.96 },
+      { total_tokens: 140_000, requests: 2, last_prompt_tokens: 120_000, cache_hit_rate: 0.1,
+        provisional: true }
+    ])
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = channel.loop_session_runner("s1").call(session_id: "loop-abc~it1",
+                                                    prompt: "do one step", workspace: "/tmp/wt")
+
+    assert_equal({ requests: 1, context_first: 19_000, context_last: 19_000, cache_hit_rate: 0.96 },
+                 answer[:metrics])
+  end
+
+  # A turn nobody measured answers exactly as it did before this existed: no
+  # metrics key at all, rather than a made-up zero the loop would print.
+  def test_a_turn_with_no_usage_numbers_carries_no_shape
+    handle = FakeHandle.new(tokens: 1_234, text: "wrote step.txt")
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = channel.loop_session_runner("s1").call(session_id: "loop-abc~it1",
+                                                    prompt: "do one step", workspace: "/tmp/wt")
+
+    assert_equal({ text: "wrote step.txt", tokens: 1_234 }, answer)
+  end
+
   # -- the budget, inside the turn -------------------------------------------
 
   # The whole bug, in one turn. The budget used to be checked between

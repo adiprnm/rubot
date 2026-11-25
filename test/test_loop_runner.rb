@@ -34,6 +34,7 @@ class TestLoopRunner < Minitest::Test
     @own_shas = []         # every sha the fake agent committed itself
     @iteration_tokens = 1_000
     @verify_tokens = 250
+    @metrics = nil
     @answer = ->(number) { "wrote step #{number}.txt" }
     @verdict = ->(number) { "NOT_YET still red #{number}" }
   end
@@ -69,7 +70,7 @@ class TestLoopRunner < Minitest::Test
         elsif @changes
           write_step(workspace, number)
         end
-        { text: @answer.call(number), tokens: @iteration_tokens }
+        { text: @answer.call(number), tokens: @iteration_tokens, metrics: @metrics }
       end
     end
   end
@@ -166,6 +167,21 @@ class TestLoopRunner < Minitest::Test
     assert_equal "iteration 1: wrote step 1.txt",
                  git(@repo, "log", "-1", "--format=%s", "loop/#{state.id}").strip,
                  "git log on the branch and the loop file tell the same story"
+  end
+
+  # The channel measures the shape of a turn's requests and hands it back with
+  # the answer; this runner passes it, untouched, into the report the run writes
+  # its entry from. Nothing is invented on the way: a session runner that says
+  # nothing leaves the entry without that part (see the loop run's own tests).
+  def test_a_session_runner_that_reports_the_shape_of_its_requests_is_logged
+    state = new_loop
+    @verdict = ->(_number) { "DONE step1.txt is there" }
+    @metrics = { requests: 6, context_first: 19_000, context_last: 76_000, cache_hit_rate: 0.96 }
+
+    loop_runner.start(state.id)
+
+    entry = iteration_entries(state.id).last.text
+    assert_includes entry, "req 6, ctx 19k->76k, cache 96%", entry
   end
 
   # The worktree is a place to work, not the record: the branch carries the

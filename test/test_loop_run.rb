@@ -104,6 +104,15 @@ class TestLoopRun < Minitest::Test
     git(@worktree.path(id), "rev-list", "--count", "HEAD").to_i
   end
 
+  # The one entry an iteration writes, as the file spells it: the verdict's is
+  # the other entry, and the loop's own start and worktree notes are neither.
+  def iteration_entry(id)
+    @store.load(id).log.map(&:text).find { |text| text.start_with?("iteration 1 ") }
+  end
+
+  # Seven characters, the way the entry names the commit it stands on.
+  def head_sha(id) = git(@worktree.path(id), "rev-parse", "HEAD").strip[0, 7]
+
   # A repository-level hook that refuses, which is the cheapest way to make a
   # `git commit` fail after the iteration has already been paid for.
   def failing_hook(repo)
@@ -991,6 +1000,66 @@ class TestLoopRun < Minitest::Test
     assert_equal [ "verifier: a.txt exists",
                    "iteration 1 (sha #{sha}, worker 82k, verifier 14k): added a.txt" ], entries,
                  "one entry per iteration and one per verdict, newest first: #{entries.inspect}"
+  end
+
+  # What the shape of a turn is for. One iteration of a real loop was 99 to 110
+  # requests, and the reason it cost what it did is that every one of them
+  # re-sent a conversation that had grown from 19k to 76k tokens. Those three
+  # facts sit next to the spend in the entry, so the next run's cost can be read
+  # rather than guessed.
+  def test_the_entry_carries_the_shape_of_the_turns_requests
+    state = new_loop
+    metrics = { requests: 110, context_first: 19_000, context_last: 76_000, cache_hit_rate: 0.96 }
+    run = loop_run(
+      runner: runner do |ctx|
+        write_file(ctx, "a.txt", "1\n")
+        { text: "added a.txt", tokens: 82_000, metrics: metrics }
+      end,
+      verifier: verdicts({ verdict: :done, reason: "a.txt exists" })
+    )
+
+    run.call(state.id)
+
+    entry = iteration_entry(state.id)
+    assert_equal "iteration 1 (sha #{head_sha(state.id)}, worker 82k, verifier 0, " \
+                 "req 110, ctx 19k->76k, cache 96%): added a.txt", entry
+  end
+
+  # A runner that reports no metrics is not a turn that made no request: the
+  # part is left out whole, and the entry is the one it always was. A fabricated
+  # "req 0" would read as a measurement, and a reader would believe it.
+  def test_a_runner_that_reports_no_metrics_leaves_the_shape_out_of_the_entry
+    state = new_loop
+    run = loop_run(
+      runner: runner { |ctx| write_file(ctx, "a.txt", "1\n"); { text: "added a.txt", tokens: 100 } },
+      verifier: verdicts({ verdict: :done, reason: "a.txt exists" })
+    )
+
+    run.call(state.id)
+
+    entry = iteration_entry(state.id)
+    assert_equal "iteration 1 (sha #{head_sha(state.id)}, worker 100, verifier 0): added a.txt", entry
+    refute_includes entry, "req ", "nothing was measured, so nothing is claimed"
+  end
+
+  # The same thing from the other side: a runner that does send a metrics hash
+  # whose numbers are all zero measured nothing worth writing down.
+  def test_a_zero_metric_is_not_written_as_a_request_that_never_happened
+    state = new_loop
+    run = loop_run(
+      runner: runner do |ctx|
+        write_file(ctx, "a.txt", "1\n")
+        { text: "added a.txt", tokens: 100, metrics: { requests: 0, context_first: 0, context_last: 0 } }
+      end,
+      verifier: verdicts({ verdict: :done, reason: "a.txt exists" })
+    )
+
+    run.call(state.id)
+
+    entry = iteration_entry(state.id)
+    refute_includes entry, "req 0"
+    refute_includes entry, "ctx "
+    assert_equal "iteration 1 (sha #{head_sha(state.id)}, worker 100, verifier 0): added a.txt", entry
   end
 
   # The same guarantee stated the way the bug was, from the texts: the report
