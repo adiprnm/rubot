@@ -16,10 +16,11 @@ module Rubot
   # request time would do the opposite -- the transcript would be rewritten
   # under the cache on every round.
   module ToolOutput
-    # What one tool result may weigh in the transcript, in characters. A file
-    # read of a normal source file fits under it; a directory listing, a log or
-    # a whole-file dump does not, and that is the case this exists for.
-    MAX_CHARS = 8_000
+    # What one tool result may weigh in the transcript, in characters, when the
+    # caller names no ceiling of its own. The default lives in Config
+    # (`agents.defaults.tool_output_max_chars`): a workspace of large files
+    # wants a wider head than one that only runs commands.
+    MAX_CHARS = Config::DEFAULT_TOOL_OUTPUT_MAX_CHARS
     # Where the cut falls: most of the budget to the head, because the beginning
     # of an output is where a search result, a file's structure and a command's
     # first error live. The tail keeps the last lines, where a failure usually
@@ -37,14 +38,19 @@ module Rubot
     module_function
 
     # The text as the transcript will hold it: unchanged when it already fits,
-    # otherwise head, the note and tail, all inside MAX_CHARS.
-    def clip(text)
+    # otherwise head, the note and tail, all inside the ceiling. `max_chars` is
+    # the configured budget; a caller that names none gets the default.
+    def clip(text, max_chars: MAX_CHARS)
       text = text.to_s
-      return text if text.length <= MAX_CHARS
+      max_chars = max_chars.to_i
+      max_chars = MAX_CHARS unless max_chars.positive?
+      return text if text.length <= max_chars
 
       # The two ends share what the note leaves, and the note counts what they
       # did not keep: the result is strictly shorter than the cap, never at it.
-      room = MAX_CHARS - NOTE_RESERVE - 3
+      # A ceiling smaller than the note itself has no room to share, so the note
+      # wins and the ends get one character each.
+      room = [ max_chars - NOTE_RESERVE - 3, 1 ].max
       head = (room * HEAD_SHARE).to_i
       tail = room - head
       note = format(NOTE, removed: text.length - room)

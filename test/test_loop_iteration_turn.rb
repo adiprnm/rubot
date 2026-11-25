@@ -15,8 +15,9 @@ class TestLoopIterationTurn < Minitest::Test
   class ScriptedProvider
     attr_reader :requests, :offers
 
-    def initialize(script)
+    def initialize(script, usage: { "prompt_tokens" => 20, "completion_tokens" => 5 })
       @script = script.dup
+      @usage = usage
       @requests = []
       @offers = []
     end
@@ -24,7 +25,7 @@ class TestLoopIterationTurn < Minitest::Test
     def name = "openai"
 
     def last_usage
-      { "prompt_tokens" => 20, "completion_tokens" => 5 }
+      @usage
     end
 
     def chat(messages, tools: nil, on_retry: nil)
@@ -47,13 +48,13 @@ class TestLoopIterationTurn < Minitest::Test
     FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
   end
 
-  def build_agent(script, session_id:, defaults: {})
+  def build_agent(script, session_id:, defaults: {}, usage: nil)
     path = File.join(@tmpdir, "config.yml")
     File.write(path, {
       "agents" => { "defaults" => { "workspace" => @workspace }.merge(defaults) },
       "models" => [ { "name" => "test", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ]
     }.to_yaml)
-    provider = ScriptedProvider.new(script)
+    provider = usage ? ScriptedProvider.new(script, usage: usage) : ScriptedProvider.new(script)
     agent = Rubot::Agent.new(config: Rubot::Config.new(path), provider: provider, session_id: session_id)
     [ agent, provider ]
   end
@@ -131,6 +132,68 @@ class TestLoopIterationTurn < Minitest::Test
     assert_includes answer, "stopped after 2 rounds"
     assert_includes answer, "Say \"lanjut\""
     assert_nil agent.last_round_cap
+  end
+
+  # -- the context ceiling ---------------------------------------------------
+
+  # The other half of the ceiling, and the one that replaces compaction: an
+  # iteration stops when its transcript is bigger than it is worth sending
+  # again. It is a setting of its own, default 100k tokens, because the right
+  # number follows what one step of real work costs.
+  def test_the_context_ceiling_is_a_setting_of_its_own
+    iteration, = build_agent([], session_id: "loop-abc~a1~it1")
+
+    assert_equal Rubot::Config::DEFAULT_LOOP_MAX_CONTEXT_TOKENS, iteration.loop_max_context_tokens
+    assert_equal 100_000, iteration.loop_max_context_tokens
+  end
+
+  def test_the_context_ceiling_follows_the_setting
+    agent, = build_agent([], session_id: "loop-abc~a1~it1",
+                             defaults: { "loop_max_context_tokens" => 12_345 })
+
+    assert_equal 12_345, agent.loop_max_context_tokens
+    assert_equal 12_345, agent.config.loop_max_context_tokens
+  end
+
+  # The whole behaviour, at the provider: the measured request already carries
+  # more than the ceiling, so the round that would re-send it is never made --
+  # the opposite of the compaction this replaces, which bought a summary and
+  # then paid for the same transcript again.
+  def test_an_iteration_stops_at_its_context_ceiling_instead_of_sending_again
+    agent, provider = build_agent(
+      [ tool_round("call_1"), { "content" => "must never be asked" } ],
+      session_id: "loop-abc~a1~it1",
+      defaults: { "loop_max_context_tokens" => 4_000 },
+      usage: { "prompt_tokens" => 4_200, "completion_tokens" => 5 }
+    )
+
+    answer = agent.process("work a step", stream: false)
+
+    assert_equal 1, provider.requests.size, "the request that would re-send the context is never made"
+    reaching = agent.last_context_ceiling
+    refute_nil reaching, "the ceiling it stopped at is reported"
+    assert_equal 4_000, reaching[:limit]
+    assert_operator reaching[:tokens], :>=, 4_000
+    assert_includes answer, "stopped at its context ceiling"
+    assert_includes answer, "of 4000 tokens"
+    assert_nil agent.last_round_cap, "no round cap was reached"
+  end
+
+  # A turn outside a loop has no such ceiling: the reader is waiting for its
+  # answer, and 100k tokens of a normal conversation is not a reason to stop it.
+  def test_an_ordinary_turn_has_no_context_ceiling
+    agent, provider = build_agent(
+      [ tool_round("call_1"), { "content" => "answered anyway" } ],
+      session_id: "chatter",
+      defaults: { "loop_max_context_tokens" => 4_000 },
+      usage: { "prompt_tokens" => 4_200, "completion_tokens" => 5 }
+    )
+
+    answer = agent.process("halo", stream: false)
+
+    assert_equal 2, provider.requests.size, "an ordinary turn keeps its rounds"
+    assert_nil agent.last_context_ceiling
+    assert_includes answer, "answered anyway"
   end
 
   # -- compaction ------------------------------------------------------------

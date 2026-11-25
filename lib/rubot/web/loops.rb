@@ -41,7 +41,7 @@ module Rubot
       # that stops short of the goal and says nothing is a loop the reader has
       # to ask `status` about -- which is the whole reason this exists.
       ANNOUNCED_STOPS = %i[
-        done_by_verifier stalled budget max_iterations verifier_stuck
+        done_by_verifier stalled budget max_iterations verifier_stuck context_ceiling
         error worktree_error worktree_missing
       ].freeze
       # The model's cue that this arrived on its own, shaped like the one a
@@ -518,10 +518,13 @@ module Rubot
           # must not become the loop's log entry or the commit's subject.
           text = "" if stopped
 
-          # The iteration's own ceiling, when it reached one. The agent is the
-          # only side that knows it, and the run is the only side with the log to
-          # write it into, so it rides back with the answer.
+          # The iteration's own ceilings, when it reached one. The agent is the
+          # only side that knows them, and the run is the only side with the log
+          # to write them into, so they ride back with the answer. Two of them,
+          # because an iteration stops either when it has had its rounds or when
+          # its context has grown past what is worth sending again.
           cap = handle.last_round_cap if handle.respond_to?(:last_round_cap)
+          ceiling = handle.last_context_ceiling if handle.respond_to?(:last_context_ceiling)
 
           # Zero back to a caller that knows the budget: this turn has already
           # paid every token it reported, and a total charged a second time by
@@ -529,12 +532,14 @@ module Rubot
           if budget.nil?
             report = { text: text.to_s, tokens: seen }
             report[:round_cap] = cap if cap
+            report[:context_ceiling] = ceiling if ceiling
             next with_shape(report, shape)
           end
 
           owed = outstanding(ledger, id, measured, paid)
           report = with_shape({ text: text.to_s, tokens: 0, spent: measured, budget_stopped: stopped }, shape)
           report[:round_cap] = cap if cap
+          report[:context_ceiling] = ceiling if ceiling
           report[:unwritten] = owed if owed.positive?
           report
         end
@@ -669,6 +674,7 @@ module Rubot
         when :done_by_verifier then "kriteria yang kamu tetapkan sudah terpenuhi"
         when :stalled then "tidak ada kemajuan baru, jadi iterasi lagi hanya akan membakar token"
         when :budget then "jatah token untuk loop ini habis"
+        when :context_ceiling then "satu iterasinya sudah mencapai plafon konteks, jadi request berikutnya cuma akan mengirim ulang transkrip yang sama"
         when :max_iterations then "batas iterasinya tercapai sebelum kriterianya terpenuhi"
         when :verifier_stuck then "verifier terus menolak dengan alasan yang sama, jadi iterasi lagi tidak mengubah apa pun"
         when :worktree_error, :worktree_missing then "worktree-nya bermasalah, jadi iterasinya tidak bisa jalan"

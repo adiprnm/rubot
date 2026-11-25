@@ -67,12 +67,16 @@ class TestWebLoops < Minitest::Test
     # What the agent reports after a turn that reached its round cap; nil for
     # every other turn, which is what the runner then leaves out of its answer.
     attr_reader :last_round_cap
+    # The same for the context ceiling (see Agent#last_context_ceiling).
+    attr_reader :last_context_ceiling
 
     def initialize(tokens: 1_234, text: "wrote step.txt", raise_with: nil, usage: nil, reports: nil,
-                   cancel_ok: true, cancel_raises: false, cancel_results: [], between: nil, round_cap: nil)
+                   cancel_ok: true, cancel_raises: false, cancel_results: [], between: nil, round_cap: nil,
+                   context_ceiling: nil)
       @tokens = tokens
       @text = text
       @last_round_cap = round_cap
+      @last_context_ceiling = context_ceiling
       @raise_with = raise_with
       # Cumulative totals, the way a turn reports them, oldest first; `reports`
       # is the same thing with the provisional flag each report carries.
@@ -333,6 +337,21 @@ class TestWebLoops < Minitest::Test
                                                     prompt: "do one step", workspace: "/tmp/wt")
 
     refute answer.key?(:round_cap), "nothing was cut, so nothing is claimed"
+    refute answer.key?(:context_ceiling), "and nothing reached a ceiling"
+  end
+
+  # The context ceiling travels the same road as the round cap, because the
+  # agent is the only side that knows it and the run is the only side with the
+  # log to write it into.
+  def test_an_iteration_that_reached_its_context_ceiling_says_so_in_the_answer
+    handle = FakeHandle.new(text: "a step", context_ceiling: { tokens: 101_400, limit: 100_000 })
+    channel = harness(pool: FakePool.new(handle))
+
+    answer = channel.loop_session_runner("s1").call(session_id: "loop-abc~it1",
+                                                    prompt: "do one step", workspace: "/tmp/wt")
+
+    assert_equal({ tokens: 101_400, limit: 100_000 }, answer[:context_ceiling])
+    assert_equal "a step", answer[:text]
   end
 
   # -- the budget, inside the turn -------------------------------------------

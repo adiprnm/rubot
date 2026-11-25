@@ -1098,6 +1098,49 @@ class TestLoopRun < Minitest::Test
                  "started a.txt", iteration_entry(state.id)
   end
 
+  # The other ceiling, and the one that replaces compaction inside an
+  # iteration: the turn stopped because its transcript grew past what is worth
+  # sending again. Its work is committed like any other iteration's, the entry
+  # says which ceiling it reached, and no verdict is bought -- a second turn on
+  # the same transcript is exactly the cost the ceiling exists to avoid.
+  def test_an_iteration_that_reaches_its_context_ceiling_stops_after_committing
+    state = new_loop
+    run = loop_run(
+      runner: runner do |ctx|
+        write_file(ctx, "a.txt", "1\n")
+        { text: "stopped at its context ceiling", tokens: 100,
+          context_ceiling: { tokens: 101_400, limit: 100_000 } }
+      end,
+      verifier: verdicts({ verdict: :done, reason: "a.txt exists" })
+    )
+
+    outcome = run.call(state.id)
+
+    assert_equal :context_ceiling, outcome.stop_reason
+    assert_equal "paused", @store.load(state.id).status, "a look at the ceiling is a loop to report, not to rerun"
+    assert_equal 2, commits_in(state.id),
+                 "the work the turn left behind is on the branch, on top of the init one"
+    assert_equal "iteration 1 (sha #{head_sha(state.id)}, worker 100, verifier 0, ceiling 101k/100k): " \
+                 "stopped at its context ceiling", iteration_entry(state.id)
+    assert_empty @verify_contexts, "no verdict is bought for a turn that stopped at its ceiling"
+    assert @store.load(state.id).log.map(&:text).any? { |text| text.include?("context ceiling reached at iteration 1") },
+           "the stop itself is in the log, with the numbers"
+  end
+
+  # An iteration that ended on its own makes no such claim, so a loop driven by
+  # a runner that reports no ceiling reads exactly as it always did.
+  def test_a_runner_that_reports_no_ceiling_leaves_the_fact_out_of_the_entry
+    state = new_loop
+    run = loop_run(
+      runner: runner { |ctx| write_file(ctx, "a.txt", "1\n"); { text: "added a.txt", tokens: 100 } },
+      verifier: verdicts({ verdict: :done, reason: "a.txt exists" })
+    )
+
+    run.call(state.id)
+
+    refute_includes iteration_entry(state.id), "ceiling "
+  end
+
   # A runner that reports no cap leaves no claim of one: the entry is the one it
   # always was, so a loop driven by an older runner does not look capped.
   def test_a_runner_that_reports_no_cap_leaves_the_fact_out_of_the_entry

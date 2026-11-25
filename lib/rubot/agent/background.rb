@@ -317,8 +317,10 @@ module Rubot
         # the turn ends, so the summarizer would be a request paid for a
         # transcript nobody reads again -- and it would rewrite the conversation
         # mid-turn, which is what broke the prefix cache the rest of the turn
-        # was still hitting (96% of it, measured). The round cap and the clipping
-        # of tool output are what bound that turn; a summary is not.
+        # was still hitting (96% of it, measured). What bounds that turn instead
+        # is its own context ceiling, reached at a round boundary and recorded in
+        # the loop's log (see Agent#last_context_ceiling), together with the round
+        # cap and the clipping of tool output.
         return if loop_iteration_session?
         min_keep = @config.token_based_compaction? ? 2 : @config.compact_keep_recent_messages
         return if @session.message_count <= min_keep

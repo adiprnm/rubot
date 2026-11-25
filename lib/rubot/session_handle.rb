@@ -30,6 +30,10 @@ module Rubot
       # Agent#last_round_cap). A loop's runner reads it after the turn to write
       # the fact into the iteration's log entry; an ordinary turn leaves it nil.
       attr_reader :last_round_cap
+      # The context ceiling the last turn reached, when it reached one (see
+      # Agent#last_context_ceiling): the other thing an iteration can stop at,
+      # carried the same way and for the same reason.
+      attr_reader :last_context_ceiling
 
       def initialize(ractor, session_id, stop_port = nil)
         @ractor = ractor
@@ -83,6 +87,7 @@ module Rubot
         events = Ractor::Port.new
         control = nil
         @last_round_cap = nil
+        @last_context_ceiling = nil
 
         @ractor.send({ type: :message, text: message, events: events, stream: stream })
 
@@ -138,6 +143,7 @@ module Rubot
             control << [ :confirm_result, event[1], answered ]
           when :done
             @last_round_cap = event[2].is_a?(Hash) ? event[2][:round_cap] : nil
+            @last_context_ceiling = event[2].is_a?(Hash) ? event[2][:context_ceiling] : nil
             response = event[1].to_s
             break
           when :error

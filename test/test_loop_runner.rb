@@ -36,6 +36,7 @@ class TestLoopRunner < Minitest::Test
     @verify_tokens = 250
     @metrics = nil
     @round_cap = nil
+    @context_ceiling = nil
     @answer = ->(number) { "wrote step #{number}.txt" }
     @verdict = ->(number) { "NOT_YET still red #{number}" }
   end
@@ -72,7 +73,7 @@ class TestLoopRunner < Minitest::Test
           write_step(workspace, number)
         end
         { text: @answer.call(number), tokens: @iteration_tokens, metrics: @metrics,
-          round_cap: @round_cap }
+          round_cap: @round_cap, context_ceiling: @context_ceiling }
       end
     end
   end
@@ -270,6 +271,24 @@ class TestLoopRunner < Minitest::Test
     entry = iteration_entries(state.id).first.text
     assert_includes entry, "rounds 40/40"
     assert_includes entry, "worker 1k", "the cap sits beside what the turn cost"
+  end
+
+  # The other ceiling reaches the entry the same way -- through the answer, not
+  # through anything this side infers. The loop pauses, and the turn's work is
+  # on the branch: what stopped the iteration is the transcript, not the agent.
+  def test_an_iteration_that_hit_its_context_ceiling_stops_the_loop_and_says_so
+    state = new_loop
+    @context_ceiling = { tokens: 101_400, limit: 100_000 }
+
+    outcome = loop_runner.start(state.id)
+
+    assert_equal :context_ceiling, outcome.stop_reason
+    entry = iteration_entries(state.id).first.text
+    assert_includes entry, "ceiling 101k/100k"
+    assert_includes entry, "stopped at its context ceiling",
+                    "the commit and the entry name the ceiling, not the agent's notice"
+    assert_equal 1, @calls.size,
+                 "no verifier turn is bought for an iteration that never finished"
   end
 
   def test_the_verifier_prompt_judges_the_worktree_and_never_reads_the_log

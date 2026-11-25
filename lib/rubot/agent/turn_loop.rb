@@ -35,6 +35,7 @@ module Rubot
         # A cap reported by an earlier turn must not be read as this one's: the
         # reader of the answer looks here to write down what stopped it.
         @last_round_cap = nil
+        @last_context_ceiling = nil
         # The tool registry is shared across sessions, so the persona that owns
         # this turn has to be stamped on it now — not at boot, where a second
         # persona's actor would silently overwrite the first one's scope.
@@ -121,6 +122,18 @@ module Rubot
           turn.answer << STOP_NOTICE
         end
 
+        # The other ceiling an iteration can reach: the transcript got too big to
+        # send again. It stopped before the request rather than after it, so the
+        # notice is the only thing the turn has to say -- and it says the number,
+        # because the next reading of the loop starts from it.
+        if @last_context_ceiling
+          turn.answer << "\n\n" unless turn.answer.empty?
+          turn.answer << "⚠️ The iteration stopped at its context ceiling " \
+                         "(#{@last_context_ceiling[:tokens]} of #{@last_context_ceiling[:limit]} tokens) " \
+                         "instead of re-sending it. What it produced is committed, and the next " \
+                         "iteration starts from a fresh context."
+        end
+
         parts << turn.answer if turn.answer && !turn.answer.empty?
 
         combined = parts.join("\n\n---\n\n")
@@ -188,6 +201,15 @@ module Rubot
             end
             break
           end
+
+          # The other ceiling an iteration has: its context. Checked before the
+          # request leaves, so the stop costs nothing -- the opposite of the
+          # auto-compaction an iteration no longer buys, which paid for a
+          # summary and then rewrote the prefix the rest of the turn was still
+          # hitting. A loop's work is committed by the run that reads the
+          # answer, so stopping here keeps what was made and drops only the
+          # request that would have re-sent it.
+          break if context_ceiling_reached?
 
           # Steering, a stop, and the compaction that may call the provider all
           # happen here, between rounds. Any of them can end the turn.
@@ -315,6 +337,28 @@ module Rubot
         false
       end
 
+      # Whether this round would re-send a transcript past the iteration's own
+      # ceiling. Only a loop iteration has one, and only a measured figure
+      # counts: before the first request nothing has been priced (an estimate of
+      # the system prompt is not a context), and after it the anchor plus
+      # everything appended since is what the next request would carry.
+      #
+      # No closing round is bought here, which is the difference from the round
+      # cap: a closing round is one more request carrying exactly the context
+      # this ceiling exists to stop paying for. The work is committed by the run,
+      # and the notice says where the iteration stopped.
+      def context_ceiling_reached?
+        return false unless loop_iteration_session?
+        return false unless @session.context_anchored?
+
+        ceiling = loop_max_context_tokens
+        used = context_usage[:tokens].to_i
+        return false unless ceiling.positive? && used >= ceiling
+
+        @last_context_ceiling = { tokens: used, limit: ceiling }
+        true
+      end
+
       # The one round an iteration gets after its cap: no tools, one question,
       # and the answer is the turn's closing text. It is a request like any
       # other -- measured and published like one -- but it does not count towards
@@ -405,7 +449,8 @@ module Rubot
           # rebuild the diff on /resume. The transcript gets the clipped copy:
           # the callback above already showed the full result, and every later
           # request re-sends what is written here.
-          @session.add("tool", Rubot::ToolOutput.clip(tool_result), tool_call_id: call[:id], ui_diff: ui_diff)
+          @session.add("tool", Rubot::ToolOutput.clip(tool_result, max_chars: tool_output_max_chars),
+                       tool_call_id: call[:id], ui_diff: ui_diff)
 
           # A tool that answered with UI has nothing for the model to say.
           # End the turn here instead of asking for a reply that would only

@@ -46,6 +46,12 @@ module Rubot
     # and the notice the agent appends to a stopped turn ("Stopped by user") is
     # not one: it would become the history of a loop nobody stopped.
     BUDGET_SUBJECT = "stopped for its budget"
+    # What an iteration that reached its context ceiling says in its commit
+    # subject and its log entry. Its notice names the two numbers, which is the
+    # right thing for a reader and the wrong thing for a subject: the subject is
+    # the one line `git log` shows, and it should say what stopped the work, not
+    # repeat the ceiling. The run's own entry carries the numbers.
+    CONTEXT_SUBJECT = "stopped at its context ceiling"
     # The first words of the one entry a spent loop gets when it is woken: it is
     # the marker that says the refusal is already in the log, so a schedule that
     # fires every five minutes writes it once instead of forever.
@@ -201,8 +207,16 @@ module Rubot
                      id: id, budget: context[:budget], spent: context[:spent])
         # A turn the budget stopped has no answer to name: what stopped it is the
         # entry and the commit subject, so the agent's own "stopped" notice never
-        # becomes either.
-        note = answer[:budget_stopped] ? BUDGET_SUBJECT : answer[:text]
+        # becomes either. A turn that hit its context ceiling is the same case one
+        # step later: its answer is the notice that says so, and the subject says
+        # the short version instead.
+        note = if answer[:budget_stopped]
+          BUDGET_SUBJECT
+        elsif answer[:context_ceiling]
+          CONTEXT_SUBJECT
+        else
+          answer[:text]
+        end
         # Charged here, before the commit, because the commit can fail: a stale
         # index.lock or a refused commit would otherwise throw away a turn the
         # provider already billed. The report hands back zero, since the run
@@ -217,7 +231,7 @@ module Rubot
         # worth buying.
         { text: note, tokens: 0, commit: reported, progress: progress,
           budget_stopped: answer[:budget_stopped], metrics: answer[:metrics],
-          round_cap: answer[:round_cap] }
+          round_cap: answer[:round_cap], context_ceiling: answer[:context_ceiling] }
       end
     end
 
@@ -307,6 +321,10 @@ module Rubot
         # The cap the iteration reached, when it reached one: reported by the
         # agent, carried here, written into the entry by the run.
         round_cap: (answer[:round_cap] || answer["round_cap"]),
+        # The other ceiling it can reach, in the same shape and for the same
+        # reason: a turn that stopped because its context grew past what is worth
+        # sending again is not a failure, and the run is what says so.
+        context_ceiling: (answer[:context_ceiling] || answer["context_ceiling"]),
         # The shape of the turn's requests, when the door measured it (see
         # Web#loop_session_runner). Passed through untouched and never
         # invented here: a session runner that reports none leaves the entry

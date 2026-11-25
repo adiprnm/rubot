@@ -35,6 +35,20 @@ module Rubot
     # was one measured iteration. The cap is a ceiling on that, and the turn
     # still gets one last round with no tools so it can say where it stopped.
     DEFAULT_LOOP_MAX_ROUNDS = 40
+    # The context one loop iteration may reach, in tokens, measured from the
+    # last request the provider answered. An iteration that would go past it
+    # stops there instead of paying again for a conversation that grew (19k to
+    # 76k tokens inside one measured iteration), and its work is committed
+    # before the loop says so. This is what replaces the auto-compaction the
+    # iteration no longer buys: a ceiling on the transcript instead of a
+    # summary of it.
+    DEFAULT_LOOP_MAX_CONTEXT_TOKENS = 100_000
+    # What one tool result may weigh in the transcript, in characters. A result
+    # is written once and re-sent on every request that follows it, so an
+    # unbounded one is a cost paid again on each round: a whole-file read, a
+    # directory listing, a build log. The clip keeps the head and the tail and
+    # names what it left out.
+    DEFAULT_TOOL_OUTPUT_MAX_CHARS = 6_000
     DEFAULT_AUTO_COMPACT = true
     DEFAULT_COMPACT_THRESHOLD_PERCENT = 60.0
     # Messages kept verbatim next to the summary. Six was a caption's worth: a
@@ -430,6 +444,25 @@ module Rubot
     def loop_max_rounds
       limit = agent_defaults["loop_max_rounds"].to_i
       limit.positive? ? limit : DEFAULT_LOOP_MAX_ROUNDS
+    end
+
+    # The context ceiling one loop iteration may reach, in tokens. Read the same
+    # way as the round cap, from `agents.defaults`: an iteration is a step the
+    # loop pays for, and a transcript that grows to the whole window is the
+    # other half of what made one iteration cost millions. 0 or absent means the
+    # default of 100k.
+    def loop_max_context_tokens
+      limit = agent_defaults["loop_max_context_tokens"].to_i
+      limit.positive? ? limit : DEFAULT_LOOP_MAX_CONTEXT_TOKENS
+    end
+
+    # What one tool result may weigh in the transcript, in characters. A knob
+    # rather than a constant because the right number follows the tools a
+    # persona has: a workspace of large files wants a wider head than one that
+    # only runs commands. 0 or absent means the default of 6000.
+    def tool_output_max_chars
+      limit = agent_defaults["tool_output_max_chars"].to_i
+      limit.positive? ? limit : DEFAULT_TOOL_OUTPUT_MAX_CHARS
     end
 
     # --- History window --------------------------------------------------

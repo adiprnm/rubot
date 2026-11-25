@@ -894,6 +894,22 @@ module Rubot
       @config.respond_to?(:loop_max_rounds) ? @config.loop_max_rounds : Config::DEFAULT_LOOP_MAX_ROUNDS
     end
 
+    # How large an iteration's context may get before the turn stops, in tokens.
+    # The other half of the same ceiling: an iteration is bounded in rounds and
+    # in context, because one request re-sends the whole conversation and a
+    # turn that reaches its window has already paid for the transcript many
+    # times over.
+    def loop_max_context_tokens
+      @config.respond_to?(:loop_max_context_tokens) ? @config.loop_max_context_tokens : Config::DEFAULT_LOOP_MAX_CONTEXT_TOKENS
+    end
+
+    # What one tool result may weigh in the transcript, in characters, clipped
+    # once on the way in (see Rubot::ToolOutput). An ordinary turn clips too:
+    # the cost of a re-sent transcript is not a loop's alone.
+    def tool_output_max_chars
+      @config.respond_to?(:tool_output_max_chars) ? @config.tool_output_max_chars : Config::DEFAULT_TOOL_OUTPUT_MAX_CHARS
+    end
+
     # Whether this session is one turn of a loop's work (see LoopRunner). The id
     # is shaped by the runner -- `loop-<id>~a<stamp>~it<n>` -- and it is the only
     # thing the agent is told: the session is a throwaway, never a conversation
@@ -911,13 +927,23 @@ module Rubot
     # stopped it rather than inferring it from a text.
     attr_reader :last_round_cap
 
-    # Four reads a test drives directly, because each is a policy fact and not a
+    # The context ceiling an iteration reached, when it reached one:
+    # `{ tokens:, limit: }`, read off the last measured request. The same fact as
+    # `last_round_cap` for the other ceiling, and the one the loop writes into the
+    # entry that says the iteration stopped before sending a transcript it had
+    # already paid for.
+    attr_reader :last_context_ceiling
+
+    # Five reads a test drives directly, because each is a policy fact and not a
     # step of a turn: `turn_round_limit` is which ceiling this turn is under,
-    # `loop_iteration_session?` is what decides it, and `last_round_cap` is what
-    # an iteration reports after it reached one. All three are what the round cap
-    # and the compaction skip are written in terms of, so a test that proves
-    # either has to be able to ask them without a full turn.
-    public :turn_round_limit, :loop_iteration_session?, :last_round_cap
+    # `loop_iteration_session?` is what decides it, `last_round_cap` and
+    # `last_context_ceiling` are what an iteration reports after it reached one,
+    # and `loop_max_context_tokens` is the number the second ceiling compares
+    # against. All of them are what the caps and the compaction skip are written
+    # in terms of, so a test that proves either has to be able to ask them
+    # without a full turn.
+    public :turn_round_limit, :loop_iteration_session?, :last_round_cap, :last_context_ceiling,
+           :loop_max_context_tokens
 
     # Build a response when the turn ends with no answer of its own — the
     # model produced only tool calls and nothing to say about them. This is a

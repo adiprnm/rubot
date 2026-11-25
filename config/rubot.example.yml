@@ -38,6 +38,22 @@ agents:
     # 19k to 76k tokens. At the cap the turn gets one last round with no tools
     # to say where it stopped, and the loop's log records it. Default 40.
     loop_max_rounds: 40
+    # Context one loop iteration may reach, in tokens, measured from the last
+    # request the provider answered. An iteration that would go past it stops
+    # there -- no more requests for a transcript that is only growing -- and its
+    # work is committed before the loop reports it in the log. This is what
+    # replaces compaction inside a loop: an iteration's session is thrown away
+    # when the turn ends, so a summary bought for it would never be read. Set it
+    # above the size of one real step; a goal that needs more in a single
+    # iteration should be split. Default 100000.
+    loop_max_context_tokens: 100000
+    # What one tool result may weigh in the transcript, in characters. A result
+    # is written once and re-sent by every request that follows it, so an
+    # unbounded one -- a whole-file read, a directory listing, a build log -- is
+    # a cost paid on each round. The clip keeps 70% of the budget from the head
+    # and the rest from the tail, and names the number of characters it left
+    # out. Default 6000.
+    tool_output_max_chars: 6000
     # Context compaction. When the conversation reaches `threshold_percent` of
     # the model's context window, older turns are summarized into the running
     # summary and the most recent `keep_recent_messages` are kept verbatim.

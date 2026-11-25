@@ -44,10 +44,10 @@ class TestToolOutput < Minitest::Test
     FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
   end
 
-  def build_agent(script)
+  def build_agent(script, defaults: {})
     path = File.join(@tmpdir, "config.yml")
     File.write(path, {
-      "agents" => { "defaults" => { "workspace" => @workspace, "max_rounds" => 6 } },
+      "agents" => { "defaults" => { "workspace" => @workspace, "max_rounds" => 6 }.merge(defaults) },
       "models" => [ { "name" => "test", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" } ]
     }.to_yaml)
     provider = ScriptedProvider.new(script)
@@ -91,6 +91,37 @@ class TestToolOutput < Minitest::Test
     removed = note[/(\d+) characters/, 1].to_i
     kept = clipped.length - note.length - 2
     assert_equal text.length - kept, removed, "the note counts exactly what is missing"
+  end
+
+  # The ceiling is a setting, not a constant: a persona whose workspace holds
+  # large files wants a wider head than one that only runs commands. The default
+  # is 6000 characters, and a caller may name its own.
+  def test_the_clip_ceiling_is_a_setting_with_a_sensible_default
+    path = File.join(@tmpdir, "bare.yml")
+    File.write(path, {}.to_yaml)
+
+    assert_equal 6_000, Rubot::Config::DEFAULT_TOOL_OUTPUT_MAX_CHARS
+    assert_equal 6_000, Rubot::Config.new(path).tool_output_max_chars
+
+    text = "a" * 3_000
+    assert_operator Rubot::ToolOutput.clip(text, max_chars: 500).length, :<, 500,
+                    "the named ceiling is the one the clip obeys"
+  end
+
+  def test_the_transcript_uses_the_configured_ceiling
+    big = File.join(@workspace, "big.txt")
+    File.write(big, "#{"0123456789" * 4_000}\n")
+    agent, = build_agent(
+      [ { "content" => "reading", "tool_calls" => [ read_call(big, "call_1") ] },
+        { "content" => "done", "finish_reason" => "stop" } ],
+      defaults: { "tool_output_max_chars" => 400 }
+    )
+
+    agent.process("look at the file", stream: false)
+
+    tool_message = agent.session.messages.find { |message| message["role"] == "tool" }
+    assert_operator tool_message["content"].length, :<, 400, "the configured ceiling, not the default"
+    assert_includes tool_message["content"], "left out to keep the transcript small"
   end
 
   # The reason the clip happens on the way in rather than on the way out: the
