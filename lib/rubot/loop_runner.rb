@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "securerandom"
 require "time"
 
 require_relative "loop_run"
@@ -140,8 +141,8 @@ module Rubot
       end
 
       outcome = LoopRun.new(store: @store, worktree: worktree,
-                            runner: runner_for(id, worktree, dir, branch),
-                            verifier: verifier_for(id, worktree, dir, branch, base)).call(id)
+                            runner: runner_for(id, worktree, dir, branch, attempt_stamp),
+                            verifier: verifier_for(id, worktree, dir, branch, base, attempt_stamp)).call(id)
       log("loop #{id} stopped: #{outcome.stop_reason} after #{outcome.iterations_run} iterations")
       cleanup(settle(outcome), worktree)
     rescue LoopStore::Corrupt
@@ -189,14 +190,14 @@ module Rubot
     # The log entry itself is not written here. The run writes it once the sha
     # and both halves of the spend are known, and a second write from this side
     # is how one iteration came to be logged twice, in two different shapes.
-    def runner_for(id, worktree, dir, branch)
+    def runner_for(id, worktree, dir, branch, attempt)
       lambda do |context|
         iteration = context[:iteration].to_i
         # The head on either side of the turn is what says whether it produced
         # anything: an agent may run `git commit` itself, and the worktree it
         # leaves behind is then clean.
         before = worktree.head(id)
-        answer = ask("loop-#{id}~it#{iteration}", iteration_prompt(context, dir, branch), dir,
+        answer = ask("loop-#{id}~a#{attempt}~it#{iteration}", iteration_prompt(context, dir, branch), dir,
                      id: id, budget: context[:budget], spent: context[:spent])
         # A turn the budget stopped has no answer to name: what stopped it is the
         # entry and the commit subject, so the agent's own "stopped" notice never
@@ -243,16 +244,28 @@ module Rubot
     # Its spend is charged here, because the run charges only what the runner
     # reports, and an unpaid verifier would let a loop spend its whole budget on
     # judgement and never notice.
-    def verifier_for(id, worktree, dir, branch, base)
+    def verifier_for(id, worktree, dir, branch, base, attempt)
       lambda do |context|
         iteration = context[:iteration].to_i
         files = worktree.changed_files(id, base)
-        answer = ask("loop-#{id}~verify#{iteration}", verifier_prompt(context, dir, branch, files), dir,
+        answer = ask("loop-#{id}~a#{attempt}~verify#{iteration}", verifier_prompt(context, dir, branch, files), dir,
                      id: id, budget: context[:budget], spent: context[:spent])
         charge(id, answer[:tokens])
         verdict, reason = parse_verdict(answer[:text])
         { verdict: verdict, reason: reason }
       end
+    end
+
+    # A session id per attempt, because the iteration number alone is not one.
+    # A run that died mid-iteration comes back to the same number, and reusing
+    # its session id hands the new turn the dead one's history and its usage:
+    # the brake then reads a spend that was already paid for and cancels the
+    # turn before it does a thing (a restart did exactly that to a loop with
+    # 5.1M tokens of history under an 8M budget). The stamp carries the process
+    # and the second, and the random tail makes two attempts in the same second
+    # -- a retry, a resume, a runner built again -- two sessions.
+    def attempt_stamp
+      "#{Time.now.utc.strftime("%Y%m%dT%H%M%S")}-#{Process.pid}-#{SecureRandom.hex(3)}"
     end
 
     # The one door to an agent: a session id, a prompt, and the worktree as its

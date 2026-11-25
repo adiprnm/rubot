@@ -470,8 +470,11 @@ class TestLoopRunner < Minitest::Test
     result = loop_runner(session: session).start(state.id)
 
     assert_equal :max_iterations, result.stop_reason
-    assert_equal [ "loop-#{state.id}~it1", "loop-#{state.id}~verify1" ], calls,
-                 "the work turn and the verdict, on the three keywords it declared"
+    assert_equal 2, calls.size, "the work turn and the verdict"
+    assert_match(/\Aloop-#{Regexp.escape(state.id)}~a[^~]+~it1\z/, calls[0],
+                 "the work turn, on the three keywords it declared")
+    assert_match(/\Aloop-#{Regexp.escape(state.id)}~a[^~]+~verify1\z/, calls[1],
+                 "the verdict, on the three keywords it declared")
   end
 
   # A turn the channel stopped for its budget, end to end: the store is paid as
@@ -522,6 +525,34 @@ class TestLoopRunner < Minitest::Test
            "the reason is in the loop's own log, where a reader finds it")
   end
 
+  # A run that died mid-iteration leaves the number where it was, so the next
+  # run comes back to the same iteration. Reusing that iteration's session id
+  # hands the new turn the dead one's history and its usage, and the brake then
+  # reads a spend that was already paid for: the turn is cancelled before it
+  # does a thing. The session belongs to the attempt, not to the number.
+  def test_a_run_that_comes_back_to_the_same_iteration_asks_a_new_session
+    state = new_loop(max_iterations: 2)
+    @verdict = ->(_number) { "NOT_YET red" }
+
+    loop_runner.start(state.id)
+    first = @calls.map { |call| call[:session_id] }.grep(/~it1\z/)
+    refute_empty first, "the first run asks its iteration-1 session"
+
+    # The file a crash leaves behind: the iteration number never advanced.
+    @store.update(state.id) do |loop|
+      loop.status = "paused"
+      loop.iterations = 0
+      loop.tokens = 0
+    end
+    @calls.clear
+
+    loop_runner.resume(state.id)
+    second = @calls.map { |call| call[:session_id] }.grep(/~it1\z/)
+
+    refute_empty second, "the resumed run asks iteration 1 again"
+    refute_equal first, second, "the same iteration number must not reuse the dead run's session"
+  end
+
   # A loop that stopped for its budget is paused, and paused is what a tick
   # wakes -- but nothing in the file can raise the budget, so the wake buys
   # nothing. It must not buy a turn, and it must say why once instead of every
@@ -563,7 +594,8 @@ class TestLoopRunner < Minitest::Test
 
     assert_equal :done_by_verifier, result.stop_reason
     refute_empty @calls, "a bigger budget is what buys the next turn"
-    assert_equal "loop-#{state.id}~it2", @calls.first[:session_id], "it continues from the file's iteration"
+    assert_match(/\Aloop-#{Regexp.escape(state.id)}~a[^~]+~it2\z/, @calls.first[:session_id],
+                 "it continues from the file's iteration")
   end
 
   # Tokens a channel could not write down are not silently forgiven: the turn
@@ -637,7 +669,9 @@ class TestLoopRunner < Minitest::Test
 
     assert_equal :done_by_verifier, result.stop_reason
     assert_equal 3, result.iterations_run
-    assert_equal [ "loop-#{state.id}~it3", "loop-#{state.id}~verify3" ], @calls.map { |call| call[:session_id] }
+    ids = @calls.map { |call| call[:session_id] }
+    assert_match(/\Aloop-#{Regexp.escape(state.id)}~a[^~]+~it3\z/, ids[0])
+    assert_match(/\Aloop-#{Regexp.escape(state.id)}~a[^~]+~verify3\z/, ids[1])
     reread = @store.load(state.id)
     assert_equal 3, reread.iterations
     assert_equal 4_000 + 1_000 + 250, reread.tokens
