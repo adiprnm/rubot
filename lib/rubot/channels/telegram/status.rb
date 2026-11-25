@@ -26,9 +26,8 @@ module Rubot
         # Override per deployment with `status_edit_interval` in channel config.
         MIN_STATUS_EDIT_INTERVAL = 1.0
 
-        # Shown once per request, not on every edit.
-        STATUS_STOP_HINT = "/stop untuk menghentikan"
-
+        # Shown once per request, not on every edit. Named through the dictionary
+        # at the moment the card is drawn, so the hint follows the language.
         SUBAGENT_RUNNING_PHASES = %w[started thinking tool].freeze
 
         private
@@ -143,15 +142,15 @@ module Rubot
         #   $ bundle exec rspec test/agent_test.rb
         def render_tool_status(state)
           elapsed = format_elapsed(monotonic_now - state[:started_at].to_f)
-          head = (state[:finished] ? "✓ " : "") + "#{state[:emoji]} `#{state[:tool_name]}`" \
-                                      " · step #{state[:step]} · #{elapsed}"
+          step = I18n.t("telegram.status.step", step: state[:step], elapsed: elapsed)
+          head = (state[:finished] ? "✓ " : "") + "#{state[:emoji]} `#{state[:tool_name]}`" + step
           lines = [ head ]
           preview = state[:preview].to_s
           lines.push("", preview) unless preview.empty?
           subagents = state[:subagents]
           if subagents && !subagents.empty?
             running = subagents.values.count { |s| SUBAGENT_RUNNING_PHASES.include?(s[:phase]) }
-            lines.push("", "⟡ #{running} subagent aktif")
+            lines.push("", subagent_count_line(running))
             subagents.each_value do |s|
               mark = s[:phase] == "done" ? "✓" : (s[:phase] == "failed" ? "✗" : "·")
               detail = s[:detail].to_s.gsub(/\s+/, " ").strip
@@ -160,7 +159,7 @@ module Rubot
               lines.push(line)
             end
           end
-          lines.push("", STATUS_STOP_HINT) if state[:hint_sent]
+          lines.push("", I18n.t("telegram.status.stop_hint")) if state[:hint_sent]
           lines.join("\n")
         end
 
@@ -169,6 +168,14 @@ module Rubot
         # a reader cannot match to the row they see elsewhere.
         def tool_preview(tool_name, args)
           Rubot::ToolCaption.caption(tool_name, args)
+        end
+
+        # One sub agent is not "one subagents": the count line has its own
+        # wording for the single case in both languages.
+        def subagent_count_line(count)
+          return I18n.t("telegram.status.subagent_one") if count == 1
+
+          I18n.t("telegram.status.subagents", count: count)
         end
 
         # The stop hint appears once, and only when the request has gone on long

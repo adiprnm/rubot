@@ -15,17 +15,19 @@ module Rubot
           ra = request_agent
           info = ra.startup_info
           lines = info.map { |k, v| "#{k}: #{v}" }
-          [ :skip, "ℹ️ Agent Info\n\n" + lines.join("\n") ]
+          [ :skip, "#{I18n.t("telegram.info.header")}\n\n" + lines.join("\n") ]
         end
 
         def handle_context_command
           report = request_agent.usage_report
 
           context = if report[:context_window]
-            "#{UsageReport.tokens(report[:context_used])} / #{UsageReport.tokens(report[:context_window])} token " \
-              "(#{format('%.1f', report[:context_percent])}%)"
+            I18n.t("telegram.context.window",
+                   used: UsageReport.tokens(report[:context_used]),
+                   window: UsageReport.tokens(report[:context_window]),
+                   percent: format("%.1f", report[:context_percent]))
           else
-            "#{UsageReport.tokens(report[:context_used])} token (window tidak diketahui)"
+            I18n.t("telegram.context.no_window", used: UsageReport.tokens(report[:context_used]))
           end
 
           hit = if report[:last_prompt_tokens].to_i.zero?
@@ -34,31 +36,34 @@ module Rubot
             format("%.1f%%", report[:cache_hit_rate].to_f * 100)
           end
 
-          lines = [ "📊 **Konteks Sesi**" ]
-          lines << "Model: `#{report[:model]}` (#{report[:provider]})"
-          lines << "Konteks: #{context}"
-          lines << "Pesan: #{report[:messages]} | Request: #{report[:requests]}"
-          lines << "Token: #{UsageReport.tokens(report[:prompt_tokens])} in / " \
-                   "#{UsageReport.tokens(report[:completion_tokens])} out"
-          lines << "Cache: #{UsageReport.tokens(report[:cached_tokens])} cached total " \
-                   "(hit rate #{hit} on request terakhir)"
-          lines << "Re-read: #{UsageReport.tokens(report[:last_re_read_tokens])} token dibayar penuh"
+          lines = [ I18n.t("telegram.context.header") ]
+          lines << I18n.t("telegram.context.model", model: report[:model], provider: report[:provider])
+          lines << I18n.t("telegram.context.used", context: context)
+          lines << I18n.t("telegram.context.messages", messages: report[:messages], requests: report[:requests])
+          lines << I18n.t("telegram.context.tokens",
+                          prompt: UsageReport.tokens(report[:prompt_tokens]),
+                          completion: UsageReport.tokens(report[:completion_tokens]))
+          lines << I18n.t("telegram.context.cache",
+                          cached: UsageReport.tokens(report[:cached_tokens]), hit: hit)
+          lines << I18n.t("telegram.context.re_read",
+                          tokens: UsageReport.tokens(report[:last_re_read_tokens]))
 
           cost = report[:cost]
           if cost
             source = report[:price_source] ? " [#{report[:price_source]}]" : ""
-            bound = cost["cache_price_unknown"] ? " (batas atas)" : ""
-            lines << "Estimasi biaya: `$#{UsageReport.money(cost['total'])}`#{bound} " \
-                     "(input $#{UsageReport.money(cost['input'])}, " \
-                     "cache read $#{UsageReport.money(cost['cached_input'])}, " \
-                     "cache write $#{UsageReport.money(cost['cache_creation'])}, " \
-                     "output $#{UsageReport.money(cost['output'])})#{source}"
+            bound = cost["cache_price_unknown"] ? I18n.t("telegram.context.bound") : ""
+            lines << I18n.t("telegram.context.cost",
+                            total: UsageReport.money(cost["total"]), bound: bound, source: source,
+                            input: UsageReport.money(cost["input"]),
+                            cached_input: UsageReport.money(cost["cached_input"]),
+                            cache_creation: UsageReport.money(cost["cache_creation"]),
+                            output: UsageReport.money(cost["output"]))
             if cost["saved"].to_f.positive?
-              lines << "Dihemat: `$#{UsageReport.money(cost['saved'])}` dari " \
-                       "#{UsageReport.tokens(report[:cached_tokens])} token cache"
+              lines << I18n.t("telegram.context.saved", saved: UsageReport.money(cost["saved"]),
+                                                       tokens: UsageReport.tokens(report[:cached_tokens]))
             end
           else
-            lines << "Estimasi biaya: belum tersedia — set `pricing` di preset config.yml"
+            lines << I18n.t("telegram.context.cost_missing")
           end
 
           [ :skip, lines.join("\n") ]
@@ -92,11 +97,10 @@ module Rubot
           changed = request_agent.respond_to?(:repin_system_prompt) &&
                     request_agent.repin_system_prompt
           unless changed
-            return [ :skip, "ℹ️ Prompt belum di-pin — pesan berikutnya memang sudah membangunnya dari memory dan skill terbaru." ]
+            return [ :skip, I18n.t("telegram.repin.missing") ]
           end
 
-          [ :skip, "🧠 Prompt akan dibangun ulang pada pesan berikutnya — memory, skill, dan AGENTS.md yang berubah ikut masuk.\n\n" \
-                    "Ongkosnya: request berikutnya membayar penuh (prefix berubah, jadi cache sekali hangus)." ]
+          [ :skip, I18n.t("telegram.repin.rebuilt") ]
         end
 
         def handle_model_command(args = nil)
@@ -149,7 +153,7 @@ module Rubot
           choices = preset_choices
 
           if choices.empty?
-            return [ :skip, "🧠 Belum ada model preset.\n\nBuat dengan:\n`/preset set fast deepseek-v4-pro temperature=0.2`" ]
+            return [ :skip, I18n.t("telegram.preset.empty") ]
           end
 
           lines = choices.map do |choice|
@@ -160,10 +164,8 @@ module Rubot
             "#{marker}**#{label}** (`#{preset['model']}`)"
           end
 
-          text = "🧠 **Model Presets**\n\n" + lines.join("\n")
-          text += "\n\nGanti untuk sesi ini: `/model <preset>`"
-          text += "\nKelola: `/preset set|default|delete|models`"
-          [ :skip, text ]
+          text = "#{I18n.t("telegram.preset.header")}\n\n" + lines.join("\n")
+          [ :skip, text + I18n.t("telegram.preset.list_footer") ]
         end
 
         def switch_session_preset(name)
@@ -171,17 +173,17 @@ module Rubot
           preset = config && config.model_preset(name)
           unless preset
             list = preset_choices.map { |choice| "• **#{choice['name']}**" }.join("\n")
-            return [ :skip, "❌ Model preset `#{name}` tidak ada.\n\n*Preset tersedia:*\n#{list}" ]
+            return [ :skip, I18n.t("telegram.preset.missing", name: name, list: list) ]
           end
 
           applied = request_agent.use_model_preset(name, preset: preset)
           unless applied
-            return [ :skip, "❌ Gagal mengganti preset ke `#{name}`." ]
+            return [ :skip, I18n.t("telegram.preset.switch_failed", name: name) ]
           end
 
-          [ :skip, "✅ Sesi ini sekarang memakai preset **#{name}** — model `#{applied['model']}`.\n_Persist sampai /new._" ]
+          [ :skip, I18n.t("telegram.preset.switched", name: name, model: applied["model"]) ]
         rescue StandardError => e
-          [ :skip, "❌ Error: #{e.message}" ]
+          [ :skip, I18n.t("telegram.error", message: e.message) ]
         end
 
         def handle_preset_show(name)
@@ -190,7 +192,7 @@ module Rubot
 
           config = persona_config
           preset = config && config.model_preset(name)
-          return [ :skip, "❌ Preset `#{name}` tidak ada." ] unless preset
+          return [ :skip, I18n.t("telegram.preset.show_missing", name: name) ] unless preset
 
           [ :skip, preset_detail_text(name, preset) ]
         end
@@ -199,11 +201,11 @@ module Rubot
           parts = rest.to_s.split(/\s+/)
           name = parts.shift
           if name.to_s.empty?
-            return [ :skip, "⚠️ Penggunaan: `/preset set <nama> [model] [temperature=0.2] [max_tokens=4096]`\n\nLihat model yang tersedia dengan `/preset models`." ]
+            return [ :skip, I18n.t("telegram.preset.set_usage") ]
           end
 
           config = persona_config
-          return [ :skip, "❌ Config tidak tersedia." ] unless config
+          return [ :skip, I18n.t("telegram.preset.no_config") ] unless config
 
           model = nil
           attributes = {}
@@ -220,7 +222,9 @@ module Rubot
 
           if model.nil?
             existing = config.model_preset(name)
-            return [ :skip, "⚠️ Preset `#{name}` belum punya model. Sertakan model id: `/preset set #{name} <model>`." ] unless existing
+            unless existing
+              return [ :skip, I18n.t("telegram.preset.set_needs_model", name: name) ]
+            end
 
             model = existing["model"]
           end
@@ -230,7 +234,7 @@ module Rubot
           end
           known ||= !config.model_entry_by_name(model).nil?
           if !known && !persona_models.empty?
-            return [ :skip, "❌ Model `#{model}` tidak ada di katalog provider atau config.yml.\n\nCek `/preset models`." ]
+            return [ :skip, I18n.t("telegram.preset.unknown_model", model: model) ]
           end
 
           attributes["model"] = provided_model if provided_model
@@ -246,24 +250,25 @@ module Rubot
           applied_now = active && active["name"].to_s.casecmp?(preset["name"]).to_s
           ra.use_model_preset(preset["name"], preset: preset) if applied_now
 
-          text = "✅ Preset **#{preset['name']}** disimpan.\n\n" + preset_detail_text(preset["name"], preset)
-          text += "\n\n_Sesi ini memakai preset tersebut; perubahannya langsung diterapkan._" if applied_now
+          text = I18n.t("telegram.preset.saved", name: preset["name"],
+                                                detail: preset_detail_text(preset["name"], preset))
+          text += I18n.t("telegram.preset.saved_active") if applied_now
           [ :skip, text ]
         rescue ArgumentError => e
           [ :skip, "❌ #{e.message}" ]
         rescue StandardError => e
-          [ :skip, "❌ Gagal menyimpan preset: #{e.message}" ]
+          [ :skip, I18n.t("telegram.preset.save_failed", message: e.message) ]
         end
 
         def handle_preset_default(name)
           name = name.to_s.strip
           config = persona_config
-          return [ :skip, "❌ Config tidak tersedia." ] unless config
+          return [ :skip, I18n.t("telegram.preset.no_config") ] unless config
 
           if name.empty?
             primary = config.primary_model_preset_name
             preset = config.model_preset(primary)
-            return [ :skip, "🧠 Belum ada preset default bernama. Sesi baru memakai preset **#{primary}** (`#{preset['model']}`).\n\nAtur dengan `/preset default <nama>` atau `/preset default default` untuk kembali ke model config." ]
+            return [ :skip, I18n.t("telegram.preset.default_none", name: primary, model: preset["model"]) ]
           end
 
           applied = config.set_default_model_preset(name)
@@ -272,15 +277,15 @@ module Rubot
 
           if applied
             preset = config.model_preset(applied)
-            [ :skip, "✅ Preset default untuk **sesi baru**: **#{applied}** (`#{preset['model']}`).\n\nSesi yang sedang berjalan tidak diubah; gunakan `/model #{applied}`." ]
+            [ :skip, I18n.t("telegram.preset.default_set", name: applied, model: preset["model"]) ]
           else
             preset = config.model_preset("default")
-            [ :skip, "✅ Default kembali ke model config: `#{preset['model']}`.\n\nSesi baru akan memakai preset ini." ]
+            [ :skip, I18n.t("telegram.preset.default_config", model: preset["model"]) ]
           end
         rescue ArgumentError => e
           [ :skip, "❌ #{e.message}" ]
         rescue StandardError => e
-          [ :skip, "❌ Gagal menyimpan default preset: #{e.message}" ]
+          [ :skip, I18n.t("telegram.preset.default_failed", message: e.message) ]
         end
 
         def handle_preset_delete(name)
@@ -288,11 +293,11 @@ module Rubot
           return [ :skip, preset_usage_text ] if name.empty?
 
           config = persona_config
-          return [ :skip, "❌ Config tidak tersedia." ] unless config
+          return [ :skip, I18n.t("telegram.preset.no_config") ] unless config
 
           removed = config.delete_model_preset(name)
           unless removed
-            return [ :skip, "❌ Preset `#{name}` tidak ada." ]
+            return [ :skip, I18n.t("telegram.preset.show_missing", name: name) ]
           end
 
           config.save
@@ -305,9 +310,10 @@ module Rubot
             ra.use_model_preset(fallback["name"], preset: fallback)
           end
 
-          [ :skip, "🗑️ Preset **#{name}** dihapus.\n\nSesi baru memakai preset **#{config.primary_model_preset_name}**." ]
+          [ :skip, I18n.t("telegram.preset.deleted", name: name,
+                                                     primary: config.primary_model_preset_name) ]
         rescue StandardError => e
-          [ :skip, "❌ Gagal menghapus preset: #{e.message}" ]
+          [ :skip, I18n.t("telegram.preset.delete_failed", message: e.message) ]
         end
 
         def handle_preset_models(filter)
@@ -320,7 +326,7 @@ module Rubot
           end
 
           if models.empty?
-            return [ :skip, "🧠 Tidak ada model yang cocok. Katalog provider mungkin belum tersedia; model dari config tetap bisa dipakai." ]
+            return [ :skip, I18n.t("telegram.preset.models_empty") ]
           end
 
           max = 60
@@ -328,79 +334,76 @@ module Rubot
             label = model["label"] || model["name"]
             "• `#{model['name']}` — #{label}"
           end
-          text = "🧠 **Model tersedia (#{models.size})**\n\n" + lines.join("\n")
-          text += "\n\nBuat preset: `/preset set <nama> <id>`" 
-          text += "\n… dan #{models.size - max} lainnya" if models.size > max
+          text = "#{I18n.t("telegram.preset.models_header", count: models.size)}\n\n" + lines.join("\n")
+          text += I18n.t("telegram.preset.models_hint")
+          text += I18n.t("telegram.preset.models_more", count: models.size - max) if models.size > max
           [ :skip, text ]
         end
 
         def preset_detail_text(name, preset)
           public_preset = persona_config&.public_model_preset(preset) || preset
-          lines = [ "🧠 **Preset: #{name}**" ]
-          lines << "Model: `#{public_preset['model']}`"
-          lines << "Provider: `#{public_preset['provider']}`"
-          lines << "Max tokens: `#{public_preset['max_tokens']}`" if public_preset["max_tokens"]
-          lines << "Temperature: `#{public_preset['temperature']}`" if public_preset["temperature"]
-          lines << "Reasoning effort: `#{public_preset['reasoning_effort']}`" if public_preset["reasoning_effort"]
-          lines << "Primary/default: ya" if name.to_s.casecmp?(persona_config&.primary_model_preset_name.to_s)
+          lines = [ I18n.t("telegram.preset.detail.header", name: name) ]
+          lines << I18n.t("telegram.preset.detail.model", model: public_preset["model"])
+          lines << I18n.t("telegram.preset.detail.provider", provider: public_preset["provider"])
+          if public_preset["max_tokens"]
+            lines << I18n.t("telegram.preset.detail.max_tokens", value: public_preset["max_tokens"])
+          end
+          if public_preset["temperature"]
+            lines << I18n.t("telegram.preset.detail.temperature", value: public_preset["temperature"])
+          end
+          if public_preset["reasoning_effort"]
+            lines << I18n.t("telegram.preset.detail.reasoning", value: public_preset["reasoning_effort"])
+          end
+          if name.to_s.casecmp?(persona_config&.primary_model_preset_name.to_s)
+            lines << I18n.t("telegram.preset.detail.primary")
+          end
           lines.join("\n")
         end
 
         def preset_usage_text
-          "🧠 **Penggunaan /preset**\n\n" \
-            "/preset — list preset\n" \
-            "/preset show <nama> — detail\n" \
-            "/preset set <nama> <model> [temperature=0.2] [max_tokens=4096] [provider=openai] [api_base=...] [reasoning_effort=high]\n" \
-            "/preset default <nama|default> — preset untuk sesi baru\n" \
-            "/preset delete <nama>\n" \
-            "/preset models [filter] — model yang didukung provider\n\n" \
-            "Ganti preset sesi ini: /model <nama>"
+          I18n.t("telegram.preset.usage")
         end
 
         def handle_skills_command
           ra = request_agent
           registry = ra.skill_registry
           registry.reload!
-          return [ :skip, "📚 Skills\n\nNo skills installed.\n\nPlace skills in the workspace `skills/` directory." ] unless registry.any?
+          return [ :skip, I18n.t("telegram.skills.none") ] unless registry.any?
 
           lines = registry.all.values.map do |skill|
             "• **#{skill.name}** — #{skill.summary}"
           end
-          [ :skip, "📚 Available Skills (#{registry.count})\n\n" + lines.join("\n") ]
+          [ :skip, "#{I18n.t("telegram.skills.header", count: registry.count)}\n\n" + lines.join("\n") ]
         end
 
         def handle_memory_command
           ra = request_agent
-          return [ :skip, "🧠 Memory is not enabled (no workspace configured)." ] unless ra.memory.enabled?
+          return [ :skip, I18n.t("telegram.memory.disabled") ] unless ra.memory.enabled?
 
           content = ra.memory.read
           max_len = DEFAULT_MAX_LENGTH - 200
-          content = content[0, max_len] + "\n\n… (truncated)" if content.length > max_len
-          [ :skip, "🧠 Memory\n\n```
-  #{content}
-  ```" ]
+          content = content[0, max_len] + "\n\n" + I18n.t("telegram.truncated") if content.length > max_len
+          [ :skip, "#{I18n.t("telegram.memory.header")}\n\n```\n  #{content}\n  ```" ]
         end
 
         def handle_soul_command
           ra = request_agent
-          return [ :skip, "🧬 No soul file (SOUL.md) found in workspace." ] unless ra.soul.enabled?
+          return [ :skip, I18n.t("telegram.soul.disabled") ] unless ra.soul.enabled?
 
           content = ra.soul.to_s
           max_len = DEFAULT_MAX_LENGTH - 200
-          content = content[0, max_len] + "\n\n… (truncated)" if content.length > max_len
-          [ :skip, "🧬 Soul\n\n#{content}" ]
+          content = content[0, max_len] + "\n\n" + I18n.t("telegram.truncated") if content.length > max_len
+          [ :skip, "#{I18n.t("telegram.soul.header")}\n\n#{content}" ]
         end
 
         def handle_agents_command
           ra = request_agent
-          return [ :skip, "📋 No AGENTS.md found in workspace." ] unless ra.agents_file.enabled?
+          return [ :skip, I18n.t("telegram.agents.disabled") ] unless ra.agents_file.enabled?
 
           content = ra.agents_file.raw
           max_len = DEFAULT_MAX_LENGTH - 200
-          content = content[0, max_len] + "\n\n… (truncated)" if content.length > max_len
-          [ :skip, "📋 Agent Rules\n\n```
-  #{content}
-  ```" ]
+          content = content[0, max_len] + "\n\n" + I18n.t("telegram.truncated") if content.length > max_len
+          [ :skip, "#{I18n.t("telegram.agents.header")}\n\n```\n  #{content}\n  ```" ]
         end
 
 
@@ -409,7 +412,9 @@ module Rubot
         # Handle /use <skill-name> command
         def handle_use_command(skill_name)
           ra = request_agent
-          return [ :skip, "⚠️ Usage: /use <skill-name>\n\nAvailable skills:\n#{list_skills_text}" ] if skill_name.nil? || skill_name.empty?
+          if skill_name.nil? || skill_name.empty?
+            return [ :skip, I18n.t("telegram.use.usage", skills: list_skills_text) ]
+          end
 
           registry = ra.skill_registry
           registry.reload!
@@ -418,18 +423,18 @@ module Rubot
           # /use can name anything installed; a skill this persona switched off
           # is refused here so the refusal is visible, not silent.
           if skill && ra.persona && !ra.persona.skill_enabled?(skill_name)
-            return [ :skip, "🚫 Skill '#{skill_name}' is switched off for this persona.\n\nTurn it back on from the persona's skills list." ]
+            return [ :skip, I18n.t("telegram.use.refused", name: skill_name) ]
           end
 
           if skill && skill.enabled?
             ra.session.forced_skill = skill_name
             ra.session.save! if ra.session.respond_to?(:save!)
-            [ :skip, "✅ Skill '#{skill_name}' will be used for the next message." ]
+            [ :skip, I18n.t("telegram.use.applied", name: skill_name) ]
           else
-            [ :skip, "❌ Skill '#{skill_name}' not found or not enabled.\n\nAvailable skills:\n#{list_skills_text}" ]
+            [ :skip, I18n.t("telegram.use.missing", name: skill_name, skills: list_skills_text) ]
           end
         rescue StandardError => e
-          [ :skip, "❌ Error: #{e.message}" ]
+          [ :skip, I18n.t("telegram.error", message: e.message) ]
         end
 
         # Handle /unuse command
@@ -438,12 +443,12 @@ module Rubot
           if ra.session.forced_skill
             ra.session.forced_skill = nil
             ra.session.save! if ra.session.respond_to?(:save!)
-            [ :skip, "✅ Forced skill cleared." ]
+            [ :skip, I18n.t("telegram.use.cleared") ]
           else
-            [ :skip, "ℹ️ No forced skill is set." ]
+            [ :skip, I18n.t("telegram.use.none") ]
           end
         rescue StandardError => e
-          [ :skip, "❌ Error: #{e.message}" ]
+          [ :skip, I18n.t("telegram.error", message: e.message) ]
         end
 
         # Auto mode: run anything the safety guard allows without asking. The
@@ -460,29 +465,28 @@ module Rubot
             AUTO_TOGGLE[word]
           end
 
-          return [ :skip, "Usage: /auto on|off (no argument flips it)." ] if wanted.nil?
+          return [ :skip, I18n.t("telegram.auto.usage") ] if wanted.nil?
 
           ra.set_auto_approve(wanted)
           if wanted
-            [ :skip, "⚡ Auto mode on — non-destructive actions run without asking.\n" \
-                      "Destructive patterns (rm -rf /, mkfs, dd onto a device, …) are still refused." ]
+            [ :skip, I18n.t("telegram.auto.on") ]
           else
-            [ :skip, "🛑 Auto mode off — every dangerous action asks first." ]
+            [ :skip, I18n.t("telegram.auto.off") ]
           end
         rescue StandardError => e
-          [ :skip, "❌ Error: #{e.message}" ]
+          [ :skip, I18n.t("telegram.error", message: e.message) ]
         end
 
         def list_skills_text
           ra = request_agent
           registry = ra.skill_registry
           registry.reload!
-          return "No skills installed." unless registry.any?
+          return I18n.t("telegram.skills.list_empty") unless registry.any?
 
           skills = registry.all.values
           persona = ra.persona
           skills = skills.select { |s| persona.skill_enabled?(s.name) } if persona
-          return "No skills are switched on for this persona." if skills.empty?
+          return I18n.t("telegram.skills.list_none_enabled") if skills.empty?
 
           skills.map { |s| "• **#{s.name}** — #{s.summary}" }.join("\n")
         end

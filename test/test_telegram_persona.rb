@@ -456,7 +456,7 @@ module Rubot
     def test_model_command_rejects_unknown_preset
       result = @tg.before_process("/model nope")
 
-      assert_includes result[1], "tidak ada"
+      assert_includes result[1], "does not exist"
       assert_equal "fast", @agent.active_preset_name
     end
 
@@ -465,7 +465,7 @@ module Rubot
 
       result = @tg.before_process("/preset set coding glm-5.3 temperature=0.15 max_tokens=4096")
 
-      assert_includes result[1], "Preset **coding** disimpan"
+      assert_includes result[1], "Preset **coding** saved"
       preset = @config.model_preset("coding")
       assert_equal "glm-5.3", preset["model"]
       assert_equal 0.15, preset["temperature"]
@@ -478,7 +478,7 @@ module Rubot
     def test_preset_default_changes_the_default_for_new_sessions
       result = @tg.before_process("/preset default deep")
 
-      assert_includes result[1], "sesi baru"
+      assert_includes result[1], "new sessions"
       assert_equal "deep", @config.primary_model_preset_name
 
       new_agent = Rubot::Agent.new(
@@ -492,7 +492,7 @@ module Rubot
     def test_preset_delete_removes_it
       result = @tg.before_process("/preset delete deep")
 
-      assert_includes result[1], "dihapus"
+      assert_includes result[1], "deleted"
       assert_nil @config.model_preset("deep")
     end
 
@@ -501,9 +501,19 @@ module Rubot
 
       result = @tg.before_process("/preset models")
 
-      assert_includes result[1], "Model tersedia"
+      assert_includes result[1], "Models available"
       assert_includes result[1], "deepseek-v4-pro"
       assert_includes result[1], "glm-5.3"
+    end
+
+    # The preset card is drawn by the channel, so the switch has to reach it:
+    # the same command in the other language answers in that language.
+    def test_the_preset_card_follows_the_language
+      Rubot::I18n.with_locale("id") do
+        assert_includes @tg.before_process("/models")[1], "Preset Model"
+        assert_includes @tg.before_process("/model nope")[1], "tidak ada"
+        assert_includes @tg.before_process("/preset delete deep")[1], "dihapus"
+      end
     end
   end
 end

@@ -762,7 +762,7 @@ module Rubot
         page = FakeResponse.new
         channel.send(:dispatch, FakeRequest.new("/settings"), page)
         assert_equal 200, page.status
-        assert_includes page.body, "pengaturan"
+        assert_includes page.body, Rubot::I18n.t("web.settings.heading")
 
         saved = FakeResponse.new
         post = FakeRequest.new("/settings", method: "POST",

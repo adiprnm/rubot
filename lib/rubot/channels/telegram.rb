@@ -279,15 +279,15 @@ module Rubot
 
         case text.downcase
         when "/start"
-          [ :skip, "👋 Welcome to Rubot!\n\nI'm your AI assistant. Send me any message and I'll help you out.\n\nUse /help to see available commands." ]
+          [ :skip, I18n.t("telegram.start") ]
         when "/new"
           request_agent.clear_session
-          [ :skip, "✨ Started a new session. Previous conversation has been cleared." ]
+          [ :skip, I18n.t("telegram.new_session") ]
         when "/stop"
           if cancel_session(request_session_id)
-            [ :skip, "⏹️ Stopped the running task." ]
+            [ :skip, I18n.t("telegram.stop.stopped") ]
           else
-            [ :skip, "ℹ️ Nothing is running." ]
+            [ :skip, I18n.t("telegram.stop.nothing") ]
           end
         when "/compact"
           handle_compact_command
@@ -295,7 +295,8 @@ module Rubot
           handle_repin_command
         when "/help"
           bot_name = @config.fetch("bot_name", "Rubot")
-          [ :skip, "📖 Help | #{bot_name}\n\nJust send me a message and I'll do my best to help. While a task is still running, a plain message steers it instead of waiting behind it.\n\nBuilt-in commands:\n/start - Start the bot\n/new - Clear chat and start a new session\n/stop - Stop the task that is running\n/compact - Summarize older messages to free context\n/repin - Rebuild the system prompt on the next message (picks up memory and skills, costs one uncached request)\n/help - Show this help message\n/info - Show agent info\n/model - Show current model preset\n/model <preset> - Switch preset for this session\n/models - List model presets\n/preset - Manage model presets\n/preset set <name> <model> - Create/update a preset\n/preset default <name> - Preset for new sessions\n/preset models - List models supported by the provider\n/use_model <preset> - Alias for /model <preset>\n/persona - Setup persona for this forum topic\n/persona show - Show this topic's persona\n/persona reset - Remove this topic's persona\n/cancel - Cancel the persona setup\n/skills - List available skills\n/memory - Show persistent memory\n/soul - Show bot personality\n/agents - Show agent rules\n/cron - List scheduled cron jobs\n/context - Context usage, cache hit rate, and estimated cost\n/usage - OpenCode Go subscription usage\n/cron delete <id> - Delete a cron job\n/use <skill> - Force a skill for the next message\n/unuse - Clear the forced skill\n/auto on|off - Run non-destructive actions without asking (remembered)" ]
+          [ :skip, "#{I18n.t("telegram.help.header", bot_name: bot_name)}\n\n" \
+                    "#{I18n.t("telegram.help.lead")}\n\n#{I18n.t("telegram.help.commands")}" ]
         when "/info"
           handle_info_command
         when "/context"

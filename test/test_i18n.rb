@@ -14,6 +14,19 @@ class TestI18n < Minitest::Test
   COMPACT_RESULT = { summarized_messages: 12, kept_messages: 4,
                      context_before: 48_000, context_after: 9_000 }.freeze
 
+  # A usage report shaped like the one /context reads: a window, a hit rate and
+  # a price, so every line of the card is drawn.
+  CONTEXT_REPORT = {
+    model: "test-model", provider: "openai",
+    context_used: 10_500, context_window: 128_000, context_percent: 8.2,
+    messages: 12, requests: 3,
+    prompt_tokens: 5_000, completion_tokens: 400, cached_tokens: 2_000,
+    last_prompt_tokens: 1_000, cache_hit_rate: 0.5, last_re_read_tokens: 0,
+    price_source: nil,
+    cost: { "total" => 0.0123, "input" => 0.01, "cached_input" => 0.0002,
+            "cache_creation" => 0.0, "output" => 0.0021, "saved" => 0.0 }
+  }.freeze
+
   def setup
     @tmpdir = Dir.mktmpdir
     @config_path = File.join(@tmpdir, "config.yml")
@@ -78,6 +91,30 @@ class TestI18n < Minitest::Test
         assert_instance_of String, value, "#{locale}.#{key} is not a string"
         refute_empty value.strip, "#{locale}.#{key} is empty"
       end
+    end
+  end
+
+  # A key nobody renders is a label nobody can read, and a sentence written in
+  # place is a row that never switches. The two directions are checked against
+  # the channel's own source: every `web.*` and `telegram.*` key has to be named
+  # by the code that belongs to it, and the parity check above keeps the other
+  # half honest. Telegram keeps its replies in the channel class and in the
+  # modules beside it, so both are read.
+  def test_every_channel_key_is_named_by_the_channel_that_renders_it
+    {
+      "web" => [ File.expand_path("../lib/rubot/web", __dir__) ],
+      "telegram" => [ File.expand_path("../lib/rubot/channels/telegram.rb", __dir__),
+                      File.expand_path("../lib/rubot/channels/telegram", __dir__) ]
+    }.each do |namespace, roots|
+      keys = Rubot::I18n.keys.select { |key| key.start_with?("#{namespace}.") }
+      refute_empty keys, "#{namespace}.* is a namespace this build speaks"
+
+      source = roots
+        .flat_map { |root| File.directory?(root) ? Dir.glob(File.join(root, "**/*.{rb,erb}")) : [ root ] }
+        .sort.map { |path| File.read(path) }.join("\n")
+      unused = keys.reject { |key| source.include?(key) }
+
+      assert_empty unused, "keys in #{namespace}.* that nothing renders: #{unused.inspect}"
     end
   end
 
@@ -235,6 +272,74 @@ class TestI18n < Minitest::Test
     assert_includes web_compact_note("id", :busy), "Turn masih berjalan"
   end
 
+  # --- the Telegram replies, drawn by the channel ----------------------
+
+  # Six commands typed into a real Telegram handler, each read back the way the
+  # chat shows it. Only the agent is a double; the wording is the channel's own,
+  # so a reply written in place fails here instead of passing on the dictionary.
+  def test_the_telegram_command_replies_follow_the_language
+    english = telegram_surfaces("en")
+    indonesian = telegram_surfaces("id")
+
+    assert_includes english[:start], "Welcome to Rubot!"
+    assert_includes indonesian[:start], "Selamat datang di Rubot!"
+
+    assert_includes english[:new], "Started a new session"
+    assert_includes indonesian[:new], "Sesi baru dimulai"
+
+    assert_includes english[:stop], "Nothing is running."
+    assert_includes indonesian[:stop], "Tidak ada yang sedang berjalan"
+
+    assert_includes english[:help], "Built-in commands:"
+    assert_includes indonesian[:help], "Perintah bawaan:"
+
+    assert_includes english[:skills], "No skills installed."
+    assert_includes indonesian[:skills], "Belum ada skill yang terpasang"
+
+    assert_includes english[:auto], "Usage: /auto on|off (no argument flips it)."
+    assert_includes indonesian[:auto], "Penggunaan: /auto on|off"
+
+    english.each_key do |surface|
+      refute_equal english[surface], indonesian[surface], "/#{surface} has to switch"
+    end
+  end
+
+  # /context is the one reply that lands as a whole card: header, labels and the
+  # price line all have to speak the chosen language.
+  def test_the_telegram_context_card_follows_the_language
+    english = telegram_context("en")
+    indonesian = telegram_context("id")
+
+    assert_includes english, "📊 **Context**"
+    assert_includes english, "Messages: 12 | Requests: 3"
+    assert_includes english, "Estimated cost: `$0.0123`"
+
+    assert_includes indonesian, "📊 **Konteks Sesi**"
+    assert_includes indonesian, "Pesan: 12 | Request: 3"
+    assert_includes indonesian, "Estimasi biaya: `$0.0123`"
+
+    refute_equal english, indonesian
+  end
+
+  # The live card while a request works, and the one-time /stop hint under it:
+  # the step count and the hint are both reader-facing, so both switch.
+  def test_the_telegram_status_card_follows_the_language
+    english = telegram_status_card("en")
+    indonesian = telegram_status_card("id")
+
+    assert_includes english, "💻 `shell_exec`"
+    assert_includes english, " · step 1 · 0s"
+    assert_includes english, "⟡ 2 subagents running"
+    assert_includes english, "/stop to stop it"
+
+    assert_includes indonesian, " · langkah 1 · 0s"
+    assert_includes indonesian, "⟡ 2 subagent aktif"
+    assert_includes indonesian, "/stop untuk menghentikan"
+
+    refute_includes english, "langkah", "the card is not half Indonesian"
+    refute_includes indonesian, "step", "the card is not half English"
+  end
+
   # A caption is not the command and not the argument: the sentence is built
   # from the intent table, the verbs and the durations too, so the switch has to
   # reach all of them. Six calls are drawn here, each by the branch that owns
@@ -290,6 +395,72 @@ class TestI18n < Minitest::Test
 
   def web_compact_note(locale, state)
     Rubot::I18n.with_locale(locale) { Rubot::Web::View.render("_compact_note", state: state) }
+  end
+
+  # Six slash commands in one language, each answered by the channel's own
+  # `before_process`. The agent is a double with only what these replies read,
+  # so nothing here can pass on a template the chat never draws.
+  def telegram_surfaces(locale)
+    Rubot::I18n.with_locale(locale) do
+      agent = telegram_stub_agent
+      channel = Rubot::Channels::Telegram.new(agent: nil, channel_config: {})
+      channel.define_singleton_method(:request_agent) { agent }
+      channel.define_singleton_method(:cancel_session) { |_id| false }
+
+      {
+        start: channel.before_process("/start")[1],
+        new: channel.before_process("/new")[1],
+        stop: channel.before_process("/stop")[1],
+        help: channel.before_process("/help")[1],
+        skills: channel.before_process("/skills")[1],
+        auto: channel.before_process("/auto sideways")[1]
+      }
+    end
+  end
+
+  # The agent as the command replies see it: a registry with no skills installed
+  # (the empty state), a session that clears, and nothing else.
+  def telegram_stub_agent
+    registry = Object.new
+    registry.define_singleton_method(:reload!) { nil }
+    registry.define_singleton_method(:any?) { false }
+
+    handle = Object.new
+    handle.define_singleton_method(:clear_session) { true }
+    handle.define_singleton_method(:skill_registry) { registry }
+    handle
+  end
+
+  # /context, with a report shaped like the agent's: a window, a hit rate, and a
+  # price, so every label on the card is drawn.
+  def telegram_context(locale)
+    Rubot::I18n.with_locale(locale) do
+      handle = Object.new
+      handle.define_singleton_method(:usage_report) { CONTEXT_REPORT }
+      channel = Rubot::Channels::Telegram.new(agent: nil, channel_config: {})
+      channel.define_singleton_method(:request_agent) { handle }
+      channel.before_process("/context")[1]
+    end
+  end
+
+  # The live card, drawn by the channel's own notify_* path: one tool, two sub
+  # agents running, and the round that fires the one-time /stop hint.
+  def telegram_status_card(locale)
+    Rubot::I18n.with_locale(locale) do
+      texts = []
+      channel = Rubot::Channels::Telegram.new(agent: nil, channel_config: {})
+      channel.define_singleton_method(:update_or_send_status) do |_chat_id, _thread_id, text, **_options|
+        texts << text
+        true
+      end
+
+      channel.notify_tool_started(42, 7, "shell_exec", { "command" => "bundle exec rspec" })
+      channel.notify_subagent(42, 7, { run_id: "r1", agent: "writer", phase: "started", detail: "write a poem" })
+      channel.notify_subagent(42, 7, { run_id: "r2", agent: "researcher", phase: "tool", detail: "search the docs" })
+      channel.notify_progress(42, 7, 3)
+
+      texts.last
+    end
   end
 
   def spoken_captions(locale)

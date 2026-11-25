@@ -27,7 +27,7 @@ module Rubot
 
         assert_includes res.body, %(value="claude-sonnet")
         assert_includes res.body, %(<option value="anthropic" selected>)
-        assert_includes res.body, "sudah tersimpan"
+        assert_includes res.body, "already stored"
         refute_includes res.body, "sk-rahasia", "a credential must not come back in the page"
       end
 
@@ -41,7 +41,7 @@ module Rubot
         html = settings_page_html
 
         labels = html.scan(%r{<button[^>]*role="tab"[^>]*>(.*?)</button>}m).flatten.map(&:strip)
-        assert_equal ["Koneksi", "Tampilan", "Preset model", "Subagent", "Instagram"], labels
+        assert_equal [ "Connection", "Appearance", "Model presets", "Subagents", "Instagram" ], labels
 
         assert_equal 5, html.scan(%r{<section class="settings-panel[^"]*" role="tabpanel"}).size
         assert_equal 1, html.scan(%r{class="settings-panel is-active"}).size,
@@ -184,6 +184,54 @@ module Rubot
         assert_includes page.body, CGI.escapeHTML(message)
       ensure
         Rubot::I18n.locale = Rubot::I18n::DEFAULT_LOCALE
+      end
+
+      # The page is a document, not a conversation: its labels, its notes, the
+      # empty panels and the two links at the foot all come from the dictionary.
+      # Drawn twice through the channel's own renderer, once per language, so a
+      # string written in place — and left in one language — fails here rather
+      # than being discovered on a half-translated screen.
+      def test_every_part_of_the_settings_page_follows_the_language
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ %w[user halo] ] })
+
+        english = settings_page_in(channel, "en")
+        indonesian = settings_page_in(channel, "id")
+
+        # The top bar, the heading and the save button.
+        assert_includes english, ">Save</button>"
+        assert_includes english, ">Settings</h1>"
+        assert_includes indonesian, ">Simpan</button>"
+        assert_includes indonesian, ">Pengaturan</h1>"
+
+        # The five tabs, in the strip a reader presses.
+        assert_includes english, ">Connection</button>"
+        assert_includes english, "Model presets"
+        assert_includes indonesian, ">Koneksi</button>"
+        assert_includes indonesian, "Preset model"
+
+        # The password box's placeholder, and the note under the fields.
+        assert_includes english, %(placeholder="not set yet")
+        assert_includes english, %(placeholder="already stored, leave it empty to keep it")
+        assert_includes indonesian, %(placeholder="belum ada")
+        assert_includes indonesian, %(placeholder="sudah tersimpan, kosongkan untuk tidak mengubah")
+        assert_includes english, "Register it in the Meta App"
+        assert_includes indonesian, "Daftarkan di Meta App"
+
+        # An empty panel is a sentence too.
+        assert_includes english, "no presets yet"
+        assert_includes indonesian, "belum ada preset"
+
+        # The foot of the page.
+        assert_includes english, ">Refresh the model list</a>"
+        assert_includes indonesian, ">Refresh daftar model</a>"
+
+        # And the document says which language it is in, for a screen reader.
+        assert_includes english, %(<html lang="en")
+        assert_includes indonesian, %(<html lang="id")
+
+        refute_includes indonesian, ">Save</button>", "the Indonesian page is not half English"
+        refute_includes english, ">Simpan</button>", "the English page is not half Indonesian"
       end
 
       def test_settings_page_lists_editable_presets_and_the_default_picker
@@ -335,7 +383,7 @@ module Rubot
         res = FakeResponse.new
         channel.render_settings(res, FakeRequest.new("/settings"))
         refute_includes res.body, "secret-rahasia"
-        assert_includes res.body, "sudah tersimpan"
+        assert_includes res.body, "already stored"
       end
 
       def test_connect_route_redirects_to_meta_with_a_fresh_state
@@ -747,6 +795,13 @@ module Rubot
         res = FakeResponse.new
         channel.render_settings(res, FakeRequest.new("/settings"))
         res.body
+      end
+
+      # The same page while the process speaks one language, with the language
+      # it spoke before put back afterwards: a test that changed it for good
+      # would leave the next file reading a page in the wrong tongue.
+      def settings_page_in(channel, locale)
+        Rubot::I18n.with_locale(locale) { settings_page_of(channel) }
       end
     end
   end

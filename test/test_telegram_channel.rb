@@ -89,8 +89,12 @@ module Rubot
       assert_kind_of Array, result
       assert_equal :skip, result[0]
       assert handle.instance_variable_get(:@repinned), "the pin has to actually be dropped"
-      assert_includes result[1], "dibangun ulang"
-      assert_includes result[1], "membayar penuh"
+      assert_includes result[1], "rebuilt on the next message"
+      assert_includes result[1], "pays in full"
+
+      indonesian = Rubot::I18n.with_locale("id") { @tg.before_process("/repin") }
+      assert_includes indonesian[1], "dibangun ulang"
+      assert_includes indonesian[1], "membayar penuh"
     end
 
     def test_repin_command_says_when_there_was_nothing_pinned
@@ -100,7 +104,7 @@ module Rubot
       result = @tg.before_process("/repin")
 
       assert_equal :skip, result[0]
-      assert_includes result[1], "belum di-pin"
+      assert_includes result[1], "not pinned yet"
     end
 
     def test_new_command_is_case_insensitive
@@ -436,14 +440,19 @@ module Rubot
       @tg.notify_subagent(42, 7, { run_id: "r2", agent: "researcher", phase: "tool", detail: "search docs" })
 
       card = texts.last
-      assert_includes card, "2 subagent aktif"
+      assert_includes card, "2 subagents running"
       assert_includes card, "writer"
       assert_includes card, "researcher"
       assert_includes card, "search docs"
 
       @tg.notify_subagent(42, 7, { run_id: "r1", agent: "writer", phase: "done", detail: "3s" })
-      assert_includes texts.last, "1 subagent aktif"
+      assert_includes texts.last, "1 subagent running"
       assert_includes texts.last, "✓ writer"
+
+      indonesian = Rubot::I18n.with_locale("id") do
+        Rubot::I18n.t("telegram.status.subagents", count: 2)
+      end
+      assert_equal "⟡ 2 subagent aktif", indonesian
     end
 
     def test_progress_without_a_tool_card_does_nothing

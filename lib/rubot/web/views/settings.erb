@@ -15,12 +15,16 @@
     cannot switch tabs should read as the long page it used to be, not as four
     fifths of itself.
 
+    Every label, note and placeholder goes through the dictionary (`web.settings.*`),
+    so the page speaks the language the install was set to — and the field that
+    picks the language is itself drawn from that dictionary.
+
     The key is never sent back into the page — it is a password box with a
     sentence about what is already stored, because a form that echoes a
     credential is a credential in the page source, the browser's form history
     and every screenshot of it. -%>
 <!DOCTYPE html>
-<html lang="id" class="settings-doc">
+<html lang="<%= h(I18n.locale) %>" class="settings-doc">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -29,7 +33,7 @@
   <%= View.render("_appearance_head") %>
   <meta name="color-scheme" content="dark light">
   <meta name="theme-color" content="#2b332f">
-  <title>rubot · pengaturan</title>
+  <title><%= h(I18n.t("web.settings.title")) %></title>
   <link rel="stylesheet" href="/assets/app.css?v=<%= h(asset_version) %>">
   <%# This page holds three controls that belong to the device — the palette,
       the typeface and the notification toggle — and all three are wired in
@@ -40,12 +44,12 @@
 </head>
 <body>
 <div class="settings-topbar">
-  <a class="settings-back" href="<%= h(back_url) %>"><span aria-hidden="true">←</span> kembali</a>
-  <span class="settings-topbar-title">pengaturan</span>
+  <a class="settings-back" href="<%= h(back_url) %>"><span aria-hidden="true">←</span> <%= h(I18n.t("web.settings.back")) %></a>
+  <span class="settings-topbar-title"><%= h(I18n.t("web.settings.topbar")) %></span>
   <% if saved %>
-    <span class="settings-flash settings-saved" role="status">Tersimpan</span>
+    <span class="settings-flash settings-saved" role="status"><%= h(I18n.t("web.settings.saved")) %></span>
   <% end %>
-  <button class="btn primary" type="submit" form="settings-form">Simpan</button>
+  <button class="btn primary" type="submit" form="settings-form"><%= h(I18n.t("web.settings.save")) %></button>
 </div>
 
 <main class="settings-page">
@@ -54,16 +58,11 @@
   <form id="settings-form" class="settings-form" method="post"
         action="/settings<%= h(token_query) %>" data-settings-tabs>
     <header class="settings-intro">
-      <h1>Pengaturan</h1>
-      <p class="settings-lead">
-        Koneksi dan model berlaku untuk semua persona. Tema, font, dan notifikasi
-        berlaku di perangkat ini, dan tersimpan begitu ditekan.
-      </p>
+      <h1><%= h(I18n.t("web.settings.heading")) %></h1>
+      <p class="settings-lead"><%= h(I18n.t("web.settings.lead")) %></p>
 
       <% unless archived %>
-        <p class="settings-error">
-          Arsip sesi belum terbuka, jadi belum ada tempat untuk menyimpan.
-        </p>
+        <p class="settings-error"><%= h(I18n.t("web.settings.no_archive")) %></p>
       <% end %>
 
       <%# A form that was refused comes back here with its reason: the value it
@@ -75,14 +74,15 @@
       <% end %>
     </header>
 
-    <div class="settings-tabs" role="tablist" aria-label="Bagian pengaturan">
-      <% [["koneksi", "Koneksi"], ["tampilan", "Tampilan"], ["preset", "Preset model"],
-          ["subagent", "Subagent"], ["instagram", "Instagram"]].each_with_index do |(name, label), index| -%>
+    <div class="settings-tabs" role="tablist" aria-label="<%= h(I18n.t("web.settings.tabs.label")) %>">
+      <% [["koneksi", "web.settings.tabs.connection"], ["tampilan", "web.settings.tabs.appearance"],
+          ["preset", "web.settings.tabs.presets"], ["subagent", "web.settings.tabs.subagents"],
+          ["instagram", "web.settings.tabs.instagram"]].each_with_index do |(name, key), index| -%>
         <button type="button" role="tab" class="settings-tab"
                 id="settings-tab-<%= name %>" aria-controls="settings-panel-<%= name %>"
                 aria-selected="<%= index.zero? ? "true" : "false" %>"
                 tabindex="<%= index.zero? ? 0 : -1 %>"
-                data-settings-tab="<%= name %>"><%= label %></button>
+                data-settings-tab="<%= name %>"><%= h(I18n.t(key)) %></button>
       <% end -%>
     </div>
 
@@ -92,7 +92,7 @@
       <p class="settings-tab-note"><%= h([provider.to_s, default_model.to_s].reject(&:empty?).join(" · ")) %></p>
 
       <div class="settings-field">
-        <label for="setting-provider">Provider</label>
+        <label for="setting-provider"><%= h(I18n.t("web.settings.connection.provider")) %></label>
         <div class="settings-control">
           <select id="setting-provider" name="provider">
             <% provider_choices.each do |choice| %>
@@ -103,30 +103,30 @@
       </div>
 
       <div class="settings-field">
-        <label for="setting-api-key">API key</label>
+        <label for="setting-api-key"><%= h(I18n.t("web.settings.connection.api_key")) %></label>
         <div class="settings-control">
           <input id="setting-api-key" type="password" name="api_key" value=""
                  autocomplete="new-password" autocapitalize="off" autocorrect="off"
                  spellcheck="false"
-                 placeholder="<%= key_set ? "sudah tersimpan, kosongkan untuk tidak mengubah" : "belum ada" %>">
+                 placeholder="<%= key_set ? h(I18n.t("web.settings.field.key_stored")) : h(I18n.t("web.settings.field.key_missing")) %>">
           <% if key_from_archive %>
             <p class="settings-note">
-              Tersimpan di database pemasangan. Centang untuk kembali ke config.yml.
+              <%= h(I18n.t("web.settings.connection.key_from_archive")) %>
             </p>
             <label class="settings-check">
               <input type="checkbox" name="clear_api_key" value="1">
-              Hapus kunci dari database
+              <%= h(I18n.t("web.settings.connection.clear_key")) %>
             </label>
           <% elsif !key_set %>
             <p class="settings-note">
-              Tanpa kunci, hanya provider lokal seperti ollama yang bisa menjawab.
+              <%= h(I18n.t("web.settings.connection.no_key")) %>
             </p>
           <% end %>
         </div>
       </div>
 
       <div class="settings-field">
-        <label for="setting-default-model">Model default</label>
+        <label for="setting-default-model"><%= h(I18n.t("web.settings.connection.default_model")) %></label>
         <div class="settings-control">
           <select id="setting-default-model" name="default_model">
             <%= model_option_tags(model_choices, default_model) %>
@@ -135,22 +135,22 @@
       </div>
 
       <div class="settings-field">
-        <label for="setting-auxiliary-model">Model auxiliary</label>
+        <label for="setting-auxiliary-model"><%= h(I18n.t("web.settings.connection.auxiliary_model")) %></label>
         <div class="settings-control">
           <select id="setting-auxiliary-model" name="auxiliary_model">
-            <%= model_option_tags(model_choices, auxiliary_model, blank: "Ikut model default") %>
+            <%= model_option_tags(model_choices, auxiliary_model, blank: I18n.t("web.settings.connection.auxiliary_blank")) %>
           </select>
-          <p class="settings-note">Untuk pekerjaan di belakang layar: merangkum dan menamai sesi.</p>
+          <p class="settings-note"><%= h(I18n.t("web.settings.connection.auxiliary_note")) %></p>
         </div>
       </div>
 
       <div class="settings-field">
-        <label for="setting-subagent-model">Model subagent</label>
+        <label for="setting-subagent-model"><%= h(I18n.t("web.settings.connection.subagent_model")) %></label>
         <div class="settings-control">
           <select id="setting-subagent-model" name="subagent_model">
-            <%= model_option_tags(model_choices, subagent_model, blank: "Ikuti preset subagent (flash)") %>
+            <%= model_option_tags(model_choices, subagent_model, blank: I18n.t("web.settings.connection.subagent_blank")) %>
           </select>
-          <p class="settings-note">Untuk semua subagent. Kosongkan untuk memakai preset bawaan.</p>
+          <p class="settings-note"><%= h(I18n.t("web.settings.connection.subagent_note")) %></p>
         </div>
       </div>
 
@@ -181,52 +181,48 @@
     <section class="settings-panel" role="tabpanel"
              id="settings-panel-tampilan" aria-labelledby="settings-tab-tampilan"
              data-settings-panel="tampilan">
-      <p class="settings-tab-note">perangkat ini, tersimpan begitu ditekan</p>
+      <p class="settings-tab-note"><%= h(I18n.t("web.settings.appearance.note")) %></p>
 
       <div class="settings-field">
-        <span class="settings-field-label">Tema</span>
+        <span class="settings-field-label"><%= h(I18n.t("web.settings.appearance.theme")) %></span>
         <div class="settings-control">
           <%= View.render("_theme_picker") %>
         </div>
       </div>
 
       <div class="settings-field">
-        <span class="settings-field-label">Font</span>
+        <span class="settings-field-label"><%= h(I18n.t("web.settings.appearance.font")) %></span>
         <div class="settings-control">
           <%# Each button is set in the face it offers: a name written in the
               font it names answers the question "what does this look like"
               without a preview pane beside it. -%>
-          <div class="font-picker" role="group" aria-label="Font">
+          <div class="font-picker" role="group" aria-label="<%= h(I18n.t("web.settings.appearance.font")) %>">
             <% font_choices.each do |choice| -%>
               <button type="button" class="font-choice" data-font-choice="<%= h(choice[:value]) %>"
                       aria-pressed="false" title="<%= h(choice[:title]) %>"><%= h(choice[:label]) %></button>
             <% end -%>
           </div>
           <p class="settings-note">
-            Serif adalah bawaan. Georgia dan Palatino memakai huruf milik
-            perangkat, jadi tampilannya bisa sedikit berbeda. Nama mesin tetap
-            monospace.
+            <%= h(I18n.t("web.settings.appearance.font_note")) %>
           </p>
         </div>
       </div>
 
       <div class="settings-field">
-        <span class="settings-field-label">Notifikasi</span>
+        <span class="settings-field-label"><%= h(I18n.t("web.settings.appearance.notifications")) %></span>
         <div class="settings-control">
           <div class="push-picker" data-push-slug="<%= h(push_persona) %>">
             <button type="button" class="theme-swatch push-toggle" data-push-toggle
-                    aria-pressed="false" title="Notifikasi saat app sedang ditutup">
-              <span class="swatch-dot push-dot" aria-hidden="true"></span><span data-push-label>memuat…</span>
+                    aria-pressed="false" title="<%= h(I18n.t("web.settings.appearance.push_title")) %>">
+              <span class="swatch-dot push-dot" aria-hidden="true"></span><span data-push-label><%= h(I18n.t("web.settings.appearance.push_loading")) %></span>
             </button>
             <button type="button" class="theme-swatch push-test" data-push-test hidden
-                    title="Kirim satu notifikasi percobaan ke perangkat ini">
-              kirim tes
+                    title="<%= h(I18n.t("web.settings.appearance.push_test_title")) %>">
+              <%= h(I18n.t("web.settings.appearance.push_test")) %>
             </button>
           </div>
           <p class="settings-note">
-            Kabari perangkat ini saat app tertutup: pengingat, balasan yang
-            selesai, atau subagent yang melapor. Izin diminta saat tombolnya
-            ditekan.
+            <%= h(I18n.t("web.settings.appearance.push_note")) %>
           </p>
         </div>
       </div>
@@ -235,7 +231,7 @@
     <section class="settings-panel" role="tabpanel"
              id="settings-panel-preset" aria-labelledby="settings-tab-preset"
              data-settings-panel="preset">
-      <p class="settings-tab-note"><%= preset_rows.empty? ? "belum ada preset" : "#{preset_rows.size} preset" %></p>
+      <p class="settings-tab-note"><%= preset_rows.empty? ? h(I18n.t("web.settings.presets.none")) : h(I18n.t("web.settings.presets.count", count: preset_rows.size)) %></p>
 
       <% preset_rows.each do |row| %>
         <div class="settings-field settings-preset-row">
@@ -243,18 +239,18 @@
           <div class="settings-control">
             <input type="hidden" name="preset_name" value="<%= h(row[:name]) %>">
             <select id="preset-model-<%= h(row[:name]) %>" name="preset_model">
-              <%= model_option_tags(model_choices, row[:model], blank: "Hapus preset ini") %>
+              <%= model_option_tags(model_choices, row[:model], blank: I18n.t("web.settings.presets.remove")) %>
             </select>
             <div class="settings-preset-fields">
-              <label>Temperature
-                <input type="text" name="preset_temperature" value="<%= h(row[:temperature]) %>" placeholder="bawaan">
+              <label><%= h(I18n.t("web.settings.presets.temperature")) %>
+                <input type="text" name="preset_temperature" value="<%= h(row[:temperature]) %>" placeholder="<%= h(I18n.t("web.settings.presets.placeholder")) %>">
               </label>
-              <label>Max tokens
-                <input type="text" name="preset_max_tokens" value="<%= h(row[:max_tokens]) %>" placeholder="bawaan">
+              <label><%= h(I18n.t("web.settings.presets.max_tokens")) %>
+                <input type="text" name="preset_max_tokens" value="<%= h(row[:max_tokens]) %>" placeholder="<%= h(I18n.t("web.settings.presets.placeholder")) %>">
               </label>
-              <label>Reasoning
+              <label><%= h(I18n.t("web.settings.presets.reasoning")) %>
                 <select name="preset_reasoning_effort">
-                  <option value="">Bawaan</option>
+                  <option value=""><%= h(I18n.t("web.settings.presets.default")) %></option>
                   <% Persona::THINKING_LEVELS.each do |level| %>
                     <option value="<%= h(level) %>"<%= " selected" if level == row[:reasoning_effort] %>><%= h(level) %></option>
                   <% end %>
@@ -271,29 +267,29 @@
       <%# Three blank rows, so several presets can be added in one save. -%>
       <% 3.times do |i| %>
         <div class="settings-field settings-preset-row">
-          <label for="new-preset-name-<%= i %>">Preset baru</label>
+          <label for="new-preset-name-<%= i %>"><%= h(I18n.t("web.settings.presets.new")) %></label>
           <div class="settings-control">
             <input id="new-preset-name-<%= i %>" type="text" name="new_preset_name" value=""
                    autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
-                   placeholder="nama preset">
+                   placeholder="<%= h(I18n.t("web.settings.presets.name_placeholder")) %>">
             <div class="settings-preset-fields">
-              <label>Model
+              <label><%= h(I18n.t("web.settings.presets.model")) %>
                 <select name="new_preset_model">
-                  <option value="">Pilih model</option>
+                  <option value=""><%= h(I18n.t("web.settings.presets.choose_model")) %></option>
                   <% model_choices.each do |choice| %>
                     <option value="<%= h(choice[:value]) %>"><%= h(choice[:label]) %></option>
                   <% end %>
                 </select>
               </label>
-              <label>Temperature
-                <input type="text" name="new_preset_temperature" value="" placeholder="bawaan">
+              <label><%= h(I18n.t("web.settings.presets.temperature")) %>
+                <input type="text" name="new_preset_temperature" value="" placeholder="<%= h(I18n.t("web.settings.presets.placeholder")) %>">
               </label>
-              <label>Max tokens
-                <input type="text" name="new_preset_max_tokens" value="" placeholder="bawaan">
+              <label><%= h(I18n.t("web.settings.presets.max_tokens")) %>
+                <input type="text" name="new_preset_max_tokens" value="" placeholder="<%= h(I18n.t("web.settings.presets.placeholder")) %>">
               </label>
-              <label>Reasoning
+              <label><%= h(I18n.t("web.settings.presets.reasoning")) %>
                 <select name="new_preset_reasoning_effort">
-                  <option value="">Bawaan</option>
+                  <option value=""><%= h(I18n.t("web.settings.presets.default")) %></option>
                   <% Persona::THINKING_LEVELS.each do |level| %>
                     <option value="<%= h(level) %>"><%= h(level) %></option>
                   <% end %>
@@ -303,18 +299,18 @@
           </div>
         </div>
       <% end %>
-      <p class="settings-note">Isi nama dan pilih model pada baris yang ingin ditambahkan, lalu Simpan. Bisa beberapa sekaligus.</p>
+      <p class="settings-note"><%= h(I18n.t("web.settings.presets.new_note")) %></p>
 
       <div class="settings-field">
-        <label for="setting-default-preset">Preset default</label>
+        <label for="setting-default-preset"><%= h(I18n.t("web.settings.presets.default_preset")) %></label>
         <div class="settings-control">
           <select id="setting-default-preset" name="default_preset">
-            <option value="">Ikut config.yml</option>
+            <option value=""><%= h(I18n.t("web.settings.presets.follow_config")) %></option>
             <% preset_rows.each do |row| %>
               <option value="<%= h(row[:name]) %>"<%= " selected" if row[:name] == default_preset %>><%= h(row[:name]) %></option>
             <% end %>
           </select>
-          <p class="settings-note">Untuk sesi baru. Pilih "Ikut config.yml" untuk memakai nilai dari berkas.</p>
+          <p class="settings-note"><%= h(I18n.t("web.settings.presets.follow_config_note")) %></p>
         </div>
       </div>
     </section>
@@ -322,7 +318,7 @@
     <section class="settings-panel" role="tabpanel"
              id="settings-panel-subagent" aria-labelledby="settings-tab-subagent"
              data-settings-panel="subagent">
-      <p class="settings-tab-note"><%= subagent_rows.size.positive? ? "#{subagent_rows.size} persona" : "belum ada yang diatur" %></p>
+      <p class="settings-tab-note"><%= subagent_rows.size.positive? ? h(I18n.t("web.settings.subagents.count", count: subagent_rows.size)) : h(I18n.t("web.settings.subagents.none")) %></p>
 
       <% subagent_rows.each do |row| %>
         <div class="settings-field settings-preset-row">
@@ -330,14 +326,14 @@
           <div class="settings-control">
             <input type="hidden" name="subagent_slug" value="<%= h(row[:slug]) %>">
             <div class="settings-preset-fields">
-              <label>Model
+              <label><%= h(I18n.t("web.settings.subagents.model")) %>
                 <select id="subagent-model-<%= h(row[:slug]) %>" name="subagent_model_choice">
-                  <%= model_option_tags(model_choices, row[:model], blank: "Bawaan") %>
+                  <%= model_option_tags(model_choices, row[:model], blank: I18n.t("web.settings.subagents.default")) %>
                 </select>
               </label>
-              <label>Thinking
+              <label><%= h(I18n.t("web.settings.subagents.thinking")) %>
                 <select name="subagent_thinking">
-                  <option value="">Bawaan</option>
+                  <option value=""><%= h(I18n.t("web.settings.subagents.default")) %></option>
                   <% Persona::THINKING_LEVELS.each do |level| %>
                     <option value="<%= h(level) %>"<%= " selected" if level == row[:thinking] %>><%= h(level) %></option>
                   <% end %>
@@ -352,72 +348,71 @@
     <section class="settings-panel" role="tabpanel"
              id="settings-panel-instagram" aria-labelledby="settings-tab-instagram"
              data-settings-panel="instagram">
-      <p class="settings-tab-note"><%= ig_accounts.empty? ? "belum terhubung" : "#{ig_accounts.size} akun terhubung" %></p>
+      <p class="settings-tab-note"><%= ig_accounts.empty? ? h(I18n.t("web.settings.instagram.none")) : h(I18n.t("web.settings.instagram.count", count: ig_accounts.size)) %></p>
 
       <div class="settings-field">
-        <label for="setting-ig-app-id">App ID</label>
+        <label for="setting-ig-app-id"><%= h(I18n.t("web.settings.instagram.app_id")) %></label>
         <div class="settings-control">
           <input id="setting-ig-app-id" type="text" name="instagram_app_id" value="<%= h(ig_app_id) %>"
                  autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
-                 placeholder="dari Meta App">
+                 placeholder="<%= h(I18n.t("web.settings.instagram.app_id_placeholder")) %>">
         </div>
       </div>
 
       <div class="settings-field">
-        <label for="setting-ig-secret">App Secret</label>
+        <label for="setting-ig-secret"><%= h(I18n.t("web.settings.instagram.app_secret")) %></label>
         <div class="settings-control">
           <input id="setting-ig-secret" type="password" name="instagram_app_secret" value=""
                  autocomplete="new-password" autocapitalize="off" autocorrect="off"
                  spellcheck="false"
-                 placeholder="<%= ig_secret_set ? "sudah tersimpan, kosongkan untuk tidak mengubah" : "belum ada" %>">
+                 placeholder="<%= ig_secret_set ? h(I18n.t("web.settings.field.key_stored")) : h(I18n.t("web.settings.field.key_missing")) %>">
           <% if ig_secret_set %>
             <label class="settings-check">
               <input type="checkbox" name="clear_ig_secret" value="1">
-              Hapus App Secret dari database
+              <%= h(I18n.t("web.settings.instagram.clear_secret")) %>
             </label>
           <% end %>
         </div>
       </div>
 
       <div class="settings-field">
-        <label for="setting-ig-redirect">Redirect URI</label>
+        <label for="setting-ig-redirect"><%= h(I18n.t("web.settings.instagram.redirect_uri")) %></label>
         <div class="settings-control">
           <input id="setting-ig-redirect" type="url" name="instagram_redirect_uri" value="<%= h(ig_redirect_uri) %>"
                  autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
                  placeholder="https://nama.ts.net/instagram/callback">
           <p class="settings-note">
-            Daftarkan di Meta App, Facebook Login, Valid OAuth Redirect URIs.
-            Harus HTTPS (localhost boleh HTTP).
+            <%= h(I18n.t("web.settings.instagram.redirect_note")) %>
           </p>
         </div>
       </div>
 
       <div class="settings-field">
-        <span class="settings-field-label">Akun terhubung</span>
+        <span class="settings-field-label"><%= h(I18n.t("web.settings.instagram.accounts")) %></span>
         <div class="settings-control">
           <p class="settings-note">
-            Persona <strong><%= h(ig_persona) %></strong>:
+            <%= h(I18n.t("web.settings.instagram.persona")) %> <strong><%= h(ig_persona) %></strong>:
           </p>
           <% if ig_accounts.empty? %>
-            <p class="settings-note">Belum ada. Ketik "connect ke instagram" di chat untuk mulai.</p>
+            <p class="settings-note"><%= h(I18n.t("web.settings.instagram.empty")) %></p>
           <% else %>
             <ul class="ig-account-list">
               <% ig_accounts.each do |acc| -%>
                 <li class="ig-account-row">
                   <span class="ig-account-name">
                     <span class="ig-check" aria-hidden="true">✓</span>
-                    @<%= h(acc["username"]) %><% if acc["is_default"] %> <span class="ig-default-label">(default)</span><% end %>
+                    @<%= h(acc["username"]) %><% if acc["is_default"] %> <span class="ig-default-label"><%= h(I18n.t("web.settings.instagram.default_mark")) %></span><% end %>
                   </span>
                 </li>
               <% end -%>
             </ul>
             <label class="settings-check">
               <input type="checkbox" name="ig_disconnect" value="1">
-              Putuskan semua akun Instagram persona ini
+              <%= h(I18n.t("web.settings.instagram.disconnect_all")) %>
             </label>
           <% end %>
           <% unless ig_linkable_accounts.empty? -%>
-            <p class="settings-note">Sudah terhubung di persona lain, centang untuk link ke persona ini tanpa OAuth:</p>
+            <p class="settings-note"><%= h(I18n.t("web.settings.instagram.linkable_note")) %></p>
             <% ig_linkable_accounts.each do |acc| -%>
               <label class="settings-check">
                 <input type="checkbox" name="ig_link" value="<%= h(acc["username"]) %>">
@@ -430,8 +425,8 @@
     </section>
 
     <footer class="settings-foot">
-      <a href="/settings?refresh=1<%= h(token_query.empty? ? "" : "&" + token_query.sub(/^\?/, "")) %>">Refresh daftar model</a>
-      <a href="<%= h(back_url) %>">Kembali ke percakapan</a>
+      <a href="/settings?refresh=1<%= h(token_query.empty? ? "" : "&" + token_query.sub(/^\?/, "")) %>"><%= h(I18n.t("web.settings.footer.refresh_models")) %></a>
+      <a href="<%= h(back_url) %>"><%= h(I18n.t("web.settings.footer.back_to_chat")) %></a>
     </footer>
   </form>
 </main>
