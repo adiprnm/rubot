@@ -761,11 +761,8 @@ module Rubot
         return if sid.to_s.empty?
 
         rows = loop_rows(sid)
-        markup = if remember_loop_sheet(sid, rows.empty?)
-                   loop_sheet_markup(sid, rows)
-                 else
-                   loop_body_markup(sid, rows)
-                 end
+        remember = remember_loop_sheet(sid, rows.empty?)
+        markup = remember ? loop_sheet_markup(sid, rows) : loop_body_markup(sid, rows)
         push_to_session(sid, :"loop-sheet", markup)
       rescue StandardError => e
         # A stale icon, never a broken loop: the run is on a thread of its own

@@ -388,8 +388,8 @@ module Rubot
     # keeps working.
     def legacy_skills_workspaces
       extra = Array(agent_defaults["legacy_skills_workspaces"])
-      roots = [workspace, assets_workspace, *extra].compact
-      roots.map { |path| File.expand_path(path.to_s) }.uniq - [skills_workspace]
+      roots = [ workspace, assets_workspace, *extra ].compact
+      roots.map { |path| File.expand_path(path.to_s) }.uniq - [ skills_workspace ]
     end
 
     def restrict_to_workspace

@@ -358,14 +358,14 @@ module Rubot
       # still wore the mark it had while it worked. Drawing the sheet whole on
       # every (re)connect is what repairs that without a reload.
       def event_stream_opening(sid)
-        opening = [[:sidebar, sidebar_markup(sid)]]
-        opening << [:"subagent-sheet", subagent_sheet_markup(subagent_runs_for_page(sid))] unless sid.to_s.empty?
+        opening = [ [ :sidebar, sidebar_markup(sid) ] ]
+        opening << [ :"subagent-sheet", subagent_sheet_markup(subagent_runs_for_page(sid)) ] unless sid.to_s.empty?
         # The loop panel is the other one that only ever arrives as a diff: a
         # loop begins on a thread nobody is watching, and a page that dropped
         # its stream while that happened would keep a footer without the toggle
         # that watches it until someone reloaded.
-        opening << [:"loop-sheet", loop_sheet_markup(sid)] unless sid.to_s.empty?
-        opening << [:"compact-done", "done"] unless compacting?(sid)
+        opening << [ :"loop-sheet", loop_sheet_markup(sid) ] unless sid.to_s.empty?
+        opening << [ :"compact-done", "done" ] unless compacting?(sid)
         opening
       end
 
