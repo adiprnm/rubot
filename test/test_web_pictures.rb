@@ -665,7 +665,7 @@ module Rubot
 
         items = channel.history("web_rubot").last[:items]
 
-        assert_equal [ "Membaca isi b.rb" ],
+        assert_equal [ "Reading b.rb" ],
                      items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
         assert_includes items.map { |item| item[:kind] }, :text, "the answer is not part of the log"
       end
@@ -682,7 +682,7 @@ module Rubot
 
         items = channel.history("web_rubot").last[:items]
 
-        assert_equal [ "Membaca isi b.rb" ],
+        assert_equal [ "Reading b.rb" ],
                      items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
       end
 
@@ -713,7 +713,7 @@ module Rubot
 
         items = channel.history(sid).last[:items]
 
-        assert_equal [ "Membaca isi a.rb", "Membaca isi b.rb" ],
+        assert_equal [ "Reading a.rb", "Reading b.rb" ],
                      items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
         assert_equal %i[tool text tool text], items.map { |item| item[:kind] }
       end
@@ -730,7 +730,7 @@ module Rubot
 
         assert(items.none? { |item| item[:kind] == :step }, "no marker rows")
         assert(items.none? { |item| item.key?(:round) }, "no pass numbers")
-        assert_equal [ "Membaca isi a.rb", "Membaca isi b.rb" ],
+        assert_equal [ "Reading a.rb", "Reading b.rb" ],
                      items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
       end
 
@@ -743,7 +743,7 @@ module Rubot
 
         items = channel.history("web_rubot").last[:items]
 
-        assert_equal [ "Membaca isi a.rb", "Membaca isi b.rb" ],
+        assert_equal [ "Reading a.rb", "Reading b.rb" ],
                      items.select { |item| item[:kind] == :tool }.map { |item| item[:detail] }
       end
 
@@ -1175,16 +1175,16 @@ module Rubot
                                         detail: ToolCaption.caption("file_ops",
                                                                     { "operation" => "edit", "path" => "lib/a.rb" }),
                                         op: "edit", state: :ok, elapsed: nil } ])
-        assert_includes edited, "Mengubah isi lib/a.rb"
-        assert_includes edited, %(<span class="tool-detail">Mengubah isi lib/a.rb</span>),
+        assert_includes edited, "Editing lib/a.rb"
+        assert_includes edited, %(<span class="tool-detail">Editing lib/a.rb</span>),
                         "the sentence is the row's own text"
         refute_includes edited, "tool-op", "the operation is part of the sentence, not a chip"
         refute_includes edited, "tool-name", "the tool's name is not the reader's word for it"
 
         plain = View.render("_timeline",
-                            items: [ { kind: :tool, name: "shell_exec", detail: "Menjalankan perintah di terminal",
+                            items: [ { kind: :tool, name: "shell_exec", detail: "Ran a command in the terminal",
                                        state: :ok, elapsed: nil } ])
-        assert_includes plain, "Menjalankan perintah di terminal"
+        assert_includes plain, "Ran a command in the terminal"
       end
 
       # The thought is a word and nothing else. The half disc that used to sit
