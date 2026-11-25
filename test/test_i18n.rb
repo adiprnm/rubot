@@ -8,6 +8,12 @@ require_relative "support/tui_support"
 # channels draw through the one translation function.
 class TestI18n < Minitest::Test
   include Rubot::TuiSupport
+
+  # What a compaction answers with, in the shape every channel reads: the same
+  # numbers appear in the TUI rows, the Telegram card and the web note.
+  COMPACT_RESULT = { summarized_messages: 12, kept_messages: 4,
+                     context_before: 48_000, context_after: 9_000 }.freeze
+
   def setup
     @tmpdir = Dir.mktmpdir
     @config_path = File.join(@tmpdir, "config.yml")
@@ -161,7 +167,107 @@ class TestI18n < Minitest::Test
     assert_includes indonesian, ">48000 → 9000 token<"
   end
 
+  # --- the compaction answer, drawn by each channel ---------------------
+
+  # /compact typed into a real TUI: the lines come back through the same
+  # say/say_text the reader sees, so a channel that writes its own wording
+  # fails here instead of passing on the dictionary alone.
+  def test_the_tui_compaction_answer_follows_the_language
+    english = tui_compact_output("en")
+    indonesian = tui_compact_output("id")
+
+    assert_includes english, "Compaction complete."
+    assert_includes english, "Summarized: 12 messages"
+    assert_includes english, "Kept: 4 messages"
+    assert_includes english, "Context: ~48000 → ~9000 tokens (estimated)"
+
+    assert_includes indonesian, "Compact selesai."
+    assert_includes indonesian, "Pesan diringkas: 12"
+    assert_includes indonesian, "Pesan dipertahankan: 4"
+    assert_includes indonesian, "Perkiraan konteks: ~48000 → ~9000 token"
+
+    refute_equal english, indonesian
+  end
+
+  def test_the_tui_says_there_is_nothing_to_compact_in_both_languages
+    assert_includes tui_compact_output("en", result: nil), "Nothing to compact yet"
+    assert_includes tui_compact_output("id", result: nil), "Belum ada yang perlu diringkas"
+  end
+
+  # The Telegram card is assembled from the same keys, header included, so the
+  # two languages differ there as well.
+  def test_the_telegram_compaction_card_follows_the_language
+    english = telegram_compact_reply("en")
+    indonesian = telegram_compact_reply("id")
+
+    assert_includes english, "Compaction complete"
+    assert_includes english, "Summarized: 12"
+    assert_includes english, "Context: ~48000 → ~9000 tokens (estimated)"
+
+    assert_includes indonesian, "Compact selesai"
+    assert_includes indonesian, "Pesan diringkas: 12"
+    assert_includes indonesian, "Perkiraan konteks: ~48000 → ~9000 token"
+
+    refute_equal english, indonesian
+  end
+
+  def test_the_telegram_empty_compaction_follows_the_language
+    assert_includes telegram_compact_reply("en", result: nil), "Nothing to compact yet"
+    assert_includes telegram_compact_reply("id", result: nil), "Belum ada yang perlu diringkas"
+  end
+
+  # The note under the compact button is a template, so this renders the
+  # template: every state it can land in has to speak the chosen language.
+  def test_the_web_compaction_note_follows_the_language
+    %i[busy done error empty].each do |state|
+      english = web_compact_note("en", state)
+      indonesian = web_compact_note("id", state)
+
+      refute_empty english.strip, "#{state} must say something"
+      refute_equal english, indonesian, "the #{state} note must differ between en and id"
+    end
+
+    assert_includes web_compact_note("en", :done), "Conversation summarized"
+    assert_includes web_compact_note("id", :done), "Percakapan berhasil diringkas"
+    assert_includes web_compact_note("en", :error), "Summarizing failed"
+    assert_includes web_compact_note("id", :error), "Ringkasan gagal"
+    assert_includes web_compact_note("en", :busy), "A turn is still running"
+    assert_includes web_compact_note("id", :busy), "Turn masih berjalan"
+  end
+
   private
+
+  # One /compact in a real TUI, with only the agent's answer stubbed: the rows
+  # are what say/say_text drew, read back the way a terminal would show them.
+  def tui_compact_output(locale, result: COMPACT_RESULT)
+    Rubot::I18n.with_locale(locale) do
+      repl = build_repl
+      repl.agent.define_singleton_method(:compact_session) { result }
+      app = repl.instance_variable_get(:@app)
+
+      repl.handle_command("/compact")
+      repl.pump
+
+      plain(app.render_lines).join("\n")
+    end
+  end
+
+  # The Telegram handler, reached the way an update reaches it. Only the agent
+  # is a double; the card itself is the channel's own code.
+  def telegram_compact_reply(locale, result: COMPACT_RESULT)
+    Rubot::I18n.with_locale(locale) do
+      handle = Object.new
+      handle.define_singleton_method(:compact_session) { result }
+      channel = Rubot::Channels::Telegram.new(agent: nil, channel_config: {})
+
+      channel.define_singleton_method(:request_agent) { handle }
+      channel.before_process("/compact")[1]
+    end
+  end
+
+  def web_compact_note(locale, state)
+    Rubot::I18n.with_locale(locale) { Rubot::Web::View.render("_compact_note", state: state) }
+  end
 
   def config_with(data)
     File.write(@config_path, data.to_yaml)

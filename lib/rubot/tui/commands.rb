@@ -98,12 +98,12 @@ module Rubot
       def command_compact
         result = agent.compact_session
         if result
-          say("Compaction complete.", :ok)
-          say_text("Summarized: #{result[:summarized_messages]} messages")
-          say_text("Kept:       #{result[:kept_messages]} messages")
-          say_text("Context:    ~#{result[:context_before]} → ~#{result[:context_after]} tokens (estimated)")
+          say(I18n.t("compaction.complete"), :ok)
+          say_text(I18n.t("compaction.summarized", count: result[:summarized_messages]))
+          say_text(I18n.t("compaction.kept", count: result[:kept_messages]))
+          say_text(I18n.t("compaction.context", before: result[:context_before], after: result[:context_after]))
         else
-          say("Nothing to compact yet (conversation is short or summarization failed).", :info)
+          say(I18n.t("compaction.empty"), :info)
         end
         refresh_usage
       end

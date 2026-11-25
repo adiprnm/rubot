@@ -70,7 +70,10 @@ module Rubot
       result = @tg.before_process("/compact")
       assert_kind_of Array, result
       assert_equal :skip, result[0]
-      assert_includes result[1], "Tidak ada"
+      assert_includes result[1], "Nothing to compact yet"
+
+      indonesian = Rubot::I18n.with_locale("id") { @tg.before_process("/compact") }
+      assert_includes indonesian[1], "Belum ada yang perlu diringkas"
     end
 
     # Telegram gets the same door as the TUI and the page: the prompt is pinned

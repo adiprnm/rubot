@@ -3,11 +3,11 @@
     thread after the page reloads, so it is not repeated here. -%>
 <% case state -%>
 <% when :busy -%>
-  <p class="usage-note">Turn masih berjalan. Ringkas setelah selesai: percakapan yang sedang berjalan tidak boleh ikut diringkas.</p>
+  <p class="usage-note"><%= h(Rubot::I18n.t("compaction.busy")) %></p>
 <% when :done -%>
-  <p class="usage-note">Percakapan berhasil diringkas. Baris penandanya ada di bawah, di tempat compaction terjadi.</p>
+  <p class="usage-note"><%= h(Rubot::I18n.t("compaction.note")) %></p>
 <% when :error -%>
-  <p class="usage-note">Ringkasan gagal. Coba lagi sebentar.</p>
+  <p class="usage-note"><%= h(Rubot::I18n.t("compaction.error")) %></p>
 <% else -%>
-  <p class="usage-note">Belum ada yang perlu diringkas — percakapan masih terlalu pendek.</p>
+  <p class="usage-note"><%= h(Rubot::I18n.t("compaction.empty")) %></p>
 <% end -%>
