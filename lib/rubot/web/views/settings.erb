@@ -65,6 +65,14 @@
           Arsip sesi belum terbuka, jadi belum ada tempat untuk menyimpan.
         </p>
       <% end %>
+
+      <%# A form that was refused comes back here with its reason: the value it
+          named and what is accepted instead, written in the language the
+          install still speaks. Nothing was stored, so nothing on the page is
+          half-applied. -%>
+      <% unless error.to_s.empty? %>
+        <p class="settings-error" role="alert"><%= h(error) %></p>
+      <% end %>
     </header>
 
     <div class="settings-tabs" role="tablist" aria-label="Bagian pengaturan">
@@ -143,6 +151,23 @@
             <%= model_option_tags(model_choices, subagent_model, blank: "Ikuti preset subagent (flash)") %>
           </select>
           <p class="settings-note">Untuk semua subagent. Kosongkan untuk memakai preset bawaan.</p>
+        </div>
+      </div>
+
+      <%# The one control that changes what every other row says. It sits with
+          the install's settings because that is what it is — a language belongs
+          to the installation, not to this browser — and it reads its own label
+          and options through the dictionary, so the field is drawn in the
+          language it has selected. -%>
+      <div class="settings-field">
+        <label for="setting-bahasa"><%= h(Rubot::I18n.t("settings.language.label")) %></label>
+        <div class="settings-control">
+          <select id="setting-bahasa" name="bahasa">
+            <% Rubot::I18n::LOCALES.each do |code| -%>
+              <option value="<%= h(code) %>"<%= " selected" if code == bahasa %>><%= h(Rubot::I18n.t("settings.language.#{code}")) %></option>
+            <% end -%>
+          </select>
+          <p class="settings-note"><%= h(Rubot::I18n.t("settings.language.note")) %></p>
         </div>
       </div>
     </section>

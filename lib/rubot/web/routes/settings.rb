@@ -61,6 +61,10 @@ module Rubot
           subagent_rows: settings_subagent_rows,
           preset_rows: settings_preset_rows,
           default_preset: @app_config&.primary_model_preset_name.to_s,
+          # The language the install speaks now, so the select opens on the
+          # value in force rather than on the first option of the list.
+          bahasa: @app_config ? @app_config.bahasa : Rubot::I18n::DEFAULT_LOCALE,
+          error: req.query["error"].to_s,
           key_set: !@app_config&.api_key.to_s.empty?,
           key_from_archive: !store&.setting("api_key").to_s.strip.empty?,
           ig_app_id: store&.setting("instagram_app_id").to_s,
@@ -110,12 +114,29 @@ module Rubot
         store = Rubot::Archive.current
         return redirect_to(res, settings_url) unless store
 
+        # The language is settled before a single row is written. A value this
+        # build cannot speak is not stored and not applied: the form comes back
+        # with the value it named and the two it accepts, and the install keeps
+        # speaking what it already spoke. Writing it down and finding out at the
+        # next boot is exactly how an interface ends up half in one language.
+        typed_bahasa = form(req, "bahasa").strip
+        bahasa = Rubot::I18n.normalize(typed_bahasa)
+        if bahasa.nil? && !typed_bahasa.empty?
+          message = Rubot::I18n.t("settings.language.unknown", value: typed_bahasa,
+                                                             choices: Rubot::I18n::LOCALES.join(", "))
+          return redirect_to(res, settings_error_url(message))
+        end
+
         values = {
           "provider" => form(req, "provider"),
           "default_model" => form(req, "default_model"),
           "auxiliary_model" => form(req, "auxiliary_model"),
           "subagent_model" => form(req, "subagent_model")
         }
+        # An empty picker is "leave the language alone", the same reading the
+        # key field has: the select always posts one of the two, so a blank
+        # one came from something that is not this form.
+        values["bahasa"] = bahasa if bahasa
         # An empty key field means "leave the key alone": it is a password box,
         # it never carries the current value back, and a form that blanked the
         # key because nobody retyped it would take the install down. Clearing is
@@ -283,6 +304,10 @@ module Rubot
         return unless store && @app_config
 
         @app_config.apply_settings(store.settings)
+        # The new language is live before this request returns: the redirected
+        # page, the next turn and every row after it are drawn in it. No
+        # restart, and no second place that has to remember to do it.
+        Rubot::I18n.locale = @app_config.bahasa
         return unless @pool
 
         @pool.refresh_config(@app_config)
@@ -305,6 +330,15 @@ module Rubot
         query << "saved=1" if saved
         query << "token=#{CGI.escape(@token)}" if @token
         query.empty? ? "/settings" : "/settings?#{query.join("&")}"
+      end
+
+      # Where a refused form goes: back to the page with the reason on it, so
+      # the reader is told what was not accepted instead of being sent away
+      # with a saved flash for a change that never happened.
+      def settings_error_url(message)
+        query = [ "error=#{CGI.escape(message.to_s)}" ]
+        query << "token=#{CGI.escape(@token)}" if @token
+        "/settings?#{query.join("&")}"
       end
 
       # The model this persona actually talks to. A preset it inherited from
