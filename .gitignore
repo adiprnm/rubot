@@ -15,6 +15,8 @@ Thumbs.db
 # Workspace & runtime data
 workspace/
 *.jsonl
+# Local notes and plans, not part of the shipped project.
+docs/
 # The TUI uses the directory it was launched from as its workspace, so these
 # land in whatever project it runs in.
 sessions/
