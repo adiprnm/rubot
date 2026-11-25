@@ -276,6 +276,19 @@ module Rubot
         res.body = quota_markup(sid)
       end
 
+      # The footer's loop panel, asked for its rows while it is open. The same
+      # partial the page drew (see Web::Loops#loop_rows_markup), so a loop that
+      # moved on while nobody was looking arrives without a reload — and a panel
+      # whose loops all ended answers with the sentence rather than with an
+      # empty list, which is what a reader sees in place of a card.
+      def render_loops(res, sid)
+        return not_found(res) unless owner_slug(sid)
+
+        res["Content-Type"] = "text/html; charset=utf-8"
+        res["Cache-Control"] = "no-store"
+        res.body = loop_rows_markup(sid)
+      end
+
       # The reader asking for the pinned prompt to be rebuilt (see
       # Agent#repin_system_prompt): memory written since the session started, an
       # edited skill, a changed AGENTS.md — none of it reaches a running session
@@ -450,6 +463,7 @@ module Rubot
           usage: metrics_locals(report ? Rubot::UsageReport.metrics(report) : nil),
           usage_facts: usage_facts(report || {}),
           subagent_runs: subagent_runs_for_page(sid),
+          loop_runs: loop_rows(sid),
           token_query: token_query,
           ig_persona: slug,
           **ig_account_locals(slug)

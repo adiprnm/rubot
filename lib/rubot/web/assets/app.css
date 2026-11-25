@@ -2830,6 +2830,46 @@ select:focus-visible { outline: none; }
 .subagent-rows .subagent-name { font-size: 11px; white-space: nowrap; }
 .subagent-rows .subagent-detail { font-size: 11px; }
 
+/* One card per loop in flight. A loop is read in three lines — which one it is,
+   what it was asked for, where it got to — so the card stacks them instead of
+   trying to fit them on the one line a subagent row gets. The facts at the
+   bottom are the numbers a reader compares, set in the fixed-width face so two
+   cards side by side line up digit for digit. */
+.loop-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.loop-rows .loop {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  font-size: 12px;
+}
+.loop-rows .loop-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+.loop-rows .loop-id { font-size: 11px; color: var(--muted); }
+/* The status is the one word on the card that says the loop is still moving, so
+   it wears the colour a running row already wears. */
+.loop-rows .loop-status { font-size: 11px; color: var(--green); }
+.loop-rows .loop-goal {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 26rem;
+}
+.loop-rows .loop-facts {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
 /* A prompt the server refused: the text stays in the field, so the reason
    belongs on the edge of it rather than up in the thread. Kept to the
    composer's own width so it reads as a note on the field. */

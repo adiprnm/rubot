@@ -275,6 +275,11 @@
         party, and it was the one readers had to scroll to reach. -%>
     <div class="status-line">
       <%= View.render("_subagent_sheet", subagents: subagent_runs) %>
+      <%# The loops in flight. Nothing is drawn while nothing runs: the panel
+          is for work that outlives the turn that started it, and a loop is the
+          one kind of work that does. -%>
+      <%= View.render("_loop_sheet", loops: loop_runs,
+                                      session_id: session_id, token_query: token_query) %>
       <%= View.render("_usage", **usage) %>
       <%= View.render("_compact_button", session_id: session_id, token_query: token_query) %>
       <%# The one-line result of a manual compaction lands here, beside the

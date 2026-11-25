@@ -32,6 +32,10 @@ module Rubot
       SESSION_PIN_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/pin\z}
       SESSION_RENAME_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/rename\z}
       SESSION_QUOTA_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/quota\z}
+      # The footer's loop panel asking for its rows again. Read while a reader
+      # has the panel open and nothing else: a loop's progress is a file on
+      # disk, so the page has to ask rather than be told.
+      SESSION_LOOPS_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/loops\z}
       SESSION_REPIN_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/repin\z}
       SESSION_COMPACT_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/compact\z}
       SESSION_SETTINGS_PATH = %r{\A/s/([a-z0-9][a-z0-9_~-]{0,90})/settings\z}
@@ -126,6 +130,7 @@ module Rubot
           [ "GET", SESSION_MEDIA_PATH, ->(c, _req, res) { serve_media(res, c[0], c[1]) } ],
           [ "GET", "/events", ->(_c, req, res) { stream_events(res, req) } ],
           [ "GET", SESSION_QUOTA_PATH, ->(c, _req, res) { render_quota(res, c[0]) } ],
+          [ "GET", SESSION_LOOPS_PATH, ->(c, _req, res) { render_loops(res, c[0]) } ],
           [ "POST", SESSION_REPIN_PATH, ->(c, _req, res) { repin_prompt(res, c[0]) } ],
           [ "POST", SESSION_COMPACT_PATH, ->(c, req, res) { compact_session_now(res, c[0], req) } ],
           [ "POST", SESSION_DELETE_PATH, ->(c, req, res) { delete_session(res, c[0], req) } ],

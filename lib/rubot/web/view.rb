@@ -49,6 +49,11 @@ module Rubot
         # it, not another page of numbers.
         quota: %(<path d="M1.7 7.5a3.3 3.3 0 0 1 6.6 0"/>) +
                %(<path d="M5 7.5 6.5 4.8"/>),
+        # A loop, drawn as the shape a loop has: an open circle with an arrow
+        # closing it. Work that goes round again until a condition holds, told
+        # in one turn rather than in another stack of lines.
+        loop: %(<path d="M8.2 4.2A3.4 3.4 0 1 0 8.2 6"/>) +
+              %(<path d="M8.4 2.2v2.2H6.2"/>),
         # The footer button that asks for a compaction now. Three lines closing
         # in on the middle, so it reads as "make this smaller" next to the
         # meter and the card the other two toggles wear.
@@ -230,6 +235,13 @@ module Rubot
           Format.duration(seconds)
         end
 
+        # A count separated into thousands. A loop's budget is seven digits, and
+        # a row that puts it beside what is left has to be compared at a glance
+        # rather than decoded digit by digit.
+        def num(value)
+          Formatting.number(value)
+        end
+
         # A label drawn one letter per span, each carrying its own index, so the
         # glow can travel from the first letter to the last and start over. The
         # index is a custom property rather than a per-letter delay: the timing
@@ -279,6 +291,12 @@ module Rubot
         # The footer's panel is drawn from the background runs the channel
         # knows about. A page rendered outside the channel has none.
         def subagent_runs
+          []
+        end
+
+        # The loops in flight, for the same reason: a page drawn by a test has
+        # no workspace to read them from, and the sheet draws its empty state.
+        def loop_runs
           []
         end
 

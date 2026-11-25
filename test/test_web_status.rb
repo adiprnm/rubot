@@ -484,8 +484,9 @@ module Rubot
       def test_each_usage_icon_draws_a_different_shape
         bodies = View::SVG_ICONS.values
 
-        assert_equal 7, bodies.size, "cost, cache, context, the report, the allowance, compact and subagent"
-        assert_equal 7, bodies.uniq.size
+        assert_equal 8, bodies.size,
+                     "cost, cache, context, the report, the allowance, compact, subagent and loop"
+        assert_equal 8, bodies.uniq.size
         bodies.each { |body| assert_includes body, "<", "every icon needs at least one shape" }
       end
 

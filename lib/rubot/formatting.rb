@@ -35,6 +35,15 @@ module Rubot
       rest.zero? ? "#{minutes}m" : "#{minutes}m #{rest}s"
     end
 
+    # A count with its thousands separated, e.g. "12,000,000". The separator is
+    # the comma the same string would take in a locale that writes decimals with
+    # a point; the digits are what matter here, and a budget is compared, not
+    # parsed. Written here rather than in a channel so the three channels that
+    # show a token total cannot disagree about it.
+    def number(value)
+      value.to_i.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse
+    end
+
     # How long ago, in the units a reader actually uses. Absolute times would
     # have to assume a timezone; a difference between two instants does not.
     def age(epoch, now: Time.now)

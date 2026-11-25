@@ -609,6 +609,24 @@ module Rubot
             "failed" => "subagent failed",
             "done" => "subagent finished"
           },
+          "loops" => {
+            "title" => "Loops",
+            "toggle" => "loop",
+            "empty" => "No loop running.",
+            "iterations" => "%{done}/%{max} iterations",
+            "tokens" => "%{used} tokens used",
+            "remaining" => "%{left} of %{total} left",
+            "updated" => "updated %{when} ago",
+            # One wording per state the store writes. Only `active` reaches the
+            # panel (see Web::Loops#loop_rows), but the row template names the
+            # status it reads rather than assuming which one it got.
+            "statuses" => {
+              "active" => "running",
+              "paused" => "paused",
+              "done" => "done",
+              "stalled" => "stalled"
+            }
+          },
           "skills" => {
             "title" => "Skills",
             "empty" => "No skills installed yet",
@@ -1408,6 +1426,21 @@ module Rubot
             "running_one" => "1 subagent berjalan",
             "failed" => "subagent gagal",
             "done" => "subagent selesai"
+          },
+          "loops" => {
+            "title" => "Loop",
+            "toggle" => "loop",
+            "empty" => "Tidak ada loop berjalan.",
+            "iterations" => "%{done}/%{max} iterasi",
+            "tokens" => "%{used} token terpakai",
+            "remaining" => "sisa %{left} dari %{total}",
+            "updated" => "diperbarui %{when} lalu",
+            "statuses" => {
+              "active" => "berjalan",
+              "paused" => "dijeda",
+              "done" => "selesai",
+              "stalled" => "mandek"
+            }
           },
           "skills" => {
             "title" => "Skill",

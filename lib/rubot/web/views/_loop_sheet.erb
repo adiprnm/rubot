@@ -1,0 +1,33 @@
+<%# The loops in flight, at the same edge as the subagent and usage sheets: all
+    three are facts about the work this conversation has going, and a reader
+    checking one is asking the same question as a reader checking another.
+
+    Hidden while nothing is running (see Web::Loops#loop_rows, which hands over
+    an empty list): a conversation that never started a loop gets no control
+    for it, and the element stays in the page so the poll has somewhere to write
+    when one begins. A finished loop is its own message in the transcript, so
+    the panel does not need to be the place it is remembered.
+
+    It is a `<details>` like the two sheets beside it, so it opens without a
+    script and its panel hangs above the row instead of off the bottom of the
+    page. The card inside moves on its own -- an iteration can take minutes and
+    the numbers are written to a file in between -- so the body polls while it
+    is open and never while it is closed: a closed panel is not a thing the
+    reader is looking at, and a timer that kept asking would be one request
+    every three seconds for the rest of the session. -%>
+<%- hidden = loops.empty? -%>
+<details class="usage-sheet usage-sheet-loops" id="loop-sheet"<%= " hidden" if hidden %>>
+  <summary class="usage-toggle" title="<%= h(I18n.t("web.loops.title")) %>" aria-label="<%= h(I18n.t("web.loops.title")) %>">
+    <%= usage_icon(:loop) %><span class="loop-label"><%= h(I18n.t("web.loops.toggle")) %></span>
+  </summary>
+
+  <div class="usage-panel" role="group" aria-label="<%= h(I18n.t("web.loops.title")) %>">
+    <p class="panel-title"><%= h(I18n.t("web.loops.title")) %></p>
+    <div id="loop-sheet-body"
+         hx-get="/s/<%= h(session_id) %>/loops<%= h(token_query) %>"
+         hx-trigger="every 3s [this.closest('details').open]"
+         hx-swap="innerHTML">
+      <%= View.render("_loop_rows", loops: loops) %>
+    </div>
+  </div>
+</details>

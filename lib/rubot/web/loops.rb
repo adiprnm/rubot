@@ -25,6 +25,10 @@ module Rubot
       # change: the tool is stamped with the same root (see #bind_loop_runner).
       LOOPS_DIR = "loops"
       WORKTREES_DIR = "worktrees"
+      # The one status the footer's panel draws. A loop that is paused, finished
+      # or stalled is not in flight, and the panel exists to answer "what is
+      # being worked right now?" — the loop tool is what answers the rest.
+      LOOP_PANEL_STATUS = "active"
       # The operations a `:loop` event can carry: the ones a runner performs.
       # Status and list are answered from the state file by the tool itself.
       LOOP_OPS = %i[start resume abort].freeze
@@ -593,6 +597,69 @@ module Rubot
         LoopStore.new(dir: File.join(base, LOOPS_DIR))
       end
 
+      # -- the footer's panel ---------------------------------------------------
+
+      # The loops the footer's sheet draws: every loop of this conversation's
+      # workspace that is being worked right now, newest update first. Read from
+      # the same store a running turn pays into (see #loop_ledger), so the
+      # budget printed in the row and the budget the brake reads are one number
+      # rather than two that happen to agree today.
+      def loop_rows(sid)
+        ledger = loop_ledger(sid)
+        return [] if ledger.nil?
+
+        ledger.ids.filter_map do |id|
+          state = begin
+            ledger.load(id)
+          rescue LoopStore::Corrupt
+            # A file that cannot be read back is not a loop the panel can
+            # describe. The tool is where a reader hears about it, and a row
+            # whose numbers were guessed would be worse than no row at all.
+            nil
+          end
+          next nil unless state && state.status.to_s == LOOP_PANEL_STATUS
+
+          loop_row(state)
+        end.sort_by { |row| -row[:age_seconds] }
+      end
+
+      # One row of it. Everything the panel shows is decided here, in numbers
+      # and words the template only has to place: a row is never half-assembled
+      # in ERB, so the page and the poll cannot word the same loop differently.
+      def loop_row(state)
+        max_tokens = state.max_tokens.to_i
+        used = state.tokens.to_i
+        updated = state.updated_at
+        {
+          id: state.id,
+          status: state.status.to_s,
+          # The word the card calls the state. Named here rather than built from
+          # the status at draw time, so the status the row carries and the
+          # sentence a reader reads are chosen in one place.
+          status_key: case state.status.to_s
+                      when "active" then "web.loops.statuses.active"
+                      when "paused" then "web.loops.statuses.paused"
+                      when "done" then "web.loops.statuses.done"
+                      else "web.loops.statuses.stalled"
+                      end,
+          goal: LoopStore.one_line(state.goal),
+          iterations: state.iterations.to_i,
+          max_iterations: state.max_iterations.to_i,
+          tokens: used,
+          max_tokens: max_tokens,
+          # Never negative: the turn that crosses the line can be charged past
+          # the budget, and "-12,000 left" is not a figure a reader should have
+          # to reason about at the end of a long day.
+          remaining: [ max_tokens - used, 0 ].max,
+          age_seconds: updated ? [ (Time.now - updated.to_time).to_i, 0 ].max : 0
+        }
+      end
+
+      # The rows on their own, for the poll the sheet makes while it is open:
+      # the same partial the page drew, so the panel and the answer to its poll
+      # can never disagree about a loop.
+      def loop_rows_markup(sid) = View.render("_loop_rows", loops: loop_rows(sid))
+
       # Called from the channel's stop path, before the pool goes down.
       def stop_loop_threads(timeout: 5)
         runners = @loop_runners ? @loop_runners.values : []
@@ -638,7 +705,13 @@ module Rubot
       # conversation is a fact about the channel, not about the thread that ran
       # it.
       public :bind_loop_runner, :loop_session_runner, :stop_loop_threads,
-             :report_loop_finished, :loop_report_text
+             :report_loop_finished, :loop_report_text,
+             # What the footer's panel draws, and the rows the poll answers
+             # with. Both are seams for the same reason: a test that checks the
+             # panel against real state files has to be able to ask what the
+             # channel would have drawn, and a route answers with exactly these
+             # rows. Only these two: how one row is built stays private.
+             :loop_rows, :loop_rows_markup
     end
   end
 end
