@@ -196,6 +196,114 @@ class TestLoopIterationTurn < Minitest::Test
     assert_includes answer, "answered anyway"
   end
 
+  # -- the wiring from config ------------------------------------------------
+
+  # Both numbers are settings, so the thing worth proving is not that the
+  # defaults work (the tests above do that) but that a file's own numbers reach
+  # the turn. These are values nobody would guess: a turn that reads the
+  # constant instead of the config fails every assertion below.
+  TUNED = { "loop_max_rounds" => 7, "loop_max_context_tokens" => 12_345 }.freeze
+
+  def test_the_numbers_in_the_config_file_reach_the_iteration_turn
+    iteration, = build_agent([], session_id: "loop-abc~a1~it1", defaults: TUNED)
+    ordinary, = build_agent([], session_id: "chatter", defaults: TUNED)
+
+    assert_equal 7, iteration.turn_round_limit, "the iteration obeys the file's round cap"
+    assert_equal 12_345, iteration.loop_max_context_tokens, "and the file's context ceiling"
+    assert_equal 1000, ordinary.turn_round_limit, "the tuned loop cap is not an ordinary turn's"
+  end
+
+  # The cap as the turn really spends it: seven tool rounds are allowed, the
+  # eighth request is the closing one. A turn on the default 40 would keep
+  # asking, and one on the ordinary 1000 would ask again after the seventh.
+  def test_the_tuned_round_cap_is_the_one_the_turn_obeys
+    script = (1..7).map { |index| tool_round("call_#{index}") } << { "content" => "seven rounds, then the report" }
+    agent, provider = build_agent(script, session_id: "loop-abc~a1~it1", defaults: TUNED)
+
+    answer = agent.process("work a step", stream: false)
+
+    assert_equal 8, provider.requests.size, "seven working rounds and the closing one"
+    assert_equal 7, provider.offers.count { |tools| !tools.empty? }
+    assert_includes answer, "stopped at its round cap (7)"
+    assert_equal({ rounds: 7, limit: 7 }, agent.last_round_cap)
+  end
+
+  # The ceiling as the turn compares it: 11k is under 12_345 and the turn goes
+  # on; 12_346 is over it and the next request is never made. A turn comparing
+  # against the 100k default would send again in both cases.
+  def test_the_tuned_context_ceiling_is_the_one_the_turn_obeys
+    under, under_provider = build_agent(
+      [ tool_round("call_1"), { "content" => "carried on" } ],
+      session_id: "loop-abc~a1~it1", defaults: TUNED,
+      usage: { "prompt_tokens" => 11_000, "completion_tokens" => 5 }
+    )
+    over, over_provider = build_agent(
+      [ tool_round("call_1"), { "content" => "must never be asked" } ],
+      session_id: "loop-abc~a1~it1", defaults: TUNED,
+      usage: { "prompt_tokens" => 12_346, "completion_tokens" => 5 }
+    )
+
+    assert_includes under.process("work a step", stream: false), "carried on"
+    assert_equal 2, under_provider.requests.size, "11k is under the tuned ceiling"
+    assert_nil under.last_context_ceiling
+
+    answer = over.process("work a step", stream: false)
+    assert_equal 1, over_provider.requests.size, "12_346 is over the tuned ceiling"
+    assert_equal 12_345, over.last_context_ceiling[:limit]
+    assert_includes answer, "of 12345 tokens", "the stop names the number the file set"
+  end
+
+  # The two facts together, in the same turn: compaction is on and would fire
+  # for an ordinary session at this size, yet the iteration that is over its
+  # ceiling stops without buying a summary and without sending the transcript
+  # again. One request is the whole proof.
+  def test_an_iteration_at_its_ceiling_buys_no_compaction
+    agent, provider = build_agent(
+      [ tool_round("call_1"), { "content" => "the conversation so far" }, { "content" => "must never be asked" } ],
+      session_id: "loop-abc~a1~it1",
+      defaults: TUNED.merge("compaction" => { "auto" => true, "threshold_tokens" => 1,
+                                             "keep_recent_messages" => 1 }),
+      usage: { "prompt_tokens" => 12_346, "completion_tokens" => 5 }
+    )
+
+    answer = agent.process("work a step", stream: false)
+
+    assert_equal 1, provider.requests.size, "no summary request, no second attempt"
+    refute_nil agent.last_context_ceiling
+    assert_includes answer, "stopped at its context ceiling"
+  end
+
+  # The other side, so the skip above cannot be a global one: the same config
+  # and the same size on an ordinary session compacts -- the summarizer reads
+  # the earlier conversation, which is a real request -- and the turn still
+  # takes its following round. The script answers that summarizer first, so the
+  # order of the requests is the order of the facts.
+  def test_an_ordinary_session_at_the_same_size_still_compacts
+    agent, provider = build_agent(
+      [ { "content" => "what came before, in a sentence" }, tool_round("call_1"),
+        { "content" => "answered anyway" } ],
+      session_id: "chatter",
+      defaults: TUNED.merge("max_rounds" => 4,
+                            "compaction" => { "auto" => true, "threshold_tokens" => 1,
+                                              "keep_recent_messages" => 1 }),
+      usage: { "prompt_tokens" => 12_346, "completion_tokens" => 5 }
+    )
+    # A conversation already under way, so the summarizer has an earlier part to
+    # read: the current turn is always kept verbatim, and compacting nothing is
+    # not a compaction.
+    3.times { |index| agent.session.add("user", "earlier message #{index}") }
+
+    answer = agent.process("halo", stream: false)
+
+    assert_equal 3, provider.requests.size,
+                 "the summary it bought, the round, and the round after it"
+    assert_includes provider.requests[0].map { |message| message["content"].to_s }.join, "earlier message",
+                    "the first request is the summarizer reading the transcript"
+    refute_empty provider.offers[1], "the ordinary turn keeps taking tool rounds"
+    assert_includes answer, "answered anyway"
+    assert_nil agent.last_context_ceiling, "an ordinary turn has no context ceiling"
+  end
+
   # -- compaction ------------------------------------------------------------
 
   # Compaction is a request in the middle of a turn that rewrites the
