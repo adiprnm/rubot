@@ -243,7 +243,7 @@ module Rubot
       repl.refresh_thinking
 
       texts = log_texts(repl)
-      bar = texts.find { |text| text.include?("Thinking") }
+      bar = texts.find { |text| text.include?("Berpikir") }
       assert bar, "a thinking row appears with the first fragment"
       refute texts.any? { |text| text.include?("Let me look at the repo first.") },
              "the thought itself never reaches the transcript: #{texts.inspect}"
@@ -257,8 +257,8 @@ module Rubot
       age_thinking(repl, 5)
       repl.refresh_thinking
 
-      bar = log_texts(repl).find { |text| text.include?("Thinking") }
-      assert_includes bar, "Thinking… · 5s", "the clock starts past the threshold"
+      bar = log_texts(repl).find { |text| text.include?("Berpikir") }
+      assert_includes bar, "Berpikir… · 5s", "the clock starts past the threshold"
     end
 
     def test_a_long_thought_collapses_to_one_line_when_the_answer_starts
@@ -269,7 +269,7 @@ module Rubot
       repl.apply_event([ :chunk, "Here it is." ])
 
       texts = log_texts(repl)
-      assert texts.any? { |text| text.include?("Thought for 5s") }, "the wait is recorded: #{texts.inspect}"
+      assert texts.any? { |text| text.include?("Berpikir 5s") }, "the wait is recorded: #{texts.inspect}"
       refute texts.any? { |text| text.include?("Let me look at the repo first.") },
              "the thought itself is folded away"
       assert texts.any? { |text| text.include?("Here it is.") }, "the answer follows it"
@@ -286,10 +286,10 @@ module Rubot
       repl.apply_event([ :thinking, "Still counting." ])
 
       texts = log_texts(repl)
-      bar = texts.find { |text| text.include?("Thinking") }
+      bar = texts.find { |text| text.include?("Berpikir") }
       assert_includes bar, "· 6s", "the elapsed label is kept across fragments"
       refute texts.any? { |text| text.include?("Still counting.") }, "the fragment itself stays hidden"
-      assert_equal 1, texts.count { |text| text.include?("Thinking") }, "still one block, not one per fragment"
+      assert_equal 1, texts.count { |text| text.include?("Berpikir") }, "still one block, not one per fragment"
     end
 
     # Some gateways open the stream with an empty `content` chunk *before* the
@@ -303,10 +303,10 @@ module Rubot
       repl.apply_event([ :chunk, "" ])
       repl.refresh_thinking
 
-      bar = log_texts(repl).find { |text| text.include?("Thinking") }
+      bar = log_texts(repl).find { |text| text.include?("Berpikir") }
       assert bar, "the block survives an empty fragment"
       assert_includes bar, "· 4s", "and keeps its clock"
-      refute log_texts(repl).any? { |text| text.include?("Thought for") },
+      refute log_texts(repl).any? { |text| text.include?("Berpikir 4s") },
              "the block is not closed by an empty chunk"
     end
 
@@ -325,7 +325,7 @@ module Rubot
       texts = log_texts(repl)
       assert_includes texts, "Semua item itu untuk TUI.",
                       "the answer stays in one row: #{texts.inspect}"
-      refute texts.any? { |text| text.include?("Thinking") },
+      refute texts.any? { |text| text.include?("Berpikir") },
              "a mid-answer fragment opens no block of its own"
     end
 
@@ -337,7 +337,7 @@ module Rubot
       repl.apply_event([ :chunk, "Hi." ])
 
       texts = log_texts(repl)
-      refute texts.any? { |text| text.include?("Thought for") }, "no footer for a pause nobody felt"
+      refute texts.any? { |text| text.include?("Berpikir") }, "no footer for a pause nobody felt"
       refute texts.any? { |text| text.include?("Quick.") }, "the block is gone"
       refute texts.each_cons(2).any? { |above, below| above.empty? && below.empty? },
              "the blank the block sat under is reused, not doubled"
@@ -384,7 +384,7 @@ module Rubot
       repl.apply_event([ :tool_call, "shell_exec", { "command" => "cat x" } ])
 
       texts = log_texts(repl)
-      thought = texts.index { |text| text.include?("Thought for 6s") }
+      thought = texts.index { |text| text.include?("Berpikir 6s") }
       assert thought, "the block is kept: #{texts.inspect}"
       assert_equal "", texts[thought - 1], "with a blank row above it"
     end
@@ -406,7 +406,7 @@ module Rubot
       repl.apply_event([ :tool_done, "shell_exec", nil, "[Exit code: 0] ok" ])
 
       texts = log_texts(repl)
-      thought = texts.index { |text| text.include?("Thought for 6s") }
+      thought = texts.index { |text| text.include?("Berpikir 6s") }
       assert thought, "the block is kept: #{texts.inspect}"
       assert_equal "", texts[thought - 1], "with a blank row above it"
       assert_equal "", texts[thought + 1], "and one below it"
@@ -430,7 +430,7 @@ module Rubot
       repl.apply_event([ :tool_done, "shell_exec", nil, "[Exit code: 0] ok" ])
 
       texts = log_texts(repl)
-      refute texts.any? { |text| text.include?("Thought for") }, "no block: #{texts.inspect}"
+      refute texts.any? { |text| text.include?("Berpikir") }, "no block: #{texts.inspect}"
       first = texts.index { |text| text.include?("Menampilkan isi direktori ini") }
       assert_equal first + 1, texts.index { |text| text.include?("Membaca isi x") },
                    "the two tool rows are adjacent"
@@ -446,10 +446,10 @@ module Rubot
       repl.apply_event([ :stream_end, false ])
 
       texts = log_texts(repl)
-      thought = texts.index { |text| text.include?("Thought for 6s") }
+      thought = texts.index { |text| text.include?("Berpikir 6s") }
       assert thought, "the block is kept: #{texts.inspect}"
       assert_equal "", texts[thought + 1], "one blank under the block"
-      assert texts[thought + 2].include?("Turn took"), "then the footer, not another blank"
+      assert texts[thought + 2].include?("giliran"), "then the footer, not another blank"
     end
 
     def test_a_tool_call_closes_the_thinking_block
@@ -460,7 +460,7 @@ module Rubot
       repl.apply_event([ :tool_call, "shell_exec", { "command" => "ls" } ])
 
       texts = log_texts(repl)
-      assert texts.any? { |text| text.include?("Thought for 4s") }
+      assert texts.any? { |text| text.include?("Berpikir 4s") }
       refute texts.any? { |text| text.include?("I need the directory listing.") }
     end
 
@@ -474,7 +474,7 @@ module Rubot
       repl.apply_event([ :thinking, thought ])
 
       texts = log_texts(repl)
-      assert_equal 1, texts.count { |text| text.include?("Thinking") }, "one block for the whole thought"
+      assert_equal 1, texts.count { |text| text.include?("Berpikir") }, "one block for the whole thought"
       refute texts.any? { |text| text.include?("step ") }, "not one row of it is shown"
     end
 

@@ -116,8 +116,8 @@ module Rubot
       badge.render(canvas)
 
       row = plain(canvas.lines)[1]
-      assert_includes row, "working · 0s · esc cancels", row.inspect
-      assert_match(/working · \d+s · esc cancels/, row)
+      assert_includes row, "bekerja · 0s · esc membatalkan", row.inspect
+      assert_match(/bekerja · \d+s · esc membatalkan/, row)
     end
 
     def test_working_badge_shows_running_subagents
@@ -149,13 +149,13 @@ module Rubot
 
       canvas = ::TUI::Canvas.new(80, 3)
       badge.render(canvas)
-      assert_includes plain(canvas.lines)[1], "working · 2m 05s · esc cancels"
+      assert_includes plain(canvas.lines)[1], "bekerja · 2m 05s · esc membatalkan"
 
       badge.tick(nil)
       canvas = ::TUI::Canvas.new(80, 3)
       badge.render(canvas)
       assert_nil badge.elapsed, "the clock stops with the turn"
-      refute plain(canvas.lines).join.include?("working"), "idle band is blank"
+      refute plain(canvas.lines).join.include?("bekerja"), "idle band is blank"
     end
 
     def test_workspace_line_sits_between_the_prompt_and_the_usage_footer
@@ -722,10 +722,10 @@ end
       ev << [ :stream_end ]
       repl.pump
 
-      line = plain(app.render_lines).find { |l| l.include?("Turn took") }
+      line = plain(app.render_lines).find { |l| l.include?("giliran") }
       assert line, "a turn footer is shown"
-      assert_includes line, "\u273b Turn took 2m 25s"
-      assert_includes line, "(Total time 2m 25s \u00b7 1 turn)"
+      assert_includes line, "\u273b 2m 25s giliran"
+      assert_includes line, "(total waktu 2m 25s \u00b7 1 giliran)"
 
       ev << [ :stream_start ]
       repl.pump
@@ -733,9 +733,9 @@ end
       ev << [ :stream_end ]
       repl.pump
 
-      line = plain(app.render_lines).reverse.find { |l| l.include?("Turn took") }
-      assert_includes line, "Turn took 29m 15s"
-      assert_includes line, "(Total time 31m 40s \u00b7 2 turns)"
+      line = plain(app.render_lines).reverse.find { |l| l.include?("giliran") }
+      assert_includes line, "29m 15s giliran"
+      assert_includes line, "(total waktu 31m 40s \u00b7 2 giliran)"
     end
   end
 end

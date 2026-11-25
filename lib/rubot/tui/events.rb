@@ -327,7 +327,7 @@ module Rubot
 
         if elapsed > THINKING_SECONDS
           @log.set_entry(index, [ [ MARK[:think] + " ", :muted ],
-                                  [ "Thought for #{format_duration(elapsed)}", :dim ] ],
+                                  [ I18n.t("thinking.done", duration: format_duration(elapsed)), :dim ] ],
                          keep_leading: true, indent: 2)
           # A kept block is set off by a blank row on both sides: its own remark
           # on the turn, not a line of whatever it sits between. The block is
@@ -345,7 +345,7 @@ module Rubot
       # The live block: a header that grows an elapsed counter once the wait is
       # long enough to notice. Nothing of the thought itself is drawn.
       def thinking_segments(elapsed = nil)
-        header = [ [ MARK[:think] + " ", :accent ], [ "Thinking…", :muted ] ]
+        header = [ [ MARK[:think] + " ", :accent ], [ I18n.t("thinking.live"), :muted ] ]
         header << [ " · #{format_duration(elapsed)}", :dim ] if elapsed
         header
       end
@@ -380,9 +380,10 @@ module Rubot
         @turn_total_seconds += duration
         @turn_count += 1
 
-        turns = @turn_count == 1 ? "turn" : "turns"
-        text = "Turn took #{format_duration(duration)} " \
-               "(Total time #{format_duration(@turn_total_seconds)} · #{@turn_count} #{turns})"
+        turns = I18n.t(@turn_count == 1 ? "footer.turn_one" : "footer.turn_other")
+        text = I18n.t("footer.turn", duration: format_duration(duration),
+                      total: format_duration(@turn_total_seconds),
+                      count: @turn_count, turns: turns)
         @log.add_entry([ [ "#{TURN_MARK} ", :muted ], [ text, :dim ] ])
         @log.add_entry([ [ "", nil ] ])
       end
