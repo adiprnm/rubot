@@ -986,7 +986,7 @@ module Rubot
 
         assert_equal :tool, item[:kind]
         assert_equal "shell_exec", item[:name]
-        assert_equal "Menampilkan tanggal dan waktu", item[:detail]
+        assert_equal "Showing the date and time", item[:detail]
         assert_equal :ok, item[:state]
       end
 

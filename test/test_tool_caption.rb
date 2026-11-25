@@ -127,10 +127,46 @@ module Rubot
                    "a path the reader can already place is left alone"
     end
 
-    def test_every_file_operation_gets_a_verb
-      ToolCaption::FILE_VERBS.each do |operation, verb|
-        assert_equal "#{verb}notes.md",
-                     ToolCaption.caption("file_ops", { "operation" => operation, "path" => "notes.md" })
+    # Every operation the tool accepts has an entry of its own, and each entry
+    # puts the path where that language puts it.
+    FILE_ROWS = {
+      "read" => "Membaca isi notes.md",
+      "write" => "Menulis berkas notes.md",
+      "edit" => "Mengubah isi notes.md",
+      "append" => "Menambahkan isi ke notes.md",
+      "delete" => "Menghapus notes.md",
+      "list" => "Menampilkan isi direktori notes.md",
+      "info" => "Memeriksa notes.md"
+    }.freeze
+
+    def test_every_file_operation_gets_a_sentence
+      assert_equal ToolCaption::FILE_OPERATIONS.sort, FILE_ROWS.keys.sort,
+                   "the operations the tool takes and the rows they draw are one list"
+
+      FILE_ROWS.each do |operation, sentence|
+        assert_equal sentence, ToolCaption.caption("file_ops", { "operation" => operation, "path" => "notes.md" })
+      end
+    end
+
+    # The other half of the dictionary's bargain: whatever operation a tool can
+    # name, both languages have a sentence for it. An operation added to one of
+    # these tables and not to the dictionary is a row that raises on screen.
+    def test_every_operation_a_tool_accepts_has_a_sentence_in_both_languages
+      {
+        "tool.file" => ToolCaption::FILE_OPERATIONS,
+        "tool.memory" => ToolCaption::MEMORY_OPERATIONS,
+        "tool.cron" => ToolCaption::CRON_OPERATIONS,
+        "tool.loop" => ToolCaption::LOOP_OPERATIONS,
+        "tool.instagram" => ToolCaption::INSTAGRAM_OPERATIONS,
+        "tool.git" => ToolCaption::GIT_OPERATIONS,
+        "tool.package" => ToolCaption::PACKAGE_OPERATIONS.values.uniq
+      }.each do |prefix, operations|
+        operations.each do |operation|
+          Rubot::I18n::LOCALES.each do |locale|
+            refute_empty Rubot::I18n.t("#{prefix}.#{operation}", locale: locale),
+                         "#{prefix}.#{operation} has no sentence in #{locale}"
+          end
+        end
       end
     end
 

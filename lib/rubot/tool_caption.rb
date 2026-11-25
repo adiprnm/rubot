@@ -25,6 +25,12 @@ module Rubot
   # are read as the thing the reader would have said, and only the ones nobody
   # would recognize are left as a plain "ran a command". `raw` is the one place
   # the command survives, for that hover.
+  #
+  # No sentence is written here: every branch names a key of the dictionary
+  # (`tool.…` in lib/rubot/i18n.rb) and fills in what the arguments supply, so
+  # the language the reader picked reaches the intent table, the verbs, the
+  # durations and the place a call points at alike. The tables below say only
+  # which operation has an entry of its own; the words are the dictionary's.
   module ToolCaption
     PATH_SEGMENTS = 3
     PATTERN_CHARS = 60
@@ -46,57 +52,37 @@ module Rubot
     # where rounding to "sebentar" would be the opposite of the truth.
     SLEEP_ARGUMENT = /\A([+-]?(?:inf(?:inity)?|(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:e[+-]?\d+)?))([smhd])?\z/i
 
-    FILE_VERBS = {
-      "read" => "Membaca isi ",
-      "write" => "Menulis berkas ",
-      "edit" => "Mengubah isi ",
-      "append" => "Menambahkan isi ke ",
-      "delete" => "Menghapus ",
-      "list" => "Menampilkan isi direktori ",
-      "info" => "Memeriksa "
-    }.freeze
-
-    MEMORY_VERBS = {
-      "read" => "Mengingat kembali catatan",
-      "append" => "Mencatat satu hal ke ingatan",
-      "update_section" => "Merapikan satu bagian catatan"
-    }.freeze
-
-    CRON_VERBS = {
-      "add" => "Menjadwalkan tugas berkala",
-      "list" => "Melihat daftar tugas terjadwal",
-      "detail" => "Melihat satu tugas terjadwal",
-      "remove" => "Membatalkan satu tugas",
-      "enable" => "Mengaktifkan satu tugas",
-      "disable" => "Menonaktifkan satu tugas"
-    }.freeze
-
-    # `start` is missing on purpose: it is the one operation with something to
+    # The operations each tool names in its arguments, and so the entries the
+    # dictionary owes it (`tool.file.read`, `tool.cron.add`, …): a table here
+    # and a key in both languages, nothing else. An operation this does not
+    # list still reads as a sentence, through `tool.operation_unknown`, rather
+    # than as the bare word the model happened to send.
+    FILE_OPERATIONS = %w[read write edit append delete list info].freeze
+    MEMORY_OPERATIONS = %w[read append update_section].freeze
+    CRON_OPERATIONS = %w[add list detail remove enable disable].freeze
+    # `start` is absent on purpose: it is the one operation with something to
     # say about the call (see `loop_caption`).
-    LOOP_VERBS = {
-      "status" => "Melihat keadaan satu loop",
-      "list" => "Melihat daftar loop",
-      "pause" => "Menghentikan loop sementara",
-      "resume" => "Melanjutkan loop yang berhenti",
-      "stop" => "Menghentikan loop",
-      "undo" => "Membatalkan iterasi terakhir"
-    }.freeze
-
-    INSTAGRAM_VERBS = {
-      "connect" => "Menyiapkan sambungan Instagram",
-      "status" => "Memeriksa akun Instagram",
-      "schedule" => "Menjadwalkan unggahan Instagram",
-      "publish" => "Mengunggah ke Instagram",
-      "posts" => "Melihat daftar unggahan Instagram",
-      "cancel" => "Membatalkan unggahan Instagram",
-      "link" => "Menautkan akun Instagram",
-      "disconnect" => "Melepas akun Instagram"
+    LOOP_OPERATIONS = %w[status list pause resume stop undo].freeze
+    INSTAGRAM_OPERATIONS = %w[connect status schedule publish posts cancel link disconnect].freeze
+    GIT_OPERATIONS = %w[status diff log add commit push pull checkout branch stash show clone].freeze
+    # A shell verb that says the same thing under another name: the sentence is
+    # the one its target entry already has.
+    GIT_ALIASES = { "fetch" => "pull", "switch" => "checkout" }.freeze
+    PACKAGE_OPERATIONS = {
+      "install" => "install", "i" => "install", "add" => "install", "ci" => "install",
+      "test" => "test", "t" => "test", "run" => "run", "build" => "build"
     }.freeze
 
     def self.caption(tool_name, args)
       args = {} unless args.is_a?(Hash)
-      name = tool_name.to_s
+      # An entry whose only variable came through empty ("Reading %{target}")
+      # ends on the space before it; the row must not.
+      row_for(tool_name.to_s, args).rstrip
+    end
 
+    # Which branch owns this call. Every branch names dictionary keys; none of
+    # them writes a sentence.
+    def self.row_for(name, args)
       case name
       when "shell_exec" then command_caption(args)
       when "file_ops" then file_caption(args)
@@ -105,10 +91,12 @@ module Rubot
       when "delegate" then delegate_caption(args)
       when "subagent_results" then I18n.t("tool.subagent_results")
       when "send_files" then send_caption(args)
-      when "memory" then operation_caption("Memori", MEMORY_VERBS, args)
-      when "cron" then operation_caption("Tugas terjadwal", CRON_VERBS, args)
+      when "memory" then verb_caption("tool.memory", "tool.name.memory", MEMORY_OPERATIONS, args)
+      when "cron" then verb_caption("tool.cron", "tool.name.cron", CRON_OPERATIONS, args)
       when "loop" then loop_caption(args)
-      when "instagram" then INSTAGRAM_VERBS.fetch(args["operation"].to_s, "Mengurus Instagram")
+      when "instagram"
+        verb_caption("tool.instagram", "tool.name.instagram", INSTAGRAM_OPERATIONS, args,
+                     other: "tool.instagram.other")
       when "notify" then I18n.t("tool.notify")
       else unknown_caption(name, args)
       end
@@ -176,49 +164,54 @@ module Rubot
       WRAPPERS.include?(token) || (token.include?("=") && !token.start_with?("-"))
     end
 
+    # The table the whole shell vocabulary hangs on: one entry per verb the
+    # reader would recognize, each built from a key and the arguments. A verb
+    # that is not here is not guessed at (see `command_caption`).
     def self.intent_for(head, tokens, segment)
       words = positional(tokens)
 
       case head
-      when *DIRECTORY_WORDS then "Menampilkan isi direktori#{where(words.first, fallback: ' ini')}"
+      when *DIRECTORY_WORDS
+        I18n.t("tool.shell.directory",
+               target: place(words.first, default: "tool.place.here", here: "tool.place.here"))
       when *READ_WORDS then read_intent(head, tokens, words)
       when *SEARCH_WORDS then search_intent(segment)
       when *PACKAGE_WORDS then package_intent(head, words)
       when "git" then git_intent(words)
-      when "find" then "Mencari berkas#{where(words.first)}"
-      when "mkdir" then "Membuat direktori#{where(words.first)}"
-      when "rm", "rmdir" then "Menghapus #{words.join(' ')}".strip
-      when "mv" then "Memindahkan #{words.first}#{where(words[1], prefix: ' ke ')}"
-      when "cp" then "Menyalin #{words.first}#{where(words[1], prefix: ' ke ')}"
-      when "touch" then "Membuat berkas#{where(words.first)}"
-      when "chmod" then "Mengubah izin #{words.last}".strip
-      when "wc" then "Menghitung baris#{where(words.last)}"
-      when "curl", "wget" then "Mengambil isi halaman #{clip(words.last.to_s, URL_CHARS)}".strip
-      when "ps", "top", "htop" then "Melihat proses yang sedang berjalan"
-      when "kill", "pkill", "killall" then "Menghentikan proses"
-      when "date" then "Menampilkan tanggal dan waktu"
+      when "find" then I18n.t("tool.shell.find", where: where(words.first))
+      when "mkdir" then I18n.t("tool.shell.mkdir", where: where(words.first))
+      when "rm", "rmdir" then I18n.t("tool.shell.remove", target: words.join(" "))
+      when "mv" then I18n.t("tool.shell.move", from: place(words.first), to: toward(words[1]))
+      when "cp" then I18n.t("tool.shell.copy", from: place(words.first), to: toward(words[1]))
+      when "touch" then I18n.t("tool.shell.touch", where: where(words.first))
+      when "chmod" then I18n.t("tool.shell.chmod", where: where(words.last, key: "tool.place.on"))
+      when "wc" then I18n.t("tool.shell.count_lines", where: where(words.last))
+      when "curl", "wget" then I18n.t("tool.shell.download", url: clip(words.last.to_s, URL_CHARS))
+      when "ps", "top", "htop" then I18n.t("tool.shell.processes")
+      when "kill", "pkill", "killall" then I18n.t("tool.shell.kill")
+      when "date" then I18n.t("tool.shell.date")
       when "sleep" then sleep_intent(tokens)
-      when "which", "type" then "Mencari lokasi perintah #{words.first}".strip
-      when "echo", "printf" then "Menuliskan teks pendek"
-      when "ssh", "scp" then "Menghubungi server lain"
-      when "sqlite3" then "Membuka basis data"
+      when "which", "type" then I18n.t("tool.shell.locate", command: words.first.to_s)
+      when "echo", "printf" then I18n.t("tool.shell.echo")
+      when "ssh", "scp" then I18n.t("tool.shell.remote")
+      when "sqlite3" then I18n.t("tool.shell.database")
       when "ruby", "ruby3" then ruby_intent(words)
       when "node" then script_intent("Node", words)
       when "python", "python3" then script_intent("Python", words)
-      when "rubocop" then "Memeriksa gaya kode"
-      when "rspec" then "Menjalankan test"
+      when "rubocop" then I18n.t("tool.shell.style")
+      when "rspec" then I18n.t("tool.shell.tests")
       when "rake" then rake_intent(words)
       when "go" then go_intent(words)
-      when "docker" then "Menjalankan docker#{where(words.first)}"
-      when "tar", "zip", "unzip", "gzip" then "Mengemas atau membuka berkas"
-      when "systemctl", "launchctl", "service" then "Mengatur layanan sistem"
+      when "docker" then I18n.t("tool.shell.docker", command: words.first.to_s)
+      when "tar", "zip", "unzip", "gzip" then I18n.t("tool.shell.archive")
+      when "systemctl", "launchctl", "service" then I18n.t("tool.shell.service")
       end
     end
 
     def self.read_intent(head, tokens, words)
-      return "Melihat log secara langsung" if head == "tail" && tokens.any? { |token| token.start_with?("-f") }
+      return I18n.t("tool.shell.read_follow") if head == "tail" && tokens.any? { |token| token.start_with?("-f") }
 
-      "Membaca isi#{where(words.last, fallback: ' berkas')}"
+      I18n.t("tool.shell.read", target: place(words.last, default: "tool.place.file"))
     end
 
     # `sleep 90` is what waiting looks like on the command line, and the generic
@@ -233,11 +226,11 @@ module Rubot
     def self.sleep_intent(tokens)
       seconds = Array(tokens).sum { |token| sleep_seconds(token) || 0.0 }
       if seconds.infinite?
-        return seconds.positive? ? "Menunggu tanpa batas" : "Menunggu sebentar"
+        return I18n.t(seconds.positive? ? "tool.shell.sleep_unbounded" : "tool.shell.sleep_brief")
       end
 
       label = wait_label(seconds)
-      label ? "Menunggu #{label}" : "Menunggu sebentar"
+      label ? I18n.t("tool.shell.sleep", duration: label) : I18n.t("tool.shell.sleep_brief")
     end
 
     # Everything `sleep` accepts as a duration: `90`, `1.5`, `.5`, `+5`, `1e3`,
@@ -263,26 +256,29 @@ module Rubot
 
     # nil when there is nothing a row could count: no argument at all, or one
     # too short to round up to a second. `sleep 0.4` is still a wait, just not
-    # one worth putting a number on.
+    # one worth putting a number on. The units are the dictionary's, because a
+    # wait is the one caption whose whole message is a number and a noun.
     def self.wait_label(seconds)
       total = seconds.to_f.round
       return nil if total < 1
-      return "#{total} detik" if total < 60
+      return I18n.t("tool.wait.seconds", count: total) if total < 60
 
       minutes, rest = total.divmod(60)
       if minutes < 60
-        return "#{minutes} menit" if rest.zero?
+        return I18n.t("tool.wait.minutes", count: minutes) if rest.zero?
 
-        return "#{minutes} menit #{rest} detik"
+        return I18n.t("tool.wait.minutes_seconds", minutes: minutes, seconds: rest)
       end
 
       hours, minutes = minutes.divmod(60)
       if hours < 24
-        return minutes.zero? ? "#{hours} jam" : "#{hours} jam #{minutes} menit"
+        return I18n.t("tool.wait.hours", count: hours) if minutes.zero?
+
+        return I18n.t("tool.wait.hours_minutes", hours: hours, minutes: minutes)
       end
 
       days, hours = hours.divmod(24)
-      hours.zero? ? "#{days} hari" : "#{days} hari #{hours} jam"
+      hours.zero? ? I18n.t("tool.wait.days", count: days) : I18n.t("tool.wait.days_hours", days: days, hours: hours)
     end
 
     # The pattern is read off the line rather than off the split tokens: a
@@ -291,65 +287,55 @@ module Rubot
     def self.search_intent(segment)
       match = segment.match(/\A\S+\s+(?:-\S+\s+)*("[^"]*"|'[^']*'|\S+)/)
       pattern = match ? match[1].delete_prefix('"').delete_suffix('"').delete_prefix("'").delete_suffix("'") : ""
-      return "Mencari sesuatu di dalam berkas" if pattern.empty?
+      return I18n.t("tool.shell.grep_bare") if pattern.empty?
 
-      "Mencari \"#{clip(pattern, PATTERN_CHARS)}\" di dalam berkas"
+      I18n.t("tool.shell.grep", pattern: "\"#{clip(pattern, PATTERN_CHARS)}\"")
     end
 
     def self.git_intent(words)
-      case words.first.to_s
-      when "status" then "Memeriksa status git"
-      when "diff" then "Melihat perubahan yang belum disimpan"
-      when "log" then "Melihat riwayat commit"
-      when "add" then "Menandai perubahan untuk di-commit"
-      when "commit" then "Menyimpan perubahan ke git"
-      when "push" then "Mengirim commit ke remote"
-      when "pull", "fetch" then "Mengambil pembaruan dari remote"
-      when "checkout", "switch" then "Berpindah branch#{where(words[1])}"
-      when "branch" then "Melihat daftar branch"
-      when "stash" then "Menyimpan perubahan sementara"
-      when "show" then "Melihat rincian satu commit"
-      when "clone" then "Mengunduh salinan repositori"
-      else "Mengurus repositori git"
-      end
+      sub = words.first.to_s
+      sub = GIT_ALIASES.fetch(sub, sub)
+      return I18n.t("tool.git.other") unless GIT_OPERATIONS.include?(sub)
+
+      key = "tool.git.#{sub}"
+      return I18n.t(key) unless sub == "checkout"
+
+      I18n.t(key, where: toward(words[1]))
     end
 
     def self.package_intent(head, words)
-      case words.first.to_s
-      when "install", "i", "add", "ci" then "Memasang dependensi"
-      when "test", "t" then "Menjalankan test"
-      when "run" then "Menjalankan skrip proyek"
-      when "build" then "Membangun proyek"
-      else head == "gem" ? "Mengurus gem" : "Mengurus dependensi"
-      end
+      operation = PACKAGE_OPERATIONS[words.first.to_s]
+      return I18n.t("tool.package.#{operation}") if operation
+
+      I18n.t(head == "gem" ? "tool.package.gem" : "tool.package.other")
     end
 
     def self.rake_intent(words)
-      return "Menjalankan test" if words.include?("test")
-      return "Menjalankan migrasi basis data" if words.any? { |word| word.start_with?("db:") }
+      return I18n.t("tool.shell.tests") if words.include?("test")
+      return I18n.t("tool.shell.migrate") if words.any? { |word| word.start_with?("db:") }
 
-      "Menjalankan tugas rake"
+      I18n.t("tool.shell.rake")
     end
 
     def self.ruby_intent(words)
-      return "Menjalankan test" if words.any? { |word| word.match?(/(_test|test_|_spec)\w*\.rb\z/) }
+      return I18n.t("tool.shell.tests") if words.any? { |word| word.match?(/(_test|test_|_spec)\w*\.rb\z/) }
 
       script_intent("Ruby", words)
     end
 
     def self.script_intent(language, words)
       script = words.find { |word| word.include?(".rb") || word.include?(".js") || word.include?(".py") }
-      return "Menjalankan skrip #{language}#{where(script)}" if script
+      return I18n.t("tool.shell.script", language: language, where: where(script)) if script
 
-      "Menjalankan #{language}"
+      I18n.t("tool.shell.script_bare", language: language)
     end
 
     def self.go_intent(words)
       case words.first.to_s
-      when "test" then "Menjalankan test"
-      when "build" then "Membangun program"
-      when "run" then "Menjalankan program"
-      else "Menjalankan perintah go"
+      when "test" then I18n.t("tool.shell.tests")
+      when "build" then I18n.t("tool.shell.go_build")
+      when "run" then I18n.t("tool.shell.go_run")
+      else I18n.t("tool.shell.go")
       end
     end
 
@@ -359,34 +345,55 @@ module Rubot
             .reject { |token| token.include?("=") }
     end
 
-    # Where a call points, as a clause: empty when it points at nothing, " ini"
-    # when it points at the current directory, and the last segments otherwise.
-    def self.where(target, prefix: " ", fallback: "")
+    # The place a call points at, as a word a sentence can stand on: empty when
+    # it points nowhere, the language's own word for the working directory when
+    # that is where it points, and the last segments of the path otherwise.
+    # `default` is the key to fall back on when there is no argument at all: `ls`
+    # with nothing after it is still a listing of where the work happened, and
+    # `here` is the word for the directory the command ran in, since a listing
+    # puts the noun in its own template.
+    def self.place(target, default: nil, here: "tool.place.directory")
       label = path_label(target.to_s)
-      return fallback if label.empty?
-      return "#{prefix}ini" if [ ".", "./" ].include?(label)
+      return default ? I18n.t(default) : "" if label.empty?
+      return I18n.t(here) if [ ".", "./" ].include?(label)
 
-      "#{prefix}#{label}"
+      label
+    end
+
+    # The same place as a clause ready to append: empty when it points nowhere,
+    # otherwise with the preposition in front, which each language supplies
+    # (`tool.place.in`, `.to`, `.on`).
+    def self.where(target, key: "tool.place.in")
+      word = place(target)
+      word.empty? ? "" : I18n.t(key, target: word)
+    end
+
+    def self.toward(target)
+      where(target, key: "tool.place.to")
     end
 
     # --- the other tools --------------------------------------------------
 
+    # One entry per operation the tool accepts (see FILE_OPERATIONS), and the
+    # path is the variable each of them places: after the verb, or after the
+    # noun the language puts first.
     def self.file_caption(args)
-      verb = FILE_VERBS.fetch(args["operation"].to_s, "Membaca isi ")
+      operation = args["operation"].to_s
+      operation = "read" unless FILE_OPERATIONS.include?(operation)
       path = args["path"].to_s.strip
-      return files_phrase(verb, args["paths"]) if path.empty?
+      target = path.empty? ? paths_target(args["paths"]) : place(path)
 
-      "#{verb}#{path_label(path)}"
+      I18n.t("tool.file.#{operation}", target: target)
     end
 
     # `paths` is the plural shape of a read, and a row that said "reading" with
     # nothing after it would leave the reader wondering what it read.
-    def self.files_phrase(verb, paths)
+    def self.paths_target(paths)
       list = Array(paths).map(&:to_s).reject(&:empty?)
-      return verb.strip if list.empty?
-      return "#{verb}#{path_label(list.first)}" if list.size == 1
+      return "" if list.empty?
+      return place(list.first) if list.size == 1
 
-      "#{verb.sub(/\s+\z/, '')} #{list.size} berkas"
+      I18n.t("tool.place.files", count: list.size)
     end
 
     def self.search_caption(args)
@@ -394,15 +401,14 @@ module Rubot
       files = args["operation"].to_s == "files"
       return I18n.t(files ? "tool.search.files" : "tool.search.code") if pattern.empty?
 
-      label = clip(pattern, PATTERN_CHARS)
-      files ? "Mencari berkas bernama \"#{label}\"" : "Mencari \"#{label}\" di dalam kode"
+      I18n.t(files ? "tool.search.files_named" : "tool.search.code_for", pattern: clip(pattern, PATTERN_CHARS))
     end
 
     def self.fetch_caption(args)
       url = args["url"].to_s.strip
       return I18n.t("tool.fetch") if url.empty?
 
-      "Membuka halaman #{clip(url, URL_CHARS)}"
+      I18n.t("tool.fetch_page", url: clip(url, URL_CHARS))
     end
 
     def self.delegate_caption(args)
@@ -422,26 +428,32 @@ module Rubot
 
     # A loop is started for a goal, and the goal is the only part of that call a
     # reader cares about: the worktree, the branch and the iteration cap are all
-    # consequences of it. Everything else the tool does is one verb (see
-    # LOOP_VERBS), and an operation this map does not know still reads as a
-    # sentence rather than as the word the model happened to send.
+    # consequences of it. Everything else the tool does is one entry per
+    # operation (see LOOP_OPERATIONS), and an operation this list does not know
+    # still reads as a sentence rather than as the word the model happened to
+    # send.
     def self.loop_caption(args)
       operation = args["operation"].to_s
-      return operation_caption("Loop", LOOP_VERBS, args) unless operation == "start"
+      unless operation == "start"
+        return verb_caption("tool.loop", "tool.name.loop", LOOP_OPERATIONS, args)
+      end
 
       goal = args["goal"].to_s.gsub(/\s+/, " ").strip
-      return "Memulai loop baru" if goal.empty?
+      return I18n.t("tool.loop.start_bare") if goal.empty?
 
-      "Memulai loop: #{clip(goal, PATTERN_CHARS)}"
+      I18n.t("tool.loop.start", goal: clip(goal, PATTERN_CHARS))
     end
 
-    def self.operation_caption(prefix, verbs, args)
+    # The shape every tool with an `operation` argument takes: the entry for the
+    # operation it named, the tool's own name when it named none, and a sentence
+    # that still reads when it named one this build has never heard of.
+    def self.verb_caption(key_prefix, name_key, operations, args, other: nil)
       operation = args["operation"].to_s
-      verb = verbs[operation]
-      return verb if verb
-      return prefix if operation.empty?
+      return I18n.t(name_key) if operation.empty?
+      return I18n.t("#{key_prefix}.#{operation}") if operations.include?(operation)
+      return I18n.t(other) if other
 
-      "#{prefix}: #{operation}"
+      I18n.t("tool.operation_unknown", prefix: I18n.t(name_key), operation: operation)
     end
 
     def self.unknown_caption(name, args)

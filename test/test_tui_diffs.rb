@@ -23,7 +23,7 @@ module Rubot
                              after: "one\nTWO\nthree\n")
 
         texts = entry_texts(repl)
-        tool_ix = texts.index { |text| text.include?("Menulis berkas") }
+        tool_ix = texts.index { |text| text.include?("Writing ") }
         diff_ix = texts.index { |text| text.match?(/\A[+-]\d/) }
 
         assert tool_ix, "the tool row still renders: #{texts.inspect}"

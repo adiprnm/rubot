@@ -235,6 +235,29 @@ class TestI18n < Minitest::Test
     assert_includes web_compact_note("id", :busy), "Turn masih berjalan"
   end
 
+  # A caption is not the command and not the argument: the sentence is built
+  # from the intent table, the verbs and the durations too, so the switch has to
+  # reach all of them. Six calls are drawn here, each by the branch that owns
+  # it, through the same function the channels call.
+  def test_a_caption_follows_the_language_through_the_whole_intent_table
+    assert_equal [
+      "Showing what is inside this directory",
+      "Searching for \"Turn\" in the files",
+      "Looking for files in lib",
+      "Asking planner for help",
+      "Reading lib/rubot/agent.rb",
+      "Waiting 1m 30s"
+    ], spoken_captions("en")
+    assert_equal [
+      "Menampilkan isi direktori ini",
+      "Mencari \"Turn\" di dalam berkas",
+      "Mencari berkas di lib",
+      "Meminta bantuan planner",
+      "Membaca isi lib/rubot/agent.rb",
+      "Menunggu 1 menit 30 detik"
+    ], spoken_captions("id")
+  end
+
   private
 
   # One /compact in a real TUI, with only the agent's answer stubbed: the rows
@@ -267,6 +290,19 @@ class TestI18n < Minitest::Test
 
   def web_compact_note(locale, state)
     Rubot::I18n.with_locale(locale) { Rubot::Web::View.render("_compact_note", state: state) }
+  end
+
+  def spoken_captions(locale)
+    Rubot::I18n.with_locale(locale) do
+      [
+        Rubot::ToolCaption.caption("shell_exec", { "command" => "ls" }),
+        Rubot::ToolCaption.caption("shell_exec", { "command" => "grep -rn Turn lib" }),
+        Rubot::ToolCaption.caption("shell_exec", { "command" => "find lib" }),
+        Rubot::ToolCaption.caption("delegate", { "agent" => "planner" }),
+        Rubot::ToolCaption.caption("file_ops", { "operation" => "read", "path" => "lib/rubot/agent.rb" }),
+        Rubot::ToolCaption.caption("shell_exec", { "command" => "sleep 90" })
+      ]
+    end
   end
 
   def config_with(data)
