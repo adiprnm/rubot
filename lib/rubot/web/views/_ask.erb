@@ -1,0 +1,52 @@
+<%# The one ask the turn is waiting on: either a confirmation from the safety
+    guard or a question from the ask_user tool. Both are drawn from turn state,
+    so a page refreshed mid-question still shows it, and both are answered
+    through a route that wakes the same waiter. -%>
+<% if prompt -%>
+<% if prompt[:kind] == :question -%>
+<div class="ask ask-question">
+  <p class="ask-title"><%= h(prompt[:question]) %></p>
+  <% options = Array(prompt[:options]) -%>
+  <% unless options.empty? -%>
+  <div class="ask-options">
+    <% options.each_with_index do |option, index| -%>
+    <%# A button, not a form: the index is the whole answer, and a form per
+        option would submit whatever the reader typed in the box below as
+        well. -%>
+    <button class="btn ask-option"
+            hx-post="/turns/<%= h(turn_id) %>/ask"
+            hx-vals='{"choice":"<%= index %>","token":"<%= h(prompt[:token]) %>"}'
+            hx-swap="none">
+      <span class="ask-option-label"><%= h(option[:label]) %></span>
+      <% if option[:description] -%>
+      <span class="ask-option-description"><%= h(option[:description]) %></span>
+      <% end -%>
+    </button>
+    <% end -%>
+  </div>
+  <% end -%>
+  <form class="ask-custom" hx-post="/turns/<%= h(turn_id) %>/ask" hx-swap="none">
+    <input type="hidden" name="choice" value="custom">
+    <input type="hidden" name="token" value="<%= h(prompt[:token]) %>">
+    <input class="ask-custom-input" type="text" name="text" autocomplete="off"
+           placeholder="<%= h(I18n.t("web.ask.custom")) %>">
+    <button class="btn" type="submit"><%= h(I18n.t("web.ask.send")) %></button>
+  </form>
+</div>
+<% else -%>
+<div class="ask ask-confirm">
+  <p class="confirm-title"><%= h(I18n.t("web.confirm.title", name: prompt[:name])) %></p>
+  <p class="confirm-reason"><%= h(prompt[:reason]) %></p>
+  <div class="confirm-actions">
+    <button class="btn primary"
+            hx-post="/turns/<%= h(turn_id) %>/confirm"
+            hx-vals='{"value":"1"}'
+            hx-swap="none"><%= h(I18n.t("web.confirm.continue")) %></button>
+    <button class="btn"
+            hx-post="/turns/<%= h(turn_id) %>/confirm"
+            hx-vals='{"value":"0"}'
+            hx-swap="none"><%= h(I18n.t("web.confirm.cancel")) %></button>
+  </div>
+</div>
+<% end -%>
+<% end -%>

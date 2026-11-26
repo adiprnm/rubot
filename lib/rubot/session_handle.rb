@@ -81,6 +81,7 @@ module Rubot
       end
 
       def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil,
+                  on_ask: nil,
                   on_assistant_text: nil, on_reasoning: nil, on_steer: nil, on_stopped: nil, on_usage: nil,
                   on_subagent: nil, on_compaction: nil, on_compaction_start: nil, on_compaction_failed: nil,
                   on_delegate: nil, on_loop: nil, stream: true, &on_chunk)
@@ -141,6 +142,18 @@ module Rubot
             raise ActorError, "confirmation channel not established" unless control
 
             control << [ :confirm_result, event[1], answered ]
+          when :ask
+            # The question itself travels out; the reader's answer travels back.
+            # A channel that has no way to ask answers with an expiry, which is
+            # the honest thing: the model then decides on its own.
+            answer = begin
+              on_ask ? on_ask.call(event[2]) : { outcome: :expired }
+            rescue StandardError
+              { outcome: :expired } # never leave the actor blocked on a reply
+            end
+            raise ActorError, "question channel not established" unless control
+
+            control << [ :ask_result, event[1], answer ]
           when :done
             @last_round_cap = event[2].is_a?(Hash) ? event[2][:round_cap] : nil
             @last_context_ceiling = event[2].is_a?(Hash) ? event[2][:context_ceiling] : nil

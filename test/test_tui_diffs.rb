@@ -391,6 +391,68 @@ module Rubot
       assert_equal false, second.value
     end
 
+    # --- the question ---------------------------------------------------
+
+    def test_picking_an_option_answers_the_question_with_that_option
+      repl = build_repl
+      answer = nil
+      worker = Thread.new do
+        answer = repl.send(:ask_callback).call(question: "Where should it go?",
+                                        options: [ { label: "New file" }, { label: "Extend 018" } ])
+      end
+      repl.apply_event(repl.instance_variable_get(:@events).pop)
+      list = repl.instance_variable_get(:@confirm_prompt)
+
+      list.handle_key(::TUI::Key.new(:right))
+      list.handle_key(::TUI::Key.new(:enter))
+
+      assert worker.join(2)
+      assert_equal({ outcome: :option, label: "Extend 018" }, answer)
+    end
+
+    # "Other" is the last chip on every question, and choosing it moves the
+    # answer to the prompt box: a second inline editor inside a prompt that
+    # already is one would be the wrong shape.
+    def test_other_takes_the_next_typed_line_as_the_answer
+      repl = build_repl
+      answer = nil
+      worker = Thread.new do
+        answer = repl.send(:ask_callback).call(question: "What should I call it?",
+                                        options: [ { label: "A" }, { label: "B" } ])
+      end
+      repl.apply_event(repl.instance_variable_get(:@events).pop)
+      list = repl.instance_variable_get(:@confirm_prompt)
+
+      list.handle_key(::TUI::Key.new(:right))
+      list.handle_key(::TUI::Key.new(:right))
+      list.handle_key(::TUI::Key.new(:enter))
+
+      assert list.awaiting_text?, "Other hands the keyboard back to the prompt"
+      list.deliver_text("something else")
+
+      assert worker.join(2)
+      assert_equal({ outcome: :custom, text: "something else" }, answer)
+    end
+
+    # A confirmation escapes to "no". A question has no safe default to escape
+    # to, so esc must not answer it: the deadline does.
+    def test_escape_does_not_answer_a_question
+      repl = build_repl
+      worker = Thread.new do
+        repl.send(:ask_callback).call(question: "Anyone?", options: [ { label: "A" }, { label: "B" } ])
+      end
+      repl.apply_event(repl.instance_variable_get(:@events).pop)
+      list = repl.instance_variable_get(:@confirm_prompt)
+
+      list.handle_key(::TUI::Key.new(:escape))
+
+      assert list.active?, "a question is ended by its deadline, not by esc"
+      assert_nil worker.join(0.1), "the worker is still waiting on an answer"
+
+      list.handle_key(::TUI::Key.new(:enter))
+      assert worker.join(2)
+    end
+
     # While the question is up the mouse stays with the log, so the path or
     # command can be drag-selected and copied before answering.
     def test_selection_keys_reach_the_log_while_the_confirmation_is_up

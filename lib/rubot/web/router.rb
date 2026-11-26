@@ -142,7 +142,7 @@ module Rubot
           [ "POST", "/push/unsubscribe", ->(_c, req, res) { push_unsubscribe(req, res) } ],
           [ "POST", "/push/test", ->(_c, req, res) { push_test(req, res) } ],
           [ "GET", %r{\A/turns/([\w-]+)/stream\z}, ->(c, _req, res) { stream_turn(res, c[0]) } ],
-          [ "POST", %r{\A/turns/([\w-]+)/(steer|stop|confirm)\z},
+          [ "POST", %r{\A/turns/([\w-]+)/(steer|stop|confirm|ask)\z},
             ->(c, req, res) { control_turn(req, res, c[0], c[1]) } ]
         ]
       end

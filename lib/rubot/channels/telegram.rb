@@ -127,6 +127,9 @@ module Rubot
         @request_cv = ConditionVariable.new
         # Confirmation tracking — keyed by confirmation_id
         @pending_confirmations = {}  # id => { cv:, result:, chat_id:, thread_id: }
+        # Questions from the ask_user tool, keyed by question id and waited on
+        # the same way: a button press or the next typed message fills :result.
+        @pending_questions = {}
         @confirm_mutex = Mutex.new
         # Per-topic persona wizard state, guarded by its own mutex.
         @persona_wizards = {} # "chat:thread" => wizard Hash
@@ -445,6 +448,12 @@ module Rubot
         # the wizard. The message itself is still processed below.
         maybe_start_persona_wizard_for_new_topic(chat_id, thread_id)
 
+        # A question from the ask_user tool is waiting for exactly this: the
+        # next thing typed in this conversation is its answer, not a new
+        # prompt. A command is not an answer, though: /stop has to keep
+        # stopping, so anything starting with a slash goes its usual way.
+        return if !text.to_s.start_with?("/") && deliver_question_answer(chat_id, thread_id, text)
+
         run_turn(message, chat_id, thread_id, text, caption)
       end
 
@@ -556,6 +565,10 @@ module Rubot
           notify_progress(chat_id, thread_id, round)
         }, on_confirm: ->(tool_name, args, reason) {
           ask_confirmation(chat_id, thread_id, tool_name, args, reason)
+        }, on_ask: ->(payload) {
+          # Blocks this turn until a button is pressed or the next message
+          # arrives; the answer travels back as the ask_user call's result.
+          ask_question(chat_id, thread_id, payload)
         })
 
         stop_typing(chat_id, thread_id) unless is_general_topic

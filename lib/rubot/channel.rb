@@ -137,7 +137,7 @@ module Rubot
     #   fragments out of the transcript; they are not the answer.
     # @return [String, nil] The agent's response, or nil if processing was skipped
     def process_message(message, session_id: nil, on_tool_call: nil, on_tool_result: nil, on_progress: nil,
-                        on_confirm: nil, on_assistant_text: nil, on_reasoning: nil, on_usage: nil,
+                        on_confirm: nil, on_ask: nil, on_assistant_text: nil, on_reasoning: nil, on_usage: nil,
                         on_subagent: nil, on_compaction: nil, on_compaction_start: nil, on_compaction_failed: nil,
                         on_delegate: nil, on_loop: nil)
       sid = (session_id || "default").to_s
@@ -163,6 +163,7 @@ module Rubot
         on_tool_result: on_tool_result,
         on_progress: on_progress,
         on_confirm: on_confirm,
+        on_ask: on_ask,
         on_assistant_text: on_assistant_text,
         on_reasoning: on_reasoning,
         on_usage: on_usage,

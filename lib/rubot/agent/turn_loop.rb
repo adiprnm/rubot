@@ -42,6 +42,9 @@ module Rubot
         inject_tool_persona
         inject_tool_delegate
         @subagent_count = 0
+        # Questions are spent per turn, not per agent: a turn that already
+        # interrupted the reader three times is done interrupting.
+        @asks_this_turn = 0
         @on_subagent = callbacks.subagent
         @on_delegate = callbacks.delegate
         @on_loop = callbacks.on_loop
@@ -528,6 +531,21 @@ module Rubot
           end
 
           tool = @tools.get(tool_name)
+
+          # A question is the call itself: it blocks this thread until the
+          # reader answers, and the answer becomes the call's result. It is
+          # asked here rather than inside the tool because the reader lives in
+          # the channel and a tool cannot reach it.
+          if tool_name == "ask_user"
+            result = ask_the_user(tool, arguments, callbacks)
+            # The row is published like any other call, so the transcript keeps
+            # both halves: what was asked, and what came back.
+            callbacks.tool_call&.call(tool_name, arguments, nil)
+            pending << { name: tool_name, arguments: arguments, id: tool_call_id,
+                         snapshot: nil, result: result }
+            next
+          end
+
           if tool && tool.respond_to?(:dangerous_action?) && tool.dangerous_action?(arguments)
             if auto_approve?
               # Auto mode: the prompt is skipped, not the guard. Destructive
@@ -561,6 +579,24 @@ module Rubot
           }
         end
         pending
+      end
+
+      # One question, asked through the channel's reader and counted.
+      #
+      # A channel that handed no reader (a background turn, a surface with
+      # nowhere to ask) gets the tool's own honest answer instead of a block
+      # that would never be released. The same goes for the ceiling: the fourth
+      # question of a turn is not asked at all, so a hesitant model is told to
+      # decide rather than left waiting.
+      def ask_the_user(tool, arguments, callbacks)
+        return "Nobody can be asked on this surface." if tool.nil? || !tool.respond_to?(:ask)
+
+        if @asks_this_turn.to_i >= Tools::AskUser::PER_TURN_LIMIT
+          return tool.limit_reached_text
+        end
+
+        @asks_this_turn = @asks_this_turn.to_i + 1
+        tool.ask(arguments, reader: callbacks.ask)
       end
       # One request to the provider, streamed when the channel can take chunks.
       #

@@ -575,6 +575,14 @@ module Rubot
 
     private
 
+    # The two calls that would reach Telegram's server. Recorded instead, so a
+    # test can say what the channel tried to send without a network.
+    def answer_callback_query(_callback_id, text = nil)
+      @answered_callbacks ||= []
+      @answered_callbacks << text
+      true
+    end
+
     def send_message(chat_id, text, thread_id = nil)
       @sent << [ chat_id, text, thread_id ]
       true
@@ -1051,6 +1059,68 @@ module Rubot
       tg.reply_context({ "text" => "halo" }, "tg_42", 42)
 
       assert_nil tg.reply_context({ "text" => "halo" }, "tg_42", 42)
+    end
+
+    # --- ask_user on Telegram -------------------------------------------
+    #
+    # The waiting itself is the same ConditionVariable the confirmation uses,
+    # so what is worth testing here is the two doors an answer can come
+    # through: an inline button and the next typed message. Both were dead
+    # ends before these tests existed (the callback was never dispatched, and
+    # a message arriving before the send returned was lost).
+
+    def pending_question(tg, options: [ { label: "New file" }, { label: "Extend 018" } ])
+      entry = { cv: ConditionVariable.new, result: nil, msg_id: nil,
+                chat_id: 42, thread_id: nil, options: options }
+      tg.instance_variable_get(:@pending_questions)["q#{rand(1_000_000)}"] = entry
+      [ entry, tg.instance_variable_get(:@pending_questions).keys.last ]
+    end
+
+    def test_a_button_press_answers_the_question_and_names_the_option
+      tg = build_telegram
+      entry, id = pending_question(tg)
+
+      tg.send(:handle_question_callback, "ask:#{id}:1", "cb1")
+
+      assert_equal({ outcome: :option, index: 1, label: "Extend 018" }, entry[:result])
+    end
+
+    # A stale keyboard (an index no option has) must not resolve anything: the
+    # reader would otherwise answer a question that was never asked that way.
+    def test_a_button_for_an_option_that_does_not_exist_changes_nothing
+      tg = build_telegram
+      entry, id = pending_question(tg)
+
+      tg.send(:handle_question_callback, "ask:#{id}:99", "cb1")
+
+      assert_nil entry[:result]
+    end
+
+    def test_the_next_typed_message_becomes_the_custom_answer
+      tg = build_telegram
+      entry, = pending_question(tg)
+
+      assert tg.send(:deliver_question_answer, 42, nil, "  something else  ")
+
+      assert_equal({ outcome: :custom, text: "something else" }, entry[:result])
+    end
+
+    def test_a_message_from_another_chat_is_not_an_answer
+      tg = build_telegram
+      entry, = pending_question(tg)
+
+      refute tg.send(:deliver_question_answer, 7, nil, "hai")
+
+      assert_nil entry[:result]
+    end
+
+    def test_stopping_a_turn_cancels_its_pending_question
+      tg = build_telegram
+      entry, = pending_question(tg)
+
+      tg.send(:cancel_pending_confirmations, 42, nil)
+
+      assert_equal({ outcome: :cancelled }, entry[:result])
     end
   end
 

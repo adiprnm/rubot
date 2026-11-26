@@ -149,6 +149,10 @@ module Rubot
       # 1d-bis. A card is the whole answer; no narration around it.
       parts << SILENT_TOOL_RULE if tool_names.include?("instagram")
 
+      # 1e. A question is a choice, not a fallback: only when the tool is there
+      # to be called.
+      parts << ASK_RULE if tool_names.include?("ask_user")
+
       # 1e. When a finished turn may announce itself. Only when the tool is
       # there to be called: a prompt that names a tool this agent does not
       # have is an instruction it cannot follow.

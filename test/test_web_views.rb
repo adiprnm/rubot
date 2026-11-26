@@ -310,15 +310,51 @@ module Rubot
         assert_includes html, "Thinking…"
       end
 
-      def test_confirm_view_renders_buttons_for_a_pending_prompt
-        html = View.render("_confirm", prompt: { name: "shell_exec", reason: "rm" }, turn_id: "tabc")
+      def test_ask_view_renders_the_confirmation_as_two_buttons
+        html = View.render("_ask", prompt: { kind: :confirm, name: "shell_exec", reason: "rm" },
+                                   turn_id: "tabc")
 
         assert_includes html, "/turns/tabc/confirm"
         assert_includes html, Rubot::I18n.t("web.confirm.continue")
       end
 
-      def test_confirm_view_is_empty_without_a_prompt
-        assert_equal "", View.render("_confirm", prompt: nil, turn_id: "tabc").strip
+      # One slot, two shapes: the question is not a second kind of interruption,
+      # so it renders through the same partial under a different kind.
+      def test_ask_view_renders_a_question_as_options_and_a_box
+        prompt = {
+          kind: :question,
+          question: "Where should the migration go?",
+          options: [ { label: "New file", description: "Add 019_ask.sql" },
+                     { label: "Extend 018", description: "Rebuild it in place" } ]
+        }
+
+        html = View.render("_ask", prompt: prompt, turn_id: "tabc")
+
+        assert_includes html, "Where should the migration go?"
+        assert_includes html, "/turns/tabc/ask"
+        assert_includes html, "New file"
+        assert_includes html, "Add 019_ask.sql"
+        # The custom answer is always the last choice, and it is the same route.
+        assert_includes html, Rubot::I18n.t("web.ask.custom")
+        assert_includes html, 'value="custom"'
+        # Each option answers with its index, and names the ask it belongs to so
+        # a click that outlives its question is dropped rather than answering
+        # the next one.
+        assert_includes html, 'hx-vals=\'{"choice":"0","token":""}\''
+        assert_includes html, 'hx-vals=\'{"choice":"1","token":""}\''
+      end
+
+      def test_ask_view_renders_an_open_question_as_a_box_only
+        html = View.render("_ask", prompt: { kind: :question, question: "Name?", options: [] },
+                                   turn_id: "tabc")
+
+        assert_includes html, "Name?"
+        assert_includes html, Rubot::I18n.t("web.ask.custom")
+        refute_includes html, "ask-option"
+      end
+
+      def test_ask_view_is_empty_without_a_prompt
+        assert_equal "", View.render("_ask", prompt: nil, turn_id: "tabc").strip
       end
 
       def test_turn_view_opens_the_stream_with_the_token
@@ -825,17 +861,34 @@ module Rubot
         refute_includes res.body, %(sse-connect="/turns/tabc/stream")
       end
 
-      # A confirmation that was already waiting when the page refreshed would
-      # otherwise strand the turn behind a question nobody can see: its event
-      # is in the part of the log the reconnecting reader skips.
+      # An ask that was already waiting when the page refreshed would otherwise
+      # strand the turn behind a question nobody can see: its event is in the
+      # part of the log the reconnecting reader skips.
       def test_a_refreshed_page_shows_a_confirmation_that_is_still_waiting
         turn = build
-        turn.instance_variable_set(:@confirm, { name: "shell_exec", reason: "rm -rf build" })
+        turn.instance_variable_set(:@ask, { kind: :confirm, name: "shell_exec", reason: "rm -rf build" })
 
         html = View.render("_turn", turn: turn, text: "hi", token_query: "")
 
         assert_includes html, Rubot::I18n.t("web.confirm.continue")
         assert_includes html, "rm -rf build"
+      end
+
+      # Same reason, for the question: the slot is drawn from turn state, so a
+      # reload mid-question still shows the options to click.
+      def test_a_refreshed_page_shows_a_question_that_is_still_waiting
+        turn = build
+        turn.instance_variable_set(:@ask, {
+                                     kind: :question,
+                                     question: "Where should it go?",
+                                     options: [ { label: "New file" }, { label: "Extend 018" } ]
+                                   })
+
+        html = View.render("_turn", turn: turn, text: "hi", token_query: "")
+
+        assert_includes html, "Where should it go?"
+        assert_includes html, "Extend 018"
+        assert_includes html, 'sse-swap="ask"'
       end
 
       # The stream a refreshed page joins starts at the state the turn is in,

@@ -30,7 +30,8 @@ class TestTools < Minitest::Test
     assert_includes names, "delegate"
     assert_includes names, "subagent_results"
     assert_includes names, "loop"
-    assert_equal 11, @registry.count
+    assert_includes names, "ask_user"
+    assert_equal 12, @registry.count
   end
 
   def test_registry_get_tool
@@ -957,13 +958,13 @@ class TestTools < Minitest::Test
     end.new
 
     @registry.register(custom)
-    assert_equal 12, @registry.count
+    assert_equal 13, @registry.count
     assert_equal "done: {}", @registry.execute("custom_tool", {})
   end
 
   def test_registry_provider_definitions
     defs = @registry.to_provider_definitions("openai")
-    assert_equal 11, defs.size
+    assert_equal 12, defs.size
     assert defs.all? { |d| d["type"] == "function" }
     assert defs.all? { |d| d["function"]["name"] }
     assert defs.all? { |d| d["function"]["description"] }
@@ -1619,5 +1620,124 @@ class TestTools < Minitest::Test
     refute file_tool.dangerous_action?({ "operation" => "read", "path" => "test.txt" })
     refute file_tool.dangerous_action?({ "operation" => "list", "path" => "." })
     refute file_tool.dangerous_action?({ "operation" => "info", "path" => "test.txt" })
+  end
+
+  # --- ask_user -------------------------------------------------------
+  #
+  # The reader is stubbed here on purpose: what these tests are about is the
+  # question as the model writes it and the answer as the model reads it. The
+  # waiting itself belongs to the turn that has a channel (see the web turn
+  # tests), and a test that walked both would fail for two different reasons.
+
+  def ask_user
+    @registry.get("ask_user")
+  end
+
+  def question_args(extra = {})
+    {
+      "question" => "Where should the migration go?",
+      "options" => [
+        { "label" => "New file", "description" => "Add 019_ask.sql" },
+        { "label" => "Extend 018", "description" => "Rebuild it in place" }
+      ]
+    }.merge(extra)
+  end
+
+  def test_ask_user_is_registered_and_documents_its_limit
+    assert_includes @registry.names, "ask_user"
+    assert_includes ask_user.description, "2 to 4"
+    assert_includes ask_user.description, Rubot::Tools::AskUser::PER_TURN_LIMIT.to_s
+  end
+
+  def test_a_chosen_option_comes_back_as_its_label
+    reader = ->(_payload) { { outcome: :option, index: 1, label: "Extend 018" } }
+
+    assert_equal "The user chose: Extend 018", ask_user.ask(question_args, reader: reader)
+  end
+
+  def test_a_custom_answer_comes_back_as_the_words_the_user_typed
+    reader = ->(_payload) { { outcome: :custom, text: "put it somewhere else" } }
+
+    assert_equal "The user answered in their own words: put it somewhere else",
+                 ask_user.ask(question_args, reader: reader)
+  end
+
+  # Silence and cancellation both mean "no answer", and the model has to be
+  # able to tell them apart: one is a reader who went away, the other a reader
+  # who stopped the turn on purpose.
+  def test_an_expired_question_and_a_cancelled_one_read_differently
+    expired = ask_user.ask(question_args, reader: ->(_p) { { outcome: :expired } })
+    cancelled = ask_user.ask(question_args, reader: ->(_p) { { outcome: :cancelled } })
+
+    assert_includes expired, "expired"
+    assert_includes cancelled, "cancelled"
+    refute_equal expired, cancelled
+  end
+
+  def test_the_question_reaches_the_reader_with_its_options
+    seen = nil
+    ask_user.ask(question_args, reader: ->(payload) { seen = payload; { outcome: :expired } })
+
+    assert_equal "Where should the migration go?", seen[:question]
+    assert_equal [ "New file", "Extend 018" ], seen[:options].map { |option| option[:label] }
+    assert_equal "Add 019_ask.sql", seen[:options].first[:description]
+  end
+
+  def test_an_option_without_a_description_is_still_an_option
+    seen = nil
+    args = { "question" => "Which?", "options" => [ { "label" => "A" }, { "label" => "B" } ] }
+    ask_user.ask(args, reader: ->(payload) { seen = payload; { outcome: :expired } })
+
+    assert_equal [ { label: "A" }, { label: "B" } ], seen[:options]
+  end
+
+  def test_a_question_without_options_is_an_open_question
+    seen = nil
+    ask_user.ask({ "question" => "What should I call it?" },
+                 reader: ->(payload) { seen = payload; { outcome: :expired } })
+
+    assert_empty seen[:options]
+  end
+
+  # A wrong argument is the model's mistake to fix, so it comes back as text:
+  # an exception would end the call with nothing to read.
+  def test_one_option_is_refused
+    args = { "question" => "Which?", "options" => [ { "label" => "A" } ] }
+
+    assert_match(/2 to 4 options/, ask_user.ask(args, reader: ->(_p) { { outcome: :expired } }))
+  end
+
+  def test_five_options_are_refused
+    args = { "question" => "Which?", "options" => (1..5).map { |n| { "label" => "O#{n}" } } }
+
+    assert_match(/2 to 4 options/, ask_user.ask(args, reader: ->(_p) { { outcome: :expired } }))
+  end
+
+  def test_bare_strings_are_not_options
+    args = { "question" => "Which?", "options" => %w[sqlite files] }
+
+    assert_match(/each option is an object/, ask_user.ask(args, reader: ->(_p) { { outcome: :expired } }))
+  end
+
+  def test_a_question_without_its_text_is_refused
+    assert_match(/needs a `question`/, ask_user.ask({}, reader: ->(_p) { { outcome: :expired } }))
+    assert_match(/needs a `question`/, ask_user.ask({ "question" => "  " },
+                                                   reader: ->(_p) { { outcome: :expired } }))
+  end
+
+  # No reader is a surface fact, not a mistake: a background turn and a sub
+  # agent both land here, and both need the same instruction.
+  def test_without_a_reader_the_model_is_told_to_decide
+    result = ask_user.ask(question_args)
+
+    assert_includes result, "Nobody can be asked"
+    assert_includes result, "safest default"
+  end
+
+  def test_the_limit_wording_tells_the_model_to_stop_asking
+    wording = ask_user.limit_reached_text
+
+    assert_includes wording, Rubot::Tools::AskUser::PER_TURN_LIMIT.to_s
+    assert_includes wording, "safest default"
   end
 end

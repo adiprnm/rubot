@@ -452,6 +452,12 @@ module Rubot
             "continue" => "Continue",
             "cancel" => "Cancel"
           },
+          # The question from the ask_user tool. The option labels come from the
+          # model, so only the frame around them is translated.
+          "ask" => {
+            "custom" => "Other: type your answer",
+            "send" => "Send"
+          },
           # The archive dialog. Its hint is the same sentence the results pane
           # opens with, so the two share one key rather than drifting apart.
           "search" => {
@@ -1298,6 +1304,10 @@ module Rubot
             "title" => "Konfirmasi: %{name}",
             "continue" => "Lanjutkan",
             "cancel" => "Batalkan"
+          },
+          "ask" => {
+            "custom" => "Lainnya: tulis jawabanmu",
+            "send" => "Kirim"
           },
           "search" => {
             "label" => "Cari percakapan",

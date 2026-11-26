@@ -38,6 +38,15 @@ module Rubot
         end
       end
 
+      # The turn of this conversation that is waiting on an ask, if any. The
+      # question is drawn from turn state, so this reads the same source the
+      # page does; a turn that is closed cannot be asked anything.
+      def asking_turn(sid)
+        @turns_mutex.synchronize do
+          @turns.values.find { |turn| turn.session_id == sid && !turn.closed? && turn.ask_prompt }
+        end
+      end
+
       # A turn in flight is drawn from the turn itself, because the session file
       # may not hold that prompt yet. It usually does: the user message is
       # written when the turn starts, so a page opened a second later holds the
@@ -81,6 +90,21 @@ module Rubot
         if text.empty?
           res.status = 400
           res.body = %(<div class="notice"><div class="error">#{CGI.escapeHTML(I18n.t("web.turn.empty_message"))}</div></div>)
+          return
+        end
+
+        # A question waiting in this conversation owns the next thing the reader
+        # sends. The box they type prompts in is the box a custom answer goes
+        # in, so it is answered here instead of starting a turn that would cut
+        # the ask off and leave it standing.
+        if (asking = asking_turn(sid))
+          pending_token = asking.ask_prompt && asking.ask_prompt[:token]
+          answered = asking.answer_ask({ outcome: :custom, text: text }, token: pending_token)
+          # The question can end between the lookup and the answer (a deadline,
+          # a stop). That is not this prompt's fault, and it is not a new turn
+          # either: the ask is simply gone.
+          res.status = answered ? 204 : 409
+          res.body = ""
           return
         end
 
@@ -179,7 +203,13 @@ module Rubot
             markup = usage_markup_from(report)
             turn.emit(:usage, markup) if markup
           },
-          on_confirm: ->(name, _args, reason) { turn.ask_confirm(name, reason) }
+          on_confirm: ->(name, _args, reason) { turn.ask_confirm(name, reason) },
+          # The question the model asked. It blocks this turn thread until the
+          # browser answers, exactly like the confirmation above, and comes back
+          # as the result of the ask_user call.
+          on_ask: lambda do |payload|
+            turn.ask_question(question: payload[:question], options: payload[:options])
+          end
         )
 
         # The footer figures move with every request, so the row is re-rendered
@@ -398,8 +428,8 @@ module Rubot
           elsif !update.empty?
             sse(out, "turn-patch", update)
           end
-        when :confirm
-          sse(out, "confirm", View.render("_confirm", prompt: turn.confirm_prompt, turn_id: turn.id))
+        when :ask
+          sse(out, "ask", View.render("_ask", prompt: turn.ask_prompt, turn_id: turn.id))
         when :notice
           sse(out, "notice", payload.to_s)
         when :usage
@@ -557,13 +587,42 @@ module Rubot
           end
         when "stop"
           cancel_session(turn.session_id)
+          # The thread that would have noticed the stop is the one blocked on
+          # the question, so the wait itself has to be released here.
+          turn.cancel_pending_ask
           res.status = 204
         when "confirm"
           turn.answer_confirm(%w[1 true yes approve].include?(form(req, "value")))
           res.status = 204
+        when "ask"
+          answer = ask_answer(form(req, "choice").strip, form(req, "text"))
+          return bad_request(res) if answer.nil?
+
+          # A late click names an ask that is gone; it changes nothing.
+          unless turn.answer_ask(answer, token: form(req, "token").strip)
+            res.status = 409
+            res.body = ""
+            return
+          end
+          res.status = 204
         end
 
         res.body = ""
+      end
+
+      # What the reader chose, as the turn's ask understands it. An option's
+      # button carries its index; the custom button carries "custom" with the
+      # typed text beside it; a bare submission from the text box (Enter) has no
+      # choice at all and is a custom answer.
+      def ask_answer(choice, text)
+        typed = text.to_s.strip
+        if choice.empty? || choice == "custom"
+          return nil if typed.empty?
+
+          { outcome: :custom, text: typed }
+        elsif choice.match?(/\A\d+\z/)
+          { outcome: :option, index: choice.to_i }
+        end
       end
     end
   end
