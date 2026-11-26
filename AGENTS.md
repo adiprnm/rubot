@@ -41,6 +41,11 @@ bundle exec rubocop                # lint (RuboCop Rails Omakase, Rails cops off
   files live in `test/support/` (`web_channel_support.rb`, `tui_support.rb`)
   and are mixed in with `include`; `rake test` only picks up `test/test_*.rb`,
   so a support file is never run as a test.
+- CI (`.github/workflows/ci.yml`) runs exactly two commands, the two above:
+  `rubocop` in a `lint` job and `rake test` in a `test` job. Both are meant to
+  be required on `main`. `Gemfile.lock` is tracked, so `bundle install` runs in
+  deployment mode: a `Gemfile` edit without its regenerated lockfile fails
+  there.
 
 ## Code conventions
 

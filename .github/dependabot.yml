@@ -1,0 +1,14 @@
+version: 2
+
+# Action versions rot silently: a major release of checkout or setup-ruby lands
+# and nothing in this repository ever mentions it. Their updates arrive as a
+# monthly pull request instead, and CI is what judges it.
+#
+# The gems are deliberately absent. There are four runtime dependencies, two of
+# them tied to the Ruby version, and the lockfile was just born: a monthly bump
+# there would be noise, not safety.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
