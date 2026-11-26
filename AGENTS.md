@@ -45,7 +45,7 @@ bundle exec rubocop                # lint (RuboCop Rails Omakase, Rails cops off
   `rubocop` in a `lint` job and `rake test` in a `test` job. Both are meant to
   be required on `main`. `Gemfile.lock` is tracked, so `bundle install` runs in
   deployment mode: a `Gemfile` edit without its regenerated lockfile fails
-  there.
+  there. See `docs/adr/0005-gemfile-lock-is-committed.md`.
 
 ## Code conventions
 
