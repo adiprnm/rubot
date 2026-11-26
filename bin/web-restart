@@ -127,15 +127,26 @@ def channel_config
 end
 
 def start(port)
-  log "starting: RUBOT_DEBUG=1 ruby -Ilib bin/rubot web"
   log_path = "/tmp/rubot-web.log"
   previous = "#{log_path}.prev"
   FileUtils.cp(log_path, previous) if File.exist?(log_path)
 
   # setsid: the server must outlive this script and its terminal, or a closed
   # window would take the web channel with it.
+  #
+  # The arena cap rides along in the child environment: glibc reads
+  # MALLOC_ARENA_MAX at the first allocation, so a value set here, in an
+  # already running Ruby, would be too late for this process's own arenas.
+  env = Rubot::LaunchEnv.child_env.merge("RUBOT_DEBUG" => "1")
+
+  # What the child actually gets, not just what this script asked for: spawn
+  # merges `env` into the parent environment, so an absent arena key means the
+  # operator's own value is inherited as is.
+  arena = env.fetch("MALLOC_ARENA_MAX") { ENV["MALLOC_ARENA_MAX"] || "unset" }
+  log "starting: RUBOT_DEBUG=1 MALLOC_ARENA_MAX=#{arena} ruby -Ilib bin/rubot web"
+
   pid = Process.spawn(
-    { "RUBOT_DEBUG" => "1" },
+    env,
     RbConfig.ruby, "-Ilib", "bin/rubot", "web",
     chdir: ROOT,
     out: [ log_path, "w" ],

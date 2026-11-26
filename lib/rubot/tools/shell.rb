@@ -22,10 +22,19 @@ module Rubot
       # Seconds to wait for a graceful exit after TERM, and after KILL.
       KILL_GRACE = 3
 
-      # Seconds the pipes get to reach EOF once the process has exited. A
-      # background child that inherited stdout keeps the write end open, so
-      # waiting for EOF can block long after the command itself is done.
+      # Seconds the two readers share to finish on their own once the process
+      # has exited. A background child that inherited the write end can hold an
+      # EOF off well past the command, so this waits a short while and then
+      # closes the pipe instead of waiting for an EOF that may never come.
       DRAIN_GRACE = 2
+
+      # Seconds a killed pipe reader gets to go away before drain or release
+      # stops waiting for it. The wait is bounded because kill does not
+      # necessarily interrupt a thread sitting in a native call, so an unbounded
+      # join could keep a command waiting on a reader that nothing can stop. A
+      # second is what the join after the kill used to cost, so the bound costs
+      # a reader that dies normally nothing.
+      READER_KILL_GRACE = 1
 
       attr_accessor :safety_guard
 
@@ -33,27 +42,94 @@ module Rubot
       # arrived. Waiting for EOF is not an option: a background child that
       # inherited the write end keeps it open, and a plain `read` would block
       # there forever even though the command itself finished.
+      #
+      # Releasing a reader is the creator's job, not this class's: a reader that
+      # never reached EOF keeps its thread and its pipe for the life of the
+      # process unless someone releases it, so `release` is idempotent to make
+      # it safe on every exit path. `label` and `pid` only name the reader in a
+      # warning, so an operator can tell which stream of which command was left
+      # behind.
       class PipeReader
         CHUNK = 64 * 1024
 
-        def initialize(io)
+        def initialize(io, label: nil, pid: nil)
           @io = io
+          @label = label
+          @pid = pid
           @mutex = Mutex.new
           @text = +""
+          @cut = false
           @thread = Thread.new { read_all }
         end
 
-        # Waits until `deadline` (monotonic clock) for EOF, then closes the pipe
-        # to release the reader. Returns [text, forced?], where `forced?` says
-        # the output may be short because the pipe had to be closed.
+        # Waits until `deadline` (monotonic clock) for the reader to stop, and
+        # returns [text, forced?], where `forced?` says the output is not known
+        # to be complete. It has three exits, and only one of them gives the
+        # reader back:
+        #
+        # * the reader stopped before the deadline: nothing is closed and
+        #   nothing is killed, so the reader is finished but the pipe is still
+        #   open and still the caller's to close. The text is what the reader
+        #   collected, and `cut?` says whether it stopped at EOF (complete) or
+        #   on error under the read (partial).
+        # * the deadline passed first: `release` closes the pipe and kills the
+        #   thread, then waits a bounded grace for it to unwind. This is the one
+        #   exit that gives the reader back, so the caller has nothing left to
+        #   do to it. `forced?` is true, and the reader is gone unless a kill
+        #   cannot reach it, which is warned about and left behind.
+        # * an IOError or a SystemCallError escapes inside this method: the
+        #   reader is stopped through `stop_reader` and `forced?` is true. That
+        #   exit kills the thread and touches no descriptor, so the pipe is left
+        #   exactly as it was found, open or already closed, and it is the
+        #   caller's to deal with either way.
+        #
+        # So the caller owns the pipe on two of the three exits, the join and
+        # the error, which is why the command path releases both readers in its
+        # own ensure instead of trusting drain to have done it. That release is
+        # idempotent, so the timeout exit's already closed pipe costs nothing
+        # there. A close is what usually ends a reader parked in readpartial and
+        # it is not guaranteed to wake one, which is why the kill follows it.
+        # The error exit has only a thread to end: it reached that path because
+        # the pipe could not be read, so closing it first would change nothing.
         def drain(deadline)
-          return [ text, false ] if @thread.join(remaining(deadline))
+          # A join only says the reader stopped. Only a reader that stopped at
+          # EOF has read the whole pipe; one whose io was closed underneath it
+          # stopped early, and its text is partial.
+          return [ text, cut? ] if @thread.join(remaining(deadline))
 
-          @io.close
-          @thread.join(1)
+          release
           [ text, true ]
-        rescue IOError
+        rescue IOError, SystemCallError
+          # Both classes are here because the same failure arrives in either
+          # one depending on who noticed it first: a pipe closed through Ruby
+          # raises IOError at the next read, which is what the closed under
+          # reader test models, while a descriptor that became invalid below
+          # Ruby, Errno::EBADF or Errno::EIO, arrives as a SystemCallError.
+          # Errno::EBADF is the one that used to escape here.
+          stop_reader
           [ text, true ]
+        end
+
+        # Whether the reader thread is still running, as of the moment it is
+        # asked. It answers false once drain has returned from a reader that
+        # finished, and it can answer true after drain returned anyway, which
+        # is the pathological case where the kill did not land within its
+        # grace. That is how a caller or a test sees such a leftover without
+        # reaching into the thread itself.
+        def alive?
+          @thread.alive?
+        end
+
+        # Releases this reader as far as it can be released, and safe to call
+        # more than once: the normal path has already drained it by the time the
+        # caller's ensure runs, and drain itself may have released it already.
+        # It exists for the path that never reaches drain, where a raise between
+        # creating a reader and draining it would otherwise leave the cleanup to
+        # whatever happens to close the pipe.
+        def release
+          close_io
+        ensure
+          stop_reader
         end
 
         # What has been read so far; safe to call while the reader is running.
@@ -62,6 +138,38 @@ module Rubot
         end
 
         private
+
+        # Closing is what usually ends a reader parked in readpartial; one it
+        # does not wake is the kill's job. A pipe that is already closed is not
+        # an error here, because release also runs on readers drain has already
+        # released.
+        def close_io
+          @io.close
+        rescue IOError, SystemCallError
+          nil
+        end
+
+        # Whether the reader stopped on something other than EOF, which is what
+        # makes its text partial even though its thread is done.
+        def cut?
+          @mutex.synchronize { @cut }
+        end
+
+        # Release the reader thread for good, as far as it can be done. Kill
+        # first, then wait a bounded grace for it to unwind: kill does not
+        # necessarily interrupt a thread stuck in a native call, so the join
+        # cannot be the unbounded one. A thread still running after the grace is
+        # warned about and left behind.
+        def stop_reader
+          return unless @thread.alive?
+
+          @thread.kill
+          return if @thread.join(READER_KILL_GRACE)
+
+          warn "[shell] #{@label || 'pipe'} reader for pid #{@pid || 'unknown'} still alive " \
+               "#{READER_KILL_GRACE}s after kill; leaving it behind"
+          nil
+        end
 
         # One monotonic instant shared by both pipes, so a stdout that needs the
         # full grace does not make stderr wait for another one.
@@ -75,8 +183,14 @@ module Rubot
             chunk = @io.readpartial(CHUNK)
             @mutex.synchronize { @text << chunk }
           end
-        rescue EOFError, IOError, Errno::EBADF, Errno::EIO
+        rescue EOFError
           nil
+        rescue IOError, SystemCallError
+          # The pipe went away under the read instead of ending at EOF, so
+          # whatever arrived before that is partial. SystemCallError covers
+          # every descriptor failure, Errno::EIO and Errno::EBADF included, so
+          # none of them is left to escape into the thread's own report.
+          @mutex.synchronize { @cut = true }
         end
       end
 
@@ -240,12 +354,16 @@ module Rubot
       # anything it started, not just the shell wrapper. The cancellation
       # token is set per turn by the agent.
       #
-      # The call always comes back: the process group is killed once the
-      # deadline passes, and the pipe readers are released a couple of seconds
-      # after the process exits instead of being awaited forever. Returns
-      # [stdout, stderr, status, problems], where `status` is nil when the
-      # process could not be reaped and `problems` explains anything that
-      # stopped the output from arriving whole.
+      # The call comes back once the process has exited and the readers have
+      # been drained, and the process group is killed first if the deadline
+      # passed. DRAIN_GRACE bounds how long the readers get after that, so the
+      # call does not wait for an EOF that a background child may hold open.
+      # The one exception is a timeout of 0, which asks for no deadline at all.
+      # The release also runs in an ensure, so a raise on the command path does
+      # not decide whether the readers get released. Returns [stdout, stderr,
+      # status, problems], where `status` is nil when the process could not be
+      # reaped and `problems` explains anything that stopped the output from
+      # arriving whole.
       def run_command(cmd)
         cancellation = Thread.current[:rubot_cancellation]
         limit = command_timeout
@@ -258,9 +376,12 @@ module Rubot
         Open3.popen3(cmd, **opts) do |stdin, stdout, stderr, wait_thr|
           stdin.close
           cancellation&.track(wait_thr.pid)
+          readers = []
           begin
-            out_reader = PipeReader.new(stdout)
-            err_reader = PipeReader.new(stderr)
+            out_reader = PipeReader.new(stdout, label: "stdout", pid: wait_thr.pid)
+            readers << out_reader
+            err_reader = PipeReader.new(stderr, label: "stderr", pid: wait_thr.pid)
+            readers << err_reader
             problems = []
 
             status = wait_for_exit(wait_thr, limit)
@@ -274,13 +395,41 @@ module Rubot
             out, out_cut = out_reader.drain(drain_deadline)
             err, err_cut = err_reader.drain(drain_deadline)
             if out_cut || err_cut
-              problems << "[output may be incomplete: a process started by the " \
-                          "command kept the pipe open after it exited]"
+              # No cause is named here on purpose. A cut has more than one: the
+              # drain grace can run out, the pipe can be closed under the
+              # reader, or the read itself can fail. Naming a background
+              # process as the cause would send a reader looking for something
+              # that may never have existed, so the message states the effect.
+              problems << "[output may be incomplete: it was cut short, so do not " \
+                          "assume this is the whole output of the command]"
             end
 
             [ out, err, status, problems ]
           ensure
-            cancellation&.untrack(wait_thr.pid)
+            # Release both readers here too, not only in drain: drain releases
+            # only on its timeout path, and a raise before it gets there would
+            # otherwise leave that to Open3, which closes the read ends when
+            # its block exits. That close is not enough on its own, because a
+            # thread already parked in a blocking read does not necessarily
+            # wake from it. On the normal path drain has done this work
+            # already, so the call costs nothing.
+            #
+            # RUBOT_SHELL_TIMEOUT=0 is deliberately left uncovered. With no
+            # deadline `wait_for_exit` returns only when the process exits, so
+            # an endless command keeps its readers for as long as it runs, and
+            # nothing here can reach them any earlier. That is a choice rather
+            # than the only option: 0 is the setting an operator picks to say a
+            # command may take as long as it needs, and taking its readers away
+            # mid run would cut output the command is still producing. Whoever
+            # wants readers released sooner states a deadline instead.
+            begin
+              readers.each(&:release)
+            ensure
+              # The pid gets an ensure of its own: leaving it registered after
+              # the command is gone would let a later cancellation signal a pid
+              # that no longer belongs to this command.
+              cancellation&.untrack(wait_thr.pid)
+            end
           end
         end
       end

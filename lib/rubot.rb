@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "rubot/env_loader"
+require_relative "rubot/launch_env"
 require_relative "rubot/cancellation"
 require_relative "rubot/learning"
 require_relative "rubot/timing"
