@@ -17,6 +17,8 @@ workspace/
 *.jsonl
 # Local notes and plans, not part of the shipped project.
 docs/
+# Specs, tickets and feature scratch work written by the pipeline skills.
+.scratch/
 # The TUI uses the directory it was launched from as its workspace, so these
 # land in whatever project it runs in.
 sessions/
