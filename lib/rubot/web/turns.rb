@@ -598,8 +598,12 @@ module Rubot
           answer = ask_answer(form(req, "choice").strip, form(req, "text"))
           return bad_request(res) if answer.nil?
 
-          # A late click names an ask that is gone; it changes nothing.
-          unless turn.answer_ask(answer, token: form(req, "token").strip)
+          # A late click names an ask that is gone; it changes nothing. The
+          # field is `ask`, not `token`: the auth gate reads `token` out of the
+          # body before it ever looks at the query string, so a field by that
+          # name replaced the web token with the question's and every answer
+          # came back 403.
+          unless turn.answer_ask(answer, token: form(req, "ask").strip)
             res.status = 409
             res.body = ""
             return

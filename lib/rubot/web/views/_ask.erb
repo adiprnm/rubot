@@ -15,7 +15,7 @@
         well. -%>
     <button class="btn ask-option"
             hx-post="/turns/<%= h(turn_id) %>/ask"
-            hx-vals='{"choice":"<%= index %>","token":"<%= h(prompt[:token]) %>"}'
+            hx-vals='{"choice":"<%= index %>","ask":"<%= h(prompt[:token]) %>"}'
             hx-swap="none">
       <span class="ask-option-label"><%= h(option[:label]) %></span>
       <% if option[:description] -%>
@@ -35,13 +35,13 @@
     <input class="ask-custom-input" type="text" name="text" autocomplete="off"
            placeholder="<%= h(I18n.t("web.ask.custom")) %>"
            hx-post="/turns/<%= h(turn_id) %>/ask"
-           hx-vals='{"choice":"custom","token":"<%= h(prompt[:token]) %>"}'
+           hx-vals='{"choice":"custom","ask":"<%= h(prompt[:token]) %>"}'
            hx-include="closest .ask-custom"
            hx-trigger="keyup[key=='Enter'] from:this"
            hx-swap="none">
     <button class="btn ask-send" type="button"
             hx-post="/turns/<%= h(turn_id) %>/ask"
-            hx-vals='{"choice":"custom","token":"<%= h(prompt[:token]) %>"}'
+            hx-vals='{"choice":"custom","ask":"<%= h(prompt[:token]) %>"}'
             hx-include="closest .ask-custom"
             hx-swap="none"><%= h(I18n.t("web.ask.send")) %></button>
   </div>

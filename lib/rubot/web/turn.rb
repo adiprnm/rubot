@@ -545,8 +545,11 @@ module Rubot
       # route, which keeps its old contract).
       def answer_ask(answer, token: nil)
         @ask_mutex.synchronize do
+          # Compared as text: the ask's number is an Integer here and a form
+          # field on the wire, and a type mismatch would refuse every real
+          # answer while every test with Integers passed.
           pending = @ask && @ask[:token]
-          return false if token && pending != token
+          return false if token && pending.to_s != token.to_s
 
           @ask_answer = answer
           @ask_cv.broadcast

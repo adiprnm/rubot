@@ -338,14 +338,19 @@ module Rubot
         # the same route as the options — a control with its own request, not a
         # form submit on a node that arrived by swap.
         assert_includes html, Rubot::I18n.t("web.ask.custom")
-        assert_includes html, 'hx-vals=\'{"choice":"custom","token":""}\''
+        assert_includes html, 'hx-vals=\'{"choice":"custom","ask":""}\''
         assert_includes html, 'hx-include="closest .ask-custom"'
         assert_includes html, 'class="btn ask-send"'
         # Each option answers with its index, and names the ask it belongs to so
         # a click that outlives its question is dropped rather than answering
         # the next one.
-        assert_includes html, 'hx-vals=\'{"choice":"0","token":""}\''
-        assert_includes html, 'hx-vals=\'{"choice":"1","token":""}\''
+        assert_includes html, 'hx-vals=\'{"choice":"0","ask":""}\''
+        assert_includes html, 'hx-vals=\'{"choice":"1","ask":""}\''
+        # The ask's identity must never travel as `token`: the auth gate reads
+        # `token` out of the body before the query string, so a field by that
+        # name replaces the web token and every answer comes back 403.
+        refute_includes html, '"token":'
+        refute_includes html, 'name="token"'
       end
 
       def test_ask_view_renders_an_open_question_as_a_box_only

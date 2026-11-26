@@ -1099,6 +1099,53 @@ module Rubot
         assert_equal 1, channel.instance_variable_get(:@turns).size
       end
 
+      # The route half of the same identity: an answer names its ask in a field
+      # called `ask`, so the auth gate still finds the web token where it looks
+      # for it. A field by the name `token` would shadow it and every click
+      # would come back 403 — which is exactly what happened before this test.
+      def test_an_answer_naming_its_ask_is_accepted_by_the_route
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ [ "user", "Halo" ] ] })
+        turn = Rubot::Web::Turn.new(id: "tabc", session_id: "web_rubot")
+        channel.instance_variable_get(:@turns)["tabc"] = turn
+
+        answer = nil
+        thread = Thread.new { answer = turn.ask_question(question: "Which?", options: ask_options) }
+        token = wait_for_ask(turn)[:token]
+
+        res = FakeResponse.new
+        channel.send(:control_turn, FakeRequest.new("/turns/tabc/ask", method: "POST",
+                                                    query: { "choice" => "1", "ask" => token.to_s }),
+                     res, "tabc", "ask")
+        thread.join(2)
+
+        assert_equal 204, res.status
+        assert_equal "Extend 018", answer[:label]
+      end
+
+      # And an answer that names the wrong ask changes nothing.
+      def test_an_answer_for_another_ask_is_refused_by_the_route
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ [ "user", "Halo" ] ] })
+        turn = Rubot::Web::Turn.new(id: "tabc", session_id: "web_rubot")
+        channel.instance_variable_get(:@turns)["tabc"] = turn
+
+        answer = nil
+        thread = Thread.new do
+          answer = turn.ask_question(question: "Which?", options: ask_options, timeout: 0.4)
+        end
+        wait_for_ask(turn)
+
+        res = FakeResponse.new
+        channel.send(:control_turn, FakeRequest.new("/turns/tabc/ask", method: "POST",
+                                                    query: { "choice" => "1", "ask" => "999" }),
+                     res, "tabc", "ask")
+
+        assert_equal 409, res.status
+        thread.join(2)
+        refute_equal "Extend 018", answer && answer[:label]
+      end
+
       # Two questions in one turn must not read each other's answer.
       def test_a_second_question_waits_for_its_own_answer
         turn = build
