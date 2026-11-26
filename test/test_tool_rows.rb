@@ -10,9 +10,10 @@ require "rubot"
 # pauses the turn took stay where they happened; the transcript has to agree
 # with the live turn, so both go through Rubot::Web::ToolRows.
 class TestToolRows < Minitest::Test
-  def tool(name, state: :ok, op: nil)
+  def tool(name, state: :ok, op: nil, skills: nil)
     row = { kind: :tool, name: name, detail: "", state: state, elapsed: 0.1 }
     row[:op] = op if op
+    row[:skills] = skills if skills
     row
   end
 
@@ -92,6 +93,29 @@ class TestToolRows < Minitest::Test
               tool("read"), tool("grep") ]
 
     assert_equal %w[file_ops grep], names(Rubot::Web::ToolRows.collapse(items))
+  end
+
+  # A skill load keeps a line of its own too: it is the row that says why the
+  # calls after it went the way they did, so collapsing it into the batch takes
+  # away the one thing the reader would scroll back for.
+  def test_a_skill_load_keeps_its_own_row_in_compact
+    items = [ tool("file_ops", skills: [ "brain" ]), tool("read"), tool("grep") ]
+
+    kept = Rubot::Web::ToolRows.collapse(items)
+
+    assert_equal %w[file_ops grep], names(kept)
+    assert_equal [ "brain" ], kept.first[:skills]
+  end
+
+  # Including when a thought sat above it: the pair is only dropped when the
+  # call is a plain one.
+  def test_a_thought_does_not_swallow_the_skill_load_under_it
+    items = [ thought(3), tool("file_ops", skills: [ "brain" ]), tool("grep") ]
+
+    kept = Rubot::Web::ToolRows.collapse(items)
+
+    assert_equal %w[file_ops grep], names(kept)
+    assert_equal %i[thinking tool tool], kinds(kept)
   end
 
   # The reader talking does not split a batch: it is one moment of the turn with

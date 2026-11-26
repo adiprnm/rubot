@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "i18n"
+require_relative "skill_load"
 
 module Rubot
   # What a call is doing, in one sentence a reader who never saw the arguments
@@ -73,11 +74,42 @@ module Rubot
       "test" => "test", "t" => "test", "run" => "run", "build" => "build"
     }.freeze
 
-    def self.caption(tool_name, args)
+    # `skills` is the answer to SkillLoad.names when the caller already asked
+    # for it (see Web::Channel#run_turn), so one call does not read the same
+    # arguments twice.
+    def self.caption(tool_name, args, skills: nil)
       args = {} unless args.is_a?(Hash)
+      # A skill load is a read with a meaning of its own, so it gets a sentence
+      # of its own instead of the file tool's "reading <path>": the reader is
+      # told the agent picked instructions up, not which file it opened.
+      skills ||= SkillLoad.names(tool_name.to_s, args)
+      loading = skill_caption(skills)
+      return loading if loading
+
       # An entry whose only variable came through empty ("Reading %{target}")
       # ends on the space before it; the row must not.
       row_for(tool_name.to_s, args).rstrip
+    end
+
+    # How a call that picked instructions up is read: one skill by name, several
+    # as one sentence listing them in the reader's language. nil when it loaded
+    # none.
+    def self.skill_caption(skills)
+      return nil if skills.nil? || skills.empty?
+      return I18n.t("tool.skill.load", name: skills.first) if skills.size == 1
+
+      I18n.t("tool.skill.load_many", names: skill_list(skills))
+    end
+
+    # The names as a list the reader's language punctuates: a comma between all
+    # but the last, and its own word before that one. Two names need no comma,
+    # and three need one, so the list is built rather than the joiner repeated.
+    def self.skill_list(names)
+      list = Array(names).map(&:to_s).reject(&:empty?)
+      return "" if list.empty?
+      return list.first if list.size == 1
+
+      "#{list[0..-2].join(I18n.t("tool.skill.separator"))}#{I18n.t("tool.skill.joiner")}#{list.last}"
     end
 
     # Which branch owns this call. Every branch names dictionary keys; none of

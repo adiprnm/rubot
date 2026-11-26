@@ -4,6 +4,9 @@ require "json"
 require "tui"
 
 require_relative "../formatting"
+require_relative "../i18n"
+require_relative "../skill_load"
+require_relative "../tool_caption"
 require_relative "markdown"
 require_relative "diff"
 
@@ -28,7 +31,8 @@ module Rubot
       # signature because the live renderer keys a running row by it.
       def self.tool_call(name, summary, skill)
         if skill
-          [ [ "#{Rubot::TUI::MARK[:skill]} ", :accent ], [ "skill ", :muted ], [ summary, :accent ] ]
+          [ [ "#{Rubot::TUI::MARK[:skill]} ", :accent ],
+            [ "#{I18n.t("tool.skill.label")} ", :muted ], [ summary, :accent ] ]
         else
           [ [ "#{Rubot::TUI::MARK[:tool]} ", :muted ], [ summary, :text ] ]
         end
@@ -43,7 +47,7 @@ module Rubot
         if skill
           # Slightly brighter than a finished tool row (muted): the skill name
           # is what the reader came for, the label only marks the row.
-          [ [ "#{mark} ", style ], [ "skill ", :dim ], [ summary, :dim ] ]
+          [ [ "#{mark} ", style ], [ "#{I18n.t("tool.skill.label")} ", :dim ], [ summary, :dim ] ]
         else
           segments = [ [ "#{mark} ", style ] ]
           segments += [ [ summary, :dim ] ] if summary && !summary.empty?
@@ -83,19 +87,13 @@ module Rubot
         ::TUI::Text.truncate(Rubot::ToolCaption.caption(tool_name, args), max)
       end
 
-      # Returns the skill name when this tool call reads a skill's SKILL.md,
-      # nil otherwise. Only reads count: writing a skill file is not loading it.
+      # The skills this tool call loaded, as the row reads them ("brain",
+      # "brain dan grill"), or nil when it loaded none. The word in front of
+      # them belongs to the dictionary (see .tool_call), so what is built here
+      # is only the list.
       def self.skill_load(tool_name, args)
-        args = {} unless args.is_a?(Hash)
-        raw = nil
-        case tool_name.to_s
-        when "file_ops"
-          raw = args["path"] if args["operation"].to_s == "read"
-        when "shell_exec"
-          raw = args["command"] if args["command"].to_s.match?(Rubot::TUI::READ_COMMANDS)
-        end
-        name = Rubot::TUI::SKILL_PATH.match(raw.to_s)&.[](1)
-        name if name && !name.empty?
+        names = Rubot::SkillLoad.names(tool_name, args)
+        names.empty? ? nil : Rubot::ToolCaption.skill_list(names)
       end
 
       # Cells left for the sentence after the marker and the indent, keeping one

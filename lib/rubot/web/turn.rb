@@ -390,8 +390,10 @@ module Rubot
       end
 
       # `detail` is the phrase the row reads; `title` is what the call actually
-      # asked for, kept for the row's tooltip rather than its text.
-      def tool_started(name, detail, op: nil, title: nil)
+      # asked for, kept for the row's tooltip rather than its text; `skills` are
+      # the skills this call loaded, so the row can name them in code without a
+      # template reading the arguments back.
+      def tool_started(name, detail, op: nil, title: nil, skills: nil)
         @mutex.synchronize do
           # Thinking is over once the model has decided what to run.
           close_thinking_locked
@@ -406,6 +408,7 @@ module Rubot
                   started_at: @clock.call, epoch: epoch_now, elapsed: nil,
                   row_id: @row_seq += 1 }
           row[:title] = title.to_s unless title.to_s.empty?
+          row[:skills] = Array(skills).map(&:to_s).reject(&:empty?) unless Array(skills).empty?
           # The operation a file tool was asked for. The compact view keeps a
           # row that changed a file even when it has no diff to show (see
           # Rubot::Web::ToolRows), and the name alone cannot tell a read from a

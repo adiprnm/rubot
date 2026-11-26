@@ -144,7 +144,7 @@ module Rubot
           end
           @live_entry = nil
         end
-        skill = skill_load(name, args)
+        skill = Rubot::TUI::Transcript.skill_load(name, args)
         summary = if skill
           ::TUI::Text.truncate(skill, tool_summary_limit("skill"))
         else
@@ -221,12 +221,6 @@ module Rubot
         return if rows.nil? || rows.empty?
 
         rows.each { |segments| @log.add_entry(segments, keep_leading: true, indent: 4) }
-      end
-
-      # Returns the skill name when this tool call reads a skill's SKILL.md,
-      # nil otherwise. Only reads count: writing a skill file is not loading it.
-      def skill_load(tool_name, args)
-        Rubot::TUI::Transcript.skill_load(tool_name, args)
       end
 
       def start_live_entry

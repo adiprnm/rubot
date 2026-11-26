@@ -147,8 +147,12 @@ module Rubot
           on_tool_call: lambda do |name, args, _snapshot|
             announcement = args.to_h["message"].to_s.strip if name.to_s == "notify"
             announcement ||= ""
-            turn.tool_started(name, ToolCaption.caption(name, args),
-                              op: args.to_h["operation"], title: ToolCaption.tooltip(name, args))
+            # Read once: the sentence, the names in it and the tooltip all come
+            # from the same arguments, and the arguments are a model's.
+            skills = Rubot::SkillLoad.names(name, args)
+            turn.tool_started(name, ToolCaption.caption(name, args, skills: skills),
+                              op: args.to_h["operation"], title: ToolCaption.tooltip(name, args),
+                              skills: skills)
           end,
           on_tool_result: ->(name, result, diff) { tool_finished(turn, name, result, diff) },
           on_reasoning: ->(delta) { turn.thinking(delta) },

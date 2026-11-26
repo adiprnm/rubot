@@ -170,6 +170,13 @@ module Rubot
             "list" => "Showing what is in %{target}",
             "info" => "Looking at %{target}"
           },
+          "skill" => {
+            "load" => "Loading the %{name} skill",
+            "load_many" => "Loading the %{names} skills",
+            "joiner" => " and ",
+            "separator" => ", ",
+            "label" => "skill"
+          },
           "memory" => {
             "read" => "Recalling what it wrote down",
             "append" => "Writing one thing down in memory",
@@ -1030,6 +1037,13 @@ module Rubot
             "delete" => "Menghapus %{target}",
             "list" => "Menampilkan isi direktori %{target}",
             "info" => "Memeriksa %{target}"
+          },
+          "skill" => {
+            "load" => "Memuat skill %{name}",
+            "load_many" => "Memuat skill %{names}",
+            "joiner" => " dan ",
+            "separator" => ", ",
+            "label" => "skill"
           },
           "memory" => {
             "read" => "Mengingat kembali catatan",

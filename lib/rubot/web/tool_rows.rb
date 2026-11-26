@@ -136,10 +136,13 @@ module Rubot
 
       # A call whose result the reader has to be able to find again: a file it
       # changed, a failure it should hear about rather than watch the model
-      # silently retry, and a call still running — a row that vanished under a
-      # spinning clock reads as work disappearing mid-flight.
+      # silently retry, a call still running — a row that vanished under a
+      # spinning clock reads as work disappearing mid-flight — and a skill it
+      # picked up. A skill load is the one row that says why the calls after it
+      # went the way they did, so in the compact view it keeps a line of its
+      # own instead of collapsing into the batch that followed it.
       def self.keeps_call?(item)
-        records_a_result?(item) || item[:state] == :running
+        records_a_result?(item) || item[:state] == :running || !Array(item[:skills]).empty?
       end
 
       # The two results a row owes the reader even when the turn moved on: what

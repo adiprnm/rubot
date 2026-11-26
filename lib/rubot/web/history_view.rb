@@ -219,6 +219,12 @@ module Rubot
         # one showed, down to the tooltip.
         tooltip = ToolCaption.tooltip(name, arguments)
         row[:title] = tooltip unless tooltip.empty?
+        # The skills the call loaded, when it loaded any: the row reads "Memuat
+        # skill <code>brain</code>" and wears the skill class, the same way the
+        # live one does (see _timeline.erb), so a replayed conversation and a
+        # live one cannot disagree about what happened.
+        skills = Rubot::SkillLoad.names(name, arguments)
+        row[:skills] = skills unless skills.empty?
         # The instagram tool is named after the service, so its `connect`
         # operation would otherwise read "instagram connect connect" — the
         # name already says the service, the op only adds the verb.

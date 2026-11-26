@@ -158,16 +158,14 @@ module Rubot
 
     # Skills are loaded by reading their SKILL.md through the file tool (see
     # SkillRegistry#to_system_prompt). The TUI spots that path so a skill load
-    # gets its own transcript row instead of hiding inside a file_ops row.
-    SKILL_PATH = %r{/skills/([^/\s]+)/SKILL\.md}
+    # gets its own transcript row instead of hiding inside a file_ops row; the
+    # reading of the path itself lives in Rubot::SkillLoad, because the web
+    # timeline and the Telegram card have to spot the same call.
 
-    # Shell commands that only dump a file's contents count as reading.
     # How many archive hits /search prints. A terminal is a scrollback, not a
     # page: the best of a query is worth reading and the rest is a narrower
     # query away.
     SEARCH_RESULTS = 15
-
-    READ_COMMANDS = /\b(cat|bat|less|more|head|tail)\b/
 
     # The slash commands: see tui/commands.rb.
     include Commands

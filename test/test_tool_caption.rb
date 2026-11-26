@@ -328,6 +328,92 @@ module Rubot
                    ToolCaption.caption("file_ops", { "operation" => "read", "path" => "lib/rubot/agent.rb" })
     end
 
+    # --- loading a skill -------------------------------------------------
+
+    # A call that reads a SKILL.md is the agent picking instructions up, and
+    # that is what the row says: the file it opened is the tooltip's business.
+    def test_loading_a_skill_reads_as_loading_that_skill
+      assert_equal "Memuat skill brain",
+                   ToolCaption.caption("file_ops", { "operation" => "read",
+                                                     "path" => "/home/adipurnm/.rubot/skills/brain/SKILL.md" })
+      assert_equal "Memuat skill grill",
+                   ToolCaption.caption("shell_exec",
+                                       { "command" => "cat /home/adipurnm/.rubot/skills/grill/SKILL.md" })
+    end
+
+    # The sentence is the dictionary's, in whichever language the reader picked.
+    def test_loading_a_skill_is_said_in_the_readers_language
+      args = { "operation" => "read", "path" => "/home/adipurnm/.rubot/skills/brain/SKILL.md" }
+
+      english = I18n.with_locale("en") { ToolCaption.caption("file_ops", args) }
+
+      assert_equal "Loading the brain skill", english
+    end
+
+    # The file tool reads when it is told no operation, so a bare path is a read
+    # and the row must not fall back to "reading <path>".
+    def test_a_read_without_an_operation_reads_as_loading_the_skill
+      assert_equal "Memuat skill brain",
+                   ToolCaption.caption("file_ops", { "path" => "/home/adipurnm/.rubot/skills/brain/SKILL.md" })
+    end
+
+    # Several skills in one call are one sentence, joined the way the reader's
+    # language joins two names.
+    def test_loading_several_skills_names_them_all
+      args = { "paths" => [ "/home/adipurnm/.rubot/skills/brain/SKILL.md",
+                            "/home/adipurnm/.rubot/skills/grill/SKILL.md" ] }
+
+      assert_equal "Memuat skill brain dan grill", ToolCaption.caption("file_ops", args)
+      assert_equal "Loading the brain and grill skills",
+                   I18n.with_locale("en") { ToolCaption.caption("file_ops", args) }
+    end
+
+    # Three of them need the comma the two of them do not: the list is built
+    # rather than the joiner repeated ("brain dan grill dan pr").
+    def test_loading_three_skills_commas_all_but_the_last
+      args = { "paths" => [ "/home/adipurnm/.rubot/skills/brain/SKILL.md",
+                            "/home/adipurnm/.rubot/skills/grill/SKILL.md",
+                            "/home/adipurnm/.rubot/skills/pr/SKILL.md" ] }
+
+      assert_equal "Memuat skill brain, grill dan pr", ToolCaption.caption("file_ops", args)
+      assert_equal "Loading the brain, grill and pr skills",
+                   I18n.with_locale("en") { ToolCaption.caption("file_ops", args) }
+    end
+
+    # The TUI row is the same fact in its shorter shape: the mark, the word the
+    # dictionary gives it, and the names.
+    def test_the_tui_skill_row_takes_its_word_from_the_dictionary
+      args = { "paths" => [ "/home/adipurnm/.rubot/skills/brain/SKILL.md",
+                            "/home/adipurnm/.rubot/skills/grill/SKILL.md" ] }
+      names = TUI::Transcript.skill_load("file_ops", args)
+      row = TUI::Transcript.tool_done("file_ops", names, names).map(&:first).join
+
+      assert_equal "brain dan grill", names
+      assert_equal "✓ skill brain dan grill", row
+    end
+
+    def test_writing_a_skill_file_does_not_read_as_loading_it
+      caption = ToolCaption.caption("file_ops", { "operation" => "write",
+                                                  "path" => "/home/adipurnm/.rubot/skills/brain/SKILL.md" })
+
+      refute_includes caption, "Memuat skill"
+      assert_includes caption, "SKILL.md"
+    end
+
+    # A refreshed page replays the skill load as the same row the live turn
+    # drew: the sentence and the mark it wears.
+    def test_the_replayed_transcript_marks_a_skill_load_the_same_way
+      args = { "operation" => "read", "path" => "/home/adipurnm/.rubot/skills/brain/SKILL.md" }
+      call = { "id" => "c1", "function" => { "name" => "file_ops", "arguments" => args.to_json } }
+      view = Object.new.extend(Web::HistoryView)
+      view.define_singleton_method(:sent_attachments) { |*_args| [] }
+
+      row = view.history_tool_items(call, {}, {}, "s1").first
+
+      assert_equal [ "brain" ], row[:skills]
+      assert_equal "Memuat skill brain", row[:detail]
+    end
+
     private
 
     def command(text)

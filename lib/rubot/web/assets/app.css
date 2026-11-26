@@ -2431,6 +2431,21 @@ select:focus-visible { outline: none; }
    all asking for the eye is no page at all. The state then shows as colour
    alone, since there is no glyph left to carry it: red for a call that failed,
    the faint grey for one whose result nobody could read. */
+/* A skill load is the one call whose colour is not a state: green says the
+   agent picked instructions up, not that anything went right. It is written
+   before the two states below so that they still win — a skill read that
+   failed is red, the same as any other failure. The sentence carries the
+   skill's name (see Rubot::SkillLoad), so the colour only makes that row
+   findable when the reader scrolls back for it. */
+.tool-row.is-skill .tool-detail { color: var(--green); }
+/* The skill's name is the one identifier in the row, and it is set as one: the
+   row is already mono, so the tag marks the word rather than the font. It
+   keeps the row's colour so the state still reads through it. */
+.tool-row code {
+  padding: 0 0.28em;
+  border-radius: 2px;
+  background: var(--bg1);
+}
 .tool-row.failed .tool-detail { color: var(--red); }
 .tool-row.unknown .tool-detail { color: var(--fg-faint); }
 /* One call giving way to the next. The row is a new element on every event of
