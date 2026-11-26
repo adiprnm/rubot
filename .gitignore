@@ -1,5 +1,7 @@
 # Dependencies
-Gemfile.lock
+# Gemfile.lock is tracked, not ignored: CI installs from it in deployment mode,
+# so a Gemfile edited without a regenerated lockfile fails there instead of
+# quietly testing something else.
 
 # IDE
 .vscode/
