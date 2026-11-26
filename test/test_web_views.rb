@@ -334,9 +334,13 @@ module Rubot
         assert_includes html, "/turns/tabc/ask"
         assert_includes html, "New file"
         assert_includes html, "Add 019_ask.sql"
-        # The custom answer is always the last choice, and it is the same route.
+        # The custom answer is always the last choice, and it answers through
+        # the same route as the options — a control with its own request, not a
+        # form submit on a node that arrived by swap.
         assert_includes html, Rubot::I18n.t("web.ask.custom")
-        assert_includes html, 'value="custom"'
+        assert_includes html, 'hx-vals=\'{"choice":"custom","token":""}\''
+        assert_includes html, 'hx-include="closest .ask-custom"'
+        assert_includes html, 'class="btn ask-send"'
         # Each option answers with its index, and names the ask it belongs to so
         # a click that outlives its question is dropped rather than answering
         # the next one.

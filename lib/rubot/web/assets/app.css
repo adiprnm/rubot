@@ -2736,7 +2736,19 @@ select:focus-visible { outline: none; }
 .ask .ask-custom {
   display: flex;
   gap: 0.45rem;
-  align-items: center;
+  align-items: stretch;
+}
+
+/* The send button matches the box it sits beside. `.btn` on its own is the
+   small outlined control used in dense rows (10.5px, 0.3rem of padding); next
+   to a 15px input with 0.45rem of padding it read as a scrap of text and was
+   hard to hit on a phone. */
+.ask .ask-send {
+  flex: 0 0 auto;
+  font-size: 14px;
+  padding: 0.45rem 0.9rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
 }
 
 .ask .ask-custom-input {

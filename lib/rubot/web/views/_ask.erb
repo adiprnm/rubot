@@ -25,13 +25,26 @@
     <% end -%>
   </div>
   <% end -%>
-  <form class="ask-custom" hx-post="/turns/<%= h(turn_id) %>/ask" hx-swap="none">
-    <input type="hidden" name="choice" value="custom">
-    <input type="hidden" name="token" value="<%= h(prompt[:token]) %>">
+  <%# The custom answer is typed here and sent with the same kind of control as
+      the options above: an explicit htmx request per control, not a form
+      submit. A swapped-in <form> relies on htmx binding the submit event to a
+      node it did not render, which is exactly the path that left the button
+      doing nothing; a button with its own hx-post is bound the same way the
+      option buttons are, and those work. -%>
+  <div class="ask-custom">
     <input class="ask-custom-input" type="text" name="text" autocomplete="off"
-           placeholder="<%= h(I18n.t("web.ask.custom")) %>">
-    <button class="btn" type="submit"><%= h(I18n.t("web.ask.send")) %></button>
-  </form>
+           placeholder="<%= h(I18n.t("web.ask.custom")) %>"
+           hx-post="/turns/<%= h(turn_id) %>/ask"
+           hx-vals='{"choice":"custom","token":"<%= h(prompt[:token]) %>"}'
+           hx-include="closest .ask-custom"
+           hx-trigger="keyup[key=='Enter'] from:this"
+           hx-swap="none">
+    <button class="btn ask-send" type="button"
+            hx-post="/turns/<%= h(turn_id) %>/ask"
+            hx-vals='{"choice":"custom","token":"<%= h(prompt[:token]) %>"}'
+            hx-include="closest .ask-custom"
+            hx-swap="none"><%= h(I18n.t("web.ask.send")) %></button>
+  </div>
 </div>
 <% else -%>
 <div class="ask ask-confirm">
