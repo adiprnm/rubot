@@ -227,7 +227,9 @@ module Rubot
           "fetch" => "Opening a page",
           "fetch_page" => "Opening %{url}",
           "delegate" => "Asking a sub agent for help",
-          "delegate_named" => "Asking %{agent} for help"
+          "delegate_named" => "Asking %{agent} for help",
+          "ask" => "Asking: %{question}",
+          "ask_plain" => "Asking you a question"
         },
         # What the terminal's slash commands answer with. One group per
         # command family, since the lines a command prints travel together and
@@ -1101,7 +1103,9 @@ module Rubot
           "fetch" => "Membuka sebuah halaman",
           "fetch_page" => "Membuka halaman %{url}",
           "delegate" => "Meminta bantuan subagent",
-          "delegate_named" => "Meminta bantuan %{agent}"
+          "delegate_named" => "Meminta bantuan %{agent}",
+          "ask" => "Bertanya: %{question}",
+          "ask_plain" => "Bertanya sesuatu ke kamu"
         },
         "tui" => {
           "commands" => {
