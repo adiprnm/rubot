@@ -2790,14 +2790,48 @@ select:focus-visible { outline: none; }
 
 /* The mark that says a run is still working. Without it the toggle looked the
    same before, during and after a delegation, and the only way to find out was
-   to open the panel — which is not something a reader thinks to do. It turns
-   like the thinking mark above the composer, in the same colour, because it
-   means the same thing. */
+   to open the panel — which is not something a reader thinks to do.
+
+   It is the ring that turns above the composer, drawn rather than typed. The ⟡
+   it used to be was a fallback font's diamond at 10px, and on a laptop screen
+   that read as a comma with ambitions: the one thing the mark had to say was
+   motion, and only a drawn arc carries a gap wide enough to be seen turning.
+   It is drawn at the size that mark is drawn at — 9.2px, `0.8em` of the 11.5px
+   row it labels — rather than at its own idea of readable: a footnote that is
+   louder than the row it annotates is a second thing to look at, not a note. */
 .subagent-run {
   margin-left: 0.22rem;
   color: var(--yellow);
+  display: inline-flex;
+  align-items: center;
+  /* The box is the height of the line, and the ring is centred inside it, so a
+     ring that is ever redrawn larger cannot change the height of the row. Left
+     to size itself the box would follow the ring, the toggle would outgrow the
+     0.95rem floor the status row is held to, and the whole page — the composer
+     sits above that row — would step up the moment a run started. That is the
+     jitter `line-height: 1` on `.usage-toggle` exists to prevent. */
+  height: 1em;
+  line-height: 0;
+}
+
+.subagent-run .subagent-spinner {
+  flex: 0 0 auto;
+  display: block;
+  width: 9px;
+  height: 9px;
+  animation: mark-spin 1s linear infinite;
+}
+
+/* The same ring inside a row, where it stands in the column a ✓ or a ✗ takes.
+   Same rule as the mark on the working row: `0.8em` of the line it sits in, so
+   the two are never a size apart, and a baseline nudge because a text mark gets
+   one from the font for free. */
+.subagent-mark .subagent-spinner {
   display: inline-block;
-  animation: mark-spin 1.6s linear infinite;
+  width: 0.8em;
+  height: 0.8em;
+  vertical-align: -0.05em;
+  animation: mark-spin 1s linear infinite;
 }
 
 /* The same slot once the run is over. Green is the colour a finished row
@@ -2911,7 +2945,19 @@ select:focus-visible { outline: none; }
   width: calc(100% - 3.2rem);
   max-width: 52rem;
   margin: 0 auto 0.5rem;
-  padding: 0.3rem 0.45rem 0.35rem 0.8rem;
+  /* One inset, all four sides, held by the box rather than by anything in it:
+     the text, the pill and the circles all begin and end the same distance from
+     the frame. A quote chip and an attachment strip land on that same inset
+     because they are rows of this grid rather than boxes of their own — the
+     chip's own text then sits a few pixels deeper, behind its 2px rule and its
+     padding, which is what a quotation is meant to do; what lines up with the
+     field is its frame, not its first letter. The four values this used to
+     carry — 0.8rem at the left, 0.45 at the right, 0.3 above and 0.35 below —
+     put the field further in than the buttons and left the box looking tilted.
+     The text is given no extra room at the top on purpose: its own leading
+     already holds the glyphs off the edge, which is exactly the air a control
+     with a drawn edge does not need. */
+  padding: 0.5rem;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--bg-dim);
@@ -4562,11 +4608,13 @@ html:not(.js) .settings-tabs { display: none; }
 
   /* The phone draws the box the laptop draws, tighter: the field keeps its
      line with the buttons at its end, the pill keeps the row under it, inside
-     the same outline. Two things change here — the inset, because a phone has
-     less to spare, and the size of the controls, because a thumb is not a
-     mouse. The gutter comes from the narrow block above, which is the width
+     the same outline. One thing changes here — the size of the controls,
+     because a thumb is not a mouse — and the two rows are pulled closer
+     together. The inset does not change: it is one value for the whole box at
+     every width, so a phone cannot disagree with a laptop about where the text
+     starts. The gutter comes from the narrow block above, which is the width
      the thread uses, so the box stays in line with the conversation. */
-  .composer-box { row-gap: 0.45rem; padding: 0.4rem 0.45rem 0.35rem 0.65rem; }
+  .composer-box { row-gap: 0.45rem; }
 
   .composer-box textarea { min-height: 1.4rem; font-size: 16px; line-height: 1.45; }
 

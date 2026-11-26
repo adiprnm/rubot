@@ -231,6 +231,21 @@ module Rubot
             %(stroke-linejoin="round" aria-hidden="true" focusable="false">#{body}</svg>)
         end
 
+        # The mark a delegated run wears. A run that has settled says so with a
+        # tick or a cross; one that is still working wears the ring that turns
+        # above the composer, because it means the same thing and motion is the
+        # only part of it a 10px mark can carry (see `.subagent-run`).
+        #
+        # The two settled marks are literals rather than escaped text: they are
+        # this file's own characters, not anything a reader or a model wrote.
+        def subagent_mark(phase)
+          case phase.to_s
+          when "done" then "✓"
+          when "failed" then "✗"
+          else View.spinner_mark("subagent-spinner")
+          end
+        end
+
         def dur(seconds)
           Format.duration(seconds)
         end

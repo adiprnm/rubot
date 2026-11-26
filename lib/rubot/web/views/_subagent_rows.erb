@@ -13,7 +13,7 @@
   <ul class="subagent-rows">
 <% subagents.each do |s| -%>
     <li class="subagent subagent-<%= h(s[:phase]) %>"<% if s[:task].to_s != "" %> title="<%= h(s[:task]) %>"<% end %>>
-      <span class="subagent-mark" aria-hidden="true"><%= s[:phase] == "done" ? "✓" : (s[:phase] == "failed" ? "✗" : "⟡") %></span>
+      <span class="subagent-mark" aria-hidden="true"><%= subagent_mark(s[:phase]) %></span>
       <span class="subagent-name"><%= h(s[:agent]) %></span>
       <span class="subagent-detail"><%= h(s[:line]) %></span>
     </li>

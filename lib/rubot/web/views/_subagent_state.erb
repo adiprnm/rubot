@@ -14,13 +14,13 @@
     away (see Web#hide_subagents_later). -%>
 <%- running = subagents.count { |s| %w[started thinking tool].include?(s[:phase]) } -%>
 <%- running_label = I18n.t(running == 1 ? "web.subagents.running_one" : "web.subagents.running", count: running) -%>
-<%- if running.positive? -%><span class="subagent-run" title="<%= h(running_label) %>" aria-label="<%= h(running_label) %>">⟡</span><%- else -%>
+<%- if running.positive? -%><span class="subagent-run" title="<%= h(running_label) %>" aria-label="<%= h(running_label) %>"><%= View.spinner_mark("subagent-spinner") %></span><%- else -%>
 <%-   last = subagents.find { |s| %w[done failed].include?(s[:phase]) && s[:finished_at] } -%>
 <%-   fresh = last && (Time.now - last[:finished_at]).to_f <= Rubot::Web::SubagentJobs::DONE_MARK_SECONDS -%>
 <%-   if fresh -%>
 <%-     failed = last[:phase] == "failed" -%>
 <span class="subagent-settled<%= " subagent-settled-failed" if failed %>"
       title="<%= h(I18n.t(failed ? "web.subagents.failed" : "web.subagents.done")) %>"
-      aria-label="<%= h(I18n.t(failed ? "web.subagents.failed" : "web.subagents.done")) %>"><%= failed ? "✗" : "✓" %></span>
+      aria-label="<%= h(I18n.t(failed ? "web.subagents.failed" : "web.subagents.done")) %>"><%= subagent_mark(failed ? "failed" : "done") %></span>
 <%-   end -%>
 <%- end -%>

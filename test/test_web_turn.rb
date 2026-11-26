@@ -340,12 +340,40 @@ module Rubot
 
         html = Rubot::Web::View.render("_subagent_sheet", subagents: jobs.runs("web_rubot"))
         assert_includes html, %(<span class="subagent-run")
+        assert_includes html, "subagent-spinner",
+                        "a run in flight wears the drawn ring, not a typed glyph"
         assert_includes html, Rubot::I18n.t("web.subagents.running_one")
 
         jobs.finish(session_id: "web_rubot", run_id: "r1", status: "done", result: "puisi")
         html = Rubot::Web::View.render("_subagent_sheet", subagents: jobs.runs("web_rubot"))
         refute_includes html, %(<span class="subagent-run")
         assert_includes html, "subagent-done"
+      end
+
+      # The rows in the panel and the mark on the toggle say the same three
+      # states, so the mark is drawn in one place rather than typed in three: a
+      # ⟡ in the list beside a ring on the toggle would be two ways of saying
+      # "running" a few pixels apart, and the typed one is the half that got too
+      # small to read. Both halves are rendered here, because a helper that only
+      # one caller uses is a helper that can drift without a test noticing.
+      def test_the_panel_rows_wear_the_same_marks_as_the_toggle
+        rows = Rubot::Web::View.render("_subagent_rows", subagents: [
+          { phase: "tool", agent: "writer", line: "menulis" },
+          { phase: "done", agent: "reader", line: "selesai" },
+          { phase: "failed", agent: "critic", line: "gagal" }
+        ])
+        toggle = Rubot::Web::View.render("_subagent_state", subagents: [
+          { phase: "tool", finished_at: Time.now }
+        ])
+
+        assert_equal 1, rows.scan("subagent-spinner").size,
+                     "one drawn ring, for the one run still working"
+        assert_includes toggle, "subagent-spinner",
+                        "the toggle wears the ring the rows wear"
+        assert_includes rows, "✓"
+        assert_includes rows, "✗"
+        refute_includes rows, "⟡"
+        refute_includes toggle, "⟡"
       end
 
       # The mark has three states, and the reader should be able to tell "still
