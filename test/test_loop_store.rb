@@ -403,4 +403,38 @@ class TestLoopStore < Minitest::Test
 
     assert_equal 40, @store.load(state.id).iterations
   end
+
+  # How many times a loop has been picked up from a process that died. A file
+  # written before the fact is a loop that has never been taken over, so the key
+  # must read as zero rather than raise, and a save must write the number back.
+  def test_takeovers_round_trip_and_a_file_without_the_key_reads_zero
+    state = create_loop
+    assert_includes File.read(@store.path(state.id)), "takeovers: 0"
+
+    @store.update(state.id) { |loop| loop.takeovers = 2 }
+    assert_equal 2, @store.load(state.id).takeovers
+    assert_includes File.read(@store.path(state.id)), "takeovers: 2"
+
+    file = @store.path(state.id)
+    File.write(file, File.read(file).sub(/^takeovers:.*\n/, ""))
+
+    assert_equal 0, @store.load(state.id).takeovers, "an older file means \"never taken over\", not an error"
+  end
+
+  # One completed iteration is proof the run is alive and getting somewhere, so
+  # the count of takeovers goes back to zero -- but that is the run's fact, not
+  # the store's: an iteration is charged as it starts spending, so `iterations`
+  # moves for the runs that die too. The store must therefore leave the number
+  # alone, and LoopRun clears it where the verdict is.
+  def test_a_write_that_completes_no_iteration_keeps_the_takeovers
+    state = create_loop
+    @store.update(state.id) { |loop| loop.takeovers = 2 }
+
+    @store.update(state.id) { |loop| loop.iterations = loop.iterations.to_i + 1 }
+    @store.append_log(state.id, "still dying")
+
+    assert_equal 1, @store.load(state.id).iterations
+    assert_equal 2, @store.load(state.id).takeovers,
+                 "a charged iteration is not a finished one, and a log line is not progress"
+  end
 end

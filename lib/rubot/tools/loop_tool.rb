@@ -4,6 +4,7 @@ require "time"
 
 require_relative "../tool"
 require_relative "../formatting"
+require_relative "../loop_lease"
 require_relative "../loop_store"
 require_relative "../loop_worktree"
 
@@ -219,7 +220,14 @@ module Rubot
         budget, refusal = budget_for_resume(state, args)
         return refusal if refusal
 
-        if state.status == "active"
+        # An `active` file is only a loop that should be iterating; the lease is
+        # what says a run is really in flight. Two runs on one worktree share an
+        # index and an iteration number, so the second is refused -- but an
+        # active file nobody holds is a run that died with its process, and that
+        # is exactly the loop a resume is for, so this falls through to the wake
+        # below. The runner's takeover branch is what records that event, which
+        # is why this path leaves `active` alone: writing it again would hide it.
+        if state.status == "active" && LoopLease.held?(store.dir, state.id)
           return "OK: loop #{state.id} is already active and iterating" if cap.nil? && budget.nil?
 
           # A loop already iterating is not started a second time -- two runs on
@@ -235,10 +243,19 @@ module Rubot
         # One write, before the runner is asked to continue: the run reads the
         # cap and the budget from the file, so a number written afterwards is one
         # it never saw.
+        #
+        # Nothing here writes `status` or the takeover count, with a runner
+        # attached or without one. Those two are the runner's facts: it is the
+        # only part of this that can tell a loop the reader woke from a loop whose
+        # process died, and it has the branch that does it (see
+        # LoopRunner#resume). A hand-off is no exception -- the channel answers a
+        # handed-off request by running that same runner -- so a wake written here
+        # would be read there as an active loop nobody is holding, which is the
+        # definition of a takeover: three ordinary resumes were enough to stall a
+        # healthy loop, with a log saying it kept dying.
         store.update(state.id) do |loop|
           loop.max_iterations = cap if cap
           loop.max_tokens = budget if budget
-          loop.status = "active"
         end
         note = raised_note(cap, budget)
         if @loop_runner

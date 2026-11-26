@@ -300,7 +300,16 @@ module Rubot
         s.add_entry(entry(iteration_note(iteration, commit, worker, verifier, text, metrics, round_cap, ceiling)))
       end
       fail_iteration(state.id, "verifier failed: #{verdict[:error]}") if verdict[:error]
-      @store.update(state.id) { |s| s.add_entry(entry("verifier: #{verdict[:reason]}")) }
+      @store.update(state.id) do |s|
+        s.add_entry(entry("verifier: #{verdict[:reason]}"))
+        # An iteration that reached its verdict is proof the run survived one
+        # whole turn and got judged, so the takeovers it outlived are cleared.
+        # Not before: an iteration is counted the moment it starts spending, so
+        # a charge is what a run makes on its way into dying, not evidence it
+        # lived. This is the only place a loop's progress is written down, which
+        # is what makes the ceiling count crashes instead of restarts.
+        s.takeovers = 0
+      end
 
       {
         verdict: verdict[:verdict], reason: verdict[:reason], commit: commit,

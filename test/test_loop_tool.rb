@@ -78,6 +78,19 @@ class TestLoopTool < Minitest::Test
     assert result.start_with?("OK:"), result
   end
 
+  # The real runner, for the two tests that need to see what the tool's write
+  # does to it. The repository here is a plain directory, so the run stops on a
+  # worktree error without spending a turn -- which is enough: what these tests
+  # read is the file the takeover bookkeeping is written into, not the work.
+  def real_runner
+    Rubot::LoopRunner.new(
+      store: @store,
+      worktree_root: File.join(@root, "worktrees"),
+      session_runner: ->(session_id:, prompt:, workspace:) { { text: "should not be reached" } },
+      verifier_persona: "code_reviewer"
+    )
+  end
+
   # The state a run now leaves behind when it reaches its cap: paused, with the
   # iterations already at the cap, which is the state a resume has to get out of.
   def cap_stopped(max_iterations: 2)
@@ -340,7 +353,12 @@ class TestLoopTool < Minitest::Test
     assert_empty @runner.calls
   end
 
-  def test_resume_reactivates_a_paused_loop_and_asks_the_runner_to_continue
+  # The runner is the half that knows whether a wake is a wake or a takeover, so
+  # it is the half that writes the status: the tool raises the cap and leaves the
+  # file's two "is this loop really running" facts alone. Asserting `active` here
+  # would be asserting the tool did the runner's job -- and doing it is what made
+  # an ordinary resume look like a pickup from a dead process.
+  def test_resume_raises_the_cap_and_leaves_the_wake_to_the_runner
     state = create
     @store.update(state.id) { |loop| loop.status = "paused" }
     @tool.loop_runner = @runner
@@ -348,8 +366,69 @@ class TestLoopTool < Minitest::Test
     result = @tool.execute("operation" => "resume", "id" => state.id)
 
     assert_ok result
-    assert_equal "active", @store.load(state.id).status
+    assert_equal "paused", @store.load(state.id).status, "the runner wakes it, not this"
     assert_equal [ [ :resume, state.id ] ], @runner.calls
+  end
+
+  # The tool writes the file before it asks the runner to continue, and that
+  # write used to say `active` for a loop it had just woken. The real runner then
+  # read the file the tool had written, saw an active loop nobody was holding,
+  # and counted a takeover for a run that was starting normally -- three of those
+  # were enough to stall a healthy loop for good, with a log saying it kept dying.
+  #
+  # The test drives the real runner, because a fake one cannot see this: the bug
+  # lived in the pair, not in either half.
+  def test_a_paused_loop_woken_by_the_tool_is_not_counted_as_a_takeover
+    state = create
+    @store.update(state.id) do |loop|
+      loop.status = "paused"
+      loop.takeovers = 2
+    end
+    @tool.loop_runner = real_runner
+
+    result = @tool.execute("operation" => "resume", "id" => state.id)
+
+    assert_ok result
+    reread = @store.load(state.id)
+    assert_equal "active", reread.status
+    assert_equal 0, reread.takeovers, "a deliberate wake starts the count over"
+    refute(reread.log.any? { |entry| entry.text.start_with?("taken over") },
+           "and is not written down as a run picked up off a dead process")
+  end
+
+  # The bug this pair exists for: everything above passes with a fake runner, and
+  # the wake written into the file was only harmful when the real runner read it
+  # afterwards -- which is exactly what the channel does with a handed-off
+  # request. This drives both halves in that order.
+  def test_a_handed_off_wake_is_not_counted_as_a_takeover_when_the_runner_picks_it_up
+    state = create
+    @store.update(state.id) do |loop|
+      loop.status = "paused"
+      loop.takeovers = 2
+    end
+    @tool.agent = FakeAgent.new
+
+    @tool.execute("operation" => "resume", "id" => state.id)
+    real_runner.resume(state.id)
+
+    reread = @store.load(state.id)
+    assert_equal "active", reread.status, "the runner woke it"
+    assert_equal 0, reread.takeovers, "a resume the reader asked for is not a pickup off a dead process"
+    refute(reread.log.any? { |entry| entry.text.start_with?("taken over") },
+           "and the log must not say the loop kept dying")
+  end
+
+  # The other half of the same pair: a file that already said `active` with
+  # nobody holding it is a run that died, and the tool wakening it must leave the
+  # counting to the runner rather than pretending it woke something.
+  def test_an_active_loop_woken_by_the_tool_is_counted_as_one_takeover
+    state = create
+    @tool.loop_runner = real_runner
+
+    result = @tool.execute("operation" => "resume", "id" => state.id)
+
+    assert_ok result
+    assert_equal 1, @store.load(state.id).takeovers
   end
 
   def test_resume_on_a_done_loop_is_refused_and_leaves_it_done
@@ -380,7 +459,10 @@ class TestLoopTool < Minitest::Test
     assert_ok result
     reread = @store.load(state.id)
     assert_equal 5, reread.max_iterations
-    assert_equal "active", reread.status
+    # The wake itself is the runner's write (see the real-runner tests below):
+    # this half owns the cap, because a run that read it afterwards would never
+    # see the number the reader asked for.
+    assert_equal "paused", reread.status
     assert_equal [ 5 ], caps_at_resume, "the run must see the raised cap before it is asked to continue"
     assert_equal [ [ :resume, state.id ] ], runner.calls
   end
@@ -426,16 +508,19 @@ class TestLoopTool < Minitest::Test
 
     assert_ok result
     assert_equal 2, @store.load(state.id).max_iterations, "a resume must not raise a cap nobody asked for"
-    assert_equal "active", @store.load(state.id).status
+    assert_equal "paused", @store.load(state.id).status, "the wake is the runner's write"
     assert_equal [ [ :resume, state.id ] ], @runner.calls
   end
 
   # A loop already iterating is never started twice -- one worktree, one index,
-  # one iteration number -- but its cap is still a fact worth raising.
+  # one iteration number -- but its cap is still a fact worth raising. "Already
+  # iterating" is the lease's answer, not the status field's: an active file is
+  # only a loop that should be running.
   def test_resume_with_a_cap_on_an_active_loop_raises_it_without_starting_a_second_run
     state = create(max_iterations: 2)
     @store.update(state.id) { |loop| loop.iterations = 2 }
     @tool.loop_runner = @runner
+    holder = Rubot::LoopLease.hold(@store.dir, state.id)
 
     result = @tool.execute("operation" => "resume", "id" => state.id, "max_iterations" => 6)
 
@@ -443,6 +528,24 @@ class TestLoopTool < Minitest::Test
     assert_includes result, "already active"
     assert_equal 6, @store.load(state.id).max_iterations
     assert_empty @runner.calls, "an already active loop must not get a second run"
+  ensure
+    holder&.release
+  end
+
+  # An active file nobody holds is a run that died with its process, and that is
+  # exactly the loop a resume is for: the guard must let it through. The status
+  # is left alone here -- the runner's takeover branch is what records the event,
+  # and writing `active` again would hide it.
+  def test_resume_of_an_active_loop_nobody_is_running_reaches_the_runner
+    state = create
+    @tool.loop_runner = @runner
+
+    result = @tool.execute("operation" => "resume", "id" => state.id)
+
+    assert_ok result
+    assert_includes result, "resumed"
+    assert_equal [ [ :resume, state.id ] ], @runner.calls
+    assert_equal 0, @store.load(state.id).takeovers, "the takeover is the runner's to count, not the tool's"
   end
 
   # -- the budget on resume --------------------------------------------------
@@ -463,7 +566,7 @@ class TestLoopTool < Minitest::Test
     assert_ok result
     reread = @store.load(state.id)
     assert_equal 20_000, reread.max_tokens
-    assert_equal "active", reread.status
+    assert_equal "paused", reread.status, "the wake is the runner's write, the budget is this one's"
     assert_equal [ 20_000 ], budgets_at_resume, "the run must see the raised budget before it continues"
     assert_includes result, "20000", "the answer says what the loop may spend now"
     assert_equal [ [ :resume, state.id ] ], runner.calls
@@ -571,13 +674,22 @@ class TestLoopTool < Minitest::Test
 
   def test_resume_with_an_agent_and_no_runner_asks_the_agent_to_resume
     state = create
-    @store.update(state.id) { |loop| loop.status = "paused" }
+    @store.update(state.id) do |loop|
+      loop.status = "paused"
+      loop.takeovers = 2
+    end
     @tool.agent = FakeAgent.new
 
     result = @tool.execute("operation" => "resume", "id" => state.id)
 
     assert_ok result
-    assert_equal "active", @store.load(state.id).status
+    reread = @store.load(state.id)
+    # The hand-off is a request, not a run: the file keeps saying paused, and the
+    # runner the channel wakes from it is what moves the status and the count.
+    # This side writing them is what let an ordinary resume be counted as a
+    # takeover once the real runner read the file.
+    assert_equal "paused", reread.status
+    assert_equal 2, reread.takeovers
     assert_equal [ { op: :resume, id: state.id } ], @tool.instance_variable_get(:@agent).requests
   end
 

@@ -18,7 +18,7 @@ module Rubot
     LOG_HEADING = "## Log"
     # Every frontmatter fact; a save diffs these to find the caller's own edits.
     FACT_KEYS = %i[id goal done_criteria repo branch worktree base status iterations tokens
-                   max_iterations max_tokens created_at updated_at].freeze
+                   takeovers max_iterations max_tokens created_at updated_at].freeze
 
     # A file that exists but cannot be read back as a loop. Distinct from a
     # missing file on purpose: defaulting the counters (tokens 0, status active)
@@ -60,18 +60,20 @@ module Rubot
       # reattaches a branch that has moved -- so a base worked out late would
       # measure the loop's work from wherever the loop had already got to.
       attr_accessor :branch, :worktree, :base, :status, :iterations, :tokens, :max_iterations,
-                    :max_tokens, :updated_at
+                    :max_tokens, :takeovers, :updated_at
       # What the file said when this was read, nil for a state built in memory:
       # #save diffs against it, so a stale object carries edits, not an overwrite.
       attr_accessor :origin
 
       def initialize(id:, goal:, done_criteria:, repo:, branch: nil, worktree: nil, base: nil,
                      status: "active", iterations: 0, tokens: 0, max_iterations: DEFAULT_MAX_ITERATIONS,
-                     max_tokens: DEFAULT_MAX_TOKENS, created_at: nil, updated_at: nil, log: [])
+                     max_tokens: DEFAULT_MAX_TOKENS, created_at: nil, updated_at: nil, log: [],
+                     takeovers: 0)
         @id, @goal, @done_criteria, @repo = id, goal, done_criteria, repo
         @branch, @worktree, @base, @status = branch, worktree, base, status
         @iterations, @tokens, @max_iterations = iterations, tokens, max_iterations
         @max_tokens = max_tokens
+        @takeovers = takeovers
         @created_at, @updated_at, @log = created_at, updated_at, log
       end
 
@@ -90,6 +92,12 @@ module Rubot
         State.new(**disk.facts.merge(changed), log: (disk.log - log) + log)
       end
     end
+
+    # The directory the files live in. Public because the lease that says a loop
+    # is really being run lives beside them (see LoopLease): a run locks
+    # <dir>/.<id>.run and has to be given the same directory the store was built
+    # with rather than a second guess at where that was.
+    attr_reader :dir
 
     def initialize(dir:)
       raise ArgumentError, "dir is required" if dir.nil? || dir.to_s.strip.empty?
@@ -152,6 +160,11 @@ module Rubot
       with_lock(File.join(@dir, ".lock"), exclusive: true) do
         state = load(id) or next
         yield state
+        # Nothing here clears the takeovers. An iteration is counted by `charge`
+        # the moment it starts spending, so a run that dies halfway still moves
+        # `iterations` -- and a store that read that as progress would clear the
+        # count on exactly the runs the count exists for. Progress is the run's
+        # own fact, written where the verdict is (see LoopRun#iterate).
         state.updated_at = Time.now.utc
         save(state)
       end
@@ -234,7 +247,8 @@ module Rubot
         [ "branch", state.branch && quoted(state.branch) ], [ "worktree", state.worktree && quoted(state.worktree) ],
         [ "base", state.base && quoted(state.base) ],
         [ "status", state.status ], [ "iterations", state.iterations.to_i ],
-        [ "tokens", state.tokens.to_i ], [ "max_iterations", state.max_iterations.to_i ],
+        [ "tokens", state.tokens.to_i ], [ "takeovers", state.takeovers.to_i ],
+        [ "max_iterations", state.max_iterations.to_i ],
         [ "max_tokens", (state.max_tokens || State::DEFAULT_MAX_TOKENS).to_i ],
         [ "created_at", iso(state.created_at) ], [ "updated_at", iso(state.updated_at) ]
       ].reject { |_, value| value.nil? }.map { |key, value| "#{key}: #{value}\n" }.join
@@ -281,6 +295,9 @@ module Rubot
         base: blank_to_nil(data["base"]),
         status: (data["status"] || "active").to_s, iterations: data["iterations"].to_i,
         tokens: data["tokens"].to_i,
+        # A file written before takeovers were a fact is a loop that has not been
+        # taken over, so a missing key reads as zero instead of raising.
+        takeovers: data["takeovers"].to_i,
         max_iterations: (data["max_iterations"] || State::DEFAULT_MAX_ITERATIONS).to_i,
         max_tokens: (data["max_tokens"] || State::DEFAULT_MAX_TOKENS).to_i,
         created_at: parse_time(data["created_at"]), updated_at: parse_time(data["updated_at"]),

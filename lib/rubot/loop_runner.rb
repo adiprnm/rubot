@@ -3,6 +3,7 @@
 require "securerandom"
 require "time"
 
+require_relative "loop_lease"
 require_relative "loop_run"
 require_relative "loop_store"
 require_relative "loop_worktree"
@@ -59,6 +60,10 @@ module Rubot
     # A resume may wake these up. `done` is not one of them: its verdict was
     # answered, and an id in a log file must not re-arm a finished loop.
     RESUMABLE = %w[ paused stalled ].freeze
+    # What the log says when a loop that looks alive is picked up from a process
+    # that is not, so the next reader knows the run has been restarted rather
+    # than continued.
+    TAKEN_OVER = "taken over: nothing was holding it"
 
     def initialize(store:, worktree_root:, session_runner:, verifier_persona: "code_reviewer", logger: nil,
                    budget: false)
@@ -90,6 +95,12 @@ module Rubot
     # Wakes a paused or stalled loop first; the counters are on disk, so the run
     # continues from the file's iteration rather than from zero.
     #
+    # An `active` file is the case this method exists for. It says a run *should*
+    # be iterating, and after a restart it says that about a run that died with
+    # its process: without the lease below, the only way out was editing the
+    # markdown by hand. The lease is what tells the two apart -- held means a
+    # live run, free means somebody died and the loop is taken over.
+    #
     # Not every wake is a run. A loop that stopped for its budget is paused, and
     # raising the budget is the only thing that gets it going again: waking it
     # again would buy a turn or a boundary stop and announce the same stop into
@@ -101,8 +112,25 @@ module Rubot
       refusal = spent_refusal(id)
       return result(@store.load(id), :budget, iterations_of(state), refusal) if refusal
 
-      @store.update(id) { |loop| loop.status = "active" } if RESUMABLE.include?(state&.status.to_s)
-      run(id)
+      status = state&.status.to_s
+      if RESUMABLE.include?(status)
+        # An explicit wake, which is also the reader saying "run it again": the
+        # count of takeovers restarts here, so a loop that was stalled by them
+        # is not one resume away from being stalled again.
+        @store.update(id) do |loop|
+          loop.takeovers = 0
+          loop.status = "active"
+        end
+        return run(id)
+      end
+
+      return run(id) unless status == "active"
+      # A run is really in flight: nothing changes, and one run per loop still
+      # holds. run(id) answers the refusal, so the words are the same here as
+      # they are for any other caller.
+      return run(id) if LoopLease.held?(@store.dir, id)
+
+      takeover(id, state)
     end
 
     # The note a spent loop gets instead of another wake, nil when it still has
@@ -133,30 +161,104 @@ module Rubot
 
     private
 
-    def run(id)
+    # An `active` file and a free lease: the process that was running this loop is
+    # gone. A run per loop still holds -- the lease just proved nobody is running
+    # it -- so the loop is picked up where its file says it stopped, unless being
+    # picked up is what keeps happening.
+    #
+    # This decides; the run records. The count and the log entry are written by
+    # `run` once it holds the lease, because two wakes of one loop can both get
+    # here and only one of them can become a run: a loser that had already
+    # written would leave a takeover in the file, and a log line saying a run had
+    # been picked up, for a run that never happened.
+    def takeover(id, state)
+      count = state.takeovers.to_i
+      if count >= LoopLease::MAX_TAKEOVERS
+        # Taking it over again would spend another iteration on a loop that has
+        # never finished one since it started dying, and the run -- or what the
+        # run does -- is the best explanation there is. Stalled rather than
+        # silently restarted, and said plainly: the count and what clears it are
+        # the two facts a reader needs, and neither is in the file before this.
+        message = "taken over #{count} times since its last completed iteration, which is " \
+                  "probably what kills the process; it is stalled now, and a deliberate resume " \
+                  "clears the count and runs it again"
+        @store.update(id) do |loop|
+          loop.status = "stalled"
+          loop.add_entry(entry(message))
+        end
+        log("loop #{id}: #{message}")
+        return result(@store.load(id), :stalled, iterations_of(state), message)
+      end
+
+      run(id, takeover: true)
+    end
+
+    # The trace of a run that was picked up: nobody was alive to write the ending,
+    # so the next reader has to be told the start happened. Counted inside the
+    # store's own write, which is what keeps two processes from writing the same
+    # number twice.
+    def record_takeover(id)
+      @store.update(id) do |loop|
+        loop.takeovers = loop.takeovers.to_i + 1
+        loop.add_entry(entry(TAKEN_OVER))
+      end
+    end
+
+    def run(id, takeover: false)
       state = @store.load(id)
       return result(nil, :missing, 0, "no loop with id #{id.to_s.inspect}") if state.nil?
 
-      worktree = LoopWorktree.new(root: @worktree_root, repo: state.repo)
-      begin
-        dir, branch, base = prepare(worktree, state)
-      rescue LoopWorktree::Error, SystemCallError => e
-        # A repository that cannot take a worktree today can take one after the
-        # user looks at it, so the loop is left exactly as it was.
-        return reported(id, "could not prepare a worktree: #{e.message}", :worktree_error)
+      # The file says a loop should be iterating; only a held lease says one is.
+      # Taken before git is touched and kept until this method is done, so a
+      # second process answers "already active" instead of working the same
+      # worktree -- two runs share an index and an iteration number. A run that
+      # dies takes nothing with it: the kernel drops the lock with the process.
+      #
+      # A lock file that cannot even be opened is a loop that cannot be proved
+      # either way -- a root-owned file after a privileged run is the ordinary
+      # way this happens -- so it is answered in the same voice as a busy loop
+      # rather than raised, which would leave the loop unresumable and the tool
+      # with a stack trace to show nobody.
+      lease = begin
+        LoopLease.hold(@store.dir, id)
+      rescue SystemCallError, IOError => e
+        return result(state, :not_active, 0,
+                      "loop #{id} could not be leased (#{e.message}); nothing was started")
+      end
+      if lease.nil?
+        return result(state, :not_active, 0,
+                      "loop #{id} is already active in another process; nothing was started")
       end
 
-      outcome = LoopRun.new(store: @store, worktree: worktree,
-                            runner: runner_for(id, worktree, dir, branch, attempt_stamp),
-                            verifier: verifier_for(id, worktree, dir, branch, base, attempt_stamp)).call(id)
-      log("loop #{id} stopped: #{outcome.stop_reason} after #{outcome.iterations_run} iterations")
-      cleanup(settle(outcome), worktree)
-    rescue LoopStore::Corrupt
-      raise # an unreadable file means an unknown budget, and the caller must know
-    rescue StandardError => e
-      # Last resort: the reason lands in the file and in the result, because a
-      # channel has nobody to show a stack trace to.
-      reported(id, "#{e.class}: #{e.message}", :error)
+      begin
+        record_takeover(id) if takeover
+        worktree = LoopWorktree.new(root: @worktree_root, repo: state.repo)
+        begin
+          dir, branch, base = prepare(worktree, state)
+        rescue LoopWorktree::Error, SystemCallError => e
+          # A repository that cannot take a worktree today can take one after the
+          # user looks at it, so the loop is left exactly as it was.
+          return reported(id, "could not prepare a worktree: #{e.message}", :worktree_error)
+        end
+
+        outcome = LoopRun.new(store: @store, worktree: worktree,
+                              runner: runner_for(id, worktree, dir, branch, attempt_stamp),
+                              verifier: verifier_for(id, worktree, dir, branch, base, attempt_stamp)).call(id)
+        log("loop #{id} stopped: #{outcome.stop_reason} after #{outcome.iterations_run} iterations")
+        cleanup(settle(outcome), worktree)
+      rescue LoopStore::Corrupt
+        raise # an unreadable file means an unknown budget, and the caller must know
+      rescue StandardError => e
+        # Last resort: the reason lands in the file and in the result, because a
+        # channel has nobody to show a stack trace to.
+        reported(id, "#{e.class}: #{e.message}", :error)
+      ensure
+        # Every way out of a run releases the lease. The killed-process case is
+        # the kernel's, but a return, a raise and a corrupt file all come through
+        # here, and a lease left behind by one of those would look like a live run
+        # to everyone who asks next.
+        lease.release
+      end
     end
 
     # A loop that is not active is not prepared: the run answers :paused or

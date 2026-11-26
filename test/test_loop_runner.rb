@@ -100,6 +100,19 @@ class TestLoopRunner < Minitest::Test
                           session_runner: session || session_runner, logger: logger, budget: budget)
   end
 
+  # The takeovers the file holds as each turn is asked for. Read there rather
+  # than after the run: an iteration that completes clears the count, so a later
+  # read cannot tell a resume's clearing from an iteration's.
+  def takeover_watching_runner(id, session: nil)
+    seen = []
+    fake = session || session_runner
+    watching = lambda do |session_id:, prompt:, workspace:|
+      seen << @store.load(id).takeovers
+      fake.call(session_id: session_id, prompt: prompt, workspace: workspace)
+    end
+    [ loop_runner(session: watching), seen ]
+  end
+
   def worktree_path(id) = Rubot::LoopWorktree.new(root: @root, repo: @repo).path(id)
 
   # Counted on the branch, not in the worktree: a loop that finished has had its
@@ -748,6 +761,142 @@ class TestLoopRunner < Minitest::Test
     reread = @store.load(state.id)
     assert_equal 3, reread.iterations
     assert_equal 4_000 + 1_000 + 250, reread.tokens
+  end
+
+  # -- a run that died with its process --------------------------------------
+  #
+  # `status: active` says a loop should be iterating; the lease says one is. The
+  # tests below are the two halves of that difference: a live run is refused,
+  # and a dead one is picked up where its file says it stopped.
+
+  # Two runs on one worktree share an index and an iteration number, so a run
+  # that is really in flight is not started twice -- and the file a live run is
+  # writing is left exactly as it found it.
+  def test_a_run_is_refused_while_another_holder_has_the_lease
+    state = new_loop
+    holder = Rubot::LoopLease.hold(@store.dir, state.id)
+    refute_nil holder, "the test's own run holds the lease first"
+    before = File.read(@store.path(state.id))
+
+    result = loop_runner.start(state.id)
+
+    assert_equal :not_active, result.stop_reason
+    assert_includes result.message, "another process"
+    assert_empty @calls, "nothing is spent on a loop somebody else is running"
+    assert_equal before, File.read(@store.path(state.id)), "the live run's file is not written over"
+    refute File.exist?(worktree_path(state.id)), "no worktree is made for a run that will not iterate"
+  ensure
+    holder&.release
+  end
+
+  # The case the lease exists for: the file says active because the process that
+  # was working it is gone, and nobody holds the lease. The loop is taken over --
+  # worked, not refused -- and the takeover is counted before the first turn.
+  def test_resuming_an_active_loop_nobody_holds_takes_it_over
+    state = new_loop(max_iterations: 1)
+    @verdict = ->(_number) { "NOT_YET red" }
+    runner, seen = takeover_watching_runner(state.id)
+
+    result = runner.resume(state.id)
+
+    assert_equal :max_iterations, result.stop_reason
+    refute_empty @calls, "nothing was holding the lease, so the loop is worked"
+    assert_equal 1, seen.first, "the takeover is counted before the first turn"
+    assert(@store.load(state.id).log.any? { |entry| entry.text.start_with?("taken over") },
+           "the log says the run was picked up rather than continued")
+  end
+
+  # A resume of a loop somebody is running changes nothing: the words are the
+  # same ones a second run of an active loop has always got, and no turn is
+  # bought to say them.
+  def test_resuming_a_loop_somebody_is_running_says_already_active_and_starts_nothing
+    state = new_loop
+    holder = Rubot::LoopLease.hold(@store.dir, state.id)
+    before = File.read(@store.path(state.id))
+
+    result = loop_runner.resume(state.id)
+
+    assert_equal :not_active, result.stop_reason
+    assert_includes result.message, "already active"
+    assert_empty @calls
+    assert_equal before, File.read(@store.path(state.id))
+  ensure
+    holder&.release
+  end
+
+  # The cap settles where every other stop does, not in a caller that may or…
+  # (see above) — but the state this test starts from is a crash's own shape:
+  # three takeovers in a row happen only when the process dies before it can
+  # write anything, and a file left like that is exactly `active`, counted, and
+  # held by nobody. It cannot be reached by failing iterations in-process: a
+  # failed iteration pauses the loop, and the next resume of a paused loop is a
+  # deliberate wake that clears the count. That is why the count is seeded here
+  # and the increment is proved on its own, one takeover at a time.
+  def test_a_resume_at_the_takeover_ceiling_stalls_the_loop_and_spends_nothing
+    state = new_loop
+    @store.update(state.id) { |loop| loop.takeovers = Rubot::LoopLease::MAX_TAKEOVERS }
+
+    result = loop_runner.resume(state.id)
+
+    assert_equal :stalled, result.stop_reason
+    assert_empty @calls, "a loop that keeps dying is not given another iteration"
+    reread = @store.load(state.id)
+    assert_equal "stalled", reread.status
+    entry = reread.log.find { |each| each.text.start_with?("taken over") }
+    refute_nil entry, "the log says why it stalled"
+    assert_includes entry.text, Rubot::LoopLease::MAX_TAKEOVERS.to_s
+    assert_includes result.message, Rubot::LoopLease::MAX_TAKEOVERS.to_s
+    assert_includes result.message, "deliberate resume", "and what gets it going again"
+  end
+
+  # The count has to survive what a dying run writes, or the ceiling is a number
+  # nobody can reach: an iteration is charged the moment it starts spending, so
+  # `iterations` moves on the runs that die too. A run that never gets to its
+  # verdict leaves the count where it was.
+  def test_a_run_that_dies_before_its_verdict_keeps_the_takeovers
+    state = new_loop
+    dying = ->(session_id:, prompt:, workspace:) { raise IOError, "the process went away" }
+    runner = loop_runner(session: dying)
+
+    runner.resume(state.id)
+
+    reread = @store.load(state.id)
+    assert_equal 1, reread.takeovers, "the crash this count exists for is not erased by itself"
+    assert_operator reread.iterations, :>=, 1, "a charged iteration is an attempted one, not a finished one"
+    assert_operator reread.iterations, :<, 2
+  end
+
+  # An iteration that ran to its verdict is the proof the loop is alive rather
+  # than a run that keeps dying: whatever took it over has not done it again, so
+  # the count starts over instead of following the loop for the rest of its life.
+  def test_an_iteration_that_reaches_its_verdict_clears_the_takeovers
+    state = new_loop(max_iterations: 1)
+    @store.update(state.id) { |loop| loop.takeovers = 2 }
+    @verdict = ->(_number) { "DONE finished it" }
+
+    loop_runner.start(state.id)
+
+    reread = @store.load(state.id)
+    assert_equal 1, reread.iterations
+    assert_equal 0, reread.takeovers, "a judged iteration is progress, so the takeovers it outlived are gone"
+  end
+
+  # A deliberate wake is the reader's own decision, so the takeovers start over:
+  # a loop stalled by three of them must not be one resume away from stalling
+  # again.
+  def test_resuming_a_paused_loop_clears_its_takeovers
+    state = new_loop(max_iterations: 1)
+    @store.update(state.id) do |loop|
+      loop.status = "paused"
+      loop.takeovers = 2
+    end
+    @verdict = ->(_number) { "DONE finished it" }
+    runner, seen = takeover_watching_runner(state.id)
+
+    result = runner.resume(state.id)
+
+    assert_equal :done_by_verifier, result.stop_reason
+    assert_equal 0, seen.first, "an explicit wake starts the count over"
   end
 
   # -- a repository that cannot take a worktree ------------------------------
