@@ -15,8 +15,12 @@ Thumbs.db
 # Workspace & runtime data
 workspace/
 *.jsonl
-# Local notes and plans, not part of the shipped project.
-docs/
+# Local notes and plans, not part of the shipped project. ADRs are the
+# exception: they are the record of why the code is shaped the way it is, and
+# only help someone who can read them. `docs/*` rather than `docs/`, because a
+# negation cannot re-include a file under an ignored directory.
+docs/*
+!docs/adr/
 # Specs, tickets and feature scratch work written by the pipeline skills.
 .scratch/
 # The TUI uses the directory it was launched from as its workspace, so these
