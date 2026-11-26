@@ -568,6 +568,53 @@ module Rubot
         assert_nil channel.usage_markup_from(nil)
         assert_nil channel.usage_markup_from("bukan report")
       end
+      # --- the mark that a run is working --------------------------------
+
+      # The ring on the subagent toggle is drawn large enough to be seen, which
+      # is exactly the kind of mark that quietly makes a row taller — and this
+      # row has the composer sitting on top of it. Two properties keep that from
+      # happening and neither is visible in the markup, so they are held here:
+      # the box around the ring is pinned to the line's height rather than to the
+      # ring's, and the ring itself is the size the working row's mark is, so the
+      # two are read as one language instead of two sizes a few pixels apart.
+      #
+      # The numbers are read out of the stylesheet rather than restated, because
+      # a test that repeats "9px" is a test that passes while the rule says 13.
+      def test_the_running_ring_is_the_size_of_the_working_mark
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        box = css[/^\.subagent-run \{[^}]*\}/]
+        ring = css[/^\.subagent-run \.subagent-spinner \{[^}]*\}/]
+        row = css[/^\.row \{[^}]*\}/]
+        working_mark = css[/^\.row \.mark \{[^}]*\}/]
+        row_ring = css[/^\.subagent-mark \.subagent-spinner \{[^}]*\}/]
+
+        refute_nil box, "the .subagent-run rule is missing from app.css"
+        refute_nil ring, "the ring has no rule of its own"
+        refute_nil row, "the .row rule is missing from app.css"
+        refute_nil working_mark, "the working mark has no rule of its own"
+
+        assert_includes box, "height: 1em",
+                        "the box follows the line, not the ring: a box that grew with the " \
+                        "ring pushed the toggle past the status row's floor and moved the composer"
+
+        drawing = working_mark[/width:\s*([\d.]+)em/, 1].to_f
+        line = row[/font-size:\s*([\d.]+)px/, 1].to_f
+        width = ring[/width:\s*([\d.]+)px/, 1].to_f
+        height = ring[/height:\s*([\d.]+)px/, 1].to_f
+
+        assert_operator drawing, :>, 0, "the working mark is sized against its line"
+        assert_operator width, :>, 0, "the ring is drawn at a size of its own"
+        assert_in_delta line * drawing, width, 1.0,
+                        "the toggle's ring and the working row's mark are one size, or the " \
+                        "one that is a note reads as a second thing to look at"
+        assert_in_delta width, height, 0.01, "a ring that is not square wobbles as it turns"
+        assert_operator width, :<=, line,
+                        "the ring must fit the line it is pinned to; 1em is the line"
+
+        refute_nil row_ring, "the ring inside a row has no rule of its own"
+        assert_includes row_ring, "width: 0.8em",
+                        "a row's ring is sized by the line it sits in, like the working mark"
+      end
     end
   end
 end

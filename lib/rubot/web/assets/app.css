@@ -2796,9 +2796,10 @@ select:focus-visible { outline: none; }
    it used to be was a fallback font's diamond at 10px, and on a laptop screen
    that read as a comma with ambitions: the one thing the mark had to say was
    motion, and only a drawn arc carries a gap wide enough to be seen turning.
-   It is drawn at the size that mark is drawn at — 9.2px, `0.8em` of the 11.5px
-   row it labels — rather than at its own idea of readable: a footnote that is
-   louder than the row it annotates is a second thing to look at, not a note. */
+   It is drawn at the size that mark is drawn at — 9px in this 10px row, against
+   the 9.2px the working row's own mark comes out at — rather than at its own
+   idea of readable: a footnote that is louder than the row it annotates is a
+   second thing to look at, not a note. */
 .subagent-run {
   margin-left: 0.22rem;
   color: var(--yellow);
@@ -2823,9 +2824,13 @@ select:focus-visible { outline: none; }
 }
 
 /* The same ring inside a row, where it stands in the column a ✓ or a ✗ takes.
-   Same rule as the mark on the working row: `0.8em` of the line it sits in, so
-   the two are never a size apart, and a baseline nudge because a text mark gets
-   one from the font for free. */
+   The rule is the working mark's own — `0.8em` of the line it sits in — so the
+   size follows the text rather than the toggle: 9.6px in the panel's 12px rows,
+   10.9px in the transcript, whose `.subagent-row` is 0.85rem for the detail line
+   even though the name and the mark are 10.5px. Same language, not the same
+   pixel count; a row set at 10px and a row set at 13.6px do not want the same
+   mark. The baseline nudge is there because a text mark gets one from the font
+   for free. */
 .subagent-mark .subagent-spinner {
   display: inline-block;
   width: 0.8em;
