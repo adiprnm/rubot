@@ -193,7 +193,8 @@ module Rubot
       # than being discovered on a half-translated screen.
       def test_every_part_of_the_settings_page_follows_the_language
         channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
-                                       messages: { "web_rubot" => [ %w[user halo] ] })
+                                       messages: { "web_rubot" => [ %w[user halo] ] },
+                                       api_key: "sk-stored")
 
         english = settings_page_in(channel, "en")
         indonesian = settings_page_in(channel, "id")

@@ -239,7 +239,7 @@ module Rubot
         channel.instance_variable_set(:@app_config, config)
         channel
       end
-      def channel_with_archive(personas:, messages:, titles: {})
+      def channel_with_archive(personas:, messages:, titles: {}, api_key: nil)
         dir = Dir.mktmpdir("rubot-web-archive")
         @fixtures << dir
         workspace = File.join(dir, "workspace")
@@ -259,8 +259,15 @@ module Rubot
         end
         Rubot::Session.store = store
 
+        defaults = { "workspace" => workspace }
+        # A key written here is what the settings page calls "already stored".
+        # It goes in the agent defaults rather than in a model entry so the rest
+        # of the page — the model list, the presets, the default model — is drawn
+        # exactly as it is without a key.
+        defaults["api_key"] = api_key if api_key
+
         config = Rubot::Config.from_data(
-          { "agents" => { "defaults" => { "workspace" => workspace } } },
+          { "agents" => { "defaults" => defaults } },
           config_path: File.join(dir, "config.yml")
         )
 

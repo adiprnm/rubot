@@ -8,6 +8,13 @@ require "yaml"
 # The actor tests intentionally exercise Ractors.
 Warning[:experimental] = false if Warning.respond_to?(:[]=)
 
+# A developer's real provider key must never reach a test. `Config#api_key`
+# falls back to these variables, so an inherited key quietly changes what the
+# suite sees — the settings page reports a stored key it was never given — and
+# any path that would call a provider has something to call it with.
+ENV.delete("RUBOT_API_KEY")
+ENV.delete("OPENAI_API_KEY")
+
 # Some tests create and delete files under $HOME (env-loader auto-detect,
 # channel session cleanup). Point HOME at a scratch directory *before* rubot is
 # loaded so Config::DEFAULT_CONFIG_DIR resolves there instead of the user's real
