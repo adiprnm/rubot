@@ -113,17 +113,14 @@ module Rubot
       return result(@store.load(id), :budget, iterations_of(state), refusal) if refusal
 
       status = state&.status.to_s
-      if RESUMABLE.include?(status)
-        # An explicit wake, which is also the reader saying "run it again": the
-        # count of takeovers restarts here, so a loop that was stalled by them
-        # is not one resume away from being stalled again.
-        @store.update(id) do |loop|
-          loop.takeovers = 0
-          loop.status = "active"
-        end
-        return run(id)
-      end
-
+      # An explicit wake is the reader saying "run it again", and it is written by
+      # `run` under the lease rather than here: a file that was woken before the
+      # lease was taken is a file saying `active` with nobody holding it, and a
+      # run that then stops on a worktree error leaves it that way -- after which
+      # the next resume reads the file's own wake as a takeover. The count is
+      # cleared in the same write, for the same reason: this is not a run picked
+      # up off a dead process.
+      return run(id, wake: true) if RESUMABLE.include?(status)
       return run(id) unless status == "active"
       # A run is really in flight: nothing changes, and one run per loop still
       # holds. run(id) answers the refusal, so the words are the same here as
@@ -204,7 +201,7 @@ module Rubot
       end
     end
 
-    def run(id, takeover: false)
+    def run(id, takeover: false, wake: false)
       state = @store.load(id)
       return result(nil, :missing, 0, "no loop with id #{id.to_s.inspect}") if state.nil?
 
@@ -231,15 +228,31 @@ module Rubot
       end
 
       begin
-        record_takeover(id) if takeover
         worktree = LoopWorktree.new(root: @worktree_root, repo: state.repo)
         begin
-          dir, branch, base = prepare(worktree, state)
+          # `active` is passed in rather than read: a wake is written below, after
+          # the worktree is in hand, so the file still says `paused` while this
+          # prepares. Reading the status here would refuse to prepare the very
+          # loop that is being woken.
+          dir, branch, base = prepare(worktree, state, active: wake || state.status.to_s == "active")
         rescue LoopWorktree::Error, SystemCallError => e
           # A repository that cannot take a worktree today can take one after the
           # user looks at it, so the loop is left exactly as it was.
           return reported(id, "could not prepare a worktree: #{e.message}", :worktree_error)
         end
+
+        # Written only now: the worktree is in hand, so this wake will be followed
+        # by an actual run. A loop that could not even prepare keeps saying
+        # `paused` and keeps its count, which is what makes the next resume an
+        # ordinary wake instead of a pickup off a process that never died.
+        #
+        # The count is cleared in the same write as the status: this is the
+        # reader saying "run it again", not a run recovered from a dead process.
+        @store.update(id) do |loop|
+          loop.takeovers = 0
+          loop.status = "active"
+        end if wake
+        record_takeover(id) if takeover
 
         outcome = LoopRun.new(store: @store, worktree: worktree,
                               runner: runner_for(id, worktree, dir, branch, attempt_stamp),
@@ -272,8 +285,9 @@ module Rubot
     # changed files is measured from, so a later read would move the line. Read
     # from the worktree the moment it exists, which is the commit it was created
     # on -- or, for a loop resuming its own branch, where the loop's work stands.
-    def prepare(worktree, state)
-      return [ nil, nil, nil ] unless state.status.to_s == "active"
+    def prepare(worktree, state, active: nil)
+      active = state.status.to_s == "active" if active.nil?
+      return [ nil, nil, nil ] unless active
 
       id = state.id
       dir = worktree.exists?(id) ? worktree.path(id) : worktree.create(id: id, branch: state.branch)

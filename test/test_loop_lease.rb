@@ -100,6 +100,58 @@ class TestLoopLease < Minitest::Test
     refute_nil lease, "a killed holder takes nothing with it: the lock is the kernel's to drop"
   end
 
+  # A lock file that cannot be opened is neither free nor held, and the caller
+  # cannot be told which. Answering "held" is the conservative half: the run that
+  # asks again inside LoopRunner#run answers in words ("could not be leased",
+  # with the file's own message), so nothing here has to guess a sentence. What
+  # must not happen is an EACCES escaping this method, which is what the resume
+  # path and the cron route used to get.
+  def test_held_answers_conservatively_when_the_lock_file_cannot_be_opened
+    path = Rubot::LoopLease.path_for(@dir, ID)
+    File.write(path, "")
+    begin
+      File.chmod(0o000, path)
+      probe = begin
+        File.open(path, File::RDWR)
+      rescue SystemCallError
+        nil
+      end
+      if probe
+        probe.close
+        skip "this user can open an unreadable file, so the failure cannot be staged"
+      end
+
+      assert Rubot::LoopLease.held?(@dir, ID),
+             "a question that cannot be answered must not answer \"free\""
+    ensure
+      File.chmod(0o600, path)
+    end
+  end
+
+  # The other half of the same failure: a run that cannot take the lease because
+  # the file is unreadable has to be a refusal, not an exception. A root-owned
+  # lock file after a privileged run is the ordinary way this happens.
+  def test_hold_raises_for_the_caller_that_answers_in_words
+    path = Rubot::LoopLease.path_for(@dir, ID)
+    File.write(path, "")
+    begin
+      File.chmod(0o000, path)
+      probe = begin
+        File.open(path, File::RDWR)
+      rescue SystemCallError
+        nil
+      end
+      if probe
+        probe.close
+        skip "this user can open an unreadable file, so the failure cannot be staged"
+      end
+
+      assert_raises(SystemCallError) { Rubot::LoopLease.hold(@dir, ID) }
+    ensure
+      File.chmod(0o600, path)
+    end
+  end
+
   private
 
   def wait_for(path, seconds: 10)

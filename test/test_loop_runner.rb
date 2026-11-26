@@ -849,6 +849,81 @@ class TestLoopRunner < Minitest::Test
     assert_includes result.message, "deliberate resume", "and what gets it going again"
   end
 
+  # A wake that cannot get as far as a worktree is not a run, so the file must
+  # not be left saying `active`: the next resume would read that as a run that
+  # died and count a takeover for a loop nobody ever started. The count is left
+  # alone for the same reason.
+  def test_a_wake_that_cannot_prepare_leaves_the_loop_paused
+    state = @store.create(goal: GOAL, done_criteria: CRITERIA,
+                          repo: File.join(@tmp, "no-such-repo"), max_iterations: 8)
+    @store.update(state.id) do |loop|
+      loop.status = "paused"
+      loop.takeovers = 1
+    end
+
+    result = loop_runner.resume(state.id)
+
+    assert_equal :worktree_error, result.stop_reason
+    reread = @store.load(state.id)
+    assert_equal "paused", reread.status, "nothing ran, so nothing was woken"
+    assert_equal 1, reread.takeovers, "and no pickup was counted"
+    refute(reread.log.any? { |entry| entry.text.start_with?("taken over") })
+  end
+
+  # The case the todo asked for in so many words: a process that dies in the
+  # middle of an iteration. The child holds the lease in its own process with an
+  # iteration already charged, and is killed the way a restart kills a run --
+  # SIGKILL, no cleanup, no chance to write an ending. What is left is what the
+  # user had: a file saying active, an iteration paid for, nobody holding it.
+  def test_a_loop_whose_process_dies_mid_iteration_is_resumed_from_that_iteration
+    skip "fork is not available here" unless Process.respond_to?(:fork)
+    skip "flock is not honoured on this filesystem" unless Rubot::LoopLease.hold(@store.dir, "probe")
+
+    state = new_loop(max_iterations: 2)
+    @verdict = ->(_number) { "DONE the second iteration finished it" }
+    marker = File.join(@tmp, "running")
+
+    child = fork do
+      Rubot::LoopLease.hold(@store.dir, state.id)
+      @store.update(state.id) do |loop|
+        loop.iterations = 1
+        loop.tokens = 5_000
+      end
+      File.write(marker, "1")
+      sleep 30
+      exit!(0)
+    end
+
+    begin
+      deadline = Time.now + 10
+      sleep 0.01 until File.exist?(marker) || Time.now > deadline
+      assert Rubot::LoopLease.held?(@store.dir, state.id), "the child is the run"
+      Process.kill("KILL", child)
+    ensure
+      Process.waitpid(child)
+    end
+
+    crash_left = @store.load(state.id)
+    assert_equal "active", crash_left.status, "a kill writes no ending"
+    assert_equal 1, crash_left.iterations
+
+    result = loop_runner.resume(state.id)
+
+    assert_equal :done_by_verifier, result.stop_reason
+    reread = @store.load(state.id)
+    assert_equal "done", reread.status
+    assert_equal 2, reread.iterations, "the loop continued from the iteration it had paid for"
+    # Read in the log rather than in the counter: the pickup is counted before the
+    # run, and the iteration this run then finished is exactly what clears the
+    # count again. Both facts are the design; the log is where the first one can
+    # still be seen.
+    assert(reread.log.any? { |entry| entry.text.start_with?("taken over") },
+           "the resume that picked the loop up is written down")
+    assert_equal 0, reread.takeovers, "and the iteration it completed cleared the count"
+  ensure
+    FileUtils.rm_f(marker) if marker
+  end
+
   # The count has to survive what a dying run writes, or the ceiling is a number
   # nobody can reach: an iteration is charged the moment it starts spending, so
   # `iterations` moves on the runs that die too. A run that never gets to its

@@ -17,6 +17,14 @@ module Rubot
   # anyone running this loop?" has an answer the kernel keeps and drops when the
   # process dies, however it dies: nothing to clean up, no heartbeat to time out,
   # and no way for a stale claim to survive the process that made it.
+  #
+  # What this does NOT buy: the iteration in flight still dies with the process,
+  # and so does the money already spent on it. A lease makes the loop resumable
+  # from its file; it does not make the run survive a restart. Keeping the run
+  # alive would take a process of its own -- a transient systemd unit, or a child
+  # that outlives the parent and is findable again at boot -- and that is
+  # deliberately not attempted here: it is a supervisor's job, and the two facts
+  # this class does provide are what such a supervisor would need anyway.
   class LoopLease
     # How many takeovers a loop may take without finishing a single iteration
     # before the run itself is the suspect. Enforced in LoopRunner#resume, which
@@ -44,7 +52,15 @@ module Rubot
       # keeps the lease with the process that took it, so a child that outlives
       # its parent is not a loop nobody is working.
       io.close_on_exec = true
-      return new(io) if io.flock(File::LOCK_EX | File::LOCK_NB)
+      begin
+        return new(io) if io.flock(File::LOCK_EX | File::LOCK_NB)
+      rescue StandardError
+        # A `flock` that raises would otherwise leave this description open for
+        # the garbage collector to close whenever it got round to it, which is
+        # one file descriptor per failure until the process runs out.
+        io.close
+        raise
+      end
 
       io.close
       nil
@@ -65,6 +81,13 @@ module Rubot
 
       lease.release
       false
+    rescue SystemCallError, IOError
+      # A lock file that cannot be opened cannot be proved free either, so the
+      # answer is the conservative one. Nothing is guessed into words here: the
+      # caller that goes on to run the loop asks for the lease again inside
+      # LoopRunner#run, where the failure is answered as "could not be leased"
+      # with the file's own message rather than as "already active".
+      true
     end
 
     def initialize(io)

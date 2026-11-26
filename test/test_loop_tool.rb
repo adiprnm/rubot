@@ -78,17 +78,33 @@ class TestLoopTool < Minitest::Test
     assert result.start_with?("OK:"), result
   end
 
-  # The real runner, for the two tests that need to see what the tool's write
-  # does to it. The repository here is a plain directory, so the run stops on a
-  # worktree error without spending a turn -- which is enough: what these tests
-  # read is the file the takeover bookkeeping is written into, not the work.
+  # The real runner, for the tests that need to see what the tool's write does to
+  # it. It needs a repository a worktree can be made from: the wake is written
+  # only after `prepare` succeeds, so a plain directory would stop the run one
+  # step early and the file would be read while it was correctly left alone. Its
+  # session runner raises, which is the cheapest stand-in for a run that starts
+  # and then dies inside its first turn.
   def real_runner
     Rubot::LoopRunner.new(
       store: @store,
       worktree_root: File.join(@root, "worktrees"),
-      session_runner: ->(session_id:, prompt:, workspace:) { { text: "should not be reached" } },
+      session_runner: ->(session_id:, prompt:, workspace:) { raise IOError, "the run did not get to work" },
       verifier_persona: "code_reviewer"
     )
+  end
+
+  def git_repo
+    @git_repo ||= begin
+      dir = File.join(@tmp, "git-demo")
+      FileUtils.mkdir_p(dir)
+      system("git", "init", "-q", "-b", "main", dir, exception: true)
+      system("git", "-C", dir, "config", "user.email", "tool@example.com", exception: true)
+      system("git", "-C", dir, "config", "user.name", "Loop Tool Test", exception: true)
+      File.write(File.join(dir, "README.md"), "demo\n")
+      system("git", "-C", dir, "add", "-A", exception: true)
+      system("git", "-C", dir, "commit", "-q", "-m", "init", exception: true)
+      dir
+    end
   end
 
   # The state a run now leaves behind when it reaches its cap: paused, with the
@@ -379,7 +395,7 @@ class TestLoopTool < Minitest::Test
   # The test drives the real runner, because a fake one cannot see this: the bug
   # lived in the pair, not in either half.
   def test_a_paused_loop_woken_by_the_tool_is_not_counted_as_a_takeover
-    state = create
+    state = create(repo: git_repo)
     @store.update(state.id) do |loop|
       loop.status = "paused"
       loop.takeovers = 2
@@ -390,10 +406,11 @@ class TestLoopTool < Minitest::Test
 
     assert_ok result
     reread = @store.load(state.id)
-    assert_equal "active", reread.status
     assert_equal 0, reread.takeovers, "a deliberate wake starts the count over"
     refute(reread.log.any? { |entry| entry.text.start_with?("taken over") },
            "and is not written down as a run picked up off a dead process")
+    assert_operator reread.iterations, :>=, 1,
+                    "the wake has to have produced a run; a file left alone proves nothing"
   end
 
   # The bug this pair exists for: everything above passes with a fake runner, and
@@ -401,7 +418,7 @@ class TestLoopTool < Minitest::Test
   # afterwards -- which is exactly what the channel does with a handed-off
   # request. This drives both halves in that order.
   def test_a_handed_off_wake_is_not_counted_as_a_takeover_when_the_runner_picks_it_up
-    state = create
+    state = create(repo: git_repo)
     @store.update(state.id) do |loop|
       loop.status = "paused"
       loop.takeovers = 2
@@ -409,20 +426,22 @@ class TestLoopTool < Minitest::Test
     @tool.agent = FakeAgent.new
 
     @tool.execute("operation" => "resume", "id" => state.id)
+    assert_equal "paused", @store.load(state.id).status, "the hand-off wakes nothing by itself"
+
     real_runner.resume(state.id)
 
     reread = @store.load(state.id)
-    assert_equal "active", reread.status, "the runner woke it"
     assert_equal 0, reread.takeovers, "a resume the reader asked for is not a pickup off a dead process"
     refute(reread.log.any? { |entry| entry.text.start_with?("taken over") },
            "and the log must not say the loop kept dying")
+    assert_operator reread.iterations, :>=, 1, "the runner picked it up and started work"
   end
 
   # The other half of the same pair: a file that already said `active` with
   # nobody holding it is a run that died, and the tool wakening it must leave the
   # counting to the runner rather than pretending it woke something.
   def test_an_active_loop_woken_by_the_tool_is_counted_as_one_takeover
-    state = create
+    state = create(repo: git_repo)
     @tool.loop_runner = real_runner
 
     result = @tool.execute("operation" => "resume", "id" => state.id)
