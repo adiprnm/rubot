@@ -1,0 +1,57 @@
+name: CI
+
+# The same two commands a person runs before committing (see AGENTS.md):
+# `bundle exec rubocop` and `bundle exec rake test`. They are separate jobs so a
+# lint slip fails in about twenty seconds, while the suite is still starting,
+# rather than at the end of one long job.
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+# Read-only by default. Neither job writes back to the repository, and a token
+# that cannot push cannot be talked into pushing.
+permissions:
+  contents: read
+
+# A second push to the same branch leaves one run, not two competing for
+# runners. The ref in the group keeps main and the pull request apart.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint
+    # The 1-CPU container runner. RuboCop only parses files, so it needs no
+    # more than that, and this job starts in seconds while the test job waits
+    # for a full 4-core VM.
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ruby/setup-ruby@v1
+        with:
+          # Reads .ruby-version (4.0.9), installs the bundle and caches it
+          # against Gemfile.lock. The committed lockfile puts this in deployment
+          # mode, so a Gemfile edited without its lockfile fails right here.
+          bundler-cache: true
+      - run: bundle exec rubocop --format simple
+
+  test:
+    name: test
+    # A full VM, because the suite is parallel by process and only fast with
+    # cores to spread over. On one core the 313 shards are slower than a single
+    # process (189s against 83s), which is why this job is not on slim.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      # Pinned instead of left to Etc.nprocessors: inside a container that call
+      # can report the host's cores rather than the four this runner has.
+      JOBS: 4
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+      - run: bundle exec rake test
