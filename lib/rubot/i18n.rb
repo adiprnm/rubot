@@ -727,12 +727,12 @@ module Rubot
               "note" => "this device, saved the moment it is pressed",
               "theme" => "Theme",
               "font" => "Font",
-              "font_note" => "Serif is the default. Georgia and Palatino use the device's own faces, so they can look a little different. The machine name stays monospace.",
+              "font_note" => "Serif is the default. Georgia and Palatino use the device's own faces, so they can look a little different. The conversation follows this face, tool calls and the model name included; code and session ids keep their fixed width.",
               # The tooltip on each face: what the stack behind the name is.
               "font_titles" => {
                 "serif" => "The default: Source Serif 4, with Charter and Georgia as fallbacks",
                 "sans" => "A system face without serifs: Segoe UI, Roboto, or SF on an Apple device",
-                "mono" => "Martian Mono, the fixed-width face the machine names are set in",
+                "mono" => "Martian Mono, the fixed-width face the names are set in: code, session ids, a tool's slug",
                 "georgia" => "The device's own Georgia, with Times as a fallback",
                 "palatino" => "The device's own Palatino, with the system serif as a fallback"
               },
@@ -1535,11 +1535,11 @@ module Rubot
               "note" => "perangkat ini, tersimpan begitu ditekan",
               "theme" => "Tema",
               "font" => "Font",
-              "font_note" => "Serif adalah bawaan. Georgia dan Palatino memakai huruf milik perangkat, jadi tampilannya bisa sedikit berbeda. Nama mesin tetap monospace.",
+              "font_note" => "Serif adalah bawaan. Georgia dan Palatino memakai huruf milik perangkat, jadi tampilannya bisa sedikit berbeda. Percakapan ikut huruf ini, termasuk tool call dan nama model; kode dan id sesi tetap berjarak tetap.",
               "font_titles" => {
                 "serif" => "Bawaan: Source Serif 4, dengan Charter dan Georgia sebagai cadangan",
                 "sans" => "Huruf sistem tanpa kait: Segoe UI, Roboto, atau SF di perangkat Apple",
-                "mono" => "Martian Mono, huruf berjarak tetap yang dipakai nama mesin",
+                "mono" => "Martian Mono, huruf berjarak tetap untuk nama: kode, id sesi, slug tool",
                 "georgia" => "Georgia milik perangkat, dengan Times sebagai cadangan",
                 "palatino" => "Palatino milik perangkat, dengan serif sistem sebagai cadangan"
               },
