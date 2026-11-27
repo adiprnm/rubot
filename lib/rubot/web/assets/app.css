@@ -2733,17 +2733,18 @@ select:focus-visible { outline: none; }
   font-family: var(--reading);
 }
 
-/* The label names the choice in a word or two and leads; the consequence under
-   it is supporting text, so it is the smaller of the two and dimmer. The
-   reading face still comes from the reader's setting either way. */
+/* The label names the choice in a word or two and leads, at the size of the
+   reader's own prompt: a question and the choices it offers are the same
+   conversation. The consequence under it is supporting text, so it stays a step
+   below and dim. */
 .ask .ask-option-label {
-  font-size: 14px;
+  font-size: var(--prompt-size);
   font-weight: 600;
   line-height: 1.35;
 }
 
 .ask .ask-option-description {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--fg-dim);
   line-height: 1.45;
 }
