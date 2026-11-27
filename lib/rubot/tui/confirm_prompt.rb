@@ -88,7 +88,13 @@ module Rubot
 
         payload = {} unless payload.is_a?(Hash)
         options = Array(payload[:options])
-        chips = options.map { |option| { label: option[:label].to_s, value: { outcome: :option, label: option[:label].to_s } } }
+        chips = options.each_with_index.map do |option, index|
+          # The position travels with the label: a confirmation decides by
+          # position (send or start over), and a channel that only sent words
+          # made "start over" look like an answer.
+          { label: option[:label].to_s,
+            value: { outcome: :option, index: index, label: option[:label].to_s } }
+        end
         # The confirmation that closes a list offers two answers and no free
         # text: a sentence typed there would have nowhere to go.
         chips << OTHER unless payload[:confirm]
@@ -129,12 +135,14 @@ module Rubot
         when :left then move(-1)
         when :right then move(1)
         when :enter then commit(@options[@choice][:value])
-        # A confirmation escapes to "no". A question has no safe default to
-        # escape to, so escaping it does nothing: the deadline is what ends an
-        # unanswered question, not a stray key.
-        when :escape then return true if @kind == :question
-
-                          commit(false)
+        # A confirmation escapes to "no". A question has no deadline any more,
+        # so esc is the reader's way out: it stops the turn, which is the only
+        # thing that ends an unanswered question (see ADR 0011).
+        when :escape
+          # A confirmation escapes to "no". A question has no deadline any more,
+          # so esc is the reader's way out: it stops the turn, which is the only
+          # thing that ends an unanswered question (see ADR 0011).
+          commit(@kind == :question ? :stop : false)
         # Selection and scrolling keep working while the question is up.
         when :mouse_press, :mouse_drag, :mouse_release, :wheel_up, :wheel_down,
              :page_up, :page_down
@@ -167,7 +175,7 @@ module Rubot
 
       def hint_text
         base = "←/→ choose · enter confirm"
-        return "#{base} · esc leaves it unanswered" if @kind == :question
+        return "#{base} · esc stops the turn" if @kind == :question
 
         "#{base} · esc reject"
       end
@@ -221,9 +229,14 @@ module Rubot
         @on_answer&.call(value)
 
         # "Other" needs the reader's own line, and that line arrives through the
-        # prompt: the answer stays owed until #deliver_text fills it.
-        if value == :custom
+        # prompt: the answer stays owed until #deliver_text fills it. Escaping a
+        # question stops the turn, and the worker is told that — not handed a
+        # value that would read as an answer.
+        case value
+        when :custom
           @awaiting = answered
+        when :stop
+          answered << { outcome: :cancelled } if answered
         else
           answered << value if answered
         end

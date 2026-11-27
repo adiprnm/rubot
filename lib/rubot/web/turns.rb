@@ -208,7 +208,8 @@ module Rubot
           # browser answers, exactly like the confirmation above, and comes back
           # as the result of the ask_user call.
           on_ask: lambda do |payload|
-            turn.ask_question(question: payload[:question], options: payload[:options])
+            turn.ask_question(question: payload[:question], options: payload[:options],
+                              confirm: payload[:confirm] ? true : false)
           end
         )
 

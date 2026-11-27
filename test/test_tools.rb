@@ -1851,4 +1851,40 @@ class TestTools < Minitest::Test
     assert_equal 2, ask_user.questions_count(two_questions)
     assert_equal 1, ask_user.questions_count({ "question" => "Only one?" })
   end
+
+  # A channel that hands back words instead of a position still gets the
+  # restart right: it is the reader's answer that decides, not the shape the
+  # channel chose to send it in.
+  def test_starting_over_is_recognised_by_its_label_too
+    confirmations = 0
+    store_asked = 0
+    reader = lambda do |payload|
+      if confirm_question?(payload[:question])
+        confirmations += 1
+        # Start over the first time, send the second: the answers travel as
+        # words here, the way a channel that draws its own list would send them.
+        label = confirmations == 1 ? payload[:options].last[:label] : payload[:options].first[:label]
+        { outcome: :option, label: label }
+      else
+        store_asked += 1 if payload[:question] == "Which store?"
+        { outcome: :option, index: 0, label: payload[:options].first[:label] }
+      end
+    end
+
+    result = ask_user.ask(two_questions, reader: reader)
+
+    assert_equal 2, store_asked, "the label started the list over"
+    assert_includes result, "The user answered"
+  end
+
+  # An outcome nobody defined is not an answer: the model is told so instead of
+  # being handed a blank line where a decision should be.
+  def test_an_outcome_the_tool_does_not_understand_stops_the_sequence
+    reader = ->(_payload) { { outcome: :whatever } }
+
+    result = ask_user.ask(two_questions, reader: reader)
+
+    assert_includes result, "could not be read"
+    refute_includes result, "The user answered"
+  end
 end

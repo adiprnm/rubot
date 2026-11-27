@@ -27,7 +27,10 @@ module Rubot
       # How many questions one turn may spend. Without a ceiling a hesitant
       # model turns the turn into an interrogation, one interruption at a time.
       # It matches the most a single call may carry, so one full list always
-      # fits; a second call in the same turn has to come out of what is left.
+      # fits; a second call in the same turn comes out of what is left. A list
+      # that is started over spends nothing extra: the retries are bounded by
+      # MAX_RESTARTS, so five questions can cost at most five times three
+      # questions plus the same number of confirmations, and always end.
       PER_TURN_LIMIT = MAX_QUESTIONS
 
       # Which of the confirmation's two answers sends the list, and which sends
@@ -35,6 +38,9 @@ module Rubot
       SEND_INDEX = 0
       RESTART_INDEX = 1
       INTERRUPTIONS = [ :cancelled, :expired ].freeze
+      ANSWER_KINDS = [ :option, :custom ].freeze
+      UNREADABLE_TEXT = "The answer could not be read. Decide with the safest " \
+                        "default and say in one line what you assumed."
 
       # An argument the model got wrong. Reported as text, like every other
       # failed tool: the model can fix it, an exception cannot.
@@ -232,6 +238,7 @@ module Rubot
           list.each do |payload|
             outcome = reader.call(payload)
             return [ :stop, format_outcome(outcome) ] if interrupted?(outcome)
+            return [ :stop, UNREADABLE_TEXT ] if unreadable?(outcome)
 
             answers << outcome
           end
@@ -239,6 +246,7 @@ module Rubot
           attempts += 1
           verdict = confirm_sequence(reader, list, answers)
           return [ :stop, format_outcome(verdict) ] if interrupted?(verdict)
+          return [ :stop, UNREADABLE_TEXT ] if unreadable?(verdict)
           return [ :answers, answers ] unless restart?(verdict)
           return [ :stop, restart_exhausted_text ] if attempts >= MAX_RESTARTS
         end
@@ -264,7 +272,25 @@ module Rubot
 
       def restart?(verdict)
         data = verdict.is_a?(Hash) ? verdict : {}
-        (data[:outcome] || data["outcome"]) == :option && (data[:index] || data["index"]).to_i == RESTART_INDEX
+        return false unless (data[:outcome] || data["outcome"]) == :option
+
+        # Index first, label as the fallback: a channel that draws options from
+        # its own list may hand back words instead of a position, and a restart
+        # mistaken for an answer would send the list the reader asked to redo.
+        index = data[:index] || data["index"]
+        return index.to_i == RESTART_INDEX unless index.nil?
+
+        label = (data[:label] || data["label"]).to_s
+        label == I18n.t("ask.confirm.restart")
+      end
+
+      # An outcome the tool does not recognise is not an answer: the model must
+      # not be handed a blank line where a decision should be.
+      def unreadable?(outcome)
+        return true unless outcome.is_a?(Hash)
+
+        kind = outcome[:outcome] || outcome["outcome"]
+        !ANSWER_KINDS.include?(kind)
       end
 
       def interrupted?(outcome)

@@ -22,12 +22,33 @@ class TestI18n < Minitest::Test
   end
 
   def test_a_translation_can_be_read_from_another_ractor
+    require "timeout"
     port = Ractor::Port.new
     Ractor.new(port) do |reply|
       reply << Rubot::I18n.t("tool.ask", question: "Mau pakai apa?")
     end
 
-    assert_equal Rubot::I18n.t("tool.ask", question: "Mau pakai apa?"), port.receive
+    # A Ractor that dies on the way leaves this waiting forever, and a hanging
+    # test is worse than a red one: it turns the bug into a timeout in CI.
+    answer = Timeout.timeout(10) { port.receive }
+    assert_equal Rubot::I18n.t("tool.ask", question: "Mau pakai apa?"), answer
+  end
+
+  # The locale itself crosses the boundary too: it was the second half of the
+  # same failure, and a test that only reads the table would miss it.
+  def test_the_locale_can_be_read_from_another_ractor
+    require "timeout"
+    previous = Rubot::I18n.locale
+    Rubot::I18n.locale = "id"
+
+    port = Ractor::Port.new
+    Ractor.new(port) { |reply| reply << [ Rubot::I18n.locale, Rubot::I18n.t("ask.confirm.send") ] }
+
+    locale, send_label = Timeout.timeout(10) { port.receive }
+    assert_equal "id", locale
+    assert_equal Rubot::I18n.t("ask.confirm.send"), send_label
+  ensure
+    Rubot::I18n.locale = previous
   end
 
   # What a compaction answers with, in the shape every channel reads: the same

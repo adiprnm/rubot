@@ -407,7 +407,7 @@ module Rubot
       list.handle_key(::TUI::Key.new(:enter))
 
       assert worker.join(2)
-      assert_equal({ outcome: :option, label: "Extend 018" }, answer)
+      assert_equal({ outcome: :option, index: 1, label: "Extend 018" }, answer)
     end
 
     # "Other" is the last chip on every question, and choosing it moves the
@@ -436,21 +436,23 @@ module Rubot
 
     # A confirmation escapes to "no". A question has no safe default to escape
     # to, so esc must not answer it: the deadline does.
-    def test_escape_does_not_answer_a_question
+    # A question has no deadline, so esc is the only way out of one: it stops
+    # the turn and tells the worker it was cancelled, rather than leaving the
+    # prompt (and the turn) waiting for an answer nobody will give.
+    def test_escape_stops_the_turn_instead_of_answering
       repl = build_repl
+      answer = :unset
       worker = Thread.new do
-        repl.send(:ask_callback).call(question: "Anyone?", options: [ { label: "A" }, { label: "B" } ])
+        answer = repl.send(:ask_callback).call(question: "Anyone?", options: [ { label: "A" }, { label: "B" } ])
       end
       repl.apply_event(repl.instance_variable_get(:@events).pop)
       list = repl.instance_variable_get(:@confirm_prompt)
 
       list.handle_key(::TUI::Key.new(:escape))
 
-      assert list.active?, "a question is ended by its deadline, not by esc"
-      assert_nil worker.join(0.1), "the worker is still waiting on an answer"
-
-      list.handle_key(::TUI::Key.new(:enter))
-      assert worker.join(2)
+      assert worker.join(2), "the worker is released"
+      assert_equal({ outcome: :cancelled }, answer)
+      refute list.active?, "the exchange is taken back out of the transcript"
     end
 
     # While the question is up the mouse stays with the log, so the path or

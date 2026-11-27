@@ -342,6 +342,9 @@ module Rubot
       @confirm_prompt.on_answer do |value|
         @prompt.list = nil
         publish_answer_hint(value == :custom ? "Type your answer, then enter ⏎" : nil)
+        # Escaping a question is stopping the turn: with no deadline, that is
+        # the only way out of one.
+        @mailbox << :stop if value == :stop
       end
       @working = Rubot::TUI::WorkingBadge.new
       @session_list = Rubot::TUI::SessionList.new(

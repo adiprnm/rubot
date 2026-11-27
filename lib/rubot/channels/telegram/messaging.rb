@@ -193,7 +193,13 @@ module Rubot
             line += " — #{description}" unless description.empty?
             text << "\n#{line}"
           end
-          text << "\n\nChoose above, or reply with your own answer."
+          # The confirmation that closes a list offers buttons only: a typed
+          # sentence there would have nowhere to go, so it is not invited.
+          text << if payload[:confirm]
+            "\n\nChoose above."
+          else
+            "\n\nChoose above, or reply with your own answer."
+          end
 
           url = URI("#{API_BASE}#{@token}/sendMessage")
           req = Net::HTTP::Post.new(url)
@@ -221,7 +227,7 @@ module Rubot
           @confirm_mutex.synchronize do
             @pending_questions[question_id] = {
               cv: cv, result: nil, msg_id: nil, chat_id: chat_id, thread_id: thread_id,
-              options: options
+              options: options, confirm: payload[:confirm] ? true : false
             }
           end
 
@@ -267,6 +273,9 @@ module Rubot
 
           @confirm_mutex.synchronize do
             entry = @pending_questions.each_value.find do |candidate|
+              # A confirmation answers by button, not by typing.
+              next false if candidate[:confirm]
+
               candidate[:chat_id] == chat_id && candidate[:thread_id] == thread_id && candidate[:result].nil?
             end
             return false unless entry

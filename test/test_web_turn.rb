@@ -1160,6 +1160,32 @@ module Rubot
         assert_equal "Extend 018", answer[:label]
       end
 
+      # The confirmation that closes a list is a question with a flag, and the
+      # flag has to survive the trip: the view uses it to hide the text box, and
+      # the TUI to hide its "Other" chip.
+      def test_a_confirmation_question_carries_the_flag
+        turn = build
+        thread = Thread.new do
+          turn.ask_question(question: "Send these answers?", confirm: true, options: ask_options)
+        end
+
+        prompt = wait_for_ask(turn)
+        assert_equal true, prompt[:confirm]
+
+        turn.answer_ask({ outcome: :option, index: 0 })
+        thread.join(2)
+      end
+
+      # A turn that is over cannot ask: the next question of a list would be
+      # published with nothing left to release it.
+      def test_a_closed_turn_refuses_to_ask
+        turn = build
+        turn.finish("done")
+
+        assert_equal({ outcome: :cancelled }, turn.ask_question(question: "Anyone?", options: ask_options))
+        assert_nil turn.ask_prompt
+      end
+
       # Two questions in one turn must not read each other's answer.
       def test_a_second_question_waits_for_its_own_answer
         turn = build

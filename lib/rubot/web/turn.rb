@@ -520,9 +520,10 @@ module Rubot
       # chosen, the reader typed something, nobody answered, or the turn was
       # cancelled under the question. The last two are not answers and are not
       # dressed up as one.
-      def ask_question(question:, options: [], timeout: nil)
+      def ask_question(question:, options: [], confirm: false, timeout: nil)
         options = Array(options)
-        outcome = perform_ask(kind: :question, payload: { question: question.to_s, options: options },
+        outcome = perform_ask(kind: :question,
+                              payload: { question: question.to_s, options: options, confirm: confirm },
                               timeout: timeout)
         return outcome unless outcome[:outcome] == :option
 
@@ -828,6 +829,11 @@ module Rubot
       # cancel is examined under one lock and the state it describes is written
       # under another. The event queue has the lock of its own.
       def perform_ask(kind:, payload:, timeout: CONFIRM_TIMEOUT)
+        # A turn that is already over cannot ask anything: the next question of
+        # a list would be published after the reader stopped the turn, with
+        # nothing left to release it.
+        return { outcome: :cancelled } if closed?
+
         token = nil
         @ask_mutex.synchronize do
           @ask_token = (@ask_token.to_i + 1)

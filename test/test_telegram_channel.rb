@@ -1122,6 +1122,19 @@ module Rubot
 
       assert_equal({ outcome: :cancelled }, entry[:result])
     end
+
+    # The confirmation that closes a list answers by button. A sentence typed
+    # there is a new prompt, not an answer to "send these answers?".
+    def test_a_typed_message_does_not_answer_a_confirmation
+      tg = build_telegram
+      entry = { cv: ConditionVariable.new, result: nil, msg_id: nil, chat_id: 42,
+                thread_id: nil, options: [ { label: "Kirim" }, { label: "Ulangi" } ], confirm: true }
+      tg.instance_variable_get(:@pending_questions)["q1"] = entry
+
+      refute tg.send(:deliver_question_answer, 42, nil, "kirim aja")
+
+      assert_nil entry[:result]
+    end
   end
 
   # The per-topic persona wizard: forum_topic_created opens it, inline buttons
