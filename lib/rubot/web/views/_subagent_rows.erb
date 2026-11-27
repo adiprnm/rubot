@@ -5,17 +5,31 @@
 
     `line` is the whole sentence and the only thing drawn: a row is never
     half-assembled here, so the sheet and the transcript cannot disagree about
-    a run (see Web::SubagentLine). The task rides on the row as a tooltip too,
-    where a long one is still readable after the line has been cut. -%>
+    a run (see Web::SubagentLine). The task used to ride on the row as a
+    tooltip, which is a control a desktop has and a phone does not — so the row
+    is a <details> now and the whole brief is read by tapping it. Its id is the
+    run's, because the list is rewritten on every step the run takes and the
+    open row has to be found again (see app.js, restoreSubagentBriefs). -%>
 <% if subagents.empty? -%>
   <p class="usage-note"><%= h(I18n.t("web.subagents.empty")) %></p>
 <% else -%>
   <ul class="subagent-rows">
 <% subagents.each do |s| -%>
-    <li class="subagent subagent-<%= h(s[:phase]) %>"<% if s[:task].to_s != "" %> title="<%= h(s[:task]) %>"<% end %>>
-      <span class="subagent-mark" aria-hidden="true"><%= subagent_mark(s[:phase]) %></span>
-      <span class="subagent-name"><%= h(s[:agent]) %></span>
-      <span class="subagent-detail"><%= h(s[:line]) %></span>
+<%   brief = [ s[:task], s[:result], s[:error] ].any? { |value| value.to_s != "" } -%>
+<%   run_id = s[:run_id].to_s -%>
+    <li class="subagent subagent-<%= h(s[:phase]) %>">
+<% if brief -%>
+      <details class="subagent-more"<%= %( id="subagent-run-#{h(run_id)}") unless run_id.empty? %>>
+        <summary class="subagent-summary">
+          <%= View.render("_subagent_spans", agent: s[:agent], phase: s[:phase], line: s[:line]) %>
+        </summary>
+        <%= View.render("_subagent_brief", run: s) %>
+      </details>
+<% else -%>
+      <div class="subagent-summary">
+        <%= View.render("_subagent_spans", agent: s[:agent], phase: s[:phase], line: s[:line]) %>
+      </div>
+<% end -%>
     </li>
 <% end -%>
   </ul>

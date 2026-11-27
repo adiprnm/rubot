@@ -155,6 +155,7 @@ module Rubot
 
           @items << {
             kind: :subagent,
+            run_id: run_id,
             agent: info[:agent].to_s,
             phase: phase,
             detail: detail_for_row(info, phase, entry),

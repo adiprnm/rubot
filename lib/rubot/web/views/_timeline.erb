@@ -60,10 +60,22 @@ end -%>
 <% end -%>
 </div>
 <% when :subagent -%>
-<div class="subagent-row subagent-<%= h(item[:phase]) %>"<% if item[:task] && !item[:task].empty? %> title="<%= h(item[:task]) %>"<% end %><%= item_attrs(item) %>>
-  <span class="subagent-mark" aria-hidden="true"><%= subagent_mark(item[:phase]) %></span>
-  <span class="subagent-name"><%= h(item[:agent]) %></span>
-  <span class="subagent-detail"><%= h(item[:detail]) %></span>
+<%# The brief rides on the row as a <details>: a task is a whole brief and the
+    row is one line, so the rest of it is read by tapping — the tooltip it used
+    to hide in is a desktop's control, not a phone's. The id it opens under is
+    the turn's row id, which is what lets a swap that rewrites the row find it
+    again (see app.js, restoreSubagentBriefs). -%>
+<% if item[:task].to_s != "" -%>
+<details class="subagent-row subagent-<%= h(item[:phase]) %>"<%= item_attrs(item) %>>
+  <summary class="subagent-summary">
+    <%= View.render("_subagent_spans", agent: item[:agent], phase: item[:phase], line: item[:detail]) %>
+  </summary>
+  <%= View.render("_subagent_brief", run: item) %>
+</details>
+<% else -%>
+<div class="subagent-row subagent-<%= h(item[:phase]) %>"<%= item_attrs(item) %>>
+  <%= View.render("_subagent_spans", agent: item[:agent], phase: item[:phase], line: item[:detail]) %>
 </div>
+<% end -%>
 <% end -%>
 <% end -%>

@@ -1,0 +1,23 @@
+<%# What a run was asked to do, and what came back.
+    A task is a whole brief — two kilobytes is ordinary — so the row that reads
+    it cannot: the line says the beginning, and this is where the rest of it is
+    read. Opened by tapping the row, because the tooltip it used to hide in is
+    not a control a phone has (see `_subagent_rows`).
+
+    `run` is either a background run from SubagentJobs (task/result/error) or a
+    transcript item (task only): a finished turn records what was asked, not the
+    answer, which the turn's own text already carries. -%>
+<dl class="subagent-brief">
+<% if run[:task].to_s != "" -%>
+  <dt><%= h(I18n.t("web.subagents.prompt")) %></dt>
+  <dd><pre class="subagent-brief-text"><%= h(run[:task]) %></pre></dd>
+<% end -%>
+<% if run[:result].to_s != "" -%>
+  <dt><%= h(I18n.t("web.subagents.result")) %></dt>
+  <dd><pre class="subagent-brief-text"><%= h(run[:result]) %></pre></dd>
+<% end -%>
+<% if run[:error].to_s != "" -%>
+  <dt><%= h(I18n.t("web.subagents.error")) %></dt>
+  <dd><pre class="subagent-brief-text subagent-brief-error"><%= h(run[:error]) %></pre></dd>
+<% end -%>
+</dl>

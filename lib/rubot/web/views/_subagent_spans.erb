@@ -1,0 +1,7 @@
+<%# The line a delegated run always says: the persona it runs as, and one phrase
+    for where it got to. Drawn in the transcript and in the footer's sheet, and
+    now inside the <summary> that opens the run's brief, so the three places
+    cannot drift apart. -%>
+<span class="subagent-mark" aria-hidden="true"><%= subagent_mark(phase) %></span>
+<span class="subagent-name"><%= h(agent) %></span>
+<span class="subagent-detail"><%= h(line) %></span>
