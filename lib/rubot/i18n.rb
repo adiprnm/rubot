@@ -73,6 +73,18 @@ module Rubot
           "empty_message" => "Nothing to send.",
           "stop_requested" => "Stop requested."
         },
+        # The confirmation that closes a list of questions. It is the tool's,
+        # not a channel's: every surface renders the same two choices, and the
+        # labels travel with the question as its options.
+        "ask" => {
+          "confirm" => {
+            "question" => "Send these answers?",
+            "send" => "Send",
+            "send_description" => "Use these answers and carry on",
+            "restart" => "Start over",
+            "restart_description" => "Ask the questions again from the start"
+          }
+        },
         "tool" => {
           "operation_unknown" => "%{prefix}: %{operation}",
           "name" => {
@@ -948,6 +960,15 @@ module Rubot
           "cancels" => "esc membatalkan",
           "empty_message" => "Tidak ada yang dikirim.",
           "stop_requested" => "Permintaan berhenti dikirim."
+        },
+        "ask" => {
+          "confirm" => {
+            "question" => "Kirim jawaban ini?",
+            "send" => "Kirim",
+            "send_description" => "Pakai jawaban ini dan lanjut",
+            "restart" => "Ulangi",
+            "restart_description" => "Tanyakan lagi dari awal"
+          }
         },
         "tool" => {
           "operation_unknown" => "%{prefix}: %{operation}",

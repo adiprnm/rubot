@@ -8,7 +8,8 @@ when a term is settled in conversation and the code starts using it.
 
 **Question**:
 An interruption the agent raises to the reader, published into the **Turn**
-timeline and answered there, carrying 2 to 4 **Options** or none at all.
+timeline and answered there, carrying 2 to 4 **Options** or none at all. One
+call may carry several, asked in order and read back as a final confirmation.
 _Avoid_: Prompt, dialog, modal, clarification request
 
 **Option**:

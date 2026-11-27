@@ -18,11 +18,25 @@ module Rubot
     class AskUser < Tool
       MIN_OPTIONS = 2
       MAX_OPTIONS = 4
+      # One call may ask a short list, asked in order and confirmed at the end:
+      # a decision that needs three facts is one interruption, not three.
+      MAX_QUESTIONS = 5
+      # How many times the reader may send the list back for a retry before the
+      # sequence gives up rather than looping forever.
+      MAX_RESTARTS = 3
       # How many questions one turn may spend. Without a ceiling a hesitant
       # model turns the turn into an interrogation, one interruption at a time.
-      PER_TURN_LIMIT = 3
+      # It matches the most a single call may carry, so one full list always
+      # fits; a second call in the same turn has to come out of what is left.
+      PER_TURN_LIMIT = MAX_QUESTIONS
 
-      # Arguments the model got wrong. Reported as text, like every other
+      # Which of the confirmation's two answers sends the list, and which sends
+      # the reader back to the first question.
+      SEND_INDEX = 0
+      RESTART_INDEX = 1
+      INTERRUPTIONS = [ :cancelled, :expired ].freeze
+
+      # An argument the model got wrong. Reported as text, like every other
       # failed tool: the model can fix it, an exception cannot.
       class InvalidArguments < StandardError; end
 
@@ -32,7 +46,7 @@ module Rubot
 
       def description
         <<~DESC.strip
-          Put one question to the user and wait for the answer.
+          Put one or more questions to the user and wait for the answers.
 
           Ask when a decision is theirs and you cannot settle it from the code,
           the files or what you already know: which of two designs to build,
@@ -42,16 +56,19 @@ module Rubot
           Never ask what you could look up yourself. A question interrupts
           someone: read the repo, run the search, check the config first.
 
-          Give 2 to 4 `options`, best first, each with a short `label` and one
-          line of `description` saying what picking it means. Leave `options`
-          out only when you genuinely cannot guess the shape of the answer; the
-          user then gets a single text box.
+          Pass `questions` with up to #{MAX_QUESTIONS} entries. They are put to
+          the user one at a time, each replacing the last, and then shown back to
+          them for confirmation — so a decision that needs three facts is one
+          interruption, not three. Each entry takes a short `question` and, when
+          there are sensible candidates, #{MIN_OPTIONS} to #{MAX_OPTIONS}
+          `options`, best first, each with a short `label` and one line of
+          `description` saying what picking it means. Leave `options` out only
+          when you cannot guess the shape of the answer; the user then types it.
 
-          The answer comes back as this call's result. Three other results mean
-          you did not get one: the question expired, the user cancelled the
-          turn, or you have already asked #{PER_TURN_LIMIT} questions in this
-          turn. In those cases decide with the safest default, say in one line
-          what you assumed, and do not ask again.
+          The answers come back as this call's result. The result instead says
+          the user cancelled the turn, or that you have already asked
+          #{PER_TURN_LIMIT} questions in this turn — in those cases decide with the
+          safest default, say in one line what you assumed, and do not ask again.
         DESC
       end
 
@@ -59,28 +76,38 @@ module Rubot
         {
           "type" => "object",
           "properties" => {
-            "question" => {
-              "type" => "string",
-              "description" => "The question itself: one or two sentences, no preamble."
-            },
-            "options" => {
+            "questions" => {
               "type" => "array",
-              "description" => "#{MIN_OPTIONS} to #{MAX_OPTIONS} suggested answers, best first. " \
-                               "Omit for an open question.",
+              "description" => "1 to #{MAX_QUESTIONS} questions, asked in order and confirmed at the end.",
               "items" => {
                 "type" => "object",
                 "properties" => {
-                  "label" => { "type" => "string", "description" => "A few words; drawn as a button." },
-                  "description" => {
+                  "question" => {
                     "type" => "string",
-                    "description" => "One line on what this choice means for the user."
+                    "description" => "The question itself: one or two sentences, no preamble."
+                  },
+                  "options" => {
+                    "type" => "array",
+                    "description" => "#{MIN_OPTIONS} to #{MAX_OPTIONS} suggested answers, best first. " \
+                                     "Omit for an open question.",
+                    "items" => {
+                      "type" => "object",
+                      "properties" => {
+                        "label" => { "type" => "string", "description" => "A few words; drawn as a button." },
+                        "description" => {
+                          "type" => "string",
+                          "description" => "One line on what this choice means for the user."
+                        }
+                      },
+                      "required" => [ "label" ]
+                    }
                   }
                 },
-                "required" => [ "label" ]
+                "required" => [ "question" ]
               }
             }
           },
-          "required" => [ "question" ]
+          "required" => [ "questions" ]
         }
       end
 
@@ -90,27 +117,75 @@ module Rubot
         ask(arguments, reader: nil)
       end
 
-      # The whole call: validate, ask, and describe what came back.
+      # The whole call: validate, walk the list, and describe what came back.
       #
-      # `reader` is a callable that takes the question payload and returns one
-      # of the outcome hashes described in #format_outcome. Nil means nobody can
-      # be asked on this surface.
+      # `reader` is a callable that takes one question payload and returns one
+      # of the outcome hashes described in #format_outcome. The sequence lives
+      # here rather than in each channel: every surface already knows how to put
+      # one question in front of a reader, and putting the next one where the
+      # last stood is the same call again.
       def ask(arguments, reader: nil)
-        payload = question_payload(arguments)
+        list = questions_of(arguments)
         return no_reader_text if reader.nil?
 
-        format_outcome(reader.call(payload))
+        # One question is asked and answered, with nothing to read back: asking
+        # the reader to confirm the single choice they just made is friction
+        # with no question behind it.
+        return format_outcome(reader.call(list.first)) if list.size == 1
+
+        status, payload = run_sequence(list, reader)
+        return payload if status == :stop
+
+        format_answers(list, payload)
       rescue InvalidArguments => e
         "ERROR: #{e.message}"
       end
 
-      # The question as a channel draws it, validated.
-      def question_payload(arguments)
-        args = arguments.is_a?(Hash) ? arguments : {}
-        question = args["question"].to_s.strip
-        raise InvalidArguments, "ask_user needs a `question` string." if question.empty?
+      # How many questions this call is asking, for the per-turn ceiling.
+      def questions_count(arguments)
+        questions_of(arguments).size
+      rescue InvalidArguments
+        1
+      end
 
-        { question: question, options: options_of(args["options"]) }
+      # The questions this call carries, validated. `questions` is the shape the
+      # tool asks for; a lone `question` is still read, so a model that learned
+      # the old signature is answered rather than scolded.
+      def questions_of(arguments)
+        args = arguments.is_a?(Hash) ? arguments : {}
+        raw = args["questions"]
+
+        list = if raw.is_a?(Array) && !raw.empty?
+          raw
+        elsif args.key?("question")
+          [ { "question" => args["question"], "options" => args["options"] } ]
+        else
+          raise InvalidArguments, "ask_user needs `questions`: at least one question to ask."
+        end
+
+        if list.size > MAX_QUESTIONS
+          raise InvalidArguments,
+                "ask at most #{MAX_QUESTIONS} questions in one call (got #{list.size})."
+        end
+
+        list.map { |entry| question_payload(entry) }
+      end
+
+      # One question as a channel draws it, validated.
+      def question_payload(entry)
+        unless entry.is_a?(Hash)
+          raise InvalidArguments, "every entry in `questions` must be an object with a `question`."
+        end
+
+        question = entry["question"]
+        unless question.is_a?(String)
+          raise InvalidArguments, "every question needs a `question` string."
+        end
+
+        question = question.strip
+        raise InvalidArguments, "every question needs a non-empty `question` string." if question.empty?
+
+        { question: question, options: options_of(entry["options"]) }
       end
 
       def format_outcome(outcome)
@@ -144,6 +219,80 @@ module Rubot
       end
 
       private
+
+      # Q1, then Q2 in the same place, then one confirmation over the whole
+      # list. Returns [:answers, answers] or [:stop, text]: a reader that goes
+      # away mid-list leaves no half-answer behind, so the model is never told
+      # the user answered two of three things.
+      def run_sequence(list, reader)
+        attempts = 0
+
+        loop do
+          answers = []
+          list.each do |payload|
+            outcome = reader.call(payload)
+            return [ :stop, format_outcome(outcome) ] if interrupted?(outcome)
+
+            answers << outcome
+          end
+
+          attempts += 1
+          verdict = confirm_sequence(reader, list, answers)
+          return [ :stop, format_outcome(verdict) ] if interrupted?(verdict)
+          return [ :answers, answers ] unless restart?(verdict)
+          return [ :stop, restart_exhausted_text ] if attempts >= MAX_RESTARTS
+        end
+      end
+
+      # The answers read back before they are used, so a misclick is caught by
+      # the person who made it rather than by the model downstream.
+      def confirm_sequence(reader, list, answers)
+        summary = list.each_with_index.map do |payload, index|
+          "#{index + 1}. #{payload[:question]} → #{answer_text(answers[index])}"
+        end.join("\n")
+
+        reader.call(question: "#{I18n.t("ask.confirm.question")}\n\n#{summary}",
+                    options: confirm_options, confirm: true)
+      end
+
+      def confirm_options
+        [
+          { label: I18n.t("ask.confirm.send"), description: I18n.t("ask.confirm.send_description") },
+          { label: I18n.t("ask.confirm.restart"), description: I18n.t("ask.confirm.restart_description") }
+        ]
+      end
+
+      def restart?(verdict)
+        data = verdict.is_a?(Hash) ? verdict : {}
+        (data[:outcome] || data["outcome"]) == :option && (data[:index] || data["index"]).to_i == RESTART_INDEX
+      end
+
+      def interrupted?(outcome)
+        data = outcome.is_a?(Hash) ? outcome : {}
+        INTERRUPTIONS.include?(data[:outcome] || data["outcome"])
+      end
+
+      def answer_text(outcome)
+        data = outcome.is_a?(Hash) ? outcome : {}
+        case data[:outcome] || data["outcome"]
+        when :option then (data[:label] || data["label"]).to_s
+        when :custom then (data[:text] || data["text"]).to_s.strip
+        else ""
+        end
+      end
+
+      def format_answers(list, answers)
+        lines = list.each_with_index.map do |payload, index|
+          "#{index + 1}. #{payload[:question]} → #{answer_text(answers[index])}"
+        end
+
+        "The user answered:\n#{lines.join("\n")}"
+      end
+
+      def restart_exhausted_text
+        "The user asked to start over #{MAX_RESTARTS} times without answering. " \
+          "Decide with the safest default and say in one line what you assumed."
+      end
 
       def options_of(raw)
         return [] if raw.nil?

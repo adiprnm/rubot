@@ -353,6 +353,21 @@ module Rubot
         refute_includes html, 'name="token"'
       end
 
+      # The confirmation that closes a list of questions is a question with two
+      # options and no box: a sentence typed there would have nowhere to go.
+      def test_the_final_confirmation_offers_its_two_answers_only
+        html = View.render("_ask",
+                           prompt: { kind: :question, confirm: true, token: 3,
+                                     question: "Send these answers?\n\n1. Which? → SQLite",
+                                     options: [ { label: "Send" }, { label: "Start over" } ] },
+                           turn_id: "tabc")
+
+        assert_includes html, "Send these answers?"
+        assert_includes html, "Start over"
+        refute_includes html, "ask-custom"
+        refute_includes html, Rubot::I18n.t("web.ask.custom")
+      end
+
       def test_ask_view_renders_an_open_question_as_a_box_only
         html = View.render("_ask", prompt: { kind: :question, question: "Name?", options: [] },
                                    turn_id: "tabc")

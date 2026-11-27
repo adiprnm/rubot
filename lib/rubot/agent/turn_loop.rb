@@ -591,11 +591,14 @@ module Rubot
       def ask_the_user(tool, arguments, callbacks)
         return "Nobody can be asked on this surface." if tool.nil? || !tool.respond_to?(:ask)
 
-        if @asks_this_turn.to_i >= Tools::AskUser::PER_TURN_LIMIT
+        # A call may carry several questions, and they all count: the ceiling is
+        # about how often the reader is interrupted, not how many calls it took.
+        count = tool.respond_to?(:questions_count) ? tool.questions_count(arguments) : 1
+        if @asks_this_turn.to_i + count > Tools::AskUser::PER_TURN_LIMIT
           return tool.limit_reached_text
         end
 
-        @asks_this_turn = @asks_this_turn.to_i + 1
+        @asks_this_turn = @asks_this_turn.to_i + count
         tool.ask(arguments, reader: callbacks.ask)
       end
       # One request to the provider, streamed when the channel can take chunks.

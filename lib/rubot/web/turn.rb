@@ -511,7 +511,8 @@ module Rubot
       # Called from the turn thread; blocks until the browser answers or the
       # deadline passes. Fails closed, like every other channel.
       def ask_confirm(name, reason)
-        perform_ask(kind: :confirm, payload: { name: name.to_s, reason: reason.to_s })[:outcome] == :allow
+        perform_ask(kind: :confirm, payload: { name: name.to_s, reason: reason.to_s },
+                    timeout: CONFIRM_TIMEOUT)[:outcome] == :allow
       end
 
       # A question the ask_user tool put to the reader. Blocks the same way the
@@ -519,7 +520,7 @@ module Rubot
       # chosen, the reader typed something, nobody answered, or the turn was
       # cancelled under the question. The last two are not answers and are not
       # dressed up as one.
-      def ask_question(question:, options: [], timeout: CONFIRM_TIMEOUT)
+      def ask_question(question:, options: [], timeout: nil)
         options = Array(options)
         outcome = perform_ask(kind: :question, payload: { question: question.to_s, options: options },
                               timeout: timeout)
@@ -837,11 +838,19 @@ module Rubot
         end
         publish_ask
 
-        deadline = Time.now + timeout
+        deadline = timeout && Time.now + timeout
         answer = nil
         cancelled = false
         @ask_mutex.synchronize do
           while @ask_answer.nil? && !@ask_cancelled
+            # A question has no deadline: the turn is stopped until someone
+            # answers or stops it. A confirmation still fails closed on time,
+            # because the action it guards could destroy something.
+            if deadline.nil?
+              @ask_cv.wait(@ask_mutex)
+              next
+            end
+
             remaining = deadline - Time.now
             break if remaining <= 0
 

@@ -89,7 +89,9 @@ module Rubot
         payload = {} unless payload.is_a?(Hash)
         options = Array(payload[:options])
         chips = options.map { |option| { label: option[:label].to_s, value: { outcome: :option, label: option[:label].to_s } } }
-        chips << OTHER
+        # The confirmation that closes a list offers two answers and no free
+        # text: a sentence typed there would have nowhere to go.
+        chips << OTHER unless payload[:confirm]
 
         open(chips, answered, start: 0, kind: :question) do
           question_rows(payload).each do |line|
@@ -172,7 +174,12 @@ module Rubot
 
       def question_rows(payload)
         question = payload[:question].to_s
-        rows = [ [ [ "? ", :accent ], [ question, :text ] ] ]
+        # One row per line: the confirmation that closes a list reads the
+        # answers back one per line, and a row is a line here.
+        rows = question.split("\n").map do |line|
+          line = line.strip
+          line.empty? ? [ [ "", nil ] ] : [ [ "? ", :accent ], [ line, :text ] ]
+        end
         if Array(payload[:options]).empty?
           rows << [ [ "Type your answer below, then enter.", :muted ] ]
         end

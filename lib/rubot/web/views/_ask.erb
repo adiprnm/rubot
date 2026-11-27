@@ -31,6 +31,9 @@
       node it did not render, which is exactly the path that left the button
       doing nothing; a button with its own hx-post is bound the same way the
       option buttons are, and those work. -%>
+  <%# The confirmation that closes a list of questions offers its two answers and
+      nothing else: a typed sentence there would have nowhere to go. -%>
+  <% unless prompt[:confirm] -%>
   <div class="ask-custom">
     <input class="ask-custom-input" type="text" name="text" autocomplete="off"
            placeholder="<%= h(I18n.t("web.ask.custom")) %>"
@@ -45,6 +48,7 @@
             hx-include="closest .ask-custom"
             hx-swap="none"><%= h(I18n.t("web.ask.send")) %></button>
   </div>
+  <% end -%>
 </div>
 <% else -%>
 <div class="ask ask-confirm">

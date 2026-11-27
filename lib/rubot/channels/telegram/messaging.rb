@@ -240,12 +240,12 @@ module Rubot
             entry[:msg_id] = msg_id if entry
           end
 
-          @confirm_mutex.synchronize do
-            cv.wait(@confirm_mutex, CONFIRM_TIMEOUT_SECONDS)
-          end
-
-          answer = nil
-          msg_id = nil
+          # A question has no deadline: it waits until it is answered or the
+          # turn is stopped, which releases it through
+          # #cancel_pending_confirmations. Only the confirmation above fails
+          # closed on time, because the action it guards could destroy
+          # something.
+          @confirm_mutex.synchronize { cv.wait(@confirm_mutex) }
           @confirm_mutex.synchronize do
             entry = @pending_questions.delete(question_id)
             answer = entry && entry[:result]

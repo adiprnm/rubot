@@ -1,5 +1,8 @@
 # One question per `ask_user` call, answered inside the same turn
 
+Superseded by ADR 0010: a call may now carry several questions, asked in order
+and confirmed at the end.
+
 `ask_user` carries a single **Question** with up to four **Options**, and the
 **Answer** comes back as the tool result so the model keeps working in the turn
 that asked. A batch of questions in one call was rejected: it multiplies the

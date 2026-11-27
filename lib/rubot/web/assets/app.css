@@ -2707,6 +2707,9 @@ select:focus-visible { outline: none; }
   margin: 0 0 0.55rem;
   font-weight: 600;
   line-height: 1.45;
+  /* A question may be several lines: the confirmation at the end of a list
+     reads the answers back one per line. */
+  white-space: pre-line;
 }
 
 .ask .ask-options {

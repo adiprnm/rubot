@@ -552,12 +552,5 @@ module Rubot
 
       "…/#{segments.last(PATH_SEGMENTS).join("/")}"
     end
-
-    def self.clip(text, limit)
-      text = text.to_s
-      return text if text.length <= limit
-
-      "#{text[0, limit - 1]}…"
-    end
   end
 end

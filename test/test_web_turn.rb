@@ -962,17 +962,22 @@ module Rubot
         assert_equal({ outcome: :custom, text: "call it something else" }, outcome)
       end
 
-      def test_a_question_nobody_answers_expires
+      # A question has no deadline: it waits for an answer or for the turn to go
+      # away. Silence is not an outcome the turn invents.
+      def test_a_question_waits_with_no_deadline
         turn = build
         outcome = nil
 
-        thread = Thread.new do
-          outcome = turn.ask_question(question: "Anyone?", options: ask_options, timeout: 0.05)
-        end
-        thread.join(2)
+        thread = Thread.new { outcome = turn.ask_question(question: "Anyone?", options: ask_options) }
+        wait_for_ask(turn)
 
-        assert_equal({ outcome: :expired }, outcome)
-        assert_nil turn.ask_prompt
+        sleep 0.3
+        assert thread.alive?, "nothing expires the question"
+        refute_nil turn.ask_prompt, "the question is still up"
+
+        turn.answer_ask({ outcome: :option, index: 0 })
+        thread.join(2)
+        assert_equal "New file", outcome[:label]
       end
 
       # A turn that ends under a question is not a question that expired: the
@@ -1027,12 +1032,14 @@ module Rubot
         refute turn.cancel_pending_ask, "nothing was waiting"
 
         outcome = nil
-        thread = Thread.new do
-          outcome = turn.ask_question(question: "Anyone?", options: ask_options, timeout: 0.05)
-        end
-        thread.join(2)
+        thread = Thread.new { outcome = turn.ask_question(question: "Anyone?", options: ask_options) }
+        wait_for_ask(turn)
 
-        assert_equal({ outcome: :expired }, outcome)
+        assert thread.alive?, "a stop before the question did not pre-answer it"
+
+        turn.answer_ask({ outcome: :option, index: 1 })
+        thread.join(2)
+        assert_equal "Extend 018", outcome[:label]
       end
 
       # A click that outlives its question must not answer the next one: the
@@ -1131,9 +1138,7 @@ module Rubot
         channel.instance_variable_get(:@turns)["tabc"] = turn
 
         answer = nil
-        thread = Thread.new do
-          answer = turn.ask_question(question: "Which?", options: ask_options, timeout: 0.4)
-        end
+        thread = Thread.new { answer = turn.ask_question(question: "Which?", options: ask_options) }
         wait_for_ask(turn)
 
         res = FakeResponse.new
@@ -1142,8 +1147,17 @@ module Rubot
                      res, "tabc", "ask")
 
         assert_equal 409, res.status
+        assert thread.alive?, "the wrong ask leaves the question standing"
+
+        # The right one still lands.
+        token = turn.ask_prompt[:token]
+        channel.send(:control_turn, FakeRequest.new("/turns/tabc/ask", method: "POST",
+                                                    query: { "choice" => "1", "ask" => token.to_s }),
+                     res, "tabc", "ask")
         thread.join(2)
-        refute_equal "Extend 018", answer && answer[:label]
+
+        assert_equal 204, res.status
+        assert_equal "Extend 018", answer[:label]
       end
 
       # Two questions in one turn must not read each other's answer.

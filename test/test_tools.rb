@@ -1720,9 +1720,9 @@ class TestTools < Minitest::Test
   end
 
   def test_a_question_without_its_text_is_refused
-    assert_match(/needs a `question`/, ask_user.ask({}, reader: ->(_p) { { outcome: :expired } }))
-    assert_match(/needs a `question`/, ask_user.ask({ "question" => "  " },
-                                                   reader: ->(_p) { { outcome: :expired } }))
+    assert_match(/needs `questions`/, ask_user.ask({}, reader: ->(_p) { { outcome: :cancelled } }))
+    assert_match(/non-empty `question`/, ask_user.ask({ "question" => "  " },
+                                                      reader: ->(_p) { { outcome: :cancelled } }))
   end
 
   # No reader is a surface fact, not a mistake: a background turn and a sub
@@ -1739,5 +1739,116 @@ class TestTools < Minitest::Test
 
     assert_includes wording, Rubot::Tools::AskUser::PER_TURN_LIMIT.to_s
     assert_includes wording, "safest default"
+  end
+
+  # --- a call that asks several questions ------------------------------
+  #
+  # The sequence lives in the tool, not in each channel: every surface already
+  # knows how to put one question in front of a reader, and the next one is the
+  # same call again. What these tests hold is the order and the two ways it can
+  # stop.
+
+  def two_questions
+    {
+      "questions" => [
+        { "question" => "Which store?", "options" => [ { "label" => "SQLite" }, { "label" => "JSON" } ] },
+        { "question" => "Which name?", "options" => [ { "label" => "notes" }, { "label" => "journal" } ] }
+      ]
+    }
+  end
+
+  def confirm_question?(text)
+    text.to_s.start_with?(Rubot::I18n.t("ask.confirm.question"))
+  end
+
+  def test_two_questions_are_asked_in_order_and_read_back
+    asked = []
+    reader = lambda do |payload|
+      asked << payload[:question]
+      if confirm_question?(payload[:question])
+        { outcome: :option, index: Rubot::Tools::AskUser::SEND_INDEX }
+      else
+        { outcome: :option, index: 0, label: payload[:options].first[:label] }
+      end
+    end
+
+    result = ask_user.ask(two_questions, reader: reader)
+
+    assert_equal 3, asked.size, "two questions and one confirmation"
+    assert_match(/Which store\?/, asked[0])
+    assert_match(/Which name\?/, asked[1])
+    assert confirm_question?(asked[2])
+    assert_includes result, "1. Which store? → SQLite"
+    assert_includes result, "2. Which name? → notes"
+  end
+
+  # The confirmation carries the answers, so the reader can see what they are
+  # about to send before the model gets it.
+  def test_the_confirmation_reads_the_answers_back
+    seen = nil
+    reader = lambda do |payload|
+      seen = payload[:question] if confirm_question?(payload[:question])
+      payload[:options] ? { outcome: :option, index: 0, label: payload[:options].first[:label] } :
+                          { outcome: :custom, text: "x" }
+    end
+
+    ask_user.ask(two_questions, reader: reader)
+
+    assert_includes seen, "Which store? → SQLite"
+  end
+
+  def test_starting_over_asks_every_question_again
+    confirmations = 0
+    firsts = 0
+    reader = lambda do |payload|
+      if confirm_question?(payload[:question])
+        confirmations += 1
+        index = confirmations == 1 ? Rubot::Tools::AskUser::RESTART_INDEX : Rubot::Tools::AskUser::SEND_INDEX
+        { outcome: :option, index: index }
+      else
+        firsts += 1 if payload[:question] == "Which store?"
+        { outcome: :option, index: 0, label: payload[:options].first[:label] }
+      end
+    end
+
+    result = ask_user.ask(two_questions, reader: reader)
+
+    assert_equal 2, firsts, "starting over asks the first question again"
+    assert_equal 2, confirmations
+    assert_includes result, "Which store? → SQLite"
+  end
+
+  # A reader who walks away mid-list leaves no half-answer: the model is told
+  # it was cancelled, not that two of three things were decided.
+  def test_a_cancelled_question_mid_list_reports_no_answers
+    reader = lambda do |payload|
+      if payload[:question] == "Which name?"
+        { outcome: :cancelled }
+      else
+        { outcome: :option, index: 0, label: payload[:options].first[:label] }
+      end
+    end
+
+    result = ask_user.ask(two_questions, reader: reader)
+
+    assert_includes result, "cancelled"
+    refute_includes result, "The user answered"
+  end
+
+  def test_a_list_longer_than_the_limit_is_refused
+    questions = (1..(Rubot::Tools::AskUser::MAX_QUESTIONS + 1)).map do |n|
+      { "question" => "Q#{n}?" }
+    end
+
+    result = ask_user.ask({ "questions" => questions }, reader: ->(_p) { { outcome: :cancelled } })
+
+    assert_match(/at most/, result)
+  end
+
+  # The turn's ceiling counts questions, not calls: a list of three spends
+  # three.
+  def test_the_question_count_is_what_the_turn_counts
+    assert_equal 2, ask_user.questions_count(two_questions)
+    assert_equal 1, ask_user.questions_count({ "question" => "Only one?" })
   end
 end
