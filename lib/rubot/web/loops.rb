@@ -424,9 +424,12 @@ module Rubot
       # would say the same sentence into the parent conversation. Once per
       # allowance is news; the second copy is the reason a reader stops reading
       # them. A bigger allowance -- a raised limit is the only way to get one --
-      # is a different fact, so meeting it again is worth saying.
+      # is a different fact, so meeting it again is worth saying. Both limits
+      # are in the key: raising the iteration cap alone leaves `max_tokens`
+      # untouched, and a loop that then meets its allowance again has news the
+      # old key would have swallowed.
       def announce_budget?(id, state)
-        key = [ id.to_s, state&.max_tokens.to_i ]
+        key = [ id.to_s, state&.max_tokens.to_i, state&.max_iterations.to_i ]
         @announced_budget ||= {}
         @announced_budget_mutex ||= Mutex.new
         @announced_budget_mutex.synchronize do

@@ -342,11 +342,12 @@ module Rubot
         # before the commit because the commit is where the answer is written.
         # The run decides the stop after the turn returns, and a commit it did
         # not make cannot be marked afterwards without amending it, so the one
-        # predicate the run stops by is asked here too: a turn the budget
-        # cancelled, and a turn that carried the loop past its warning, both
-        # commit work no verdict will be bought for.
-        unverified = answer[:budget_stopped] ||
-                     LoopRun.budget_warning?(@store.load(id)&.tokens.to_i, context[:budget])
+        # decision the run stops by is asked here too -- including its order, so
+        # a context ceiling is never marked as a stop for money.
+        stop = LoopRun.stop_reason(spent: @store.load(id)&.tokens.to_i, limit: context[:budget],
+                                  ceiling: answer[:context_ceiling],
+                                  budget_stopped: answer[:budget_stopped])
+        unverified = LoopRun.unverified_stop?(stop)
         commit = commit_iteration(worktree, id, commit_message(iteration, note), unverified: unverified)
         # An agent may commit its own work, and that commit is made before the
         # decision above is known. It cannot be marked later without amending

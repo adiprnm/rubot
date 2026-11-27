@@ -99,6 +99,25 @@ module Rubot
       limit.positive? && tokens.to_i >= limit * BUDGET_WARNING
     end
 
+    # The one order both sides stop by: the run asks it after a turn returns, and
+    # the runner asks it before it commits, because a commit written at the end
+    # of a turn is the one the run cannot mark later without amending it. The
+    # order is the whole point -- a spent budget outranks a context ceiling, and a
+    # ceiling outranks the warning -- and it lives here alone, because two copies
+    # of it drifted once already: the runner asked only whether the spend had
+    # passed the warning, and marked a context-ceiling commit unverified.
+    def self.stop_reason(spent:, limit:, ceiling:, budget_stopped:)
+      return :budget if budget_stopped || spent.to_i >= limit.to_i
+      return :context_ceiling if ceiling
+      return :budget_warning if budget_warning?(spent, limit)
+
+      nil
+    end
+
+    # The stops that leave an iteration committed with no verdict bought for it.
+    # A context ceiling is not one: it did not stop the money.
+    def self.unverified_stop?(reason) = %i[budget budget_warning].include?(reason&.to_sym)
+
     # Raised only to leave an iteration that cannot go on: the note is on disk
     # by then, and the stop reason travels with it because a runner that failed
     # and a worktree that vanished are different repairs for the user.
@@ -416,11 +435,11 @@ module Rubot
     # where the next iteration and its verdict could no longer be afforded.
     def stop_after_work(state, spent:, budget_stop:, ceiling:)
       limit = budget_for(state)
-      return { reason: :budget, spent: spent, limit: limit } if budget_stop || spent >= limit
-      return { reason: :context_ceiling, ceiling: ceiling } if ceiling
-      return { reason: :budget_warning, spent: spent, limit: limit } if self.class.budget_warning?(spent, limit)
-
-      nil
+      case self.class.stop_reason(spent: spent, limit: limit, ceiling: ceiling, budget_stopped: budget_stop)
+      when :budget then { reason: :budget, spent: spent, limit: limit }
+      when :context_ceiling then { reason: :context_ceiling, ceiling: ceiling }
+      when :budget_warning then { reason: :budget_warning, spent: spent, limit: limit }
+      end
     end
 
     def reason_of(stop) = stop && stop[:reason]
@@ -428,7 +447,7 @@ module Rubot
     # Only the stops that leave the work committed with no judgement are marked:
     # a context ceiling did not stop the money, and its commit reads as it always
     # has until a ticket asks otherwise.
-    def unverified?(stop) = %i[budget budget_warning].include?(reason_of(stop))
+    def unverified?(stop) = self.class.unverified_stop?(reason_of(stop))
 
       # What a warning is waiting for, in the reader's words: the shape of the work
       # and the files it touched, so the choice between keeping it and dropping it

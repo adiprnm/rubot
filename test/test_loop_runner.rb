@@ -301,6 +301,11 @@ class TestLoopRunner < Minitest::Test
     assert_includes entry, "ceiling 101k/100k"
     assert_includes entry, "stopped at its context ceiling",
                     "the commit and the entry name the ceiling, not the agent's notice"
+    # A ceiling did not stop the money, so the branch must not say the work went
+    # unjudged for lack of budget. The order of the stops decides this, and it is
+    # asked in one place so the runner cannot answer it differently from the run.
+    assert_equal "iteration 1: stopped at its context ceiling",
+                 git(@repo, "log", "-1", "--format=%s", "loop/#{state.id}").strip
     assert_equal 1, @calls.size,
                  "no verifier turn is bought for an iteration that never finished"
   end
