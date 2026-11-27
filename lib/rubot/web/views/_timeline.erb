@@ -25,8 +25,9 @@
     reader would otherwise read them out as a list. -%>
 <% lit = live || item[:awake] -%>
 <% skills = Array(item[:skills]) -%>
-<%# A skill load names itself in code: the name is what the reader may type
-    again, and the rest of the sentence stays a sentence. -%>
+<%# A skill load says which instructions the agent picked up, in the sentence
+    the dictionary wrote: the name is not marked out from the words around it,
+    because the row is read as a sentence rather than as a value to copy. -%>
 <% detail_html = if skills.empty?
   lit ? glow(item[:detail]) : h(item[:detail])
 else

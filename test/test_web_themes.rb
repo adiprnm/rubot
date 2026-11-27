@@ -188,20 +188,6 @@ module Rubot
                         "the clock counts in place; a drifting box is a row that shakes"
       end
 
-      # A <code> element brings a font-family of its own from the browser's
-      # stylesheet, and that declaration beats the one it would have inherited.
-      # The tag around a skill's name therefore has to hand the row's face back:
-      # asserting that no `--mono` appears here was green on exactly this defect,
-      # because the face came from the browser and not from this file.
-      def test_a_name_inside_a_tool_row_takes_the_rows_face
-        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
-        block = css[/^\.tool-row code \{[^}]*\}/m]
-
-        refute_nil block, "the skill's name needs a rule of its own"
-        assert_includes block, "font-family: inherit",
-                        "the browser sets <code> in mono; the row's face has to be given back"
-      end
-
       # A choice is the reader's, on their own device: stored locally and never
       # sent to the server, so two people in one conversation keep their own.
       def test_a_theme_choice_is_kept_on_the_device

@@ -1836,9 +1836,10 @@ select:focus-visible { outline: none; }
 
 /* The mark that turns a paragraph into context sits in the page's right gutter,
    outside the measure, so it never pushes the prose it belongs to: it is an
-   aside, not part of the sentence. It keeps a faint presence so the affordance
-   is findable without a column of marks shouting over the answers, and comes
-   fully forward under the pointer or when it holds focus. */
+   aside, not part of the sentence. With a pointer it is not drawn at all until
+   the paragraph under it is hovered, so a long answer does not wear a column of
+   marks down its edge; a keyboard reaching it is signalled by focus, which is
+   the same reveal without a pointer to hover. */
 .text p { position: relative; }
 
 /* A list hangs its mark from a wrapper rather than the list itself: a `<ul>`
@@ -1868,7 +1869,7 @@ select:focus-visible { outline: none; }
   color: var(--fg-faint);
   line-height: 0;
   cursor: pointer;
-  opacity: 0.35;
+  opacity: 0;
   transition: opacity 120ms ease, color 120ms ease;
 }
 
@@ -2468,21 +2469,6 @@ select:focus-visible { outline: none; }
    skill's name (see Rubot::SkillLoad), so the colour only makes that row
    findable when the reader scrolls back for it. */
 .tool-row.is-skill .tool-detail { color: var(--green); }
-/* The skill's name is the one identifier in the row, and it is marked as one by
-   the tag it wears rather than by the face it is set in: the whole row follows
-   the reader's choice, a name included. `inherit` is what makes that true — a
-   <code> element carries a font-family of its own in the browser's stylesheet,
-   and a declaration on the element beats whatever it would have inherited, so
-   simply dropping the `--mono` here swapped one face nobody picked for another.
-   The tint of `--bg1` says "this is a name" and keeps the row's colour, so the
-   state still reads through it. `.diff-row code` says `inherit` for the same
-   reason. */
-.tool-row code {
-  padding: 0 0.28em;
-  border-radius: 2px;
-  background: var(--bg1);
-  font-family: inherit;
-}
 .tool-row.failed .tool-detail { color: var(--red); }
 .tool-row.unknown .tool-detail { color: var(--fg-faint); }
 /* One call giving way to the next. The row is a new element on every event of

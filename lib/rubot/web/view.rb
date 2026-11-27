@@ -283,70 +283,30 @@ module Rubot
           %( style="--glow-step:#{step}s")
         end
 
-        # A tool row that loaded a skill: each skill's name is set apart as
-        # code, because it is the one word in the sentence the reader may type
-        # again (`/use <name>`). The name came from a model's arguments, so it
-        # is escaped before it goes inside the tag.
+        # A tool row that loaded a skill: the row says which instructions the
+        # agent picked up, and it says it as one sentence. The name is not set
+        # apart from the words around it — a row is read as a sentence, not as a
+        # value to copy, and the green the row already wears is what makes a
+        # skill load findable when the reader scrolls back for it.
         #
-        # The sentence is cut around the names rather than composed here:
-        # ToolCaption already put them where the reader's language wants them,
-        # and a second composition in this file would be a second sentence to
-        # keep in step. The cut is made on whole words, so a skill called `in`
-        # cannot take "Loading" apart. The light still travels across the whole
-        # row — the letters are indexed from the start of the sentence, not from
-        # the start of each run — so the code tag interrupts the markup, not the
-        # pulse.
+        # The sentence is ToolCaption's: the names are put where the reader's
+        # language wants them there, and composing a second one here would be a
+        # second sentence to keep in step. A name the sentence does not carry
+        # would vanish from the one row that exists to say it, so it is added
+        # after the sentence instead — the word boundary is what keeps a skill
+        # called `in` from counting as present inside "installer".
         def skill_detail(detail, names, lit: false)
           text = detail.to_s
-          runs = []
-          placed = []
-          cursor = 0
-          Array(names).each do |raw|
-            name = raw.to_s
-            next if name.empty?
+          missing = names_missing_from(text, names)
+          text = "#{text} #{missing.join(" ")}" unless missing.empty?
 
-            at = name_at(text, name, cursor)
-            next if at.nil?
-
-            runs << [ text[cursor...at], false ] unless at == cursor
-            runs << [ name, true ]
-            placed << name
-            cursor = at + name.length
-          end
-          runs << [ text[cursor..], false ] unless cursor >= text.length
-
-          # A name the sentence does not carry would otherwise vanish from the
-          # one row that exists to say it: it goes after the sentence instead.
-          (Array(names).map(&:to_s) - placed).each do |name|
-            next if name.empty?
-
-            runs << [ " ", false ]
-            runs << [ name, true ]
-          end
-
-          index = 0
-          runs.map do |text, is_name|
-            body = if lit
-              text.each_char.map do |char|
-                span = %(<span style="--i:#{index}">#{h(char)}</span>)
-                index += 1
-                span
-              end.join
-            else
-              h(text)
-            end
-            is_name ? "<code>#{body}</code>" : body
-          end.join
+          lit ? glow(text) : h(text)
         end
 
-        # Where a whole-word occurrence of `name` starts, at or after `from`.
-        # The guards are the characters a skill directory may contain, so a
-        # name is never found inside a longer word or inside a longer skill's
-        # own name (`review` inside `code-review`).
-        def name_at(text, name, from)
-          pattern = /(?<![\w-])#{Regexp.escape(name)}(?![\w-])/
-          match = pattern.match(text, from)
-          match&.begin(0)
+        def names_missing_from(text, names)
+          Array(names).map(&:to_s).reject do |name|
+            name.empty? || /(?<![\w-])#{Regexp.escape(name)}(?![\w-])/.match?(text)
+          end
         end
 
         # The turn body is rendered from Ruby rather than through a nested
