@@ -60,10 +60,11 @@ end -%>
 <% end -%>
 </div>
 <% when :subagent -%>
-<div class="subagent-row subagent-<%= h(item[:phase]) %>"<% if item[:task] && !item[:task].empty? %> title="<%= h(item[:task]) %>"<% end %><%= item_attrs(item) %>>
-  <span class="subagent-mark" aria-hidden="true"><%= subagent_mark(item[:phase]) %></span>
-  <span class="subagent-name"><%= h(item[:agent]) %></span>
-  <span class="subagent-detail"><%= h(item[:detail]) %></span>
-</div>
+<%# The same delegation row the footer draws, with the turn's row id as the id
+    it opens under: a swap that rewrites the row finds it again by that id (see
+    app.js, restoreSubagentBriefs). -%>
+<%= View.render("_subagent_row",
+                run: { agent: item[:agent], phase: item[:phase], line: item[:detail], task: item[:task] },
+                wrapper_class: "subagent-row subagent-#{h(item[:phase])}", attrs: item_attrs(item)) %>
 <% end -%>
 <% end -%>

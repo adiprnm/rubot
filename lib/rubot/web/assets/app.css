@@ -2852,11 +2852,9 @@ select:focus-visible { outline: none; }
 
 /* One delegated run: the persona it runs as, what it last did, and how it
    ended. The same row is drawn in the footer's sheet and in the transcript,
-   so a delegation reads the same wherever it is found. */
+   so a delegation reads the same wherever it is found. The line is the
+   summary of the row's <details> — see `.subagent-summary`. */
 .subagent {
-  display: flex;
-  align-items: baseline;
-  gap: 0.45rem;
   color: var(--fg-muted);
   font-family: var(--mono);
 }
@@ -2875,9 +2873,6 @@ select:focus-visible { outline: none; }
 /* The same rows inside the finished transcript: indented under the turn so a
    delegation reads as work done on its behalf, not as a message from the user. */
 .subagent-row {
-  display: flex;
-  align-items: baseline;
-  gap: 0.45rem;
   margin: 0 0 0.4rem 1.1rem;
   font-family: var(--mono);
   font-size: 0.85rem;
@@ -2898,6 +2893,57 @@ select:focus-visible { outline: none; }
 /* The answer under the last delegation gets the same air as under a tool row:
    the row claims 0.4rem, the paragraph brings the rest of its 1.05rem. */
 .subagent-row + .text { margin-top: calc(1.05rem - 0.4rem); }
+
+/* The line is the summary of the row's <details>, so a run is read and then
+   opened: a task is a whole brief and the line is one line wide. The marker is
+   taken off — the row already has a mark of its own at its left end, and a
+   triangle in front of it would be two glyphs saying "look here". The pointer is
+   on the summary alone: a row with nothing to open wears the same flex block,
+   and a hand over it would promise a tap that does nothing. */
+.subagent-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  min-width: 0;
+  list-style: none;
+}
+summary.subagent-summary { cursor: pointer; }
+.subagent-summary::-webkit-details-marker { display: none; }
+.subagent-summary::marker { content: ""; }
+
+/* What the row opens onto. Set in the fixed-width face and wrapped rather than
+   scrolled sideways: a brief is markdown with its own line breaks, and one
+   written as a single paragraph would otherwise run off a phone. The height is
+   capped because a review brief is three kilobytes, and the row it belongs to
+   is a footnote — a panel taller than the screen hides the conversation it is
+   part of. */
+.subagent-brief {
+  margin: 0.35rem 0 0.15rem;
+  padding: 0.4rem 0.55rem;
+  border-left: 2px solid var(--line);
+  font-family: var(--mono);
+}
+.subagent-brief dt {
+  color: var(--fg-faint);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.subagent-brief dd { margin: 0.12rem 0 0.45rem; }
+.subagent-brief dd:last-child { margin-bottom: 0; }
+.subagent-brief-text {
+  margin: 0;
+  font-family: inherit;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 16rem;
+  overflow: auto;
+}
+.subagent-brief-error { color: var(--red); }
+.subagent-row .subagent-brief-text { font-size: 0.8rem; }
 
 /* The footer's subagent sheet: the delegated runs, in the same row as the
    figures they are spending. It is one more sheet in that row, so it borrows

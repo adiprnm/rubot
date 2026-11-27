@@ -686,7 +686,11 @@ module Rubot
             "running" => "%{count} subagents running",
             "running_one" => "1 subagent running",
             "failed" => "subagent failed",
-            "done" => "subagent finished"
+            "done" => "subagent finished",
+            # The parts of a run's brief, read when its row is opened.
+            "prompt" => "Prompt",
+            "result" => "Result",
+            "error" => "Error"
           },
           "loops" => {
             "title" => "Loops",
@@ -1545,7 +1549,10 @@ module Rubot
             "running" => "%{count} subagent berjalan",
             "running_one" => "1 subagent berjalan",
             "failed" => "subagent gagal",
-            "done" => "subagent selesai"
+            "done" => "subagent selesai",
+            "prompt" => "Prompt",
+            "result" => "Hasil",
+            "error" => "Error"
           },
           "loops" => {
             "title" => "Loop",

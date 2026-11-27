@@ -1,21 +1,23 @@
-<%# One row per delegated run: the persona it runs as, what it was asked to do,
-    how far it has got, and how it ended. The same rows the strip above the
-    composer draws, kept here so they can still be read after the turn that
-    asked for them is over.
+<%# The delegated runs of one conversation, newest first, as the footer's sheet
+    draws them. One row per run, and the row itself — the line, the brief behind
+    it, and the id it opens under — is `_subagent_row`, which the transcript
+    draws too.
 
-    `line` is the whole sentence and the only thing drawn: a row is never
-    half-assembled here, so the sheet and the transcript cannot disagree about
-    a run (see Web::SubagentLine). The task rides on the row as a tooltip too,
-    where a long one is still readable after the line has been cut. -%>
+    The id is the run's and not the position's: this list is replaced whole on
+    every step a run takes, so a row keeps its state while the ones above it
+    change (see app.js, restoreSubagentBriefs). -%>
 <% if subagents.empty? -%>
   <p class="usage-note"><%= h(I18n.t("web.subagents.empty")) %></p>
 <% else -%>
   <ul class="subagent-rows">
 <% subagents.each do |s| -%>
-    <li class="subagent subagent-<%= h(s[:phase]) %>"<% if s[:task].to_s != "" %> title="<%= h(s[:task]) %>"<% end %>>
-      <span class="subagent-mark" aria-hidden="true"><%= subagent_mark(s[:phase]) %></span>
-      <span class="subagent-name"><%= h(s[:agent]) %></span>
-      <span class="subagent-detail"><%= h(s[:line]) %></span>
+<%   run_id = s[:run_id].to_s -%>
+<%   attrs = run_id.empty? ? "" : %( id="subagent-run-#{h(run_id)}") -%>
+    <li class="subagent subagent-<%= h(s[:phase]) %>">
+      <%= View.render("_subagent_row",
+                      run: { agent: s[:agent], phase: s[:phase], line: s[:line],
+                             task: s[:task], result: s[:result], error: s[:error] },
+                      wrapper_class: "subagent-more", attrs: attrs) %>
     </li>
 <% end -%>
   </ul>

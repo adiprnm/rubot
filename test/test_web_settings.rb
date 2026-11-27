@@ -590,8 +590,9 @@ module Rubot
         assert_includes html, "2 langkah · 12s"
         refute_includes html, "read notes.md"
         refute_includes html, "grep rhyme"
-        # The task still rides on the row, just not as a line of its own.
-        assert_includes html, %(title="write a poem")
+        # The task still rides on the row, just not as a line of its own: it is
+        # what the row opens onto (see test_web_subagent_brief.rb).
+        assert_includes html, %(<pre class="subagent-brief-text">write a poem</pre>)
       end
 
       def test_a_compact_turn_keeps_the_reason_a_run_failed
