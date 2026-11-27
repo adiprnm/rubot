@@ -2719,13 +2719,20 @@ select:focus-visible { outline: none; }
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.1rem;
+  gap: 0.25rem;
   width: 100%;
   text-align: left;
-  padding: 0.5rem 0.7rem;
+  padding: 0.55rem 0.75rem;
 }
 
-.ask .ask-option-label { font-weight: 600; }
+/* The label is the thing being chosen, so it is the largest thing in the row.
+   It inherits `.btn`'s 10.5px otherwise — the size for a dense toolbar — which
+   left the description below it bigger than the choice above it. */
+.ask .ask-option-label {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+}
 
 .ask .ask-option-description {
   font-size: 13.5px;
