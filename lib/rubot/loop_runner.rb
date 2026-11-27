@@ -338,7 +338,16 @@ module Rubot
         # provider already billed. The report hands back zero, since the run
         # charges what a runner reports and this one has already paid.
         charge(id, answer[:tokens])
-        commit = commit_iteration(worktree, id, commit_message(iteration, note))
+        # Whether the run can still afford a verdict for this iteration, asked
+        # before the commit because the commit is where the answer is written.
+        # The run decides the stop after the turn returns, and a commit it did
+        # not make cannot be marked afterwards without amending it, so the one
+        # predicate the run stops by is asked here too: a turn the budget
+        # cancelled, and a turn that carried the loop past its warning, both
+        # commit work no verdict will be bought for.
+        unverified = answer[:budget_stopped] ||
+                     LoopRun.budget_warning?(@store.load(id)&.tokens.to_i, context[:budget])
+        commit = commit_iteration(worktree, id, commit_message(iteration, note), unverified: unverified)
         after = worktree.head(id)
         progress, reported = progress_report(commit, before, after)
         # A turn the budget stopped is reported, never raised: the work it left
@@ -576,12 +585,17 @@ module Rubot
     # falls back to when a head could not be read. Subject from the entry's first
     # line and everything after it as the body, so a second step cannot reach the
     # subject.
-    def commit_iteration(worktree, id, note)
+    #
+    # `unverified` puts the marker in front of the subject, ahead of the cap on
+    # its text: it is the one part that must never be truncated away, because it
+    # is what tells `git log` that this commit's work was never judged.
+    def commit_iteration(worktree, id, note, unverified: false)
       return nil unless worktree.changed?(id)
 
       subject, body = note.split("\n", 2)
       subject = subject.to_s.strip[0, SUBJECT_CHARS].to_s.strip
       subject = DEFAULT_SUBJECT if subject.empty?
+      subject = "#{LoopRun::UNVERIFIED_MARKER} #{subject}" if unverified
       body = body.to_s.strip
       worktree.commit(id, message: body.empty? ? subject : "#{subject}\n\n#{body}")
     end

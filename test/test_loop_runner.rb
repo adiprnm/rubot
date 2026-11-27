@@ -494,7 +494,7 @@ class TestLoopRunner < Minitest::Test
   # -- the budget ------------------------------------------------------------
 
   def test_the_verifier_spends_against_the_same_budget_as_the_iteration
-    state = @store.create(goal: GOAL, done_criteria: CRITERIA, repo: @repo, max_tokens: 2_500)
+    state = @store.create(goal: GOAL, done_criteria: CRITERIA, repo: @repo, max_tokens: 2_000)
     @verdict = ->(number) { "NOT_YET red #{number}" }
 
     result = loop_runner.start(state.id)
@@ -502,7 +502,10 @@ class TestLoopRunner < Minitest::Test
     assert_equal :budget, result.stop_reason
     # Two iterations and two verdicts: the judgement is paid for like the work,
     # and the loop is left resumable instead of reading "active" in the file.
-    assert_equal 2_500, @store.load(state.id).tokens
+    # The second work turn crosses the budget in one step -- a thousand tokens
+    # against the eight hundred left -- so the stop is the budget itself and not
+    # the warning at nine tenths of it.
+    assert_equal 2_250, @store.load(state.id).tokens
     assert_equal "paused", @store.load(state.id).status
   end
 
@@ -720,7 +723,9 @@ class TestLoopRunner < Minitest::Test
     log = @store.load(state.id).log.map(&:text)
     refute(log.any? { |text| text.include?("Stopped by user") }, "the agent's notice is not the loop's history")
     assert(log.any? { |text| text.include?("stopped for its budget") }, log.inspect)
-    assert_equal "iteration 1: stopped for its budget",
+    # The subject carries the marker: no verdict was bought for this iteration,
+    # and the branch has to say so where a reader looks without the loop's file.
+    assert_equal "[unverified] iteration 1: stopped for its budget",
                  git(@repo, "log", "-1", "--format=%s", "loop/#{state.id}").strip
   end
 

@@ -68,14 +68,36 @@ module Rubot
     # have its first sentence buried, and two failures that agree this far agree
     # in the part that matters.
     STUCK_REASON_CHARS = 120
+    # The marker a commit carries when no verdict was bought for it, so the
+    # branch says what the log says: this work was never judged (see #subject).
+    UNVERIFIED_MARKER = "[unverified]"
     VERDICTS = { "done" => :done, "not_yet" => :not_yet }.freeze
+
+    # The share of its budget a loop may spend before it stops to ask instead of
+    # buying another verdict. At nine tenths the next iteration -- work and
+    # verdict, two full turns of the same size -- can no longer be paid for, so
+    # the iteration just finished is committed unverified and the loop pauses.
+    # A constant, not a field in the loop's own file: the file already carries
+    # facts that have to stay in sync across every path that writes it, and a
+    # per-loop threshold is one more of those for no gain.
+    BUDGET_WARNING = Rational(9, 10)
 
     # Every way a run can end, in one place, so a caller can write an exhaustive
     # case over the result instead of grepping for the symbols.
     STOP_REASONS = %i[
-      done_by_verifier max_iterations budget stalled verifier_stuck paused not_active
-      context_ceiling missing error worktree_missing repo_mismatch
+      done_by_verifier max_iterations budget budget_warning stalled verifier_stuck paused
+      not_active context_ceiling missing error worktree_missing repo_mismatch
     ].freeze
+
+    # Whether a loop that has spent `tokens` of `budget` has reached its warning.
+    # The one implementation of the fraction: the run decides the stop with it,
+    # and a runner marks the commit it makes with it (see LoopRunner), because a
+    # commit written at the end of a turn is the one the run cannot mark later
+    # without amending it. A budget nobody set warns on nothing.
+    def self.budget_warning?(tokens, budget)
+      limit = budget.to_i
+      limit.positive? && tokens.to_i >= limit * BUDGET_WARNING
+    end
 
     # Raised only to leave an iteration that cannot go on: the note is on disk
     # by then, and the stop reason travels with it because a runner that failed
@@ -229,11 +251,28 @@ module Rubot
         fail_iteration(state.id, "iteration #{iteration} failed: #{record[:error]}")
       end
 
+      # Read back from the file, never from the state this iteration began
+      # with: the turn just paid it. The verifier is a second turn of the same
+      # size, and one iteration that reaches this point with nothing left is how
+      # a loop spent five million tokens against a five-hundred-thousand budget
+      # -- half of it on judgement nobody could afford. What the turn produced is
+      # committed below, so stopping here costs the loop its verdict, not its
+      # work.
+      spent = tokens_of(state.id)
+
       text = one_line(record[:text])
       begin
         # Read before the commit: afterwards the worktree is clean again.
         diff = diff_of(state.id)
-        ours = commit_iteration(state.id, record[:text])
+        # The loop's money decides the iteration's fate here, before the commit
+        # and not after it, so the commit can carry the decision. A verdict that
+        # is never bought is written into the subject of the commit that stands
+        # for the iteration, which is the branch's own record: `git log` then
+        # says "unverified" without anyone having to open the loop's file, and a
+        # later resume cannot make the history imply a judgement nobody paid for.
+        stop = stop_after_work(state, spent: spent, budget_stop: budget_stop,
+                               ceiling: record[:context_ceiling])
+        ours = commit_iteration(state.id, record[:text], unverified: unverified?(stop))
       rescue LoopWorktree::Error => e
         fail_iteration(state.id, "commit failed: #{e.message}")
       rescue Errno::ENOENT => e
@@ -248,14 +287,6 @@ module Rubot
       # iteration cannot make the split negative.
       worker = [ tokens_of(state.id) - before, 0 ].max
 
-      # Read back from the file, never from the state this iteration began
-      # with: the turn just paid it. The verifier is a second turn of the same
-      # size, and one iteration that reaches this point with nothing left is how
-      # a loop spent five million tokens against a five-hundred-thousand budget
-      # -- half of it on judgement nobody could afford. What the turn produced is
-      # committed above, so stopping here costs the loop its verdict, not its
-      # work.
-      #
       # What the turn's own reports said about its shape, read off the report
       # before anything is written: the note is the only place a reader finds
       # out whether this iteration was expensive because the work was, or
@@ -266,13 +297,30 @@ module Rubot
       # it, and the entry is the only place it becomes history.
       round_cap = record[:round_cap]
       ceiling = record[:context_ceiling]
-      spent = tokens_of(state.id)
-      if budget_stop || spent >= budget_for(state)
+
+      if reason_of(stop) == :budget
         @store.update(state.id) do |s|
           s.add_entry(entry(iteration_note(iteration, commit, worker, 0, text, metrics, round_cap, ceiling)))
         end
         fail_iteration(state.id, "budget spent at iteration #{iteration}: " \
                                  "#{spent} of #{budget_for(state)} tokens", reason: :budget)
+      end
+
+      # The loop has spent nine tenths of its allowance, so it stops to ask
+      # rather than buying a judgement it could not pay for whole. This is a
+      # boundary decision and not a cancellation: the turn that just finished
+      # ran to its end, its work is committed, and what it is missing is a
+      # verdict -- which is why the entry says what is waiting instead of what
+      # went wrong.
+      if reason_of(stop) == :budget_warning
+        waiting = waiting_facts(diff, changed_files_of(state))
+        @store.update(state.id) do |s|
+          s.add_entry(entry(iteration_note(iteration, commit, worker, 0, text, metrics, round_cap, ceiling,
+                                           waiting: waiting)))
+        end
+        fail_iteration(state.id, "budget warning at iteration #{iteration}: " \
+                                 "#{spent} of #{budget_for(state)} tokens spent; " \
+                                 "its work is unverified, not unfinished", reason: :budget_warning)
       end
 
       # The iteration stopped because its context grew past what is worth
@@ -335,19 +383,70 @@ module Rubot
 
       dir = @worktree.create(id: id)
       branch = @worktree.branch(id)
+      # The commit the worktree was created from, recorded with the worktree the
+      # way the runner records it: it is what the loop's work is measured from,
+      # and a stop that has to name the files it is waiting on cannot derive it
+      # afterwards without moving the line.
+      base = @worktree.head(id)
       @store.update(id) do |s|
         s.worktree = dir
         s.branch = branch
+        s.base ||= base
       end
     end
 
     # The subject comes from the report as written: the flattened text is what
-    # the log and the verifier read, not what git is asked to record.
-    def commit_iteration(id, report)
+    # the log and the verifier read, not what git is asked to record. A commit
+    # made for an iteration no verdict was bought for carries the marker, which
+    # is why the decision has to be taken before this is called.
+    def commit_iteration(id, report, unverified: false)
       return nil unless @worktree.changed?(id)
 
-      @worktree.commit(id, message: subject(report))
+      @worktree.commit(id, message: subject(report, unverified: unverified))
     end
+
+    # What the loop's money says about the iteration that has just been paid
+    # for, decided at the boundary and not inside a turn: nil for the ordinary
+    # iteration that goes on to be judged, otherwise the reason it stops here.
+    #
+    # The order is the order of the money. A budget already spent -- found here,
+    # or reported by a runner that cancelled the turn for it -- comes first and
+    # keeps its mid-turn cancellation; a context ceiling is the turn's own
+    # report; the warning is the loop spending nine tenths of its allowance,
+    # where the next iteration and its verdict could no longer be afforded.
+    def stop_after_work(state, spent:, budget_stop:, ceiling:)
+      limit = budget_for(state)
+      return { reason: :budget, spent: spent, limit: limit } if budget_stop || spent >= limit
+      return { reason: :context_ceiling, ceiling: ceiling } if ceiling
+      return { reason: :budget_warning, spent: spent, limit: limit } if self.class.budget_warning?(spent, limit)
+
+      nil
+    end
+
+    def reason_of(stop) = stop && stop[:reason]
+
+    # Only the stops that leave the work committed with no judgement are marked:
+    # a context ceiling did not stop the money, and its commit reads as it always
+    # has until a ticket asks otherwise.
+    def unverified?(stop) = %i[budget budget_warning].include?(reason_of(stop))
+
+    # What a warning is waiting for, in the reader's words: the shape of the work
+    # and the files it touched, so the choice between keeping it and dropping it
+    # can be made without opening the worktree. The diffstat is the one read
+    # before the commit -- afterwards the tree is clean and it is always empty --
+    # and the file list is the loop's own, measured from the commit it started at.
+    def waiting_facts(diff, files)
+      facts = []
+      stat = one_line(diff.to_s.lines.map(&:strip).reject(&:empty?).last)
+      facts << "diff #{stat}" unless stat.empty?
+      facts << "files #{one_line(files.join(', '))}" unless files.empty?
+      facts
+    end
+
+    # The files the loop has touched since it started, off the worktree's own
+    # seam: a loop with no base recorded, or a worktree that has gone away, says
+    # nothing rather than raising in the middle of writing an entry.
+    def changed_files_of(state) = @worktree.changed_files(state.id, state.base)
 
     # The file's cap unless the caller named one for this run.
     def budget_for(state) = @max_tokens || state.max_tokens.to_i
@@ -538,7 +637,8 @@ module Rubot
     # conversation that grew. It is nil for a runner that reports none -- there
     # is then nothing honest to say, and a fabricated "req 0" would read as a turn
     # that made no request at all.
-    def iteration_note(iteration, commit, worker, verifier, text, metrics = nil, round_cap = nil, ceiling = nil)
+    def iteration_note(iteration, commit, worker, verifier, text, metrics = nil, round_cap = nil, ceiling = nil,
+                       waiting: nil)
       facts = []
       facts << "sha #{commit[0, 7]}" if commit
       facts << "worker #{kilo(worker)}"
@@ -546,6 +646,9 @@ module Rubot
       facts.concat(request_facts(metrics))
       facts.concat(round_facts(round_cap))
       facts.concat(ceiling_facts(ceiling))
+      # Last, because these are the facts of an iteration that stopped to ask:
+      # what is waiting in the worktree, and what it looks like.
+      facts.concat(Array(waiting))
       "iteration #{iteration} (#{facts.join(', ')}): #{text}"
     end
 
@@ -626,9 +729,17 @@ module Rubot
     # capped so a runaway first line cannot become the whole history. The
     # report is not flattened first: a second line belongs in the log entry,
     # never in a subject that would then carry a newline into git.
-    def subject(report)
-      line = report.to_s.each_line.first.to_s.strip[0, COMMIT_SUBJECT_CHARS].to_s.strip
-      line.empty? ? "loop iteration" : line
+    #
+    # The marker goes in front, where a cap on the text cannot eat it: the whole
+    # point of the subject is that `git log --oneline` says the iteration was
+    # never judged, and a marker hidden past the truncation says nothing.
+    def subject(report, unverified: false)
+      line = report.to_s.each_line.first.to_s.strip
+      line = "loop iteration" if line.empty?
+      return line[0, COMMIT_SUBJECT_CHARS].to_s.strip unless unverified
+
+      room = [ COMMIT_SUBJECT_CHARS - UNVERIFIED_MARKER.length - 1, 1 ].max
+      "#{UNVERIFIED_MARKER} #{line[0, room]}".strip
     end
 
     # One implementation, shared with the store: both shape a note into one line.
