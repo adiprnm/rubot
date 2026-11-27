@@ -2727,9 +2727,10 @@ select:focus-visible { outline: none; }
 
 /* The label is the thing being chosen, so it is the largest thing in the row.
    It inherits `.btn`'s 10.5px otherwise — the size for a dense toolbar — which
-   left the description below it bigger than the choice above it. */
+   left the description below it bigger than the choice above it. 14px is one
+   step above the description, not a headline. */
 .ask .ask-option-label {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   line-height: 1.3;
 }
