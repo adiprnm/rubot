@@ -437,10 +437,16 @@ module Rubot
     # A confirmation escapes to "no". A question has no safe default to escape
     # to, so esc must not answer it: the deadline does.
     # A question has no deadline, so esc is the only way out of one: it stops
-    # the turn and tells the worker it was cancelled, rather than leaving the
-    # prompt (and the turn) waiting for an answer nobody will give.
-    def test_escape_stops_the_turn_instead_of_answering
+    # the turn and tells the worker it was cancelled.
+    #
+    # The bug this test exists for: the first fix released the worker by putting
+    # `:stop` on the worker's own queue, which is the signal that ends the
+    # thread — one esc and the terminal never answered again. So the test asks
+    # both halves: the worker is released, and nothing was asked to stop the
+    # thread for good.
+    def test_escape_stops_the_turn_instead_of_the_worker
       repl = build_repl
+      repl.instance_variable_set(:@busy, true)
       answer = :unset
       worker = Thread.new do
         answer = repl.send(:ask_callback).call(question: "Anyone?", options: [ { label: "A" }, { label: "B" } ])
@@ -450,8 +456,11 @@ module Rubot
 
       list.handle_key(::TUI::Key.new(:escape))
 
-      assert worker.join(2), "the worker is released"
+      assert worker.join(2), "the worker is released from the question"
       assert_equal({ outcome: :cancelled }, answer)
+      assert repl.instance_variable_get(:@stopping), "the turn is cancelled"
+      assert_empty repl.instance_variable_get(:@mailbox),
+                   "escaping must not signal the worker thread to stop"
       refute list.active?, "the exchange is taken back out of the transcript"
     end
 
