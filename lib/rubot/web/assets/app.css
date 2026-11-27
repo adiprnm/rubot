@@ -3128,7 +3128,7 @@ summary.subagent-summary { cursor: pointer; }
   column-gap: 0.5rem;
   /* Air under the field, where the line of controls is a different thing from
      the line being typed; none above it, where the box is already the frame. */
-  row-gap: 0.55rem;
+  row-gap: 0.7rem;
   width: calc(100% - 3.2rem);
   max-width: 52rem;
   margin: 0 auto 0.5rem;
@@ -3143,8 +3143,10 @@ summary.subagent-summary { cursor: pointer; }
      put the field further in than the buttons and left the box looking tilted.
      The text is given no extra room at the top on purpose: its own leading
      already holds the glyphs off the edge, which is exactly the air a control
-     with a drawn edge does not need. */
-  padding: 0.5rem;
+     with a drawn edge does not need. 0.75 rather than a tighter 0.5: at half a
+     rem the field, the pill and the circles all crowded the frame, and a box
+     the reader types into for minutes wants more air than a button does. */
+  padding: 0.75rem;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--bg-dim);
@@ -4801,7 +4803,7 @@ html:not(.js) .settings-tabs { display: none; }
      every width, so a phone cannot disagree with a laptop about where the text
      starts. The gutter comes from the narrow block above, which is the width
      the thread uses, so the box stays in line with the conversation. */
-  .composer-box { row-gap: 0.45rem; }
+  .composer-box { row-gap: 0.6rem; }
 
   .composer-box textarea { min-height: 1.4rem; font-size: 16px; line-height: 1.45; }
 
