@@ -391,6 +391,79 @@ module Rubot
       assert_equal false, second.value
     end
 
+    # --- the question ---------------------------------------------------
+
+    def test_picking_an_option_answers_the_question_with_that_option
+      repl = build_repl
+      answer = nil
+      worker = Thread.new do
+        answer = repl.send(:ask_callback).call(question: "Where should it go?",
+                                        options: [ { label: "New file" }, { label: "Extend 018" } ])
+      end
+      repl.apply_event(repl.instance_variable_get(:@events).pop)
+      list = repl.instance_variable_get(:@confirm_prompt)
+
+      list.handle_key(::TUI::Key.new(:right))
+      list.handle_key(::TUI::Key.new(:enter))
+
+      assert worker.join(2)
+      assert_equal({ outcome: :option, index: 1, label: "Extend 018" }, answer)
+    end
+
+    # "Other" is the last chip on every question, and choosing it moves the
+    # answer to the prompt box: a second inline editor inside a prompt that
+    # already is one would be the wrong shape.
+    def test_other_takes_the_next_typed_line_as_the_answer
+      repl = build_repl
+      answer = nil
+      worker = Thread.new do
+        answer = repl.send(:ask_callback).call(question: "What should I call it?",
+                                        options: [ { label: "A" }, { label: "B" } ])
+      end
+      repl.apply_event(repl.instance_variable_get(:@events).pop)
+      list = repl.instance_variable_get(:@confirm_prompt)
+
+      list.handle_key(::TUI::Key.new(:right))
+      list.handle_key(::TUI::Key.new(:right))
+      list.handle_key(::TUI::Key.new(:enter))
+
+      assert list.awaiting_text?, "Other hands the keyboard back to the prompt"
+      list.deliver_text("something else")
+
+      assert worker.join(2)
+      assert_equal({ outcome: :custom, text: "something else" }, answer)
+    end
+
+    # A confirmation escapes to "no". A question has no safe default to escape
+    # to, so esc must not answer it: the deadline does.
+    # A question has no deadline, so esc is the only way out of one: it stops
+    # the turn and tells the worker it was cancelled.
+    #
+    # The bug this test exists for: the first fix released the worker by putting
+    # `:stop` on the worker's own queue, which is the signal that ends the
+    # thread — one esc and the terminal never answered again. So the test asks
+    # both halves: the worker is released, and nothing was asked to stop the
+    # thread for good.
+    def test_escape_stops_the_turn_instead_of_the_worker
+      repl = build_repl
+      repl.instance_variable_set(:@busy, true)
+      answer = :unset
+      worker = Thread.new do
+        answer = repl.send(:ask_callback).call(question: "Anyone?", options: [ { label: "A" }, { label: "B" } ])
+      end
+      repl.apply_event(repl.instance_variable_get(:@events).pop)
+      list = repl.instance_variable_get(:@confirm_prompt)
+
+      list.handle_key(::TUI::Key.new(:escape))
+
+      assert worker.join(2), "the worker is released from the question"
+      assert_equal({ outcome: :cancelled }, answer)
+      assert repl.instance_variable_get(:@stopping), "the turn is cancelled"
+      assert_empty repl.instance_variable_get(:@mailbox),
+                   "escaping must not signal the worker thread to stop"
+      refute list.active?, "the exchange is taken back out of the transcript"
+    end
+
     # While the question is up the mouse stays with the log, so the path or
     # command can be drag-selected and copied before answering.
     def test_selection_keys_reach_the_log_while_the_confirmation_is_up

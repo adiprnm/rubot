@@ -55,6 +55,7 @@ module Rubot
       def register_defaults
         register Shell.new(safety_guard: @safety_guard)
         register FileTool.new(safety_guard: @safety_guard)
+        register AskUser.new
         register Search.new(safety_guard: @safety_guard)
         register Web.new
         register Cron.new

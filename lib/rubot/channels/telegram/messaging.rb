@@ -175,6 +175,117 @@ module Rubot
           confirmed
         end
 
+        # Send a question from the ask_user tool and wait for the answer.
+        #
+        # The options are buttons; the custom answer is simply the next message
+        # typed in this conversation — there is no room for a text box in a chat
+        # that already has one, and asking the reader to press "Other" first
+        # would be a step with nothing behind it.
+        def ask_question(chat_id, thread_id, payload)
+          payload = {} unless payload.is_a?(Hash)
+          options = Array(payload[:options]).first(4)
+          question_id = SecureRandom.hex(8)
+
+          text = "❓ #{payload[:question]}\n"
+          options.each_with_index do |option, index|
+            description = option[:description].to_s.strip
+            line = "#{index + 1}. #{option[:label]}"
+            line += " — #{description}" unless description.empty?
+            text << "\n#{line}"
+          end
+          # The confirmation that closes a list offers buttons only: a typed
+          # sentence there would have nowhere to go, so it is not invited.
+          text << if payload[:confirm]
+            "\n\nChoose above."
+          else
+            "\n\nChoose above, or reply with your own answer."
+          end
+
+          url = URI("#{API_BASE}#{@token}/sendMessage")
+          req = Net::HTTP::Post.new(url)
+          req["Content-Type"] = "application/json"
+          body = {
+            "chat_id" => chat_id,
+            "text" => Rubot::TelegramFormat.convert(text),
+            "parse_mode" => "HTML"
+          }
+          unless options.empty?
+            body["reply_markup"] = {
+              "inline_keyboard" => options.each_with_index.map do |option, index|
+                [ { "text" => option[:label].to_s, "callback_data" => "ask:#{question_id}:#{index}" } ]
+              end
+            }
+          end
+          body["message_thread_id"] = thread_id if thread_id
+          req.body = body.to_json
+
+          # Registered before the message goes out: the reader can answer in the
+          # time the send takes, and an answer that arrives before there is a
+          # slot for it would be dropped and the question would sit out its
+          # deadline. The message id is filled in on the way back.
+          cv = ConditionVariable.new
+          @confirm_mutex.synchronize do
+            @pending_questions[question_id] = {
+              cv: cv, result: nil, msg_id: nil, chat_id: chat_id, thread_id: thread_id,
+              options: options, confirm: payload[:confirm] ? true : false
+            }
+          end
+
+          result = http_post(url, req)
+          unless result["ok"]
+            warn "[telegram] Failed to send question: #{result["description"]}"
+            # Nowhere to ask is the same as nobody answering: the model is told
+            # the question expired and decides for itself.
+            @confirm_mutex.synchronize { @pending_questions.delete(question_id) }
+            return { outcome: :expired }
+          end
+
+          msg_id = result.dig("result", "message_id")
+          @confirm_mutex.synchronize do
+            entry = @pending_questions[question_id]
+            entry[:msg_id] = msg_id if entry
+          end
+
+          # A question has no deadline: it waits until it is answered or the
+          # turn is stopped, which releases it through
+          # #cancel_pending_confirmations. Only the confirmation above fails
+          # closed on time, because the action it guards could destroy
+          # something.
+          @confirm_mutex.synchronize { cv.wait(@confirm_mutex) }
+          @confirm_mutex.synchronize do
+            entry = @pending_questions.delete(question_id)
+            answer = entry && entry[:result]
+            msg_id = entry&.dig(:msg_id)
+          end
+
+          # The buttons go with the question: a stale keyboard in a chat is a
+          # button that answers something nobody is waiting on.
+          delete_message(chat_id, msg_id, thread_id) if msg_id
+
+          answer || { outcome: :expired }
+        end
+
+        # A message typed while a question is waiting is its answer. Returns
+        # true when it was taken, so the update is not also run as a prompt.
+        def deliver_question_answer(chat_id, thread_id, text)
+          body = text.to_s.strip
+          return false if body.empty?
+
+          @confirm_mutex.synchronize do
+            entry = @pending_questions.each_value.find do |candidate|
+              # A confirmation answers by button, not by typing.
+              next false if candidate[:confirm]
+
+              candidate[:chat_id] == chat_id && candidate[:thread_id] == thread_id && candidate[:result].nil?
+            end
+            return false unless entry
+
+            entry[:result] = { outcome: :custom, text: body }
+            entry[:cv].signal
+          end
+          true
+        end
+
         # Release a confirmation prompt waiting for a button press. Without this
         # a stopped turn would stay blocked until the 120 s timeout expires.
         def cancel_pending_confirmations(chat_id, thread_id)
@@ -184,6 +295,15 @@ module Rubot
               next unless entry[:result].nil?
 
               entry[:result] = false
+              entry[:cv].signal
+            end
+            # A question goes the same way, as a cancellation rather than an
+            # expiry: the turn stopped, the reader did not walk away.
+            @pending_questions.each_value do |entry|
+              next unless entry[:chat_id] == chat_id && entry[:thread_id] == thread_id
+              next unless entry[:result].nil?
+
+              entry[:result] = { outcome: :cancelled }
               entry[:cv].signal
             end
           end
@@ -196,6 +316,11 @@ module Rubot
 
           if data&.start_with?("persona:")
             handle_persona_callback(callback_query)
+            return
+          end
+
+          if data&.start_with?("ask:")
+            handle_question_callback(data, callback_id)
             return
           end
 
@@ -217,6 +342,29 @@ module Rubot
 
           # Acknowledge the callback query to remove the loading spinner
           answer_callback_query(callback_id, response == "yes" ? "Proceeding..." : "Action cancelled.")
+        end
+
+        # An option button under a question. The index is the whole answer; the
+        # label rides along so the model reads words, not a position.
+        def handle_question_callback(data, callback_id)
+          parts = data.split(":")
+          return unless parts.size == 3
+
+          question_id = parts[1]
+          index = parts[2].to_i
+          label = nil
+
+          @confirm_mutex.synchronize do
+            entry = @pending_questions[question_id]
+            option = entry && Array(entry[:options])[index]
+            if entry && entry[:result].nil? && option
+              label = option[:label].to_s
+              entry[:result] = { outcome: :option, index: index, label: label }
+              entry[:cv].signal
+            end
+          end
+
+          answer_callback_query(callback_id, label ? "Chose: #{label}" : "That question is closed.")
         end
       end
     end

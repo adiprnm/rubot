@@ -88,11 +88,22 @@ module Rubot
         # The number each timeline row is addressed by on the page. Assigned
         # when a row is first read (see #items), never reused.
         @seq = 0
-        @confirm = nil
+        @ask = nil
         @response = nil
-        @confirm_mutex = Mutex.new
-        @confirm_cv = ConditionVariable.new
-        @confirm_answer = nil
+        # The one pending ask: a confirmation from the safety guard, or a
+        # question from the ask_user tool. One primitive, two renderings — the
+        # deadline, the cancellation and the reconnect path are the same for
+        # both, and there is nowhere else for either to wait.
+        #
+        # Its own lock, because the turn thread waits here while the browser
+        # thread answers, and the timeline lock is held for much shorter work.
+        @ask_mutex = Mutex.new
+        @ask_cv = ConditionVariable.new
+        @ask_answer = nil
+        @ask_cancelled = false
+        # Each ask gets a number the reader's answer has to name, so a click
+        # that outlives its question cannot answer the next one.
+        @ask_token = 0
         # Sub agents this turn delegated to, keyed by run id. Each holds its
         # latest phase and detail: the transcript row a run leaves reads its
         # count of calls from here. Plain data, rendered on the reader's side
@@ -169,8 +180,8 @@ module Rubot
         @mutex.synchronize { @closed }
       end
 
-      def confirm_prompt
-        @mutex.synchronize { @confirm }
+      def ask_prompt
+        @ask_mutex.synchronize { @ask }
       end
 
       # A copy, so the renderer never shares a String the producer thread is
@@ -500,38 +511,72 @@ module Rubot
       # Called from the turn thread; blocks until the browser answers or the
       # deadline passes. Fails closed, like every other channel.
       def ask_confirm(name, reason)
-        @confirm_mutex.synchronize { @confirm_answer = nil }
-        @mutex.synchronize do
-          @confirm = { name: name.to_s, reason: reason.to_s }
-          @events << [ :confirm, nil ]
-          @cond.broadcast
-        end
-
-        deadline = Time.now + CONFIRM_TIMEOUT
-        answer = nil
-        @confirm_mutex.synchronize do
-          while @confirm_answer.nil?
-            remaining = deadline - Time.now
-            break if remaining <= 0
-
-            @confirm_cv.wait(@confirm_mutex, remaining)
-          end
-          answer = @confirm_answer
-        end
-
-        @mutex.synchronize do
-          @confirm = nil
-          @events << [ :confirm, nil ]
-          @cond.broadcast
-        end
-
-        answer == true
+        perform_ask(kind: :confirm, payload: { name: name.to_s, reason: reason.to_s },
+                    timeout: CONFIRM_TIMEOUT)[:outcome] == :allow
       end
 
+      # A question the ask_user tool put to the reader. Blocks the same way the
+      # confirmation does, and reports what actually happened: an option was
+      # chosen, the reader typed something, nobody answered, or the turn was
+      # cancelled under the question. The last two are not answers and are not
+      # dressed up as one.
+      def ask_question(question:, options: [], confirm: false, timeout: nil)
+        options = Array(options)
+        outcome = perform_ask(kind: :question,
+                              payload: { question: question.to_s, options: options, confirm: confirm },
+                              timeout: timeout)
+        return outcome unless outcome[:outcome] == :option
+
+        # The label travels with the answer: the choice arrives from the browser
+        # as a number (a button's value), and the model reads words.
+        index = outcome[:index].to_i
+        option = options[index]
+        label = option.is_a?(Hash) ? (option[:label] || option["label"]) : option
+        { outcome: :option, index: index, label: label.to_s }
+      end
+
+      # The browser's half of either ask. `answer` is what the reader chose:
+      # { outcome: :allow } / { outcome: :deny } for a confirmation, or the
+      # option/custom outcome for a question.
+      #
+      # `token` is the ask the reader is answering. A click that lands late — a
+      # second press on a button whose question is already gone, a POST from a
+      # page left open across two questions — names an ask that is no longer
+      # pending, and is dropped rather than becoming the answer to whatever is
+      # pending now. Nil means the caller cannot name one (the confirmation
+      # route, which keeps its old contract).
+      def answer_ask(answer, token: nil)
+        @ask_mutex.synchronize do
+          # Compared as text: the ask's number is an Integer here and a form
+          # field on the wire, and a type mismatch would refuse every real
+          # answer while every test with Integers passed.
+          pending = @ask && @ask[:token]
+          return false if token && pending.to_s != token.to_s
+
+          @ask_answer = answer
+          @ask_cv.broadcast
+        end
+        true
+      end
+
+      # The confirmation's own name for the same answer, so the safety guard's
+      # route keeps its contract.
       def answer_confirm(value)
-        @confirm_mutex.synchronize do
-          @confirm_answer = value
-          @confirm_cv.broadcast
+        answer_ask({ outcome: value ? :allow : :deny })
+      end
+
+      # The turn went away under the question. Wakes the waiter so it reports a
+      # cancellation instead of sitting out the deadline for an answer nobody
+      # can give any more.
+      #
+      # Only a pending ask is cancelled: pressing stop while nothing is waiting
+      # must not arm the next question to answer itself.
+      def cancel_pending_ask
+        @ask_mutex.synchronize do
+          return false unless @ask
+
+          @ask_cancelled = true
+          @ask_cv.broadcast
         end
         true
       end
@@ -556,6 +601,11 @@ module Rubot
 
       def finish(response)
         answer = response.to_s
+
+        # A turn that ends while a question is up is answering for nobody: the
+        # reader who is still deciding has to be told the turn went away, not
+        # that their question expired.
+        cancel_pending_ask
 
         @mutex.synchronize do
           close_thinking_locked
@@ -768,6 +818,67 @@ module Rubot
         # model was thinking, and a `pop` would take their message instead of
         # the pause that is too short to mention.
         @items.delete_at(index)
+      end
+
+      # The one place a turn waits for a person. Both renderings end here: the
+      # confirmation reads one boolean out of it, a question reads an option or
+      # a typed answer. The deadline belongs to the turn, not to the caller.
+      #
+      # Everything about the pending ask lives under @ask_mutex — the published
+      # ask, the answer, the cancellation — so there is no window where a
+      # cancel is examined under one lock and the state it describes is written
+      # under another. The event queue has the lock of its own.
+      def perform_ask(kind:, payload:, timeout: CONFIRM_TIMEOUT)
+        # A turn that is already over cannot ask anything: the next question of
+        # a list would be published after the reader stopped the turn, with
+        # nothing left to release it.
+        return { outcome: :cancelled } if closed?
+
+        token = nil
+        @ask_mutex.synchronize do
+          @ask_token = (@ask_token.to_i + 1)
+          token = @ask_token
+          @ask = payload.merge(kind: kind, token: token)
+          @ask_answer = nil
+          @ask_cancelled = false
+        end
+        publish_ask
+
+        deadline = timeout && Time.now + timeout
+        answer = nil
+        cancelled = false
+        @ask_mutex.synchronize do
+          while @ask_answer.nil? && !@ask_cancelled
+            # A question has no deadline: the turn is stopped until someone
+            # answers or stops it. A confirmation still fails closed on time,
+            # because the action it guards could destroy something.
+            if deadline.nil?
+              @ask_cv.wait(@ask_mutex)
+              next
+            end
+
+            remaining = deadline - Time.now
+            break if remaining <= 0
+
+            @ask_cv.wait(@ask_mutex, remaining)
+          end
+          answer = @ask_answer
+          cancelled = @ask_cancelled
+          @ask = nil
+        end
+        publish_ask
+
+        # Silence and a cancelled turn are not the same event, and neither is an
+        # answer. The caller decides what each one means; the turn refuses to
+        # invent one.
+        answer || (cancelled ? { outcome: :cancelled } : { outcome: :expired })
+      end
+
+      def publish_ask
+        @mutex.synchronize do
+          @events << [ :ask, nil ]
+          @cond.broadcast
+        end
       end
 
       def find_running_tool_locked(name)

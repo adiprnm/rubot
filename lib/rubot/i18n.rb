@@ -30,6 +30,28 @@ module Rubot
     # where it is made, not discovered as a half-English interface.
     class UnknownLocale < ArgumentError; end
 
+    # Every leaf key of one language, dotted, sorted. The parity check and the
+    # settings form both read the dictionary through this.
+    #
+    # The table is read from Ractors other than the one that loaded it — a tool
+    # running inside a session actor asks for words too — and a Ractor may only
+    # read a value it could have written itself. Freezing the literal freezes
+    # the top hash and nothing under it, so the first such read raised
+    # Ractor::IsolationError. Every node is frozen once, at load.
+    def self.deep_freeze(node)
+      case node
+      when Hash
+        node.each do |key, value|
+          deep_freeze(key)
+          deep_freeze(value)
+        end
+      when Array
+        node.each { |value| deep_freeze(value) }
+      end
+
+      node.freeze
+    end
+
     # A key with no entry in any language. Raised in every environment: a
     # missing label is a blank row on someone's screen, and the parity test is
     # what keeps this from ever firing in production.
@@ -72,6 +94,18 @@ module Rubot
           "cancels" => "esc cancels",
           "empty_message" => "Nothing to send.",
           "stop_requested" => "Stop requested."
+        },
+        # The confirmation that closes a list of questions. It is the tool's,
+        # not a channel's: every surface renders the same two choices, and the
+        # labels travel with the question as its options.
+        "ask" => {
+          "confirm" => {
+            "question" => "Send these answers?",
+            "send" => "Send",
+            "send_description" => "Use these answers and carry on",
+            "restart" => "Start over",
+            "restart_description" => "Ask the questions again from the start"
+          }
         },
         "tool" => {
           "operation_unknown" => "%{prefix}: %{operation}",
@@ -153,6 +187,36 @@ module Rubot
             "clone" => "Downloading a copy of the repository",
             "other" => "Looking after the git repository"
           },
+          "gh" => {
+            "pr_create" => "Opening a pull request",
+            "pr_list" => "Reading the list of pull requests",
+            "pr_view" => "Reading one pull request",
+            "pr_status" => "Reading where the pull requests stand",
+            "pr_checks" => "Reading the checks on a pull request",
+            "pr_diff" => "Reading the changes in a pull request",
+            "pr_checkout" => "Switching to the branch of a pull request",
+            "pr_merge" => "Merging a pull request",
+            "pr_comment" => "Commenting on a pull request",
+            "pr_review" => "Reviewing a pull request",
+            "issue_create" => "Opening an issue",
+            "issue_list" => "Reading the list of issues",
+            "issue_view" => "Reading one issue",
+            "issue_comment" => "Commenting on an issue",
+            "run_list" => "Reading the list of workflow runs",
+            "run_view" => "Reading one workflow run",
+            "run_watch" => "Waiting for a workflow run",
+            "run_rerun" => "Running a workflow run again",
+            "run_cancel" => "Cancelling a workflow run",
+            "workflow_list" => "Reading the list of workflows",
+            "workflow_run" => "Starting a workflow",
+            "repo_view" => "Looking at the repository on GitHub",
+            "repo_clone" => "Downloading a copy of the repository",
+            "release_create" => "Publishing a release",
+            "release_list" => "Reading the list of releases",
+            "auth_status" => "Checking the GitHub login",
+            "api" => "Asking the GitHub API",
+            "other" => "Looking after something on GitHub"
+          },
           "package" => {
             "install" => "Installing the dependencies",
             "test" => "Running the tests",
@@ -227,7 +291,9 @@ module Rubot
           "fetch" => "Opening a page",
           "fetch_page" => "Opening %{url}",
           "delegate" => "Asking a sub agent for help",
-          "delegate_named" => "Asking %{agent} for help"
+          "delegate_named" => "Asking %{agent} for help",
+          "ask" => "Asking: %{question}",
+          "ask_plain" => "Asking you a question"
         },
         # What the terminal's slash commands answer with. One group per
         # command family, since the lines a command prints travel together and
@@ -451,6 +517,12 @@ module Rubot
             "title" => "Confirm: %{name}",
             "continue" => "Continue",
             "cancel" => "Cancel"
+          },
+          # The question from the ask_user tool. The option labels come from the
+          # model, so only the frame around them is translated.
+          "ask" => {
+            "custom" => "Other: type your answer",
+            "send" => "Send"
           },
           # The archive dialog. Its hint is the same sentence the results pane
           # opens with, so the two share one key rather than drifting apart.
@@ -731,12 +803,12 @@ module Rubot
               "note" => "this device, saved the moment it is pressed",
               "theme" => "Theme",
               "font" => "Font",
-              "font_note" => "Serif is the default. Georgia and Palatino use the device's own faces, so they can look a little different. The machine name stays monospace.",
+              "font_note" => "Serif is the default. Georgia and Palatino use the device's own faces, so they can look a little different. The conversation follows this face, tool calls and the model name included; code and session ids keep their fixed width.",
               # The tooltip on each face: what the stack behind the name is.
               "font_titles" => {
                 "serif" => "The default: Source Serif 4, with Charter and Georgia as fallbacks",
                 "sans" => "A system face without serifs: Segoe UI, Roboto, or SF on an Apple device",
-                "mono" => "Martian Mono, the fixed-width face the machine names are set in",
+                "mono" => "Martian Mono, the fixed-width face the names are set in: code, session ids, a tool's slug",
                 "georgia" => "The device's own Georgia, with Times as a fallback",
                 "palatino" => "The device's own Palatino, with the system serif as a fallback"
               },
@@ -945,6 +1017,15 @@ module Rubot
           "empty_message" => "Tidak ada yang dikirim.",
           "stop_requested" => "Permintaan berhenti dikirim."
         },
+        "ask" => {
+          "confirm" => {
+            "question" => "Kirim jawaban ini?",
+            "send" => "Kirim",
+            "send_description" => "Pakai jawaban ini dan lanjut",
+            "restart" => "Ulangi",
+            "restart_description" => "Tanyakan lagi dari awal"
+          }
+        },
         "tool" => {
           "operation_unknown" => "%{prefix}: %{operation}",
           "name" => {
@@ -1025,6 +1106,36 @@ module Rubot
             "clone" => "Mengunduh salinan repositori",
             "other" => "Mengurus repositori git"
           },
+          "gh" => {
+            "pr_create" => "Membuka pull request",
+            "pr_list" => "Melihat daftar pull request",
+            "pr_view" => "Melihat satu pull request",
+            "pr_status" => "Melihat status pull request",
+            "pr_checks" => "Melihat hasil check pada pull request",
+            "pr_diff" => "Melihat perubahan di satu pull request",
+            "pr_checkout" => "Berpindah ke branch pull request",
+            "pr_merge" => "Menggabungkan pull request",
+            "pr_comment" => "Mengomentari pull request",
+            "pr_review" => "Me-review pull request",
+            "issue_create" => "Membuka issue",
+            "issue_list" => "Melihat daftar issue",
+            "issue_view" => "Melihat satu issue",
+            "issue_comment" => "Mengomentari issue",
+            "run_list" => "Melihat daftar workflow run",
+            "run_view" => "Melihat satu workflow run",
+            "run_watch" => "Menunggu workflow run selesai",
+            "run_rerun" => "Mengulang satu workflow run",
+            "run_cancel" => "Membatalkan workflow run",
+            "workflow_list" => "Melihat daftar workflow",
+            "workflow_run" => "Memulai workflow",
+            "repo_view" => "Melihat repositori di GitHub",
+            "repo_clone" => "Mengunduh salinan repositori",
+            "release_create" => "Menerbitkan rilis",
+            "release_list" => "Melihat daftar rilis",
+            "auth_status" => "Memeriksa login GitHub",
+            "api" => "Memanggil API GitHub",
+            "other" => "Mengurus sesuatu di GitHub"
+          },
           "package" => {
             "install" => "Memasang dependensi",
             "test" => "Menjalankan test",
@@ -1099,7 +1210,9 @@ module Rubot
           "fetch" => "Membuka sebuah halaman",
           "fetch_page" => "Membuka halaman %{url}",
           "delegate" => "Meminta bantuan subagent",
-          "delegate_named" => "Meminta bantuan %{agent}"
+          "delegate_named" => "Meminta bantuan %{agent}",
+          "ask" => "Bertanya: %{question}",
+          "ask_plain" => "Bertanya sesuatu ke kamu"
         },
         "tui" => {
           "commands" => {
@@ -1302,6 +1415,10 @@ module Rubot
             "title" => "Konfirmasi: %{name}",
             "continue" => "Lanjutkan",
             "cancel" => "Batalkan"
+          },
+          "ask" => {
+            "custom" => "Lainnya: tulis jawabanmu",
+            "send" => "Kirim"
           },
           "search" => {
             "label" => "Cari percakapan",
@@ -1542,11 +1659,11 @@ module Rubot
               "note" => "perangkat ini, tersimpan begitu ditekan",
               "theme" => "Tema",
               "font" => "Font",
-              "font_note" => "Serif adalah bawaan. Georgia dan Palatino memakai huruf milik perangkat, jadi tampilannya bisa sedikit berbeda. Nama mesin tetap monospace.",
+              "font_note" => "Serif adalah bawaan. Georgia dan Palatino memakai huruf milik perangkat, jadi tampilannya bisa sedikit berbeda. Percakapan ikut huruf ini, termasuk tool call dan nama model; kode dan id sesi tetap berjarak tetap.",
               "font_titles" => {
                 "serif" => "Bawaan: Source Serif 4, dengan Charter dan Georgia sebagai cadangan",
                 "sans" => "Huruf sistem tanpa kait: Segoe UI, Roboto, atau SF di perangkat Apple",
-                "mono" => "Martian Mono, huruf berjarak tetap yang dipakai nama mesin",
+                "mono" => "Martian Mono, huruf berjarak tetap untuk nama: kode, id sesi, slug tool",
                 "georgia" => "Georgia milik perangkat, dengan Times sebagai cadangan",
                 "palatino" => "Palatino milik perangkat, dengan serif sistem sebagai cadangan"
               },
@@ -1716,6 +1833,8 @@ module Rubot
         }
       }
     }.freeze
+    # Frozen all the way down, so a Ractor can read it: see #deep_freeze.
+    deep_freeze(DICTIONARY)
 
     class << self
       # The language everything drawn from here on is written in.
@@ -1758,7 +1877,7 @@ module Rubot
         text = value.to_s.strip.downcase
         return nil if text.empty?
 
-        LOCALES.include?(text) ? text : nil
+        LOCALES.include?(text) ? -text : nil
       end
 
       def normalize!(value)

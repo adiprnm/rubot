@@ -121,6 +121,66 @@ module Rubot
         end
       end
 
+      # The chosen face reaches the small rows too. A tool call, a thought, the
+      # working row and the compaction seam were mono whatever the reader
+      # picked, and the model and the effort under the field are the same kind
+      # of row: a mono sentence in the middle of a page set in Georgia reads as
+      # two documents stapled together.
+      def test_the_status_rows_take_the_face_the_reader_picked
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+
+        %w[.row .tool-row .compaction-row .session-trigger .thinking-row-label].each do |selector|
+          block = css[/^#{Regexp.escape(selector)} \{[^}]*\}/m]
+          refute_nil block, "#{selector} needs a rule of its own"
+          assert_includes block, "font-family: var(--reading)",
+                          "#{selector} is read like the page, not set in a face of its own"
+        end
+
+        chips = css[/^\.thinking-chip span \{[^}]*\}/m]
+        refute_nil chips, "the effort chips need a rule of their own"
+        assert_includes chips, "font-family: var(--reading)",
+                        "the level this session runs on is read, not decoded"
+
+        # A declaration proves the face was asked for, not that the row is drawn
+        # in it: a later rule naming the same element wins the cascade while the
+        # block above stays green. So every rule that mentions a row is swept —
+        # the model id and the level included, which carry no font of their own
+        # and take the pill's.
+        %w[.row .tool-row .compaction-row .session-trigger .session-trigger-model
+           .session-trigger-thinking .thinking-row-label .thinking-chip].each do |selector|
+          bodies = css.scan(/^[^\n{}]*#{Regexp.escape(selector)}[^{}]*\{([^}]*)\}/m).flatten
+          refute_empty bodies, "nothing in the stylesheet sets #{selector}"
+
+          mono = bodies.grep(/font-family:\s*var\(--mono\)/)
+          assert_empty mono, "a rule puts #{selector} back in mono: #{mono.first}"
+        end
+      end
+
+      # A face with proportional digits makes the clock shift the words beside
+      # it once a second, so the row asks for figures that hold their width.
+      def test_the_live_clock_asks_for_figures_that_hold_their_width
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        block = css[/^\.live-clock \{[^}]*\}/m]
+
+        refute_nil block, "the clock needs a rule of its own"
+        assert_includes block, "tabular-nums",
+                        "the clock counts in place; a drifting box is a row that shakes"
+      end
+
+      # A <code> element brings a font-family of its own from the browser's
+      # stylesheet, and that declaration beats the one it would have inherited.
+      # The tag around a skill's name therefore has to hand the row's face back:
+      # asserting that no `--mono` appears here was green on exactly this defect,
+      # because the face came from the browser and not from this file.
+      def test_a_name_inside_a_tool_row_takes_the_rows_face
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        block = css[/^\.tool-row code \{[^}]*\}/m]
+
+        refute_nil block, "the skill's name needs a rule of its own"
+        assert_includes block, "font-family: inherit",
+                        "the browser sets <code> in mono; the row's face has to be given back"
+      end
+
       # A choice is the reader's, on their own device: stored locally and never
       # sent to the server, so two people in one conversation keep their own.
       def test_a_theme_choice_is_kept_on_the_device

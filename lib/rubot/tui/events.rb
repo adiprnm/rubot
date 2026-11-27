@@ -62,6 +62,7 @@ module Rubot
           set_tool_done(index, event[1].to_s, prev && prev[:summary], prev && prev[:skill], failed, elapsed: tool_elapsed(prev))
           add_file_diff(event[2])
         when :confirm then show_confirm(event)
+        when :question then show_question(event)
         when :session_list then show_session_list(event[1])
         when :model_list then show_model_list(event[1], event[2], event[3])
         when :idle then
@@ -412,6 +413,38 @@ module Rubot
         _, tool_name, args, answered, reason = event
         @confirm_prompt.ask(tool_name, args, answered: answered, reason: reason)
         @prompt.list = @confirm_prompt
+      end
+
+      # A question from the ask_user tool: the same chips, the same wait, and
+      # the answer travels back to the call that asked it.
+      def show_question(event)
+        _, payload, answered = event
+        @confirm_prompt.ask_question(payload, answered: answered)
+        @prompt.list = @confirm_prompt
+      end
+
+      # Whether the ask is waiting on a typed line rather than a chip. The
+      # prompt box is where that line is typed, so the submit path has to check
+      # before it treats the text as a new message.
+      def awaiting_question_answer?
+        @confirm_prompt.awaiting_text?
+      end
+
+      # The row that says the next line is the answer, put up when "Other" is
+      # chosen and taken back when the line arrives. Removed by its own index:
+      # a row that streamed in after it would otherwise be the one taken away.
+      def publish_answer_hint(text)
+        if text.nil?
+          return unless @answer_hint
+
+          @log.remove_entry(@answer_hint)
+          @answer_hint = nil
+        else
+          @answer_hint = @log.add_entry(
+            [ [ Rubot::TUI::ConfirmPrompt::INDENT, nil ], [ text, :muted ] ],
+            keep_leading: true
+          )
+        end
       end
 
       # /resume writes the list into the transcript and hands the prompt over

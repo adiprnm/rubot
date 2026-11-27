@@ -104,6 +104,15 @@ module Rubot
           @prompt.value = ""
           next if line.empty?
 
+          # A question waiting on "Other" takes the next line as its answer: the
+          # reader chose to type instead of picking a chip, and this is the box
+          # they type in.
+          if @confirm_prompt.awaiting_text?
+            @confirm_prompt.deliver_text(line)
+            publish_answer_hint(nil)
+            next
+          end
+
           record_history(line)
 
           # A message typed while a turn is running steers it instead of

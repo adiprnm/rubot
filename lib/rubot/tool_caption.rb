@@ -36,6 +36,9 @@ module Rubot
     PATH_SEGMENTS = 3
     PATTERN_CHARS = 60
     URL_CHARS = 60
+    # A question is a sentence, not a path: it gets more room than a pattern
+    # before the row starts ellipsing.
+    QUESTION_CHARS = 90
 
     DIRECTORY_WORDS = %w[ls ll la dir tree].freeze
     READ_WORDS = %w[cat less more head tail bat].freeze
@@ -69,6 +72,39 @@ module Rubot
     # A shell verb that says the same thing under another name: the sentence is
     # the one its target entry already has.
     GIT_ALIASES = { "fetch" => "pull", "switch" => "checkout" }.freeze
+    # `gh` puts the noun before the verb (`gh pr create`), so its table is keyed
+    # by the pair the reader typed, with the entries a pair may name alone
+    # (`gh api`) keyed by their one word. A pair that is not here falls back to
+    # `tool.gh.other` rather than to a guessed sentence.
+    GH_OPERATIONS = {
+      "pr create" => "pr_create",
+      "pr list" => "pr_list",
+      "pr view" => "pr_view",
+      "pr status" => "pr_status",
+      "pr checks" => "pr_checks",
+      "pr diff" => "pr_diff",
+      "pr checkout" => "pr_checkout",
+      "pr merge" => "pr_merge",
+      "pr comment" => "pr_comment",
+      "pr review" => "pr_review",
+      "issue create" => "issue_create",
+      "issue list" => "issue_list",
+      "issue view" => "issue_view",
+      "issue comment" => "issue_comment",
+      "run list" => "run_list",
+      "run view" => "run_view",
+      "run watch" => "run_watch",
+      "run rerun" => "run_rerun",
+      "run cancel" => "run_cancel",
+      "workflow list" => "workflow_list",
+      "workflow run" => "workflow_run",
+      "repo view" => "repo_view",
+      "repo clone" => "repo_clone",
+      "release create" => "release_create",
+      "release list" => "release_list",
+      "auth status" => "auth_status",
+      "api" => "api"
+    }.freeze
     PACKAGE_OPERATIONS = {
       "install" => "install", "i" => "install", "add" => "install", "ci" => "install",
       "test" => "test", "t" => "test", "run" => "run", "build" => "build"
@@ -126,6 +162,7 @@ module Rubot
       when "memory" then verb_caption("tool.memory", "tool.name.memory", MEMORY_OPERATIONS, args)
       when "cron" then verb_caption("tool.cron", "tool.name.cron", CRON_OPERATIONS, args)
       when "loop" then loop_caption(args)
+      when "ask_user" then ask_caption(args)
       when "instagram"
         verb_caption("tool.instagram", "tool.name.instagram", INSTAGRAM_OPERATIONS, args,
                      other: "tool.instagram.other")
@@ -139,6 +176,13 @@ module Rubot
     # carries it.
     def self.tooltip(tool_name, args)
       name = tool_name.to_s
+      # A question is not a hash to read out: the hover carries the whole
+      # sentence and the choices it offered.
+      if name == "ask_user"
+        detail = ask_tooltip(args)
+        return detail.empty? ? name : "#{name} · #{detail}"
+      end
+
       snippet = raw(name, args)
       snippet.empty? ? name : "#{name} · #{snippet}"
     end
@@ -210,6 +254,7 @@ module Rubot
       when *SEARCH_WORDS then search_intent(segment)
       when *PACKAGE_WORDS then package_intent(head, words)
       when "git" then git_intent(words)
+      when "gh" then gh_intent(tokens)
       when "find" then I18n.t("tool.shell.find", where: where(words.first))
       when "mkdir" then I18n.t("tool.shell.mkdir", where: where(words.first))
       when "rm", "rmdir" then I18n.t("tool.shell.remove", target: words.join(" "))
@@ -333,6 +378,34 @@ module Rubot
       return I18n.t(key) unless sub == "checkout"
 
       I18n.t(key, where: toward(words[1]))
+    end
+
+    # The noun and the verb together name the entries the dictionary owes this
+    # verb (`tool.gh.pr_create`, …). A pair that is not listed, or a noun sent
+    # on its own, still reads as work on GitHub rather than as a bare command.
+    def self.gh_intent(tokens)
+      words = gh_words(tokens)
+      key = GH_OPERATIONS[words.first(2).join(" ")] || GH_OPERATIONS[words.first.to_s]
+      key ? I18n.t("tool.gh.#{key}") : I18n.t("tool.gh.other")
+    end
+
+    # The words the sentence may be built from. `gh` takes its global flags
+    # before the noun (`gh -R owner/repo pr list`), and neither a flag nor the
+    # value it swallows is one of them: read as words, they would hide the pair
+    # and land the row on the fallback.
+    def self.gh_words(tokens)
+      words = []
+      swallowing = false
+      Array(tokens).each do |token|
+        if token.start_with?("-")
+          swallowing = true
+        elsif swallowing
+          swallowing = false
+        else
+          words << token
+        end
+      end
+      words
     end
 
     def self.package_intent(head, words)
@@ -488,6 +561,43 @@ module Rubot
       I18n.t("tool.operation_unknown", prefix: I18n.t(name_key), operation: operation)
     end
 
+    # The question, not the structure that carries it.
+    #
+    # This is the one row whose reader is also the person being addressed, so
+    # the useful sentence is the question itself: the arguments are a hash of
+    # options and printing them told the reader nothing they could answer. The
+    # options keep their place in the tooltip, one hover away.
+    def self.ask_caption(args)
+      args = {} unless args.is_a?(Hash)
+      question = args["question"].to_s.strip
+      return I18n.t("tool.ask_plain") if question.empty?
+
+      I18n.t("tool.ask", question: clip(question, QUESTION_CHARS))
+    end
+
+    # The whole question and the choices it offered, for the hover.
+    def self.ask_tooltip(args)
+      args = {} unless args.is_a?(Hash)
+      question = args["question"].to_s.strip
+      return "" if question.empty?
+
+      labels = Array(args["options"]).filter_map do |option|
+        option.is_a?(Hash) ? option["label"].to_s.strip : option.to_s.strip
+      end.reject(&:empty?)
+      return question if labels.empty?
+
+      "#{question} — #{labels.join(', ')}"
+    end
+
+    # Long enough for a real question, short enough that the row is still one
+    # line on a phone.
+    def self.clip(text, limit)
+      value = text.to_s.strip
+      return value if value.length <= limit
+
+      "#{value[0, limit - 1].rstrip}…"
+    end
+
     def self.unknown_caption(name, args)
       snippet = raw(name, args)
       snippet.empty? ? name : snippet
@@ -503,13 +613,6 @@ module Rubot
       return path unless path.start_with?("/") && segments.size > PATH_SEGMENTS
 
       "…/#{segments.last(PATH_SEGMENTS).join("/")}"
-    end
-
-    def self.clip(text, limit)
-      text = text.to_s
-      return text if text.length <= limit
-
-      "#{text[0, limit - 1]}…"
     end
   end
 end

@@ -337,7 +337,17 @@ module Rubot
       @menu = Rubot::TUI::CommandMenu.new(DESCRIPTIONS)
       @prompt = Rubot::TUI::PromptInput.new(@history, COMPLETABLE)
       @confirm_prompt = Rubot::TUI::ConfirmPrompt.new(log: @log)
-      @confirm_prompt.on_answer { |_value| @prompt.list = nil }
+      # The list goes back to the normal prompt on any answer, and "Other"
+      # leaves a line saying the box is now where the answer is typed.
+      @confirm_prompt.on_answer do |value|
+        @prompt.list = nil
+        publish_answer_hint(value == :custom ? "Type your answer, then enter ⏎" : nil)
+        # Escaping a question stops the turn. The worker is already being
+        # released by the prompt itself, so this only has to cancel the turn:
+        # signalling the worker's own queue would end the thread for good, and
+        # the terminal would never answer again.
+        cancel_turn if value == :stop
+      end
       @working = Rubot::TUI::WorkingBadge.new
       @session_list = Rubot::TUI::SessionList.new(
         log: @log,
@@ -356,6 +366,9 @@ module Rubot
         on_cancel: -> { @prompt.list = nil }
       )
       @tool_entries = {}
+      # The row that says the next typed line is the answer to a question, put
+      # up when "Other" is chosen and taken back when the line arrives.
+      @answer_hint = nil
 
       # The prompt box grows with newlines (shift+enter) and wraps long
       # lines. One column of padding on each side keeps the typed text off
@@ -548,12 +561,17 @@ module Rubot
 
     def process_message(message)
       on_confirm = @tui ? confirm_callback : stdin_confirm_callback
+      # A question needs a screen and a keyboard; the plain-stdin path has
+      # neither in a shape that can wait, so it passes no reader and the model
+      # is told to decide on its own.
+      on_ask = @tui ? ask_callback : nil
 
       @events << [ :stream_start ]
       streamed = +""
       stopped = false
       final = agent.process(message,
                             on_confirm: on_confirm,
+                            on_ask: on_ask,
                             on_tool_call: proc do |name, args, _snapshot|
                               @events << [ :tool_call, name, args ]
                             end,
@@ -632,6 +650,16 @@ module Rubot
       proc do |tool_name, args, reason|
         answered = Queue.new
         @events << [ :confirm, tool_name, args, answered, reason ]
+        answered.pop
+      end
+    end
+
+    # The same queue-shaped wait as the confirmation above, with the question's
+    # own rows. Blocks the worker until a chip is picked or a line is typed.
+    def ask_callback
+      proc do |payload|
+        answered = Queue.new
+        @events << [ :question, payload, answered ]
         answered.pop
       end
     end
