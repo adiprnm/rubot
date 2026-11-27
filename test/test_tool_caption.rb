@@ -53,6 +53,48 @@ module Rubot
       assert_equal "Mengirim commit ke remote", command("git push origin main")
     end
 
+    # `gh` names the noun first and the verb second, the opposite of git, so
+    # the table is keyed by the pair rather than by the first word alone.
+    def test_github_cli_commands_get_their_own_sentence
+      assert_equal "Membuka pull request", command("gh pr create --title 'x' --body 'y'")
+      assert_equal "Melihat daftar pull request", command("gh pr list --state open")
+      assert_equal "Melihat satu pull request", command("gh pr view 42 --comments")
+      assert_equal "Melihat daftar issue", command("gh issue list")
+      assert_equal "Menunggu workflow run selesai", command("gh run watch")
+      assert_equal "Memeriksa login GitHub", command("gh auth status")
+    end
+
+    # A pair nobody here lists still says where the call went, and a bare `gh`
+    # is not guessed at either.
+    def test_an_unlisted_github_command_stays_on_github
+      assert_equal "Mengurus sesuatu di GitHub", command("gh pr edit 42 --add-reviewer adiprnm")
+      assert_equal "Mengurus sesuatu di GitHub", command("gh")
+      assert_equal "Memanggil API GitHub", command("gh api repos/owner/repo/pulls")
+    end
+
+    # The whole table, not a sample: a pair whose key is misspelt still draws a
+    # sentence, so only a loop over every pair keeps a new row from quietly
+    # landing on the fallback.
+    def test_every_listed_github_pair_reads_as_its_own_sentence
+      ToolCaption::GH_OPERATIONS.each do |pair, key|
+        assert_equal Rubot::I18n.t("tool.gh.#{key}"), command("gh #{pair}"),
+                     "gh #{pair} does not read as its own entry"
+      end
+      assert_equal ToolCaption::GH_OPERATIONS.size, ToolCaption::GH_OPERATIONS.values.uniq.size,
+                   "two pairs share one entry, so one of them says the wrong thing"
+    end
+
+    # `gh` takes its global flags before the noun, and the value a flag swallows
+    # is not a word the pair is read from.
+    def test_a_global_github_flag_does_not_hide_the_pair
+      assert_equal "Melihat daftar pull request", command("gh -R owner/repo pr list")
+      assert_equal "Melihat satu pull request", command("gh --repo owner/repo pr view 42")
+    end
+
+    def test_a_github_command_after_a_prefix_is_still_read_as_one
+      assert_equal "Membuka pull request", command("cd repo && gh pr create --fill")
+    end
+
     def test_a_test_run_is_called_a_test_run
       assert_equal "Menjalankan test", command("bundle exec rake test")
       assert_equal "Menjalankan test", command("bundle exec rspec test/foo_test.rb")
@@ -159,6 +201,7 @@ module Rubot
         "tool.loop" => ToolCaption::LOOP_OPERATIONS,
         "tool.instagram" => ToolCaption::INSTAGRAM_OPERATIONS,
         "tool.git" => ToolCaption::GIT_OPERATIONS,
+        "tool.gh" => ToolCaption::GH_OPERATIONS.values.uniq,
         "tool.package" => ToolCaption::PACKAGE_OPERATIONS.values.uniq
       }.each do |prefix, operations|
         operations.each do |operation|
