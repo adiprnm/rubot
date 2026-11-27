@@ -132,6 +132,24 @@ module Rubot
       git(path(id), "diff", "--stat", "HEAD")
     end
 
+    # What one commit changed, in git's own summary: the numbers a reader needs
+    # to weigh keeping an iteration against dropping it. Read from the commit
+    # and not from the worktree, because a worktree diff cannot see a file that
+    # was never tracked -- which is most of what an iteration adds -- and by the
+    # time the entry is written the commit is the only place the change exists.
+    # A commit that cannot be asked answers nothing rather than raising: this is
+    # read while a stop is being written down.
+    def commit_stat(id, sha)
+      from = sha.to_s.strip
+      return "" if from.empty?
+
+      out, _err, ok = capture(path(id), "show", "--stat", "--format=", from)
+      ok ? out : ""
+    rescue SystemCallError
+      # The worktree went away between the commit and the entry.
+      ""
+    end
+
     # What the loop changed, from the commit it started at to the head the
     # worktree is on now: git's own letter in front of each path, so the
     # verifier can check a constraint the goal states in terms of paths ("do not

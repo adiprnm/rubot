@@ -313,7 +313,7 @@ module Rubot
       # verdict -- which is why the entry says what is waiting instead of what
       # went wrong.
       if reason_of(stop) == :budget_warning
-        waiting = waiting_facts(diff, changed_files_of(state))
+        waiting = waiting_facts(@worktree.commit_stat(state.id, commit), changed_files_of(state))
         @store.update(state.id) do |s|
           s.add_entry(entry(iteration_note(iteration, commit, worker, 0, text, metrics, round_cap, ceiling,
                                            waiting: waiting)))
@@ -430,18 +430,18 @@ module Rubot
     # has until a ticket asks otherwise.
     def unverified?(stop) = %i[budget budget_warning].include?(reason_of(stop))
 
-    # What a warning is waiting for, in the reader's words: the shape of the work
-    # and the files it touched, so the choice between keeping it and dropping it
-    # can be made without opening the worktree. The diffstat is the one read
-    # before the commit -- afterwards the tree is clean and it is always empty --
-    # and the file list is the loop's own, measured from the commit it started at.
-    def waiting_facts(diff, files)
-      facts = []
-      stat = one_line(diff.to_s.lines.map(&:strip).reject(&:empty?).last)
-      facts << "diff #{stat}" unless stat.empty?
-      facts << "files #{one_line(files.join(', '))}" unless files.empty?
-      facts
-    end
+      # What a warning is waiting for, in the reader's words: the shape of the work
+      # and the files it touched, so the choice between keeping it and dropping it
+      # can be made without opening the worktree. The summary is the iteration's
+      # own commit -- the only place a new file's size appears -- and the file
+      # list is the loop's own, measured from the commit it started at.
+      def waiting_facts(stat, files)
+        facts = []
+        stat = one_line(stat.to_s.lines.map(&:strip).reject(&:empty?).last)
+        facts << "diff #{stat}" unless stat.empty?
+        facts << "files #{one_line(files.join(', '))}" unless files.empty?
+        facts
+      end
 
     # The files the loop has touched since it started, off the worktree's own
     # seam: a loop with no base recorded, or a worktree that has gone away, says
