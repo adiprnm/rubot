@@ -65,6 +65,6 @@ end -%>
     app.js, restoreSubagentBriefs). -%>
 <%= View.render("_subagent_row",
                 run: { agent: item[:agent], phase: item[:phase], line: item[:detail], task: item[:task] },
-                wrapper_class: "subagent-row subagent-#{item[:phase]}", attrs: item_attrs(item)) %>
+                wrapper_class: "subagent-row subagent-#{h(item[:phase])}", attrs: item_attrs(item)) %>
 <% end -%>
 <% end -%>

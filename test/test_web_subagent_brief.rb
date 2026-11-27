@@ -106,6 +106,20 @@ module Rubot
         assert_includes html, "1 langkah · 3s"
       end
 
+      # The phase is interpolated into a class attribute, so it goes through the
+      # same escaping every other attribute value does: a phase is internal
+      # today, and a caller that spelled one itself must not be able to end the
+      # attribute.
+      def test_the_phase_reaches_the_class_escaped
+        html = View.render("_timeline", items: [
+                             { kind: :subagent, agent: "writer", phase: %(done" onload="x),
+                               detail: "1 langkah" }
+                           ])
+
+        refute_includes html, %(onload="x")
+        assert_includes html, "&quot;"
+      end
+
       # The swap that rewrites the list must leave the id behind, or the brief
       # closes on its own a second after it was opened.
       def test_the_swapped_list_keeps_the_id_of_an_open_brief

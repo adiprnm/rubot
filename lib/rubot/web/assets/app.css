@@ -2776,11 +2776,6 @@ select:focus-visible { outline: none; }
 /* The line is the summary of the row's <details>, so a run is read and then
    opened: a task is a whole brief and the line is one line wide. The marker is
    taken off — the row already has a mark of its own at its left end, and a
-   triangle in front of it would be two glyphs saying "look here". A cursor is
-   what says it opens, on the pointer and the thumb alike. */
-/* The line is the summary of the row's <details>, so a run is read and then
-   opened: a task is a whole brief and the line is one line wide. The marker is
-   taken off — the row already has a mark of its own at its left end, and a
    triangle in front of it would be two glyphs saying "look here". The pointer is
    on the summary alone: a row with nothing to open wears the same flex block,
    and a hand over it would promise a tap that does nothing. */
