@@ -2733,18 +2733,17 @@ select:focus-visible { outline: none; }
   font-family: var(--reading);
 }
 
-/* The label names the choice in a word or two; the consequence below it is the
-   sentence, so it is the larger of the two. */
+/* The label names the choice in a word or two and leads; the consequence under
+   it is supporting text, so it is the smaller of the two and dimmer. The
+   reading face still comes from the reader's setting either way. */
 .ask .ask-option-label {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   line-height: 1.35;
 }
 
 .ask .ask-option-description {
-  /* The size of the reader's own prompt in the timeline: the consequence is
-     prose, and prose here is set at the size of their words. */
-  font-size: var(--prompt-size);
+  font-size: 13px;
   color: var(--fg-dim);
   line-height: 1.45;
 }
