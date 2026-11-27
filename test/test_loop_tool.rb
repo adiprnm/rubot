@@ -638,6 +638,166 @@ class TestLoopTool < Minitest::Test
     assert_empty @runner.calls
   end
 
+  # -- raise a limit ---------------------------------------------------------
+
+  # A loop stopped by either ceiling can only go on if the number that stopped
+  # it moves, and the run reads that number from the file. The counters are the
+  # one thing a raise must never touch: they are what was already paid for.
+  def test_raise_moves_the_budget_and_leaves_the_spend_where_it_was
+    state = budget_stopped
+    @tool.loop_runner = @runner
+
+    result = @tool.execute("operation" => "raise", "id" => state.id, "max_tokens" => 20_000)
+
+    assert_ok result
+    assert_includes result, "5000 -> 20000", "the answer names the old number beside the new one"
+    reread = @store.load(state.id)
+    assert_equal 20_000, reread.max_tokens
+    assert_equal 6_000, reread.tokens, "a raise is not a refund"
+    assert_equal 1, reread.iterations
+    assert_equal "paused", reread.status, "a raise says what it may spend, resume says when"
+    assert_empty @runner.calls
+  end
+
+  def test_raise_moves_the_cap_and_leaves_the_iteration_count_where_it_was
+    state = cap_stopped(max_iterations: 2)
+    @tool.loop_runner = @runner
+
+    result = @tool.execute("operation" => "raise", "id" => state.id, "max_iterations" => 5)
+
+    assert_ok result
+    assert_includes result, "2 -> 5"
+    reread = @store.load(state.id)
+    assert_equal 5, reread.max_iterations
+    assert_equal 2, reread.iterations, "a raise is not a rewind of the count"
+    assert_equal 0, reread.tokens
+    assert_empty @runner.calls
+  end
+
+  def test_raise_moves_both_ceilings_in_one_call
+    state = cap_stopped(max_iterations: 2)
+    @store.update(state.id) { |loop| loop.tokens = 6_000; loop.max_tokens = 5_000 }
+
+    result = @tool.execute("operation" => "raise", "id" => state.id,
+                           "max_iterations" => 5, "max_tokens" => 20_000)
+
+    assert_ok result
+    reread = @store.load(state.id)
+    assert_equal 5, reread.max_iterations
+    assert_equal 20_000, reread.max_tokens
+    assert_equal 2, reread.iterations
+    assert_equal 6_000, reread.tokens
+  end
+
+  def test_a_loop_raised_at_its_budget_resumes_past_the_budget
+    state = budget_stopped
+    @tool.loop_runner = @runner
+
+    assert_ok @tool.execute("operation" => "raise", "id" => state.id, "max_tokens" => 20_000)
+    result = @tool.execute("operation" => "resume", "id" => state.id)
+
+    assert_ok result
+    assert_equal [ [ :resume, state.id ] ], @runner.calls
+    assert_operator @store.load(state.id).max_tokens, :>, @store.load(state.id).tokens,
+                    "the run's own boundary no longer stops it before it spends"
+  end
+
+  def test_a_loop_raised_at_its_cap_resumes_past_the_cap
+    state = cap_stopped(max_iterations: 2)
+    @tool.loop_runner = @runner
+
+    assert_ok @tool.execute("operation" => "raise", "id" => state.id, "max_iterations" => 4)
+    result = @tool.execute("operation" => "resume", "id" => state.id)
+
+    assert_ok result
+    assert_equal [ [ :resume, state.id ] ], @runner.calls
+    reread = @store.load(state.id)
+    assert_operator reread.max_iterations, :>, reread.iterations
+  end
+
+  def test_raise_refuses_an_active_loop_and_moves_nothing
+    state = create(max_tokens: 5_000)
+    @tool.loop_runner = @runner
+
+    result = @tool.execute("operation" => "raise", "id" => state.id, "max_tokens" => 20_000)
+
+    assert_error result
+    assert_includes result, "active", "the answer says which state refused it"
+    reread = @store.load(state.id)
+    assert_equal 5_000, reread.max_tokens
+    assert_equal "active", reread.status
+    assert_empty @runner.calls
+  end
+
+  def test_raise_refuses_a_done_loop_and_moves_nothing
+    state = create(max_tokens: 5_000)
+    @store.update(state.id) { |loop| loop.status = "done" }
+
+    result = @tool.execute("operation" => "raise", "id" => state.id, "max_tokens" => 20_000)
+
+    assert_error result
+    assert_includes result, "done", "the answer says which state refused it"
+    reread = @store.load(state.id)
+    assert_equal 5_000, reread.max_tokens
+    assert_equal "done", reread.status
+  end
+
+  # A "raise" that lowers a number, or writes the one already there, is not a
+  # way out of anything: the run would stop at the same place or sooner, so it
+  # is refused where the reader can still see the number that is in force.
+  def test_raise_refuses_a_budget_that_does_not_clear_the_spend
+    state = budget_stopped
+    [ 6_000, 5_000, 1 ].each do |budget|
+      result = @tool.execute("operation" => "raise", "id" => state.id, "max_tokens" => budget)
+
+      assert_error result
+      assert_includes result, "6000", "the answer says what the floor is"
+      assert_equal 5_000, @store.load(state.id).max_tokens
+    end
+  end
+
+  def test_raise_refuses_a_cap_that_does_not_clear_the_iterations_already_run
+    state = cap_stopped(max_iterations: 2)
+    [ 2, 1 ].each do |cap|
+      result = @tool.execute("operation" => "raise", "id" => state.id, "max_iterations" => cap)
+
+      assert_error result
+      assert_includes result, "already allows"
+      assert_equal 2, @store.load(state.id).max_iterations
+    end
+  end
+
+  def test_raise_refuses_a_call_that_names_no_ceiling
+    state = cap_stopped(max_iterations: 2)
+
+    result = @tool.execute("operation" => "raise", "id" => state.id)
+
+    assert_error result
+    assert_includes result, "max_tokens"
+    assert_includes result, "max_iterations"
+    assert_equal 2, @store.load(state.id).max_iterations
+  end
+
+  def test_raise_refuses_a_number_that_is_not_whole
+    state = budget_stopped
+
+    result = @tool.execute("operation" => "raise", "id" => state.id, "max_tokens" => "a lot")
+
+    assert_error result
+    assert_includes result, "whole number"
+    assert_equal 5_000, @store.load(state.id).max_tokens
+  end
+
+  def test_raise_writes_the_raise_into_the_log
+    state = budget_stopped
+
+    @tool.execute("operation" => "raise", "id" => state.id, "max_tokens" => 20_000)
+
+    newest = @store.load(state.id).log.first.text
+    assert_includes newest, "limit raised"
+    assert_includes newest, "5000 -> 20000"
+  end
+
   def test_stop_pauses_the_loop_and_says_stopped
     state = create
     @tool.loop_runner = @runner

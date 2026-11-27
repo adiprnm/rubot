@@ -66,7 +66,7 @@ module Rubot
     CRON_OPERATIONS = %w[add list detail remove enable disable].freeze
     # `start` is absent on purpose: it is the one operation with something to
     # say about the call (see `loop_caption`).
-    LOOP_OPERATIONS = %w[status list pause resume stop undo].freeze
+    LOOP_OPERATIONS = %w[status list pause resume raise stop undo].freeze
     INSTAGRAM_OPERATIONS = %w[connect status schedule publish posts cancel link disconnect].freeze
     GIT_OPERATIONS = %w[status diff log add commit push pull checkout branch stash show clone].freeze
     # A shell verb that says the same thing under another name: the sentence is
