@@ -100,8 +100,9 @@ module Rubot
       end
 
       # A skill load is marked as one so the eye can find the row it went
-      # looking for, every other call wears no mark at all, and the skill's
-      # name sits in code because it is the word the reader may type again.
+      # looking for, and every other call wears no mark at all. The name stays
+      # part of the sentence: nothing is set apart as code, because the row is
+      # read rather than copied.
       def test_timeline_marks_a_skill_load_as_one
         rows = lambda do |skills|
           View.render("_timeline", items: [
@@ -112,15 +113,15 @@ module Rubot
 
         html = rows.call([ "brain" ])
         assert_includes html, "is-skill"
-        assert_includes html, "Memuat skill <code>brain</code>"
-        assert_equal 1, html.scan("<code>").size, "one tag, around the whole name"
+        assert_includes html, "Memuat skill brain"
+        refute_includes html, "<code>", "the name is a word in the sentence, not a value"
 
         refute_includes rows.call(nil), "is-skill"
       end
 
-      # Two skills read in one call are two names, each in its own tag, and the
-      # sentence around them stays the sentence the dictionary wrote.
-      def test_timeline_puts_every_loaded_skill_in_its_own_code_tag
+      # Two skills read in one call are two names in the sentence the dictionary
+      # wrote, neither of them set apart.
+      def test_timeline_keeps_the_sentence_the_dictionary_wrote_for_two_skills
         html = View.render("_timeline", items: [
                              { kind: :tool, name: "file_ops",
                                detail: "Memuat skill brain dan grill",
@@ -128,12 +129,13 @@ module Rubot
                                skills: %w[brain grill] }
                            ])
 
-        assert_includes html, "Memuat skill <code>brain</code> dan <code>grill</code>"
-        assert_equal 2, html.scan("<code>").size
+        assert_includes html, "Memuat skill brain dan grill"
+        refute_includes html, "<code>"
       end
 
       # A short skill name must not be found inside a longer word: a skill
-      # called `in` used to take "Loading" apart (Load<code>in</code>g).
+      # called `in` is already named by "Loading the in skill", so nothing is
+      # added after it.
       def test_a_short_skill_name_is_not_matched_inside_a_longer_word
         args = { "path" => "/x/.rubot/skills/in/SKILL.md" }
         detail = Rubot::I18n.with_locale("en") { ToolCaption.caption("file_ops", args) }
@@ -143,34 +145,35 @@ module Rubot
                            ])
 
         assert_equal "Loading the in skill", detail, "the sentence the reader sees"
-        assert_includes html, "Loading the <code>in</code> skill"
-        assert_equal 1, html.scan("<code>").size
+        assert_equal "Loading the in skill", html[/class="tool-detail[^"]*"[^>]*>(.*?)<\/span>/m, 1],
+                     "the sentence is drawn once, with the name already in it"
       end
 
       # The row exists to name the skill, so a name the sentence does not carry
-      # still gets its tag rather than disappearing from the only row that says
-      # it was loaded.
-      def test_a_name_missing_from_the_sentence_still_gets_its_tag
+      # is still said rather than disappearing from the only row that says the
+      # skill was loaded.
+      def test_a_name_missing_from_the_sentence_is_still_said
         html = View.render("_timeline", items: [
                              { kind: :tool, name: "file_ops", detail: "Memuat skill",
                                state: :ok, epoch: Time.now.to_f, elapsed: nil,
                                skills: [ "brain" ] }
                            ])
 
-        assert_includes html, "<code>brain</code>"
+        assert_includes html, "Memuat skill brain"
       end
 
       # A running skill row is the row in flight, so its letters still light up
-      # one by one — the tag interrupts the markup, not the pulse.
-      def test_a_live_skill_row_keeps_the_light_across_the_code_tag
+      # one by one, across the whole sentence.
+      def test_a_live_skill_row_keeps_the_light_across_the_name
         html = View.render("_timeline", items: [
                              { kind: :tool, name: "file_ops", detail: "Memuat skill brain",
                                state: :running, epoch: Time.now.to_f, elapsed: nil,
                                skills: [ "brain" ] }
                            ])
 
-        assert_includes html, "<code><span style=\"--i:13\">b</span>"
+        assert_includes html, "<span style=\"--i:13\">b</span>"
         assert_includes html, "aria-label=\"Memuat skill brain\""
+        refute_includes html, "<code>"
       end
 
       # Only the prompt wears a bubble: it is a quotation. The answer is the
