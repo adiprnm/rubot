@@ -575,40 +575,44 @@ module Rubot
       # row has the composer sitting on top of it. Two properties keep that from
       # happening and neither is visible in the markup, so they are held here:
       # the box around the ring is pinned to the line's height rather than to the
-      # ring's, and the ring itself is the size the working row's mark is, so the
-      # two are read as one language instead of two sizes a few pixels apart.
+      # ring's, and the ring is drawn at the same fraction of its line as the
+      # working row's mark, so the two are read as one language.
       #
-      # The numbers are read out of the stylesheet rather than restated, because
-      # a test that repeats "9px" is a test that passes while the rule says 13.
-      def test_the_running_ring_is_the_size_of_the_working_mark
+      # Both marks are a fraction of the line they sit in, not a pixel count.
+      # The toggle's ring ends the 10px status row and the working mark sits in
+      # a transcript row that is now set for reading, so the two rows do not
+      # want the same pixel size — they want the same answer to "how big is
+      # this line". A literal px here would have to be re-matched by hand every
+      # time a row changes size, which is what the fraction is for.
+      def test_the_marks_are_a_fraction_of_the_line_they_sit_in
         css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
         box = css[/^\.subagent-run \{[^}]*\}/]
         ring = css[/^\.subagent-run \.subagent-spinner \{[^}]*\}/]
-        row = css[/^\.row \{[^}]*\}/]
         working_mark = css[/^\.row \.mark \{[^}]*\}/]
         row_ring = css[/^\.subagent-mark \.subagent-spinner \{[^}]*\}/]
 
         refute_nil box, "the .subagent-run rule is missing from app.css"
         refute_nil ring, "the ring has no rule of its own"
-        refute_nil row, "the .row rule is missing from app.css"
         refute_nil working_mark, "the working mark has no rule of its own"
 
         assert_includes box, "height: 1em",
                         "the box follows the line, not the ring: a box that grew with the " \
                         "ring pushed the toggle past the status row's floor and moved the composer"
 
+        # Parsed as numbers once, and both asserted to exist before they are
+        # compared: two missing values are equal to each other and to zero, so
+        # comparing the strings would let a rule that went back to `px` pass.
         drawing = working_mark[/width:\s*([\d.]+)em/, 1].to_f
-        line = row[/font-size:\s*([\d.]+)px/, 1].to_f
-        width = ring[/width:\s*([\d.]+)px/, 1].to_f
-        height = ring[/height:\s*([\d.]+)px/, 1].to_f
+        width = ring[/width:\s*([\d.]+)em/, 1].to_f
+        height = ring[/height:\s*([\d.]+)em/, 1].to_f
 
         assert_operator drawing, :>, 0, "the working mark is sized against its line"
-        assert_operator width, :>, 0, "the ring is drawn at a size of its own"
-        assert_in_delta line * drawing, width, 1.0,
-                        "the toggle's ring and the working row's mark are one size, or the " \
-                        "one that is a note reads as a second thing to look at"
-        assert_in_delta width, height, 0.01, "a ring that is not square wobbles as it turns"
-        assert_operator width, :<=, line,
+        assert_operator width, :>, 0, "the ring is sized against its line, not in pixels"
+        assert_in_delta drawing, width, 0.001,
+                        "the toggle's ring and the working row's mark are one drawing, " \
+                        "each at the scale of the line it sits in"
+        assert_in_delta width, height, 0.001, "a ring that is not square wobbles as it turns"
+        assert_operator width, :<=, 1.0,
                         "the ring must fit the line it is pinned to; 1em is the line"
 
         refute_nil row_ring, "the ring inside a row has no rule of its own"
