@@ -33,6 +33,27 @@ module Rubot
         assert_includes blocks[0], "on-accent", "text on a filled button has to"
       end
 
+      # The rows under the answer are set in the reader's face now, and that
+      # face reads smaller than mono at the same number, so they sit close to
+      # the prose. Close is the limit: a row that reaches --prompt-size stops
+      # being a caption and argues with the reader's own words. One value for
+      # the three rows, so a later bump cannot move one of them alone.
+      def test_the_status_rows_stay_under_the_size_of_the_prose
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+
+        prompt = css[/--prompt-size:\s*([\d.]+)px/, 1].to_f
+        row = css[/--row-size:\s*([\d.]+)px/, 1].to_f
+
+        assert_operator prompt, :>, 0, "the prose needs a size to measure against"
+        assert_operator row, :>, 0, "a caption still has a size of its own"
+        assert_operator row, :<, prompt, "a status row is not the size of the prompt"
+        %w[.row .compaction-row .tool-row].each do |selector|
+          body = css[/^#{Regexp.escape(selector)} \{(.*?)\n\}/m, 1].to_s
+          assert_includes body, "font-size: var(--row-size)",
+                          "#{selector} has to take the shared size, not a literal"
+        end
+      end
+
       # The theme is decided in the head, before the stylesheet can paint. Left
       # to a script at the end of the page, a light reader would get a dark
       # frame first — a flash across the whole screen. The reading face is the
