@@ -1643,10 +1643,10 @@ class TestTools < Minitest::Test
     }.merge(extra)
   end
 
-  def test_ask_user_is_registered_and_documents_its_limit
+  def test_ask_user_is_registered_and_documents_its_shape
     assert_includes @registry.names, "ask_user"
     assert_includes ask_user.description, "2 to 4"
-    assert_includes ask_user.description, Rubot::Tools::AskUser::PER_TURN_LIMIT.to_s
+    assert_includes ask_user.description, "up to #{Rubot::Tools::AskUser::MAX_QUESTIONS} entries"
   end
 
   def test_a_chosen_option_comes_back_as_its_label
@@ -1732,13 +1732,6 @@ class TestTools < Minitest::Test
 
     assert_includes result, "Nobody can be asked"
     assert_includes result, "safest default"
-  end
-
-  def test_the_limit_wording_tells_the_model_to_stop_asking
-    wording = ask_user.limit_reached_text
-
-    assert_includes wording, Rubot::Tools::AskUser::PER_TURN_LIMIT.to_s
-    assert_includes wording, "safest default"
   end
 
   # --- a call that asks several questions ------------------------------
@@ -1843,13 +1836,6 @@ class TestTools < Minitest::Test
     result = ask_user.ask({ "questions" => questions }, reader: ->(_p) { { outcome: :cancelled } })
 
     assert_match(/at most/, result)
-  end
-
-  # The turn's ceiling counts questions, not calls: a list of three spends
-  # three.
-  def test_the_question_count_is_what_the_turn_counts
-    assert_equal 2, ask_user.questions_count(two_questions)
-    assert_equal 1, ask_user.questions_count({ "question" => "Only one?" })
   end
 
   # A channel that hands back words instead of a position still gets the

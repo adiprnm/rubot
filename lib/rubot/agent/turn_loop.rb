@@ -42,9 +42,6 @@ module Rubot
         inject_tool_persona
         inject_tool_delegate
         @subagent_count = 0
-        # Questions are spent per turn, not per agent: a turn that already
-        # interrupted the reader three times is done interrupting.
-        @asks_this_turn = 0
         @on_subagent = callbacks.subagent
         @on_delegate = callbacks.delegate
         @on_loop = callbacks.on_loop
@@ -581,24 +578,15 @@ module Rubot
         pending
       end
 
-      # One question, asked through the channel's reader and counted.
+      # One question, asked through the channel's reader.
       #
       # A channel that handed no reader (a background turn, a surface with
       # nowhere to ask) gets the tool's own honest answer instead of a block
-      # that would never be released. The same goes for the ceiling: the fourth
-      # question of a turn is not asked at all, so a hesitant model is told to
-      # decide rather than left waiting.
+      # that would never be released. Nothing here counts the questions: a
+      # cancellation ends the turn, so the reader's own answer is the limit.
       def ask_the_user(tool, arguments, callbacks)
         return "Nobody can be asked on this surface." if tool.nil? || !tool.respond_to?(:ask)
 
-        # A call may carry several questions, and they all count: the ceiling is
-        # about how often the reader is interrupted, not how many calls it took.
-        count = tool.respond_to?(:questions_count) ? tool.questions_count(arguments) : 1
-        if @asks_this_turn.to_i + count > Tools::AskUser::PER_TURN_LIMIT
-          return tool.limit_reached_text
-        end
-
-        @asks_this_turn = @asks_this_turn.to_i + count
         tool.ask(arguments, reader: callbacks.ask)
       end
       # One request to the provider, streamed when the channel can take chunks.

@@ -659,3 +659,75 @@ class TestAgentAutoMode < Minitest::Test
     assert reloaded.auto_approve?
   end
 end
+
+
+# Asking is not rationed: a turn may interrupt the reader as often as the work
+# needs, and every one of those questions is put to them. What limits a turn is
+# the user's own answer — a cancellation ends it — not a counter inside it.
+class TestAgentAsksWithoutACeiling < Minitest::Test
+  # One more than the ceiling this change removed (five questions a turn). Six
+  # is what makes the test mean something: at five the old code passes too.
+  ROUNDS = 6
+
+  # One question per provider round, so every round is a separate call.
+  class AskingProvider
+    attr_reader :calls
+
+    def initialize(rounds)
+      @rounds = rounds
+      @calls = 0
+    end
+
+    def name
+      "openai"
+    end
+
+    def chat(_messages, tools: nil, on_retry: nil)
+      @calls += 1
+      return { "content" => "all answered" } if @calls > @rounds
+
+      {
+        "content" => "Asking.",
+        "tool_calls" => [
+          {
+            "id" => "call_#{@calls}",
+            "type" => "function",
+            "function" => {
+              "name" => "ask_user",
+              "arguments" => JSON.generate({
+                "questions" => [
+                  { "question" => "Round #{@calls}: which one?",
+                    "options" => [ { "label" => "A" }, { "label" => "B" } ] }
+                ]
+              })
+            }
+          }
+        ]
+      }
+    end
+    alias chat_stream chat
+  end
+
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @config = isolated_config(@tmpdir, name: "asking")
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if @tmpdir && File.directory?(@tmpdir)
+  end
+
+  def test_every_question_of_a_turn_reaches_the_reader
+    agent = Rubot::Agent.new(config: @config, provider: AskingProvider.new(ROUNDS), session_id: "asking")
+    asked = []
+    reader = ->(payload) { asked << payload[:question]; { outcome: :option, index: 0, label: "A" } }
+
+    agent.process("ask me a few things", stream: false, on_ask: reader)
+
+    assert_equal ROUNDS, asked.size, "the last question must be asked, not refused"
+    assert_equal ROUNDS + 1, agent.provider.calls, "one round per question, then the closing answer"
+    results = agent.session.messages.select { |m| m["role"] == "tool" }.map { |m| m["content"] }
+    assert_equal ROUNDS, results.size
+    results.each { |content| assert_includes content, "The user chose: A" }
+  end
+end
