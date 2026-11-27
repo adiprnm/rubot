@@ -30,6 +30,28 @@ module Rubot
     # where it is made, not discovered as a half-English interface.
     class UnknownLocale < ArgumentError; end
 
+    # Every leaf key of one language, dotted, sorted. The parity check and the
+    # settings form both read the dictionary through this.
+    #
+    # The table is read from Ractors other than the one that loaded it — a tool
+    # running inside a session actor asks for words too — and a Ractor may only
+    # read a value it could have written itself. Freezing the literal freezes
+    # the top hash and nothing under it, so the first such read raised
+    # Ractor::IsolationError. Every node is frozen once, at load.
+    def self.deep_freeze(node)
+      case node
+      when Hash
+        node.each do |key, value|
+          deep_freeze(key)
+          deep_freeze(value)
+        end
+      when Array
+        node.each { |value| deep_freeze(value) }
+      end
+
+      node.freeze
+    end
+
     # A key with no entry in any language. Raised in every environment: a
     # missing label is a blank row on someone's screen, and the parity test is
     # what keeps this from ever firing in production.
@@ -1744,6 +1766,8 @@ module Rubot
         }
       }
     }.freeze
+    # Frozen all the way down, so a Ractor can read it: see #deep_freeze.
+    deep_freeze(DICTIONARY)
 
     class << self
       # The language everything drawn from here on is written in.
@@ -1786,7 +1810,7 @@ module Rubot
         text = value.to_s.strip.downcase
         return nil if text.empty?
 
-        LOCALES.include?(text) ? text : nil
+        LOCALES.include?(text) ? -text : nil
       end
 
       def normalize!(value)

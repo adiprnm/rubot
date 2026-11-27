@@ -9,6 +9,27 @@ require_relative "support/tui_support"
 class TestI18n < Minitest::Test
   include Rubot::TuiSupport
 
+  # The dictionary is read from Ractors other than the one that loaded it: a
+  # tool running inside a session actor asks for words too. A Ractor may only
+  # read a value it could have written itself, and a hash of plain strings is
+  # not one — the first such read raised
+  # `Ractor::IsolationError: can not get unshareable values from instance
+  # variables ... (@locale from Rubot::I18n)`. These two tests are that bug.
+  def test_the_dictionary_is_shareable_between_ractors
+    assert Ractor.shareable?(Rubot::I18n::DICTIONARY), "the table itself"
+    assert Ractor.shareable?(Rubot::I18n::DICTIONARY["en"]["ask"]["confirm"]),
+           "a nested entry, which is what a lookup hands back"
+  end
+
+  def test_a_translation_can_be_read_from_another_ractor
+    port = Ractor::Port.new
+    Ractor.new(port) do |reply|
+      reply << Rubot::I18n.t("tool.ask", question: "Mau pakai apa?")
+    end
+
+    assert_equal Rubot::I18n.t("tool.ask", question: "Mau pakai apa?"), port.receive
+  end
+
   # What a compaction answers with, in the shape every channel reads: the same
   # numbers appear in the TUI rows, the Telegram card and the web note.
   COMPACT_RESULT = { summarized_messages: 12, kept_messages: 4,
