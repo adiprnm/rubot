@@ -138,6 +138,36 @@ module Rubot
       nil
     end
 
+    # Put the unverified marker in front of the newest commit's subject, keeping
+    # its body. An agent may commit its own work, and whether a verdict can be
+    # bought is decided after the turn returns -- so the commit it already made
+    # is amended here, rather than left to imply a judgement nobody paid for.
+    # The sha moves, which is why the caller reads the head again instead of
+    # trusting the one it had; a commit that already says it is left alone, so
+    # a second call costs nothing. A worktree that will not answer returns nil,
+    # like `head`: this is read while a stop is being written down. The amend
+    # skips the hooks because the message is all that changes -- re-running a
+    # pre-commit check over work that is already committed can only fail the
+    # amend and leave the commit saying it was judged when it was not.
+    def mark_unverified(id, marker)
+      dir = path(id)
+      out, _err, ok = capture(dir, "log", "-1", "--format=%B")
+      return nil unless ok
+
+      message = out.to_s.sub(/\n+\z/, "")
+      return head(id) if message.empty?
+
+      subject, body = message.split("\n", 2)
+      return head(id) if subject.to_s.start_with?(marker.to_s)
+
+      text = [ "#{marker} #{subject}", body ].compact.join("\n")
+      _out, _err, amended = capture(dir, "commit", "--amend", "--no-verify", "-F", "-", stdin_data: text)
+      amended ? head(id) : nil
+    rescue SystemCallError
+      # The worktree went away between the read and the amend.
+      nil
+    end
+
     def changed?(id)
       !git(path(id), "status", "--porcelain").strip.empty?
     end
@@ -297,9 +327,11 @@ module Rubot
     # working directory, never a string handed to a shell: an id or a branch
     # name can therefore never grow into a second command. Returns
     # [stdout, stderr, success?], because the bare status object is truthy even
-    # for a failed git, which would turn every check here into a "yes".
-    def capture(dir, *args)
-      out, err, status = Open3.capture3("git", *args, chdir: dir)
+    # for a failed git, which would turn every check here into a "yes". A call
+    # that needs a body on stdin (an amend that keeps a message) passes it
+    # here, so no temporary file has to be written and cleaned up.
+    def capture(dir, *args, stdin_data: "")
+      out, err, status = Open3.capture3("git", *args, stdin_data: stdin_data, chdir: dir)
       [ out, err, status.success? ]
     end
 

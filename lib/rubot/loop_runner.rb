@@ -348,6 +348,16 @@ module Rubot
         unverified = answer[:budget_stopped] ||
                      LoopRun.budget_warning?(@store.load(id)&.tokens.to_i, context[:budget])
         commit = commit_iteration(worktree, id, commit_message(iteration, note), unverified: unverified)
+        # An agent may commit its own work, and that commit is made before the
+        # decision above is known. It cannot be marked later without amending
+        # it, so it is amended here: the branch then says "unverified" whichever
+        # side made the commit, and a report that reads the newest subject sees
+        # the same answer as the log. Only a head that moved during this turn is
+        # marked -- an idle turn leaves the previous iteration's commit alone.
+        if commit.nil? && unverified
+          moved = worktree.head(id)
+          commit = worktree.mark_unverified(id, LoopRun::UNVERIFIED_MARKER) if moved && moved != before
+        end
         after = worktree.head(id)
         progress, reported = progress_report(commit, before, after)
         # A turn the budget stopped is reported, never raised: the work it left

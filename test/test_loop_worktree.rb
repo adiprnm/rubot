@@ -83,6 +83,33 @@ class TestLoopWorktree < Minitest::Test
                  "the loop's own branch, never the user's"
   end
 
+  # An agent that commits its own work makes the commit before anyone knows
+  # whether a verdict could be bought, so the marker has to be added to a commit
+  # that already exists. The body is kept, the sha moves (the caller re-reads
+  # the head), and a second call is a no-op rather than a second marker.
+  def test_mark_unverified_puts_the_marker_on_the_newest_commit_and_keeps_its_body
+    dir = @worktrees.create(id: ID)
+    File.write(File.join(dir, "note.txt"), "iteration one\n")
+    before = @worktrees.commit(ID, message: "agent step one\n\nwhat it did, in its own words")
+
+    sha = @worktrees.mark_unverified(ID, "[unverified]")
+
+    refute_equal before, sha, "the amend rewrites the commit, so its sha moves"
+    assert_equal sha, @worktrees.head(ID)
+    assert_equal "[unverified] agent step one", git(dir, "log", "-1", "--format=%s").strip
+    assert_includes git(dir, "log", "-1", "--format=%B"), "what it did, in its own words"
+    assert_equal 2, git(dir, "rev-list", "--count", "HEAD").to_i, "an amend adds no step"
+
+    assert_equal sha, @worktrees.mark_unverified(ID, "[unverified]"), "a marked commit is left alone"
+    assert_equal "[unverified] agent step one", git(dir, "log", "-1", "--format=%s").strip
+  end
+
+  # The marker is read while a stop is being written down, so a worktree that
+  # will not answer says nil instead of raising in the middle of the entry.
+  def test_mark_unverified_answers_nil_without_a_worktree
+    assert_nil @worktrees.mark_unverified("never-created", "[unverified]")
+  end
+
   # A head nobody can read is not progress: the comparison that reads it must
   # answer nil rather than raise, whether the worktree is gone or was never one.
   def test_head_of_a_worktree_git_cannot_answer_for_is_nil
