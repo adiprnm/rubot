@@ -798,6 +798,36 @@ class TestLoopTool < Minitest::Test
     assert_includes newest, "5000 -> 20000"
   end
 
+  # -- undo ------------------------------------------------------------------
+
+  # The warning's "drop" is this call in exactly this state: paused, with the
+  # iteration nobody judged committed in a worktree still on disk. It goes back
+  # one commit and leaves the counters alone, because a rewind of what was
+  # spent would be a refund nobody gave.
+  def test_undo_takes_a_paused_warning_loop_back_one_commit_and_leaves_the_counters
+    worktrees = Rubot::LoopWorktree.new(root: File.join(@root, "worktrees"), repo: git_repo)
+    state = create(repo: git_repo)
+    dir = worktrees.create(id: state.id)
+    File.write(File.join(dir, "step.txt"), "step one\n")
+    worktrees.commit(state.id,
+                     message: "#{Rubot::LoopRun::UNVERIFIED_MARKER} iteration 1: wrote step.txt")
+    unjudged = worktrees.head(state.id)
+    @store.update(state.id) do |loop|
+      loop.worktree = dir
+      loop.status = "paused"
+      loop.iterations = 1
+      loop.tokens = 10_800_000
+    end
+
+    assert_ok @tool.execute("operation" => "undo", "id" => state.id)
+
+    refute_equal unjudged, worktrees.head(state.id), "the unjudged commit is off the branch"
+    reread = @store.load(state.id)
+    assert_equal 1, reread.iterations, "an undo is not a rewind of the count"
+    assert_equal 10_800_000, reread.tokens, "nor of the spend"
+    assert_equal "paused", reread.status, "dropping the work does not restart the loop"
+  end
+
   def test_stop_pauses_the_loop_and_says_stopped
     state = create
     @tool.loop_runner = @runner

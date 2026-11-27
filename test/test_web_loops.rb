@@ -3,8 +3,10 @@
 require_relative "test_helper"
 require "tmpdir"
 require "fileutils"
+require "open3"
 
 require "rubot/tools/loop_tool"
+require "rubot/loop_worktree"
 require "rubot/web/loops"
 
 # The web channel's half of a loop: binding the tool, and the one turn an
@@ -834,6 +836,51 @@ class TestWebLoops < Minitest::Test
                                iterations_run: iterations, message: message)
   end
 
+  # A loop the warning stopped over a real commit in a real worktree: the only
+  # honest way to ask whether the reader has work to keep or drop is the branch,
+  # so this builds one. The marker on the subject is the fact under test, which
+  # is why the caller can hand in a plain subject instead.
+  def warned_loop(subject: "#{Rubot::LoopRun::UNVERIFIED_MARKER} iteration 1: wrote step.txt")
+    git(@base, "init", "-b", "main")
+    git(@base, "config", "user.name", "Loop Test")
+    git(@base, "config", "user.email", "loop@example.test")
+    File.write(File.join(@base, "seed.txt"), "original\n")
+    git(@base, "add", "seed.txt")
+    git(@base, "commit", "-m", "seed")
+
+    state = @store.create(goal: "make the demo honest", done_criteria: "the demo test is green",
+                          repo: @base)
+    worktrees = Rubot::LoopWorktree.new(root: File.join(@base, "worktrees"), repo: @base)
+    dir = worktrees.create(id: state.id)
+    File.write(File.join(dir, "step.txt"), "step one\n")
+    worktrees.commit(state.id, message: subject)
+
+    @store.update(state.id) do |loop|
+      loop.worktree = dir
+      loop.tokens = 10_800_000
+    end
+    @store.load(state.id)
+  end
+
+  # What the conversation is told, written through the channel's own report path
+  # so the phrase, the spend line and the options are all exercised as shipped.
+  def budget_warning_report(state)
+    delivered = []
+    channel = harness
+    channel.define_singleton_method(:prepare_delivery) { |_sid| nil }
+    channel.define_singleton_method(:deliver_report) { |_sid, text:, label: ""| delivered << text }
+    channel.report_loop_finished("s1", state.id, result_for(state, :budget_warning))
+    delivered.last
+  end
+
+  # The worktree class reads the repo through git, so the tests do too: an
+  # argument array, never a shell string.
+  def git(dir, *args)
+    out, err, status = Open3.capture3("git", *args, chdir: dir)
+    assert status.success?, "git #{args.join(' ')} failed in #{dir}: #{err}"
+    out
+  end
+
   # A run outlives the turn that started it, so the thread that ran it is the
   # only thing left that can say where it got. Not a git repository here, so the
   # run stops before an iteration is paid for -- which is still an ending, and
@@ -948,6 +995,76 @@ class TestWebLoops < Minitest::Test
     channel.report_loop_finished("s1", state.id, result_for(@store.load(state.id), :budget))
 
     assert_equal 2, delivered.size
+  end
+
+  # The warning's answer is the one place a loop hands the reader a choice. The
+  # work is committed by then -- the warning stops before the judging turn, not
+  # before the commit -- so what tells it there is something to keep or drop is
+  # the marker on the newest commit's subject, never the worktree's status,
+  # which is clean again.
+  def test_a_budget_warning_offers_keep_drop_and_raise_over_the_unjudged_commit
+    state = warned_loop
+    text = budget_warning_report(state)
+
+    assert_includes text, "It has spent 10800000 of 12000000 tokens",
+                    "the answer names the spend and the limit"
+    assert_includes text, "unverified iteration", "the work is called what the glossary calls it"
+    assert_includes text, "not unfinished", "and not what it is not"
+    assert_includes text, "the loop reached its budget warning"
+
+    assert_includes text, "keep — leave that work committed"
+    assert_includes text, "drop — `loop undo` with id #{state.id}",
+                    "dropping names the operation and the loop it acts on"
+    assert_includes text, "raise — `loop raise`"
+    assert_includes text, "`loop resume`", "raising alone does not carry on; the answer says both steps"
+  end
+
+  # An iteration that committed nothing leaves nothing to keep or drop, and the
+  # worktree is clean, so the offer narrows to the one thing that is still true.
+  # An empty choice is worse than an absent one.
+  def test_a_budget_warning_with_nothing_unjudged_offers_only_raise
+    state = warned_loop(subject: "iteration 1: wrote step.txt")
+    text = budget_warning_report(state)
+
+    assert_includes text, "nothing waiting in the worktree to keep or drop"
+    assert_includes text, "raise — `loop raise`"
+    refute_includes text, "keep —"
+    refute_includes text, "drop —"
+  end
+
+  # A tick wakes the same warned loop, and every wake would repeat the same
+  # three options into the parent conversation. Once per loop budget is news; a
+  # raised limit is a different allowance, so meeting it again is worth saying.
+  def test_a_budget_warning_is_announced_once_per_allowance
+    channel = harness
+    delivered = []
+    channel.define_singleton_method(:prepare_delivery) { |_sid| nil }
+    channel.define_singleton_method(:deliver_report) { |_sid, text:, label: ""| delivered << text }
+    state = @store.create(goal: "g", done_criteria: "c", repo: @base, max_tokens: 5_000)
+
+    2.times { channel.report_loop_finished("s1", state.id, result_for(state, :budget_warning)) }
+
+    assert_equal 1, delivered.size, "one warning, one announcement"
+
+    @store.update(state.id) { |loop| loop.max_tokens = 50_000 }
+    channel.report_loop_finished("s1", state.id, result_for(@store.load(state.id), :budget_warning))
+
+    assert_equal 2, delivered.size
+  end
+
+  # The offer is written twice, and a reader who asked for Indonesian gets the
+  # same three ways out rather than a dotted key or an English sentence.
+  def test_the_warning_offer_speaks_the_chosen_language
+    state = warned_loop
+
+    text = Rubot::I18n.with_locale("id") { budget_warning_report(state) }
+
+    assert_includes text, "sudah menghabiskan 10800000 dari 12000000 token"
+    assert_includes text, "bukan belum selesai"
+    assert_includes text, "keep —"
+    assert_includes text, "drop — `loop undo` dengan id #{state.id}"
+    assert_includes text, "raise —"
+    assert_equal [], Rubot::I18n.missing_keys
   end
 
   def test_the_report_carries_the_goal_and_why_the_loop_stopped
