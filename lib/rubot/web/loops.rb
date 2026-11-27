@@ -45,9 +45,16 @@ module Rubot
       # that stops short of the goal and says nothing is a loop the reader has
       # to ask `status` about -- which is the whole reason this exists.
       ANNOUNCED_STOPS = %i[
-        done_by_verifier stalled budget max_iterations verifier_stuck context_ceiling
+        done_by_verifier stalled budget budget_warning max_iterations verifier_stuck context_ceiling
         error worktree_error worktree_missing
       ].freeze
+      # The endings a schedule can produce over and over, and the ones that must
+      # therefore be said once per loop budget rather than once per wake: a tick
+      # wakes the same paused loop, and every wake would repeat the same sentence
+      # into the parent conversation. A budget warning is the newest of them -- a
+      # loop that stopped at nine tenths of its loop budget is paused, which is
+      # exactly the status a tick is allowed to wake.
+      ANNOUNCE_ONCE = %i[budget budget_warning].freeze
       # The model's cue that this arrived on its own, shaped like the one a
       # finished batch of delegated runs gets. "Kabar" rather than "hasil",
       # because not every ending is a result: a loop that broke or ran out of
@@ -405,18 +412,19 @@ module Rubot
       def report_loop_finished(sid, id, outcome)
         reason = outcome.stop_reason.to_s.to_sym
         return unless ANNOUNCED_STOPS.include?(reason)
-        return if reason == :budget && !announce_budget?(id, outcome.state)
+        return if ANNOUNCE_ONCE.include?(reason) && !announce_budget?(id, outcome.state)
 
         wait_for_quiet_turn(sid)
         prepare_delivery(sid)
         deliver_report(sid, text: loop_report_text(id, outcome), label: LOOP_REPORT_LABEL)
       end
 
-      # A budget stop is the one ending a schedule can produce over and over: a
-      # tick wakes the same spent loop, and every wake would say the same
-      # sentence into the parent conversation. Once per allowance is news; the
-      # second copy is the reason a reader stops reading them. A bigger budget is
-      # a different allowance, so meeting it again is worth saying.
+      # A stop the schedule can repeat is the one a reader has to be spared from
+      # hearing twice: a tick wakes the same spent or warned loop, and every wake
+      # would say the same sentence into the parent conversation. Once per
+      # allowance is news; the second copy is the reason a reader stops reading
+      # them. A bigger allowance -- a raised limit is the only way to get one --
+      # is a different fact, so meeting it again is worth saying.
       def announce_budget?(id, state)
         key = [ id.to_s, state&.max_tokens.to_i ]
         @announced_budget ||= {}
@@ -459,7 +467,53 @@ module Rubot
 
         message = outcome.message.to_s.strip
         lines.push("", message) unless message.empty?
+        # A budget warning is the one ending that leaves a decision to the
+        # reader, so its answer says what can be done about the work still
+        # sitting there -- in the same answer, because a report that names a
+        # stop and no next step is one they have to come back and ask about.
+        if state && outcome.stop_reason.to_s.to_sym == :budget_warning
+          lines.push("", warning_answer(id, state))
+        end
         lines.join("\n").rstrip
+      end
+
+      # What a budget warning leaves the reader to decide: how much of the loop
+      # budget went, that the last iteration is an unverified iteration rather
+      # than unfinished work, and which of the three ways out this state actually
+      # allows. Keep, drop and raise all act on the commit the warning left
+      # behind -- dropping it is `loop undo`, which takes the branch back one
+      # commit -- so a loop whose warning iteration committed nothing has nothing
+      # to keep or drop, and offering the choice there would offer a button that
+      # drops work the reader never meant to lose. Every option named here is an
+      # operation the loop tool already has (see Tools::Loop::OPERATIONS).
+      def warning_answer(id, state)
+        lines = [ I18n.t("web.loops.warning.spend", spent: state.tokens.to_i, limit: state.max_tokens.to_i) ]
+        options = if warning_work_waiting?(state)
+          [ I18n.t("web.loops.warning.keep"),
+            I18n.t("web.loops.warning.drop", id: id),
+            I18n.t("web.loops.warning.raise") ]
+        else
+          [ I18n.t("web.loops.warning.raise_only") ]
+        end
+        options.each { |option| lines << "- #{option}" }
+        lines.join("\n")
+      end
+
+      # Whether the warning left work nobody has judged: its iteration committed,
+      # and that commit's subject carries the marker that says no verdict was
+      # bought for it. Asked of the branch and not of the worktree's status,
+      # because the work is committed by the time the choice is offered and the
+      # worktree is clean again -- the commit is what `undo` would drop. A
+      # worktree that cannot answer, or a file that records none, says no: a
+      # choice missing is better than a choice that destroys judged work.
+      def warning_work_waiting?(state)
+        path = state&.worktree.to_s
+        return false if path.empty? || state&.repo.to_s.empty?
+
+        worktree = LoopWorktree.new(root: File.dirname(path), repo: state.repo)
+        worktree.head_subject(state.id).to_s.start_with?(LoopRun::UNVERIFIED_MARKER)
+      rescue LoopWorktree::Error, SystemCallError
+        false
       end
 
       # One turn of one iteration, in the loop's worktree. The session is a
@@ -808,12 +862,15 @@ module Rubot
       end
 
       # Plain words for the run's own vocabulary: the reader asked what became
-      # of their goal, not for the symbol that ended it.
+      # of their goal, not for the symbol that ended it. The warning's sentence
+      # comes from the dictionary like the rest of the offer below it, because it
+      # is the half of this report a reader has to act on.
       def loop_stop_phrase(reason)
         case reason.to_sym
         when :done_by_verifier then "kriteria yang kamu tetapkan sudah terpenuhi"
         when :stalled then "tidak ada kemajuan baru, jadi iterasi lagi hanya akan membakar token"
         when :budget then "jatah token untuk loop ini habis"
+        when :budget_warning then I18n.t("web.loops.warning.phrase")
         when :context_ceiling then "satu iterasinya sudah mencapai plafon konteks, jadi request berikutnya cuma akan mengirim ulang transkrip yang sama"
         when :max_iterations then "batas iterasinya tercapai sebelum kriterianya terpenuhi"
         when :verifier_stuck then "verifier terus menolak dengan alasan yang sama, jadi iterasi lagi tidak mengubah apa pun"

@@ -124,6 +124,20 @@ module Rubot
       nil
     end
 
+    # The newest commit's subject on the loop's branch, or nil when the worktree
+    # cannot answer. The subject is where an unverified iteration says so (see
+    # LoopRun::UNVERIFIED_MARKER), so this is the one question a report asks the
+    # branch: is there work sitting here that nobody judged? Never raises, for
+    # the same reason `head` does not -- it is read while a stop is being written
+    # down, and a directory that went away is an answer, not an exception.
+    def head_subject(id)
+      out, _err, ok = capture(path(id), "log", "-1", "--format=%s")
+      ok ? out.strip : nil
+    rescue SystemCallError
+      # The worktree went away between the path and the call.
+      nil
+    end
+
     def changed?(id)
       !git(path(id), "status", "--porcelain").strip.empty?
     end
