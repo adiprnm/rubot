@@ -2761,6 +2761,9 @@ select:focus-visible { outline: none; }
    hard to hit on a phone. */
 .ask .ask-send {
   flex: 0 0 auto;
+  /* The same face as the prose beside it: the button is part of the question,
+     not a toolbar control in a mono face. */
+  font-family: var(--reading);
   font-size: 14px;
   padding: 0.45rem 0.9rem;
   border-radius: 0.5rem;
