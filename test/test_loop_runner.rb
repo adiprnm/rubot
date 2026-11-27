@@ -54,8 +54,9 @@ class TestLoopRunner < Minitest::Test
     out
   end
 
-  def new_loop(max_iterations: 8)
-    @store.create(goal: GOAL, done_criteria: CRITERIA, repo: @repo, max_iterations: max_iterations)
+  def new_loop(max_iterations: 8, max_tokens: nil)
+    @store.create(goal: GOAL, done_criteria: CRITERIA, repo: @repo, max_iterations: max_iterations,
+                  max_tokens: max_tokens)
   end
 
   # One call per session, exactly as the real boundary would be called: the
@@ -300,6 +301,11 @@ class TestLoopRunner < Minitest::Test
     assert_includes entry, "ceiling 101k/100k"
     assert_includes entry, "stopped at its context ceiling",
                     "the commit and the entry name the ceiling, not the agent's notice"
+    # A ceiling did not stop the money, so the branch must not say the work went
+    # unjudged for lack of budget. The order of the stops decides this, and it is
+    # asked in one place so the runner cannot answer it differently from the run.
+    assert_equal "iteration 1: stopped at its context ceiling",
+                 git(@repo, "log", "-1", "--format=%s", "loop/#{state.id}").strip
     assert_equal 1, @calls.size,
                  "no verifier turn is bought for an iteration that never finished"
   end
@@ -440,6 +446,53 @@ class TestLoopRunner < Minitest::Test
     assert_equal "2\n", git(@repo, "show", "loop/#{state.id}:step2.txt")
   end
 
+  # The warning's decision is made after the turn returns, so a commit the agent
+  # made itself already exists by then. It has to carry the marker anyway: the
+  # branch is where "unverified" is written, and the report that offers keep,
+  # drop and raise asks exactly this newest subject whether work is waiting.
+  def test_a_commit_the_agent_made_itself_is_marked_unverified_at_the_warning
+    state = new_loop(max_iterations: 2, max_tokens: 2_400)
+    @agent_commits = true
+
+    result = loop_runner.start(state.id)
+
+    assert_equal :budget_warning, result.stop_reason
+    assert_equal "paused", @store.load(state.id).status
+    branch = "loop/#{state.id}"
+    head = git(@repo, "rev-parse", branch).strip
+    subject = git(@repo, "log", "-1", "--format=%s", branch).strip
+    assert subject.start_with?(Rubot::LoopRun::UNVERIFIED_MARKER),
+           "the agent's own commit is amended to carry the marker, not left implying a verdict: #{subject}"
+    assert_includes subject, "agent step 2", "the agent's own subject survives the amend"
+    assert_equal 3, commits(state.id), "an amend rewrites the head, it does not add a step"
+    entry = iteration_entries(state.id).first.text
+    assert_includes entry, "sha #{head[0, 7]}", "the entry names the commit the branch now holds"
+    refute_includes entry, "sha #{@own_shas.last[0, 7]}", "and never a sha the amend left behind"
+  end
+
+  # The harder stop reads alike: a turn cancelled mid-flight had no chance to be
+  # told it was unverified either, and its commit is the agent's own when the
+  # agent commits. Both stops have to leave the same marker on the branch.
+  def test_a_commit_the_agent_made_itself_is_marked_unverified_at_the_budget_stop
+    state = @store.create(goal: GOAL, done_criteria: CRITERIA, repo: @repo, max_tokens: 5_000)
+    session = lambda do |session_id:, prompt:, workspace:, id: nil, budget: nil, spent: nil|
+      @calls << { session_id: session_id, prompt: prompt, workspace: workspace }
+      File.write(File.join(workspace, "step1.txt"), "1\n")
+      git(workspace, "add", "-A")
+      git(workspace, "commit", "-m", "agent step 1")
+      @store.update(id) { |loop| loop.tokens = loop.tokens.to_i + 6_000 }
+      { text: "half a step", tokens: 0, budget_stopped: true }
+    end
+
+    result = loop_runner(session: session, budget: true).start(state.id)
+
+    assert_equal :budget, result.stop_reason
+    subject = git(@repo, "log", "-1", "--format=%s", "loop/#{state.id}").strip
+    assert subject.start_with?(Rubot::LoopRun::UNVERIFIED_MARKER),
+           "a mid-turn budget stop marks the agent's commit too: #{subject}"
+    assert_equal 2, commits(state.id), "the init commit plus the one the stopped turn made"
+  end
+
   # One idle turn is not a stall: STALL_REPEATS is 2, and the turn before it did
   # commit, so the loop must keep going and report one commit and then none.
   def test_one_idle_turn_after_a_productive_one_does_not_stall
@@ -494,7 +547,7 @@ class TestLoopRunner < Minitest::Test
   # -- the budget ------------------------------------------------------------
 
   def test_the_verifier_spends_against_the_same_budget_as_the_iteration
-    state = @store.create(goal: GOAL, done_criteria: CRITERIA, repo: @repo, max_tokens: 2_500)
+    state = @store.create(goal: GOAL, done_criteria: CRITERIA, repo: @repo, max_tokens: 2_000)
     @verdict = ->(number) { "NOT_YET red #{number}" }
 
     result = loop_runner.start(state.id)
@@ -502,7 +555,10 @@ class TestLoopRunner < Minitest::Test
     assert_equal :budget, result.stop_reason
     # Two iterations and two verdicts: the judgement is paid for like the work,
     # and the loop is left resumable instead of reading "active" in the file.
-    assert_equal 2_500, @store.load(state.id).tokens
+    # The second work turn crosses the budget in one step -- a thousand tokens
+    # against the eight hundred left -- so the stop is the budget itself and not
+    # the warning at nine tenths of it.
+    assert_equal 2_250, @store.load(state.id).tokens
     assert_equal "paused", @store.load(state.id).status
   end
 
@@ -720,7 +776,9 @@ class TestLoopRunner < Minitest::Test
     log = @store.load(state.id).log.map(&:text)
     refute(log.any? { |text| text.include?("Stopped by user") }, "the agent's notice is not the loop's history")
     assert(log.any? { |text| text.include?("stopped for its budget") }, log.inspect)
-    assert_equal "iteration 1: stopped for its budget",
+    # The subject carries the marker: no verdict was bought for this iteration,
+    # and the branch has to say so where a reader looks without the loop's file.
+    assert_equal "[unverified] iteration 1: stopped for its budget",
                  git(@repo, "log", "-1", "--format=%s", "loop/#{state.id}").strip
   end
 

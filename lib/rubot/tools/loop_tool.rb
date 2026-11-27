@@ -16,7 +16,7 @@ module Rubot
     # created and read with no agent behind it. The store is built per call,
     # because the registry is shared by every session in a Ractor.
     class Loop < Tool
-      OPERATIONS = %w[start status list pause resume stop undo].freeze
+      OPERATIONS = %w[start status list pause resume raise stop undo].freeze
       GOAL_CHARS = 60 # a listing is one line per loop
       LOG_LINES = 5   # the tail of the log is the state; the rest is not worth the tokens
       # The store owns the numbers: a loop created without a cap and a call that
@@ -51,9 +51,10 @@ module Rubot
         "Work a goal through repeated iterations until it can be checked as done. " \
           "Every loop gets a git worktree and a branch of its own, and nothing is pushed.\n\n" \
           "Operations: start (needs goal, done_criteria and repo, an existing directory), " \
-          "operations: start (needs goal, done_criteria and repo, an existing directory), " \
-          "status (the facts plus the last 5 log entries), list, pause, resume, stop, " \
-          "undo (drop the last committed iteration of a paused or stalled loop)."
+          "status (the facts plus the last 5 log entries), list, pause, resume, " \
+          "raise (move a paused or stalled loop's budget, its iteration cap, or both, " \
+          "so it can continue), stop, undo (drop the last committed iteration of a " \
+          "paused or stalled loop)."
       end
 
       def parameters
@@ -61,20 +62,20 @@ module Rubot
           "type" => "object",
           "properties" => {
             "operation" => { "type" => "string", "enum" => OPERATIONS, "description" => "Loop operation" },
-            "id" => { "type" => "string", "description" => "Loop id (status, pause, resume, stop)" },
+            "id" => { "type" => "string", "description" => "Loop id (status, pause, resume, raise, stop, undo)" },
             "goal" => { "type" => "string", "description" => "The outcome the loop works toward (start)" },
             "done_criteria" => { "type" => "string", "description" => "How a verifier tells the goal is reached (start)" },
             "repo" => { "type" => "string", "description" => "Path of the git repository the loop works in (start)" },
             "max_iterations" => {
               "type" => "integer",
               "description" => "Iteration cap (start, default #{DEFAULT_MAX_ITERATIONS}); " \
-                               "resume raises it above the iterations already spent"
+                               "raise moves it up for a loop that is already paused"
             },
             "max_tokens" => {
               "type" => "integer",
               "description" => "Token budget for the whole loop (start, default #{DEFAULT_MAX_TOKENS}); " \
                                "the run stops a turn that spends it rather than waiting for an iteration to end. " \
-                               "resume raises it, and that is the only way a loop that spent its budget runs again"
+                               "raise moves it up, which is the only way a loop that spent its budget runs again"
             }
           },
           "required" => [ "operation" ]
@@ -96,6 +97,7 @@ module Rubot
         when "status" then status_of(store, args)
         when "pause"  then halt(store, args, "pause")
         when "resume" then resume(store, args)
+        when "raise"  then raise_limit(store, args)
         when "stop"   then halt(store, args, "stop")
         when "undo"   then undo_iteration(store, args)
         end
@@ -328,6 +330,92 @@ module Rubot
         end
 
         [ budget, nil ]
+      end
+
+      # A limit is the one thing a paused loop cannot walk past on its own: the
+      # run refuses a spent budget outright and stops at the same cap every time
+      # it resumes, so without this operation both ceilings could only be moved
+      # by editing the loop's file by hand.
+      #
+      # Either number or both, because a loop stopped at either ceiling is stuck
+      # the same way. The counters are left exactly as they are: tokens spent
+      # and iterations run record money already paid, and a raise that rewound
+      # them would claim the work was never bought. Nothing here wakes the loop
+      # -- a raise says what the loop may spend, `resume` says when -- so both
+      # operations stay the reader's to choose, and only those two statuses a
+      # raise cannot help are refused: `active`, where an iteration is already
+      # spending, and `done`, whose worktree is gone.
+      def raise_limit(store, args)
+        state, error = state_for(store, args)
+        return error if error
+        return "ERROR: loop #{state.id} is active; pause it first, so the limits are not moved " \
+               "under an iteration that is already spending" if state.status == "active"
+        return "ERROR: loop #{state.id} is done; its worktree is gone, so there is nothing left " \
+               "to raise a limit for" if state.status == "done"
+
+        cap, refusal = cap_for_raise(state, args)
+        return refusal if refusal
+        budget, refusal = budget_for_raise(state, args)
+        return refusal if refusal
+        return "ERROR: raise needs max_tokens, max_iterations or both; nothing was raised" if cap.nil? && budget.nil?
+
+        before = { cap: state.max_iterations.to_i, budget: state.max_tokens.to_i }
+        raised = store.update(state.id) do |loop|
+          loop.max_iterations = cap if cap
+          loop.max_tokens = budget if budget
+        end
+        note = raise_note(before, cap, budget)
+        store.append_log(state.id, "limit raised: #{note}; the spend and the iteration count are unchanged")
+        "OK: loop #{state.id} limit raised: #{note}. Tokens spent (#{raised.tokens}) and iterations " \
+          "run (#{raised.iterations}) are unchanged; resume it to continue"
+      end
+
+      # What a raise moved, both numbers so the reader sees the old one beside
+      # the new: "budget 12000000 -> 20000000 tokens" says more than the new
+      # number alone, which is a fact they could already have read.
+      def raise_note(before, cap, budget)
+        facts = []
+        facts << "budget #{before[:budget]} -> #{budget || before[:budget]} tokens" if budget
+        facts << "cap #{before[:cap]} -> #{cap || before[:cap]} iterations" if cap
+        facts.join(" and ")
+      end
+
+      # The cap a raise asks for, and nil when it asks for none. A number at or
+      # below what the loop already allows is not a raise -- the run would stop
+      # at the same place or sooner -- so it is refused rather than written, and
+      # so is one at or below the iterations already run.
+      def cap_for_raise(state, args)
+        raw = text(args["max_iterations"])
+        return [ nil, nil ] if raw.empty?
+
+        cap = Integer(raw, exception: false)
+        return [ nil, "ERROR: max_iterations must be a whole number; got #{raw.inspect}" ] if cap.nil?
+
+        floor = [ state.max_iterations.to_i, state.iterations.to_i ].max
+        return [ cap, nil ] if cap > floor
+
+        [ nil, "ERROR: loop #{state.id} already allows #{state.max_iterations} iterations and has run " \
+               "#{state.iterations}; raise max_iterations above #{floor}, and #{cap} is not" ]
+      end
+
+      # The budget a raise asks for, under the same two refusals: above what the
+      # loop already allows, and above what it has already spent. The spend is
+      # the floor a resume enforces, so a budget below it would be a raise that
+      # leaves the loop exactly as stuck as it was.
+      def budget_for_raise(state, args)
+        raw = text(args["max_tokens"])
+        return [ nil, nil ] if raw.empty?
+
+        budget = Integer(raw, exception: false)
+        if budget.nil? || budget <= 0
+          return [ nil, "ERROR: max_tokens must be a whole number of tokens above zero; got #{raw.inspect}" ]
+        end
+
+        floor = [ state.max_tokens.to_i, state.tokens.to_i ].max
+        return [ budget, nil ] if budget > floor
+
+        [ nil, "ERROR: loop #{state.id} already allows #{state.max_tokens} tokens and has spent " \
+               "#{state.tokens}; raise max_tokens above #{floor}, and #{budget} is not" ]
       end
 
       # Drop the last committed iteration: the worktree goes back one commit on

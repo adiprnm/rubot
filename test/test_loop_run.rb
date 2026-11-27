@@ -113,6 +113,10 @@ class TestLoopRun < Minitest::Test
   # Seven characters, the way the entry names the commit it stands on.
   def head_sha(id) = git(@worktree.path(id), "rev-parse", "HEAD").strip[0, 7]
 
+  # The subject of the branch's newest commit: what the branch itself says about
+  # the iteration, in the words git keeps.
+  def head_subject(id) = git(@worktree.path(id), "log", "-1", "--format=%s").strip
+
   # A repository-level hook that refuses, which is the cheapest way to make a
   # `git commit` fail after the iteration has already been paid for.
   def failing_hook(repo)
@@ -402,6 +406,133 @@ class TestLoopRun < Minitest::Test
     assert_empty @verify_contexts, "the verdict costs a full turn the loop cannot afford"
     assert_equal 60_000, @store.load(state.id).tokens
     assert_equal 2, commits_in(state.id), "the turn's work is on the branch, on top of the init one, even though it was never judged"
+  end
+
+  # -- the decision comes before the commit -----------------------------------
+  #
+  # The order is pinned where it can be seen. A stop that decides after the
+  # iteration is committed cannot mark that commit without amending it, so a
+  # marker on the subject is the branch's own proof that the money was consulted
+  # first. Move the decision back behind the commit and this fails.
+
+  def test_the_budget_decision_is_taken_before_the_commit_it_marks
+    state = @store.create(goal: "make the demo honest", done_criteria: "the demo test is green",
+                          repo: @repo, max_tokens: 50_000)
+    run = loop_run(
+      runner: runner { |ctx| write_file(ctx, "step1.txt", "1\n"); { text: "one step", tokens: 60_000 } },
+      verifier: verdicts({ verdict: :not_yet, reason: "red one" })
+    )
+
+    result = run.call(state.id)
+
+    assert_equal :budget, result.stop_reason
+    assert_equal 2, commits_in(state.id), "the work is committed even though the loop stopped on it"
+    assert head_subject(state.id).start_with?(Rubot::LoopRun::UNVERIFIED_MARKER),
+           "the commit has to carry the decision, which is only possible before it is made: #{head_subject(state.id).inspect}"
+    assert_equal "[unverified] one step", head_subject(state.id),
+                 "the marker is a prefix on the report's own line, not a second subject"
+  end
+
+  # The same marker for the harder stop: a turn cancelled mid-flight and a loop
+  # that stopped at the boundary both leave work nobody judged, so both read
+  # alike in the branch's history.
+  def test_a_mid_turn_budget_stop_marks_its_commit_unverified
+    budget = 50_000
+    state = @store.create(goal: "make the demo honest", done_criteria: "the demo test is green",
+                          repo: @repo, max_tokens: budget)
+    run = loop_run(
+      runner: runner do |ctx|
+        write_file(ctx, "step1.txt", "1\n")
+        { text: "half a step", tokens: budget + 10_000, budget_stopped: true }
+      end,
+      verifier: verdicts({ verdict: :not_yet, reason: "red one" })
+    )
+
+    result = run.call(state.id)
+
+    assert_equal :budget, result.stop_reason
+    assert_empty @verify_contexts, "a cancelled turn is not judged"
+    assert_equal "[unverified] half a step", head_subject(state.id)
+  end
+
+  # -- the warning -----------------------------------------------------------
+
+  # Nine tenths of the allowance is where the next iteration -- work and verdict,
+  # two turns of the same size -- can no longer be paid for whole. The loop
+  # stops to ask, and what it stops on is its own reason, not the budget stop's:
+  # a reader, a schedule and the tool all have to be able to tell them apart.
+  def test_nine_tenths_of_the_budget_stops_the_loop_without_buying_a_verdict
+    state = @store.create(goal: "make the demo honest", done_criteria: "the demo test is green",
+                          repo: @repo, max_tokens: 100_000)
+    run = loop_run(
+      runner: runner { |ctx| write_file(ctx, "step1.txt", "1\n"); { text: "step one", tokens: 92_000 } },
+      verifier: verdicts({ verdict: :done, reason: "green" })
+    )
+
+    result = run.call(state.id)
+
+    assert_equal :budget_warning, result.stop_reason, "a warning is not the budget stop"
+    reread = @store.load(state.id)
+    assert_equal "paused", reread.status
+    assert_equal 92_000, reread.tokens, "the counters are the money already paid"
+    assert_equal 1, result.iterations_run
+    assert_empty @verify_contexts, "the verdict is the turn the loop is stopping to ask about"
+    assert head_subject(state.id).start_with?(Rubot::LoopRun::UNVERIFIED_MARKER),
+           "its work is unverified, and the branch is where that is written"
+    assert_includes result.message, "92000 of 100000 tokens",
+                    "the stop says what was spent and what the limit was"
+    assert_includes result.message, "unverified, not unfinished"
+  end
+
+  # What a reader needs to choose between keeping the work and dropping it,
+  # without opening the worktree: the shape of the change and the files it
+  # touched. The diffstat is the one read before the commit -- afterwards the
+  # tree is clean and it would always be empty.
+  def test_the_warning_entry_names_the_diffstat_and_the_changed_files
+    state = @store.create(goal: "make the demo honest", done_criteria: "the demo test is green",
+                          repo: @repo, max_tokens: 100_000)
+    run = loop_run(
+      runner: runner do |ctx|
+        write_file(ctx, "step1.txt", "1\n")
+        { text: "step one", tokens: 95_000 }
+      end,
+      verifier: verdicts
+    )
+
+    assert_equal :budget_warning, run.call(state.id).stop_reason
+
+    entry = iteration_entry(state.id)
+    assert_includes entry, "diff ", "the entry says the size of what is waiting: #{entry.inspect}"
+    assert_includes entry, "1 file changed"
+    assert_includes entry, "files ", "and which files: #{entry.inspect}"
+    assert_includes entry, "step1.txt"
+  end
+
+  # Under the threshold nothing changes: a verdict is bought, exactly as it was
+  # before the warning existed.
+  def test_a_loop_under_the_warning_still_buys_its_verdict
+    state = @store.create(goal: "make the demo honest", done_criteria: "the demo test is green",
+                          repo: @repo, max_tokens: 100_000)
+    run = loop_run(
+      runner: runner { |ctx| write_file(ctx, "step1.txt", "1\n"); { text: "step one", tokens: 89_000 } },
+      verifier: verdicts({ verdict: :done, reason: "green" })
+    )
+
+    result = run.call(state.id)
+
+    assert_equal :done_by_verifier, result.stop_reason, "eighty-nine percent is still a loop that can pay for a verdict"
+    assert_equal 1, @verify_contexts.size
+    refute head_subject(state.id).start_with?(Rubot::LoopRun::UNVERIFIED_MARKER),
+           "an iteration that was judged is not unverified"
+    assert_equal "step one", head_subject(state.id)
+  end
+
+  # The boundary of the fraction itself, so a later edit cannot quietly move it:
+  # nine tenths exactly is the warning, a token under it is not.
+  def test_the_warning_is_nine_tenths_of_the_budget_exactly
+    assert Rubot::LoopRun.budget_warning?(90_000, 100_000)
+    assert Rubot::LoopRun.budget_warning?(89_999, 100_000) == false
+    assert Rubot::LoopRun.budget_warning?(10, 0) == false, "a budget nobody set warns on nothing"
   end
 
   # What the run tells its runner, and the whole point of it: the budget and

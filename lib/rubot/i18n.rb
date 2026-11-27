@@ -259,6 +259,7 @@ module Rubot
             "list" => "Reading the list of loops",
             "pause" => "Pausing a loop",
             "resume" => "Resuming a stopped loop",
+            "raise" => "Raising a loop's limit",
             "stop" => "Stopping a loop",
             "undo" => "Dropping the last iteration",
             "start" => "Starting a loop: %{goal}",
@@ -697,7 +698,18 @@ module Rubot
             "toggle" => "loop",
             "empty" => "No loop running.",
             "iterations" => "%{done}/%{max} iterations",
-            "remaining" => "%{left} of %{total} left"
+            "remaining" => "%{left} of %{total} left",
+            # What a budget warning says and what it offers. Each option names an
+            # operation the loop tool already has: keep is the pause the loop is
+            # already in, drop is `undo`, raise is `raise` and then `resume`.
+            "warning" => {
+              "phrase" => "the loop reached its budget warning: the last iteration is an unverified iteration, committed but never judged",
+              "spend" => "It has spent %{spent} of %{limit} tokens of its loop budget, so that unverified iteration's work is committed and unjudged, not unfinished.",
+              "keep" => "keep — leave that work committed and the loop paused; nothing more is spent.",
+              "drop" => "drop — `loop undo` with id %{id} takes the branch back one commit; the tokens already spent stay on the loop budget.",
+              "raise" => "raise — `loop raise` with a bigger max_tokens or max_iterations, then `loop resume` to carry on.",
+              "raise_only" => "There is nothing waiting in the worktree to keep or drop, so the only way on is raise — `loop raise` with a bigger max_tokens or max_iterations, then `loop resume`."
+            }
           },
           "skills" => {
             "title" => "Skills",
@@ -1178,6 +1190,7 @@ module Rubot
             "list" => "Melihat daftar loop",
             "pause" => "Menghentikan loop sementara",
             "resume" => "Melanjutkan loop yang berhenti",
+            "raise" => "Menaikkan batas loop",
             "stop" => "Menghentikan loop",
             "undo" => "Membatalkan iterasi terakhir",
             "start" => "Memulai loop: %{goal}",
@@ -1559,7 +1572,19 @@ module Rubot
             "toggle" => "loop",
             "empty" => "Tidak ada loop berjalan.",
             "iterations" => "%{done}/%{max} iterasi",
-            "remaining" => "sisa %{left} dari %{total}"
+            "remaining" => "sisa %{left} dari %{total}",
+            # What a budget warning says and what it offers, in the same words
+            # the English block uses: keep, drop and raise name operations the
+            # loop tool already has, and an unverified iteration is called
+            # unverified, never unfinished.
+            "warning" => {
+              "phrase" => "loop mencapai budget warning-nya: iterasi terakhir adalah iterasi unverified, sudah di-commit tapi belum pernah dinilai",
+              "spend" => "Loop ini sudah menghabiskan %{spent} dari %{limit} token loop budget-nya, jadi kerja iterasi unverified itu sudah di-commit dan belum dinilai, bukan belum selesai.",
+              "keep" => "keep — biarkan kerja itu tetap ter-commit dan loop tetap paused; tidak ada lagi yang dibelanjakan.",
+              "drop" => "drop — `loop undo` dengan id %{id} menarik branch mundur satu commit; token yang sudah dibelanjakan tetap tercatat di loop budget.",
+              "raise" => "raise — `loop raise` dengan max_tokens atau max_iterations yang lebih besar, lalu `loop resume` untuk melanjutkan.",
+              "raise_only" => "Tidak ada yang menunggu di worktree untuk di-keep atau di-drop, jadi satu-satunya jalan adalah raise — `loop raise` dengan max_tokens atau max_iterations yang lebih besar, lalu `loop resume`."
+            }
           },
           "skills" => {
             "title" => "Skill",
