@@ -419,5 +419,53 @@ module Rubot
     def command(text)
       ToolCaption.caption("shell_exec", { "command" => text })
     end
+
+    # --- the question ----------------------------------------------------
+    #
+    # This row is read by the person the call is addressed to, so the sentence
+    # is the question itself. What it must never be again is the arguments: a
+    # hash of label/description is not something anyone can answer.
+
+    def ask_row(args)
+      ToolCaption.caption("ask_user", args)
+    end
+
+    def test_a_question_reads_as_the_question
+      assert_equal "Bertanya: Mau pakai SQLite atau file JSON?",
+                   ask_row("question" => "Mau pakai SQLite atau file JSON?")
+    end
+
+    def test_a_question_never_prints_its_options_as_a_hash
+      row = ask_row("question" => "Mau pakai apa?",
+                    "options" => [ { "label" => "SQLite", "description" => "butuh driver" },
+                                   { "label" => "JSON", "description" => "paling simpel" } ])
+
+      assert_equal "Bertanya: Mau pakai apa?", row
+      refute_includes row, "description"
+      refute_includes row, "label"
+      refute_includes row, "=>"
+    end
+
+    def test_a_long_question_is_clipped_rather_than_flooding_the_row
+      row = ask_row("question" => "x" * 200)
+
+      assert_operator row.length, :<, 120
+      assert_includes row, "…"
+    end
+
+    def test_a_question_with_no_text_still_reads_as_a_question
+      assert_equal "Bertanya sesuatu ke kamu", ask_row({})
+    end
+
+    # The options are still one hover away, and the hover is a sentence too.
+    def test_the_hover_carries_the_question_and_its_choices
+      tooltip = ToolCaption.tooltip("ask_user",
+                                    "question" => "Mau pakai apa?",
+                                    "options" => [ { "label" => "SQLite" }, { "label" => "JSON" } ])
+
+      assert_includes tooltip, "Mau pakai apa?"
+      assert_includes tooltip, "SQLite, JSON"
+      refute_includes tooltip, "=>"
+    end
   end
 end

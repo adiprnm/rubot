@@ -90,8 +90,9 @@ module Rubot
       # The card that asks before a dangerous action: the frame moves, the tool
       # name and the reason inside it are the turn's own words.
       def test_the_confirm_card_speaks_the_chosen_language
-        locals = { prompt: { name: "rm -rf /tmp/x", reason: "deletes a directory" }, turn_id: 7 }
-        html_en, html_id = both("_confirm", **locals)
+        locals = { prompt: { kind: :confirm, name: "rm -rf /tmp/x", reason: "deletes a directory" },
+                   turn_id: 7 }
+        html_en, html_id = both("_ask", **locals)
 
         assert_includes html_en, "Confirm: rm -rf /tmp/x"
         assert_includes html_id, "Konfirmasi: rm -rf /tmp/x"

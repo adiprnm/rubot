@@ -30,6 +30,28 @@ module Rubot
     # where it is made, not discovered as a half-English interface.
     class UnknownLocale < ArgumentError; end
 
+    # Every leaf key of one language, dotted, sorted. The parity check and the
+    # settings form both read the dictionary through this.
+    #
+    # The table is read from Ractors other than the one that loaded it — a tool
+    # running inside a session actor asks for words too — and a Ractor may only
+    # read a value it could have written itself. Freezing the literal freezes
+    # the top hash and nothing under it, so the first such read raised
+    # Ractor::IsolationError. Every node is frozen once, at load.
+    def self.deep_freeze(node)
+      case node
+      when Hash
+        node.each do |key, value|
+          deep_freeze(key)
+          deep_freeze(value)
+        end
+      when Array
+        node.each { |value| deep_freeze(value) }
+      end
+
+      node.freeze
+    end
+
     # A key with no entry in any language. Raised in every environment: a
     # missing label is a blank row on someone's screen, and the parity test is
     # what keeps this from ever firing in production.
@@ -72,6 +94,18 @@ module Rubot
           "cancels" => "esc cancels",
           "empty_message" => "Nothing to send.",
           "stop_requested" => "Stop requested."
+        },
+        # The confirmation that closes a list of questions. It is the tool's,
+        # not a channel's: every surface renders the same two choices, and the
+        # labels travel with the question as its options.
+        "ask" => {
+          "confirm" => {
+            "question" => "Send these answers?",
+            "send" => "Send",
+            "send_description" => "Use these answers and carry on",
+            "restart" => "Start over",
+            "restart_description" => "Ask the questions again from the start"
+          }
         },
         "tool" => {
           "operation_unknown" => "%{prefix}: %{operation}",
@@ -227,7 +261,9 @@ module Rubot
           "fetch" => "Opening a page",
           "fetch_page" => "Opening %{url}",
           "delegate" => "Asking a sub agent for help",
-          "delegate_named" => "Asking %{agent} for help"
+          "delegate_named" => "Asking %{agent} for help",
+          "ask" => "Asking: %{question}",
+          "ask_plain" => "Asking you a question"
         },
         # What the terminal's slash commands answer with. One group per
         # command family, since the lines a command prints travel together and
@@ -451,6 +487,12 @@ module Rubot
             "title" => "Confirm: %{name}",
             "continue" => "Continue",
             "cancel" => "Cancel"
+          },
+          # The question from the ask_user tool. The option labels come from the
+          # model, so only the frame around them is translated.
+          "ask" => {
+            "custom" => "Other: type your answer",
+            "send" => "Send"
           },
           # The archive dialog. Its hint is the same sentence the results pane
           # opens with, so the two share one key rather than drifting apart.
@@ -941,6 +983,15 @@ module Rubot
           "empty_message" => "Tidak ada yang dikirim.",
           "stop_requested" => "Permintaan berhenti dikirim."
         },
+        "ask" => {
+          "confirm" => {
+            "question" => "Kirim jawaban ini?",
+            "send" => "Kirim",
+            "send_description" => "Pakai jawaban ini dan lanjut",
+            "restart" => "Ulangi",
+            "restart_description" => "Tanyakan lagi dari awal"
+          }
+        },
         "tool" => {
           "operation_unknown" => "%{prefix}: %{operation}",
           "name" => {
@@ -1095,7 +1146,9 @@ module Rubot
           "fetch" => "Membuka sebuah halaman",
           "fetch_page" => "Membuka halaman %{url}",
           "delegate" => "Meminta bantuan subagent",
-          "delegate_named" => "Meminta bantuan %{agent}"
+          "delegate_named" => "Meminta bantuan %{agent}",
+          "ask" => "Bertanya: %{question}",
+          "ask_plain" => "Bertanya sesuatu ke kamu"
         },
         "tui" => {
           "commands" => {
@@ -1298,6 +1351,10 @@ module Rubot
             "title" => "Konfirmasi: %{name}",
             "continue" => "Lanjutkan",
             "cancel" => "Batalkan"
+          },
+          "ask" => {
+            "custom" => "Lainnya: tulis jawabanmu",
+            "send" => "Kirim"
           },
           "search" => {
             "label" => "Cari percakapan",
@@ -1709,6 +1766,8 @@ module Rubot
         }
       }
     }.freeze
+    # Frozen all the way down, so a Ractor can read it: see #deep_freeze.
+    deep_freeze(DICTIONARY)
 
     class << self
       # The language everything drawn from here on is written in.
@@ -1751,7 +1810,7 @@ module Rubot
         text = value.to_s.strip.downcase
         return nil if text.empty?
 
-        LOCALES.include?(text) ? text : nil
+        LOCALES.include?(text) ? -text : nil
       end
 
       def normalize!(value)

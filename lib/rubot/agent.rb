@@ -428,14 +428,22 @@ module Rubot
     #                     it streams in, before the answer starts. Channels use
     #                     it to show a live "thinking" block; nothing is called
     #                     for a model that does not stream its reasoning.
+    #   on_ask:           Called when the model asks the user a question through
+    #                     ask_user. Yields the question payload — {question:,
+    #                     options: [{label:, description:}]} — and returns an
+    #                     outcome hash: {outcome: :option, index:, label:},
+    #                     {outcome: :custom, text:}, {outcome: :expired} or
+    #                     {outcome: :cancelled}. A channel with nowhere to ask
+    #                     passes nil, and the tool tells the model to decide.
     def process(message, on_tool_call: nil, on_tool_result: nil, on_progress: nil, on_confirm: nil,
+                on_ask: nil,
                 on_assistant_text: nil, on_reasoning: nil, on_steer: nil, on_stopped: nil, on_usage: nil,
                 on_subagent: nil, on_compaction: nil, on_compaction_start: nil, on_compaction_failed: nil, on_retry: nil,
                 on_delegate: nil, on_loop: nil, stream: true, &on_chunk)
       # One object for what this turn reports back, so the phases below name the
       # callback they use instead of carrying fifteen keywords each.
       callbacks = TurnCallbacks.new(tool_call: on_tool_call, tool_result: on_tool_result,
-                                    progress: on_progress, confirm: on_confirm,
+                                    progress: on_progress, confirm: on_confirm, ask: on_ask,
                                     assistant_text: on_assistant_text, reasoning: on_reasoning,
                                     steer: on_steer, stopped: on_stopped, usage: on_usage,
                                     subagent: on_subagent, delegate: on_delegate, on_loop: on_loop,
@@ -785,6 +793,27 @@ module Rubot
       discussing.
     PROMPT
 
+    # When a question is worth interrupting the user for.
+    #
+    # The tool's own description says how to ask. This says when, and it says
+    # it in the prompt because the rule has to hold even in a turn that never
+    # calls the tool: the failure it prevents is a turn that guessed instead of
+    # asking, and that turn has no tool call to hang the reminder on.
+    ASK_RULE = <<~PROMPT.strip.freeze
+      # Asking the User
+
+      When a decision is the user's and you cannot settle it from the code, the
+      files or what you already know, ask with `ask_user` instead of guessing.
+      Offer 2 to 4 concrete options, best first, and say in one line what
+      picking each one means. Never ask something you could look up yourself:
+      read the file, run the search, check the config, then ask only what
+      remains.
+
+      A guess that would cost the user real work is the case for asking. A
+      guess they could shrug off is the case for deciding and saying what you
+      assumed.
+    PROMPT
+
     # When a finished turn may ring the user's phone.
     #
     # The rule is the request, not the clock and not the agent's own judgement:
@@ -863,7 +892,7 @@ module Rubot
     # sub agent that opened one would hand back an answer while the work it
     # began kept spending tokens, with nobody watching the file it writes to.
     # Loops are started by a channel, which is where a reader can see them.
-    SUBAGENT_FORBIDDEN_TOOLS = %w[delegate subagent_results notify cron instagram loop].freeze
+    SUBAGENT_FORBIDDEN_TOOLS = %w[delegate subagent_results notify cron instagram loop ask_user].freeze
 
     def log_debug(msg)
       warn "[debug] #{msg}" if @config.debug?

@@ -898,14 +898,313 @@ module Rubot
 
         thread = Thread.new { answer = turn.ask_confirm("shell_exec", "deletes files") }
         deadline = Time.now + 2
-        sleep 0.01 until turn.confirm_prompt || Time.now > deadline
+        sleep 0.01 until turn.ask_prompt || Time.now > deadline
 
-        refute_nil turn.confirm_prompt
+        refute_nil turn.ask_prompt
         turn.answer_confirm(false)
         thread.join(2)
 
         refute answer
-        assert_nil turn.confirm_prompt
+        assert_nil turn.ask_prompt
+      end
+
+      # --- the question ---------------------------------------------------
+      #
+      # The same wait as the confirmation above, with an answer that is a
+      # choice or a sentence. What these tests hold is the turn's side of it:
+      # what the ask reports when the reader answers, and what it reports when
+      # the reader does not.
+
+      # Waits for the pending ask without sleeping on a fixed guess.
+      def wait_for_ask(turn)
+        deadline = Time.now + 2
+        sleep 0.005 until turn.ask_prompt || Time.now > deadline
+        turn.ask_prompt
+      end
+
+      def ask_options
+        [ { label: "New file", description: "Add 019_ask.sql" },
+          { label: "Extend 018", description: "Rebuild it in place" } ]
+      end
+
+      def test_a_question_publishes_itself_and_carries_the_options
+        turn = build
+        outcome = nil
+
+        thread = Thread.new do
+          outcome = turn.ask_question(question: "Where should it go?", options: ask_options)
+        end
+
+        prompt = wait_for_ask(turn)
+        refute_nil prompt
+        assert_equal :question, prompt[:kind]
+        assert_equal "Where should it go?", prompt[:question]
+        assert_equal [ "New file", "Extend 018" ], prompt[:options].map { |option| option[:label] }
+
+        turn.answer_ask({ outcome: :option, index: 1 })
+        thread.join(2)
+
+        # The label travels back with the choice: the browser sends a number,
+        # the model reads words.
+        assert_equal({ outcome: :option, index: 1, label: "Extend 018" }, outcome)
+        assert_nil turn.ask_prompt
+      end
+
+      def test_a_custom_answer_arrives_as_the_words_the_reader_typed
+        turn = build
+        outcome = nil
+
+        thread = Thread.new { outcome = turn.ask_question(question: "Name?", options: ask_options) }
+        wait_for_ask(turn)
+        turn.answer_ask({ outcome: :custom, text: "call it something else" })
+        thread.join(2)
+
+        assert_equal({ outcome: :custom, text: "call it something else" }, outcome)
+      end
+
+      # A question has no deadline: it waits for an answer or for the turn to go
+      # away. Silence is not an outcome the turn invents.
+      def test_a_question_waits_with_no_deadline
+        turn = build
+        outcome = nil
+
+        thread = Thread.new { outcome = turn.ask_question(question: "Anyone?", options: ask_options) }
+        wait_for_ask(turn)
+
+        sleep 0.3
+        assert thread.alive?, "nothing expires the question"
+        refute_nil turn.ask_prompt, "the question is still up"
+
+        turn.answer_ask({ outcome: :option, index: 0 })
+        thread.join(2)
+        assert_equal "New file", outcome[:label]
+      end
+
+      # A turn that ends under a question is not a question that expired: the
+      # reader was still deciding, and the turn went away.
+      def test_a_turn_that_goes_away_cancels_the_question_it_was_waiting_on
+        turn = build
+        outcome = nil
+
+        thread = Thread.new { outcome = turn.ask_question(question: "Anyone?", options: ask_options) }
+        wait_for_ask(turn)
+        turn.finish("done")
+        thread.join(2)
+
+        assert_equal({ outcome: :cancelled }, outcome)
+        assert_nil turn.ask_prompt
+      end
+
+      def test_an_open_question_carries_no_options
+        turn = build
+        outcome = nil
+
+        thread = Thread.new { outcome = turn.ask_question(question: "What should I call it?") }
+        prompt = wait_for_ask(turn)
+
+        assert_equal [], prompt[:options]
+        turn.answer_ask({ outcome: :custom, text: "anything" })
+        thread.join(2)
+
+        assert_equal({ outcome: :custom, text: "anything" }, outcome)
+      end
+
+      # Stopping a turn is the one cancellation that arrives from another
+      # thread while the question is up, so it has to release the wait itself.
+      def test_stopping_the_turn_cancels_the_question_it_is_waiting_on
+        turn = build
+        outcome = nil
+
+        thread = Thread.new { outcome = turn.ask_question(question: "Anyone?", options: ask_options) }
+        wait_for_ask(turn)
+
+        assert turn.cancel_pending_ask, "a pending question is released"
+        thread.join(2)
+
+        assert_equal({ outcome: :cancelled }, outcome)
+      end
+
+      # Stopping while nothing is waiting must not arm the next question to
+      # answer itself.
+      def test_stopping_with_nothing_pending_leaves_the_next_question_alone
+        turn = build
+
+        refute turn.cancel_pending_ask, "nothing was waiting"
+
+        outcome = nil
+        thread = Thread.new { outcome = turn.ask_question(question: "Anyone?", options: ask_options) }
+        wait_for_ask(turn)
+
+        assert thread.alive?, "a stop before the question did not pre-answer it"
+
+        turn.answer_ask({ outcome: :option, index: 1 })
+        thread.join(2)
+        assert_equal "Extend 018", outcome[:label]
+      end
+
+      # A click that outlives its question must not answer the next one: the
+      # token names the ask it belongs to.
+      def test_an_answer_for_an_older_question_is_dropped
+        turn = build
+        first = nil
+        thread = Thread.new { first = turn.ask_question(question: "First?", options: ask_options) }
+        old_token = wait_for_ask(turn)[:token]
+        turn.answer_ask({ outcome: :option, index: 0 }, token: old_token)
+        thread.join(2)
+
+        second = nil
+        two = Thread.new { second = turn.ask_question(question: "Second?", options: ask_options) }
+        wait_for_ask(turn)
+
+        refute turn.answer_ask({ outcome: :option, index: 1 }, token: old_token),
+               "a late answer is refused"
+        assert_nil second, "the second question is still waiting"
+
+        turn.answer_ask({ outcome: :option, index: 1 })
+        two.join(2)
+        assert_equal "Extend 018", second[:label]
+      end
+
+      # A prompt typed while a question is up is that question's answer: the box
+      # the reader types in is the box a custom answer goes in, and starting a
+      # turn out of it would cut the ask off and leave it standing.
+      def test_a_prompt_typed_while_a_question_is_up_answers_it
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ [ "user", "Halo" ] ] })
+        turn = Rubot::Web::Turn.new(id: "tabc", session_id: "web_rubot")
+        channel.instance_variable_get(:@turns)["tabc"] = turn
+
+        answer = nil
+        thread = Thread.new do
+          answer = turn.ask_question(question: "Name it?", options: ask_options)
+        end
+        wait_for_ask(turn)
+
+        res = FakeResponse.new
+        channel.create_turn(turn_request("something else"), res, "web_rubot")
+        thread.join(2)
+
+        assert_equal 204, res.status
+        assert_equal({ outcome: :custom, text: "something else" }, answer)
+        assert_equal 1, channel.instance_variable_get(:@turns).size,
+                     "answering a question must not start a second turn"
+      end
+
+      # With nothing waiting, the same POST starts a turn as it always did.
+      def test_a_prompt_with_no_question_up_still_starts_a_turn
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ [ "user", "Halo" ] ] })
+        channel.define_singleton_method(:owner_slug) { |_sid| "rubot" }
+        # The turn itself is not this test's subject: what matters is that the
+        # POST was not taken as an answer, so the thread is stilled here.
+        channel.define_singleton_method(:run_turn) { |*_args| }
+
+        res = FakeResponse.new
+        channel.create_turn(turn_request("halo lagi"), res, "web_rubot")
+
+        refute_equal 204, res.status, "a prompt with no question is a turn, not an answer"
+        assert_equal 1, channel.instance_variable_get(:@turns).size
+      end
+
+      # The route half of the same identity: an answer names its ask in a field
+      # called `ask`, so the auth gate still finds the web token where it looks
+      # for it. A field by the name `token` would shadow it and every click
+      # would come back 403 — which is exactly what happened before this test.
+      def test_an_answer_naming_its_ask_is_accepted_by_the_route
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ [ "user", "Halo" ] ] })
+        turn = Rubot::Web::Turn.new(id: "tabc", session_id: "web_rubot")
+        channel.instance_variable_get(:@turns)["tabc"] = turn
+
+        answer = nil
+        thread = Thread.new { answer = turn.ask_question(question: "Which?", options: ask_options) }
+        token = wait_for_ask(turn)[:token]
+
+        res = FakeResponse.new
+        channel.send(:control_turn, FakeRequest.new("/turns/tabc/ask", method: "POST",
+                                                    query: { "choice" => "1", "ask" => token.to_s }),
+                     res, "tabc", "ask")
+        thread.join(2)
+
+        assert_equal 204, res.status
+        assert_equal "Extend 018", answer[:label]
+      end
+
+      # And an answer that names the wrong ask changes nothing.
+      def test_an_answer_for_another_ask_is_refused_by_the_route
+        channel = channel_with_archive(personas: { "rubot" => { "name" => "Rubot" } },
+                                       messages: { "web_rubot" => [ [ "user", "Halo" ] ] })
+        turn = Rubot::Web::Turn.new(id: "tabc", session_id: "web_rubot")
+        channel.instance_variable_get(:@turns)["tabc"] = turn
+
+        answer = nil
+        thread = Thread.new { answer = turn.ask_question(question: "Which?", options: ask_options) }
+        wait_for_ask(turn)
+
+        res = FakeResponse.new
+        channel.send(:control_turn, FakeRequest.new("/turns/tabc/ask", method: "POST",
+                                                    query: { "choice" => "1", "ask" => "999" }),
+                     res, "tabc", "ask")
+
+        assert_equal 409, res.status
+        assert thread.alive?, "the wrong ask leaves the question standing"
+
+        # The right one still lands.
+        token = turn.ask_prompt[:token]
+        channel.send(:control_turn, FakeRequest.new("/turns/tabc/ask", method: "POST",
+                                                    query: { "choice" => "1", "ask" => token.to_s }),
+                     res, "tabc", "ask")
+        thread.join(2)
+
+        assert_equal 204, res.status
+        assert_equal "Extend 018", answer[:label]
+      end
+
+      # The confirmation that closes a list is a question with a flag, and the
+      # flag has to survive the trip: the view uses it to hide the text box, and
+      # the TUI to hide its "Other" chip.
+      def test_a_confirmation_question_carries_the_flag
+        turn = build
+        thread = Thread.new do
+          turn.ask_question(question: "Send these answers?", confirm: true, options: ask_options)
+        end
+
+        prompt = wait_for_ask(turn)
+        assert_equal true, prompt[:confirm]
+
+        turn.answer_ask({ outcome: :option, index: 0 })
+        thread.join(2)
+      end
+
+      # A turn that is over cannot ask: the next question of a list would be
+      # published with nothing left to release it.
+      def test_a_closed_turn_refuses_to_ask
+        turn = build
+        turn.finish("done")
+
+        assert_equal({ outcome: :cancelled }, turn.ask_question(question: "Anyone?", options: ask_options))
+        assert_nil turn.ask_prompt
+      end
+
+      # Two questions in one turn must not read each other's answer.
+      def test_a_second_question_waits_for_its_own_answer
+        turn = build
+        first = nil
+        second = nil
+
+        one = Thread.new { first = turn.ask_question(question: "First?", options: ask_options) }
+        wait_for_ask(turn)
+        turn.answer_ask({ outcome: :option, index: 0 })
+        one.join(2)
+
+        two = Thread.new { second = turn.ask_question(question: "Second?", options: ask_options) }
+        wait_for_ask(turn)
+        turn.answer_ask({ outcome: :option, index: 1 })
+        two.join(2)
+
+        assert_equal 0, first[:index]
+        assert_equal 1, second[:index]
+        assert_equal "Extend 018", second[:label]
       end
 
       def test_each_event_returns_after_done

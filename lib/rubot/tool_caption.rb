@@ -36,6 +36,9 @@ module Rubot
     PATH_SEGMENTS = 3
     PATTERN_CHARS = 60
     URL_CHARS = 60
+    # A question is a sentence, not a path: it gets more room than a pattern
+    # before the row starts ellipsing.
+    QUESTION_CHARS = 90
 
     DIRECTORY_WORDS = %w[ls ll la dir tree].freeze
     READ_WORDS = %w[cat less more head tail bat].freeze
@@ -126,6 +129,7 @@ module Rubot
       when "memory" then verb_caption("tool.memory", "tool.name.memory", MEMORY_OPERATIONS, args)
       when "cron" then verb_caption("tool.cron", "tool.name.cron", CRON_OPERATIONS, args)
       when "loop" then loop_caption(args)
+      when "ask_user" then ask_caption(args)
       when "instagram"
         verb_caption("tool.instagram", "tool.name.instagram", INSTAGRAM_OPERATIONS, args,
                      other: "tool.instagram.other")
@@ -139,6 +143,13 @@ module Rubot
     # carries it.
     def self.tooltip(tool_name, args)
       name = tool_name.to_s
+      # A question is not a hash to read out: the hover carries the whole
+      # sentence and the choices it offered.
+      if name == "ask_user"
+        detail = ask_tooltip(args)
+        return detail.empty? ? name : "#{name} · #{detail}"
+      end
+
       snippet = raw(name, args)
       snippet.empty? ? name : "#{name} · #{snippet}"
     end
@@ -488,6 +499,43 @@ module Rubot
       I18n.t("tool.operation_unknown", prefix: I18n.t(name_key), operation: operation)
     end
 
+    # The question, not the structure that carries it.
+    #
+    # This is the one row whose reader is also the person being addressed, so
+    # the useful sentence is the question itself: the arguments are a hash of
+    # options and printing them told the reader nothing they could answer. The
+    # options keep their place in the tooltip, one hover away.
+    def self.ask_caption(args)
+      args = {} unless args.is_a?(Hash)
+      question = args["question"].to_s.strip
+      return I18n.t("tool.ask_plain") if question.empty?
+
+      I18n.t("tool.ask", question: clip(question, QUESTION_CHARS))
+    end
+
+    # The whole question and the choices it offered, for the hover.
+    def self.ask_tooltip(args)
+      args = {} unless args.is_a?(Hash)
+      question = args["question"].to_s.strip
+      return "" if question.empty?
+
+      labels = Array(args["options"]).filter_map do |option|
+        option.is_a?(Hash) ? option["label"].to_s.strip : option.to_s.strip
+      end.reject(&:empty?)
+      return question if labels.empty?
+
+      "#{question} — #{labels.join(', ')}"
+    end
+
+    # Long enough for a real question, short enough that the row is still one
+    # line on a phone.
+    def self.clip(text, limit)
+      value = text.to_s.strip
+      return value if value.length <= limit
+
+      "#{value[0, limit - 1].rstrip}…"
+    end
+
     def self.unknown_caption(name, args)
       snippet = raw(name, args)
       snippet.empty? ? name : snippet
@@ -503,13 +551,6 @@ module Rubot
       return path unless path.start_with?("/") && segments.size > PATH_SEGMENTS
 
       "…/#{segments.last(PATH_SEGMENTS).join("/")}"
-    end
-
-    def self.clip(text, limit)
-      text = text.to_s
-      return text if text.length <= limit
-
-      "#{text[0, limit - 1]}…"
     end
   end
 end

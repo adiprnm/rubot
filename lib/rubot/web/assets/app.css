@@ -63,6 +63,11 @@
      value. The "mono" choice is the one where the two meet on purpose. */
   --reading: var(--serif);
 
+  /* The size prose arrives in: the reader's own prompt and the answer to it.
+     One value rather than 17px written twice, so a row that has to match the
+     prompt can say so and stay matched. */
+  --prompt-size: 17px;
+
   --measure: 62ch;
 
   /* The column a list marker lives in: the list pays this much of its own
@@ -225,7 +230,7 @@ body {
   background: var(--bg0);
   color: var(--fg);
   font-family: var(--reading);
-  font-size: 17px;
+  font-size: var(--prompt-size);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -1600,7 +1605,7 @@ select:focus-visible { outline: none; }
 }
 
 .thread > .turn > .turn-body,
-.thread > .turn > .confirm,
+.thread > .turn > .ask,
 .thread > .turn > .notice { max-width: 100%; }
 
 .thread::-webkit-scrollbar { width: 9px; }
@@ -2694,20 +2699,25 @@ select:focus-visible { outline: none; }
 .diff + .attachments,
 .diff + .tool-row { margin-top: 0; }
 
-/* ---------- confirm prompt --------------------------------------- */
+/* ---------- the ask: confirmation and question ------------------- */
 
-.confirm:empty,
+/* One slot, two shapes. The confirmation is what the safety guard raises
+   before an irreversible action; the question is what the model raises when a
+   decision is the reader's. They share the wait, the deadline and the place in
+   the timeline, so they share the styling too. */
+
+.ask:empty,
 .notice:empty { display: none; }
 
-.confirm,
+.ask,
 .notice {
   margin: 0 0 1.05rem;
   max-width: min(var(--measure), 86%);
 }
 
-.confirm .confirm-title { margin: 0 0 0.15rem; font-weight: 600; }
+.ask .confirm-title { margin: 0 0 0.15rem; font-weight: 600; }
 
-.confirm .confirm-reason {
+.ask .confirm-reason {
   margin: 0 0 0.55rem;
   padding-left: 0.75rem;
   border-left: 2px solid var(--yellow);
@@ -2715,7 +2725,94 @@ select:focus-visible { outline: none; }
   color: var(--fg-dim);
 }
 
-.confirm .confirm-actions { display: flex; gap: 0.45rem; }
+.ask .confirm-actions { display: flex; gap: 0.45rem; }
+
+.ask .ask-title {
+  margin: 0 0 0.55rem;
+  font-weight: 600;
+  line-height: 1.45;
+  /* A question may be several lines: the confirmation at the end of a list
+     reads the answers back one per line. */
+  white-space: pre-line;
+}
+
+.ask .ask-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0 0 0.6rem;
+}
+
+/* A suggestion is a button that carries its consequence underneath: the label
+   is what gets chosen, the line below says what choosing means. Left-aligned
+   because the descriptions are sentences, and a centred sentence reads like a
+   caption rather than a choice. */
+.ask .ask-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.55rem 0.75rem;
+  /* Prose, not a control: the option and its consequence are read in the face
+     the reader picked in settings, the same one their own prompt uses. */
+  font-family: var(--reading);
+}
+
+/* The label names the choice in a word or two and leads, at the size of the
+   reader's own prompt: a question and the choices it offers are the same
+   conversation. The consequence under it is supporting text, so it stays a step
+   below and dim. */
+.ask .ask-option-label {
+  font-size: var(--prompt-size);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.ask .ask-option-description {
+  font-size: 14px;
+  color: var(--fg-dim);
+  line-height: 1.45;
+}
+
+.ask .ask-custom {
+  display: flex;
+  gap: 0.45rem;
+  align-items: stretch;
+}
+
+/* The send button matches the box it sits beside. `.btn` on its own is the
+   small outlined control used in dense rows (10.5px, 0.3rem of padding); next
+   to a 15px input with 0.45rem of padding it read as a scrap of text and was
+   hard to hit on a phone. */
+.ask .ask-send {
+  flex: 0 0 auto;
+  /* The same face as the prose beside it: the button is part of the question,
+     not a toolbar control in a mono face. */
+  font-family: var(--reading);
+  font-size: 14px;
+  padding: 0.45rem 0.9rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+
+.ask .ask-custom-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: 15px;
+  color: var(--fg);
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  padding: 0.45rem 0.6rem;
+}
+
+.ask .ask-custom-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 
 .notice { font-size: 14px; color: var(--red); }
 

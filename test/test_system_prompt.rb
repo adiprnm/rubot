@@ -18,8 +18,8 @@ require_relative "test_helper"
 class TestSystemPrompt < Minitest::Test
   # SHA1 of the prompt, with the temporary directory replaced by "<root>" so
   # the number does not depend on where the suite runs.
-  PLAIN_PROMPT = "23566ecf584ea1bdc00544ca2ab4ef767a968704"
-  RICH_PROMPT = "8db1e17d7816f15cd6cfe03f36b86e1be03231d6"
+  PLAIN_PROMPT = "608b13ba621cea193c6717df5bb84954a96d84c3"
+  RICH_PROMPT = "643c8e172a1746682c3d42bf3b11a58cabff3e25"
   CHANGE_PATCH = "74fb59b8e45b2a4e0c20614d4ad727bed5b2e311"
 
   # The fingerprint a session pins its prompt under, key by key. Anything that

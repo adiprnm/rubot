@@ -184,6 +184,19 @@ module Rubot
               break reply[2]
             end
           end,
+          # A question from the ask_user tool. Same shape as the confirmation
+          # above and for the same reason: the reader is on the other side of
+          # the actor, so the call block here until the channel answers it.
+          on_ask: lambda do |payload|
+            id = SecureRandom.hex(6)
+            events << [ :ask, id, payload ]
+            loop do
+              reply = control.receive
+              next unless reply[0] == :ask_result
+              next unless reply[1] == id
+              break reply[2]
+            end
+          end,
           stream: msg.fetch(:stream, true)
         }
 

@@ -13,14 +13,14 @@ module Rubot
     # doing (`callbacks.usage&.call(live: live)`), and a wrapper method per
     # callback would only move the nil check one level away from the reader.
     class TurnCallbacks
-      attr_reader :tool_call, :tool_result, :progress, :confirm, :assistant_text,
+      attr_reader :tool_call, :tool_result, :progress, :confirm, :ask, :assistant_text,
                   :reasoning, :steer, :stopped, :usage, :subagent, :delegate,
                   :compaction, :compaction_start, :compaction_failed, :retry_callback,
                   # The `on_` prefix is the one reader that keeps it: a reader
                   # named `loop` would shadow Kernel#loop for this object.
                   :on_loop
 
-      def initialize(tool_call: nil, tool_result: nil, progress: nil, confirm: nil,
+      def initialize(tool_call: nil, tool_result: nil, progress: nil, confirm: nil, ask: nil,
                      assistant_text: nil, reasoning: nil, steer: nil, stopped: nil,
                      usage: nil, subagent: nil, delegate: nil, compaction: nil,
                      compaction_start: nil, compaction_failed: nil, retry_callback: nil,
@@ -29,6 +29,7 @@ module Rubot
         @tool_result = tool_result
         @progress = progress
         @confirm = confirm
+        @ask = ask
         @assistant_text = assistant_text
         @reasoning = reasoning
         @steer = steer
