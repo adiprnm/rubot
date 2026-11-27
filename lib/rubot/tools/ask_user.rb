@@ -24,14 +24,6 @@ module Rubot
       # How many times the reader may send the list back for a retry before the
       # sequence gives up rather than looping forever.
       MAX_RESTARTS = 3
-      # How many questions one turn may spend. Without a ceiling a hesitant
-      # model turns the turn into an interrogation, one interruption at a time.
-      # It matches the most a single call may carry, so one full list always
-      # fits; a second call in the same turn comes out of what is left. A list
-      # that is started over spends nothing extra: the retries are bounded by
-      # MAX_RESTARTS, so five questions can cost at most five times three
-      # questions plus the same number of confirmations, and always end.
-      PER_TURN_LIMIT = MAX_QUESTIONS
 
       # Which of the confirmation's two answers sends the list, and which sends
       # the reader back to the first question.
@@ -71,10 +63,14 @@ module Rubot
           `description` saying what picking it means. Leave `options` out only
           when you cannot guess the shape of the answer; the user then types it.
 
-          The answers come back as this call's result. The result instead says
-          the user cancelled the turn, or that you have already asked
-          #{PER_TURN_LIMIT} questions in this turn — in those cases decide with the
-          safest default, say in one line what you assumed, and do not ask again.
+          The answers come back as this call's result. If the result says the
+          user cancelled the turn, or that nobody can be asked on this surface,
+          decide with the safest default, say in one line what you assumed, and
+          do not ask again.
+
+          How many times a turn may ask is not capped, so the restraint is yours:
+          every question costs the reader a decision. Batch what belongs
+          together into one call instead of asking one thing at a time.
         DESC
       end
 
@@ -147,13 +143,6 @@ module Rubot
         "ERROR: #{e.message}"
       end
 
-      # How many questions this call is asking, for the per-turn ceiling.
-      def questions_count(arguments)
-        questions_of(arguments).size
-      rescue InvalidArguments
-        1
-      end
-
       # The questions this call carries, validated. `questions` is the shape the
       # tool asks for; a lone `question` is still read, so a model that learned
       # the old signature is answered rather than scolded.
@@ -210,13 +199,6 @@ module Rubot
         else
           no_reader_text
         end
-      end
-
-      # The ceiling is not an error the model should retry: it is a fact about
-      # how much it has already interrupted this turn.
-      def limit_reached_text
-        "No more questions this turn: #{PER_TURN_LIMIT} were already asked. " \
-          "Decide with the safest default and say in one line what you assumed."
       end
 
       def no_reader_text
