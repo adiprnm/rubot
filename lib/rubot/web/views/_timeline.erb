@@ -60,22 +60,11 @@ end -%>
 <% end -%>
 </div>
 <% when :subagent -%>
-<%# The brief rides on the row as a <details>: a task is a whole brief and the
-    row is one line, so the rest of it is read by tapping — the tooltip it used
-    to hide in is a desktop's control, not a phone's. The id it opens under is
-    the turn's row id, which is what lets a swap that rewrites the row find it
-    again (see app.js, restoreSubagentBriefs). -%>
-<% if item[:task].to_s != "" -%>
-<details class="subagent-row subagent-<%= h(item[:phase]) %>"<%= item_attrs(item) %>>
-  <summary class="subagent-summary">
-    <%= View.render("_subagent_spans", agent: item[:agent], phase: item[:phase], line: item[:detail]) %>
-  </summary>
-  <%= View.render("_subagent_brief", run: item) %>
-</details>
-<% else -%>
-<div class="subagent-row subagent-<%= h(item[:phase]) %>"<%= item_attrs(item) %>>
-  <%= View.render("_subagent_spans", agent: item[:agent], phase: item[:phase], line: item[:detail]) %>
-</div>
-<% end -%>
+<%# The same delegation row the footer draws, with the turn's row id as the id
+    it opens under: a swap that rewrites the row finds it again by that id (see
+    app.js, restoreSubagentBriefs). -%>
+<%= View.render("_subagent_row",
+                run: { agent: item[:agent], phase: item[:phase], line: item[:detail], task: item[:task] },
+                wrapper_class: "subagent-row subagent-#{item[:phase]}", attrs: item_attrs(item)) %>
 <% end -%>
 <% end -%>

@@ -1,35 +1,23 @@
-<%# One row per delegated run: the persona it runs as, what it was asked to do,
-    how far it has got, and how it ended. The same rows the strip above the
-    composer draws, kept here so they can still be read after the turn that
-    asked for them is over.
+<%# The delegated runs of one conversation, newest first, as the footer's sheet
+    draws them. One row per run, and the row itself — the line, the brief behind
+    it, and the id it opens under — is `_subagent_row`, which the transcript
+    draws too.
 
-    `line` is the whole sentence and the only thing drawn: a row is never
-    half-assembled here, so the sheet and the transcript cannot disagree about
-    a run (see Web::SubagentLine). The task used to ride on the row as a
-    tooltip, which is a control a desktop has and a phone does not — so the row
-    is a <details> now and the whole brief is read by tapping it. Its id is the
-    run's, because the list is rewritten on every step the run takes and the
-    open row has to be found again (see app.js, restoreSubagentBriefs). -%>
+    The id is the run's and not the position's: this list is replaced whole on
+    every step a run takes, so a row keeps its state while the ones above it
+    change (see app.js, restoreSubagentBriefs). -%>
 <% if subagents.empty? -%>
   <p class="usage-note"><%= h(I18n.t("web.subagents.empty")) %></p>
 <% else -%>
   <ul class="subagent-rows">
 <% subagents.each do |s| -%>
-<%   brief = [ s[:task], s[:result], s[:error] ].any? { |value| value.to_s != "" } -%>
 <%   run_id = s[:run_id].to_s -%>
+<%   attrs = run_id.empty? ? "" : %( id="subagent-run-#{h(run_id)}") -%>
     <li class="subagent subagent-<%= h(s[:phase]) %>">
-<% if brief -%>
-      <details class="subagent-more"<%= %( id="subagent-run-#{h(run_id)}") unless run_id.empty? %>>
-        <summary class="subagent-summary">
-          <%= View.render("_subagent_spans", agent: s[:agent], phase: s[:phase], line: s[:line]) %>
-        </summary>
-        <%= View.render("_subagent_brief", run: s) %>
-      </details>
-<% else -%>
-      <div class="subagent-summary">
-        <%= View.render("_subagent_spans", agent: s[:agent], phase: s[:phase], line: s[:line]) %>
-      </div>
-<% end -%>
+      <%= View.render("_subagent_row",
+                      run: { agent: s[:agent], phase: s[:phase], line: s[:line],
+                             task: s[:task], result: s[:result], error: s[:error] },
+                      wrapper_class: "subagent-more", attrs: attrs) %>
     </li>
 <% end -%>
   </ul>

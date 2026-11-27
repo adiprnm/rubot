@@ -1,0 +1,30 @@
+<%# One delegation row, drawn the same in the footer's sheet and in the
+    transcript. It lives here because both places had their own copy of the
+    `<details>` and the two copies drifted the moment one of them was touched:
+    the sheet wrapped a row that had nothing to open, the transcript did not,
+    and only the sheet's copy kept the flex line the ellipsis needs.
+
+    `line` is the whole sentence and the only thing drawn (see Web::SubagentLine).
+    A row with something to read — the task, the answer, or why it failed — is a
+    `<details>` that opens onto it; a row with nothing to read stays a line, and
+    with no marker and no pointer either, so nothing invites a tap that would
+    open an empty panel.
+
+    `wrapper_class` is what the row wears where it is drawn: `.subagent-row` in
+    the transcript, `.subagent-more` in the sheet, where the phase classes live
+    on the <li> instead. `attrs` carries whatever id the row is addressed by —
+    the turn's row id in the transcript, the run's in the sheet, because the
+    sheet's list is rewritten on every step a run takes and the open row has to
+    be found again (see app.js, restoreSubagentBriefs). -%>
+<% brief = [ run[:task], run[:result], run[:error] ].any? { |value| value.to_s != "" } -%>
+<% spans = View.render("_subagent_spans", agent: run[:agent], phase: run[:phase], line: run[:line]) -%>
+<% if brief -%>
+<details class="<%= wrapper_class %>"<%= attrs %>>
+  <summary class="subagent-summary"><%= spans %></summary>
+  <%= View.render("_subagent_brief", run: run) %>
+</details>
+<% else -%>
+<div class="<%= wrapper_class %>"<%= attrs %>>
+  <div class="subagent-summary"><%= spans %></div>
+</div>
+<% end -%>

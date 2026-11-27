@@ -92,7 +92,9 @@ module Rubot
       end
 
       # A row written before the brief was a thing has no task of its own, and
-      # the transcript still has to draw it.
+      # the transcript still has to draw it — as a line the CSS can still cut
+      # short: the ellipsis lives on a flex block, so the row that opens and the
+      # row that does not have to wear the same one.
       def test_a_transcript_row_without_a_task_stays_a_line
         html = View.render("_timeline", items: [
                              { kind: :subagent, agent: "writer", phase: "done", detail: "1 langkah · 3s" }
@@ -100,6 +102,7 @@ module Rubot
 
         refute_includes html, "<details"
         assert_includes html, %(<div class="subagent-row subagent-done">)
+        assert_includes html, %(<div class="subagent-summary">)
         assert_includes html, "1 langkah · 3s"
       end
 
@@ -128,20 +131,39 @@ module Rubot
         assert_includes js, %(document.addEventListener("toggle", rememberSubagentBrief, true))
       end
 
+      # A row that leaves the page takes its id with it, and nothing tells the
+      # set: a <details> removed by a swap never fires `toggle`. Without the
+      # prune the set keeps every run the conversation ever delegated, and the
+      # loop walks them all on every swap.
+      def test_a_row_that_left_with_its_run_is_forgotten
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+        restore = js[/function restoreSubagentBriefs\(\) \{.*?\n\}/m]
+
+        refute_nil restore, "restoreSubagentBriefs is missing from app.js"
+        assert_includes restore, "openSubagentBriefs.delete(id)",
+                        "a row that no longer resolves has to be dropped from the set"
+      end
+
       # A brief is three kilobytes and the row it belongs to is a footnote: a
       # panel that grows with the text would push the conversation off the
-      # screen on the one device this was built for.
+      # screen on the one device this was built for. And the pointer belongs to
+      # the rows that actually open — a row with nothing behind it wears the same
+      # flex block, and a hand over it promises a tap that does nothing.
       def test_the_brief_cannot_grow_past_the_screen
         css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
         text = css[/^\.subagent-brief-text \{[^}]*\}/]
         summary = css[/^\.subagent-summary \{[^}]*\}/]
+        opening = css[/^summary\.subagent-summary \{[^}]*\}/]
 
         refute_nil text, "the .subagent-brief-text rule is missing from app.css"
         refute_nil summary, "the .subagent-summary rule is missing from app.css"
+        refute_nil opening, "the summary-only rule is missing from app.css"
         assert_includes text, "max-height", "the panel has to stop growing somewhere"
         assert_includes text, "overflow: auto", "and the rest has to be reachable"
-        assert_includes summary, "cursor: pointer", "the row has to say it opens"
         assert_includes summary, "list-style: none", "the row already has a mark; no triangle"
+        refute_includes summary, "cursor: pointer",
+                        "the flex block is worn by rows that do not open as well"
+        assert_includes opening, "cursor: pointer", "the row has to say it opens"
       end
 
       private
