@@ -504,6 +504,13 @@ module Rubot
       @persona&.to_h
     end
 
+    # Whether this agent may only look at files, never change them. The rule
+    # lives in ToolWiring#read_only_role?; this is its public face, for the
+    # channels that execute a tool through a handle instead of a turn.
+    def read_only?
+      read_only_role?
+    end
+
     # Apply a persona to this agent. Accepts a Persona, a Hash, or nil to
     # remove the persona. Optionally accepts preset:/model:/prompt: keywords.
     # Returns the new persona as a Hash (or nil).

@@ -47,7 +47,7 @@ module Rubot
       # request: a read can return a PNG, and an error is reported to the model
       # rather than raised, because a failed tool is a thing to answer about.
       def run_one_tool(call)
-        result = @tools.execute(call[:name], call[:arguments])
+        result = @tools.execute(call[:name], call[:arguments], read_only: read_only_role?)
         Session.normalize_utf8(result.to_s)
       rescue StandardError => e
         "ERROR: #{e.class}: #{e.message}"

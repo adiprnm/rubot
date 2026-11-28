@@ -286,7 +286,7 @@ module Rubot
         when :tool_list            then agent.tools.all.map(&:name)
         when :tool_count           then agent.tools.count
         when :tool_description     then agent.tools.get(msg[:name])&.description.to_s
-        when :tool_execute         then agent.tools.execute(msg[:name], msg[:arguments])
+        when :tool_execute         then agent.tools.execute(msg[:name], msg[:arguments], read_only: agent.read_only?)
         when :tool_context         then set_tool_context(agent, msg[:name], msg[:context])
         when :soul_enabled         then agent.soul.enabled?
         when :soul_content         then agent.soul.to_s
