@@ -42,9 +42,10 @@ held it. The lease file is opened `close_on_exec` for the same reason it exists
 at all — rubot forks for tool execution, and an inherited open file description
 is an inherited lock, which would make a child that outlives its parent look
 like a loop nobody is working. Asking whether the lease is held opens that same
-file without creating it, so a question about a loop nobody has run leaves no
-directory and no lock file behind, and the answer comes from the open that would
-have taken the lock rather than from a separate look at whether the path exists.
+file read-only and without creating it, so a question about a loop nobody has run
+leaves no directory and no lock file behind, and the answer comes from that one
+open — a shared lock taken and given straight back — rather than from a separate
+look at whether the path exists.
 
 ## Consequences
 

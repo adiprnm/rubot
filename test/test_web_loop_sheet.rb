@@ -107,6 +107,52 @@ class TestWebLoopSheet < Minitest::Test
     refute_includes Rubot::Web::View.render("_loop_rows", loops: rows), paused.goal
   end
 
+  # -- what moves ------------------------------------------------------------
+
+  # The one fact the state file cannot answer. A loop says `active` whether or
+  # not anything is working on it, so the mark is drawn from the lease: while a
+  # process holds it, both the toggle and the card turn.
+  def test_a_loop_whose_lease_is_held_says_it_is_being_worked
+    state = loop_state
+    lease = Rubot::LoopLease.hold(File.join(@base, "loops"), state.id)
+    rows = @harness.loop_rows("web_rubot")
+
+    assert_equal true, rows.first[:running]
+    assert_includes Rubot::Web::View.render("_loop_rows", loops: rows), "loop-spinner"
+    assert_includes sheet(rows), "loop-spinner"
+  ensure
+    lease&.release
+  end
+
+  # An active loop nobody is holding is a run that died with its process. It
+  # is still worth a card -- its figures are true -- but a ring turning over it
+  # would be the panel claiming work that is not happening.
+  def test_an_active_loop_nobody_holds_draws_no_mark
+    loop_state
+    rows = @harness.loop_rows("web_rubot")
+
+    assert_equal false, rows.first[:running]
+    refute_includes Rubot::Web::View.render("_loop_rows", loops: rows), "loop-spinner"
+    refute_includes sheet(rows), "loop-spinner"
+  end
+
+  # The toggle sits outside the body the poll replaces, so the answer to that
+  # poll has to carry the mark itself: without it a ring would keep turning
+  # after the loop it described stopped.
+  def test_the_poll_carries_the_toggle_mark_out_of_band
+    state = loop_state
+    markup = @harness.loop_poll_markup("web_rubot")
+
+    assert_includes markup, %(<span class="loop-state" id="loop-state" hx-swap-oob="innerHTML">)
+    assert_includes markup, "make the demo honest"
+    refute_includes markup, "loop-spinner", "nobody holds the lease"
+
+    lease = Rubot::LoopLease.hold(File.join(@base, "loops"), state.id)
+    assert_includes @harness.loop_poll_markup("web_rubot"), "loop-spinner"
+  ensure
+    lease&.release
+  end
+
   # -- the sheet around it ---------------------------------------------------
 
   # A conversation that never started a loop gets no control for one.

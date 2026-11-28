@@ -286,7 +286,7 @@ module Rubot
 
         res["Content-Type"] = "text/html; charset=utf-8"
         res["Cache-Control"] = "no-store"
-        res.body = loop_rows_markup(sid)
+        res.body = loop_poll_markup(sid)
       end
 
       # The reader asking for the pinned prompt to be rebuilt (see

@@ -61,17 +61,34 @@ class TestLoopLease < Minitest::Test
     refute Rubot::LoopLease.held?(@dir, ID), "a released lease is free again"
   end
 
-  # A question must not leave anything behind either: `hold` creates the
-  # directory on its way to the lock file, so asking through it made a `loops`
-  # directory and an empty lock file for a loop nobody had ever run. Nobody can
-  # hold a lease that was never taken, so the answer is free before anything is
-  # opened.
+  # A question must not leave anything behind either. Opening the lock file for
+  # writing made it, and the directory it lives in, for a loop nobody had ever
+  # run -- a file that answers "free" forever plus a `loops` directory born of a
+  # question. Nobody can hold a lease that was never taken, so the answer is free
+  # without anything being opened for writing.
   def test_asking_about_a_loop_that_never_ran_creates_nothing
     dir = File.join(@tmp, "never")
 
     refute Rubot::LoopLease.held?(dir, ID), "no lease was ever taken, so none is held"
     refute File.exist?(dir), "the question must not create the loops directory"
     refute File.exist?(Rubot::LoopLease.path_for(dir, ID)), "nor the lock file inside it"
+  end
+
+  # A reader is not a run. The footer's loop mark asks this every three seconds
+  # while the panel is open, and an exclusive probe made two askers look like
+  # holders to each other: the ring turned over a loop whose run had died, which
+  # is the one thing the lease exists to be able to tell apart.
+  def test_a_reader_is_not_seen_as_a_run
+    path = Rubot::LoopLease.path_for(@dir, ID)
+    reader = File.open(path, File::RDONLY | File::CREAT, 0o600)
+    reader.flock(File::LOCK_SH)
+
+    refute Rubot::LoopLease.held?(@dir, ID), "a shared read is not somebody working"
+    refute Rubot::LoopLease.held?(@dir, ID), "and two readers do not make one"
+
+    assert_nil Rubot::LoopLease.hold(@dir, ID), "a real lease still does not get it"
+  ensure
+    reader&.close
   end
 
   # It runs in an ensure, so a second call is normal rather than a bug: an ensure

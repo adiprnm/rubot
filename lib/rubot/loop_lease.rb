@@ -42,13 +42,11 @@ module Rubot
 
     # The lease, or nil when somebody else holds it. Never waits: a run that is
     # already in flight is an answer the caller has to give, not a line to stand
-    # in. `create: false` is how a question opens a lease without leaving one
-    # behind: nothing is made, and a missing file is the caller's `ENOENT` to
-    # answer rather than something this method fixes by creating it.
-    def self.hold(dir, id, create: true)
+    # in.
+    def self.hold(dir, id)
       path = path_for(dir, id)
-      FileUtils.mkdir_p(dir) if create
-      io = File.open(path, create ? (File::RDWR | File::CREAT) : File::RDWR, 0o600)
+      FileUtils.mkdir_p(dir)
+      io = File.open(path, File::RDWR | File::CREAT, 0o600)
       # rubot forks for tool execution, and a forked child inherits the parent's
       # open file descriptions, and with them the lock. Closing this one on exec
       # keeps the lease with the process that took it, so a child that outlives
@@ -69,23 +67,39 @@ module Rubot
     end
 
     # Whether somebody holds the lease. It must not steal one on the way to the
-    # answer: asked while a run is in flight -- which is every time the loop tool
-    # is asked to resume an active loop -- a lease it managed to take would be a
-    # lease taken out of a live run's hands. So a lock it does get is given
-    # straight back, and the answer is that nobody held it.
+    # answer, and it must not look like a holder to anything else that asks.
     #
-    # Nor may asking leave anything behind. Only `hold` creates a lock file, so a
-    # question about a loop nobody has run finds nothing to open -- and the
-    # directory it would live in need not exist either. Creating both on the way
-    # to an answer left a `loops` directory and an empty `.id.run` behind for
-    # every question, so the file is opened without `CREAT` and a missing one is
-    # answered from that same open: one question to the kernel, with no separate
-    # look at whether the path exists in front of it.
+    # A shared lock is what buys the second half. A run takes the lease
+    # exclusively (see .hold); a reader takes it shared -- LOCK_SH -- and gives it
+    # straight back. Two shared locks coexist, so two pages asking at the same
+    # moment both read "free", which is the answer the loop's file already gives.
+    # Asked of an exclusive lock instead -- which is what this was -- the second
+    # asker took the first asker for a run: a dead loop wore a turning ring, and
+    # a resume landing in that window was refused as already active.
+    #
+    # A reader still brushes against a real run for the instant it holds the
+    # file, because an exclusive lock cannot land while a shared one is open.
+    # That is why the question is one non-blocking call and nothing more: the
+    # shorter it is, the smaller the window two readers of the same loop can
+    # widen between them.
+    #
+    # Nor may asking leave anything behind. A lock file that is not there is a
+    # lease nobody has taken, and the directory it would live in need not exist
+    # either: opening the file for writing made both, so every question left a
+    # `loops` directory and an empty `.id.run` behind. The file is opened
+    # read-only instead, and a missing one is answered by that same open rather
+    # than by a look at whether the path exists in front of it -- one question to
+    # the kernel, with no window between two.
     def self.held?(dir, id)
-      lease = hold(dir, id, create: false)
-      return true if lease.nil?
-
-      lease.release
+      io = File.open(path_for(dir, id), File::RDONLY)
+      begin
+        return true unless io.flock(File::LOCK_SH | File::LOCK_NB)
+      ensure
+        # The lock lives in the open file description, so closing is releasing;
+        # a probe that left a description behind would be one descriptor per ask,
+        # and there is an ask every three seconds a panel is open.
+        io.close
+      end
       false
     rescue Errno::ENOENT
       # Nothing to open is nothing held: the lock file is the lease, so a file

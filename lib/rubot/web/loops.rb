@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require_relative "../loop_lease"
 require_relative "../loop_run"
 require_relative "../loop_runner"
 require_relative "../loop_store"
@@ -754,7 +755,16 @@ module Rubot
           end
           next nil unless state && state.status.to_s == LOOP_PANEL_STATUS
 
-          loop_row(state)
+          working = begin
+            LoopLease.held?(ledger.dir, id)
+          rescue StandardError
+            # A lease that cannot be proved held is not a run the page may
+            # claim: an idle spinner on a dead loop is a worse answer than no
+            # spinner on a live one, and the row's figures are still true.
+            false
+          end
+
+          loop_row(state, running: working)
         end.sort_by { |row| -row[:age_seconds] }
       end
 
@@ -765,7 +775,13 @@ module Rubot
       # Two figures and a name. What a loop has spent is the same fact as what
       # is left of it, and the rest -- the id, the status word, the clock -- was
       # the panel repeating the reader's own question back at them.
-      def loop_row(state)
+      #
+      # `running` is the one fact that is not in the file: a loop's markdown says
+      # `active` whether or not anything is working on it, so "somebody is on
+      # this right now" is asked of the lease (see LoopLease) and handed in. The
+      # row carries it rather than the template asking for it, for the same
+      # reason every other field is decided here.
+      def loop_row(state, running: false)
         max_tokens = state.max_tokens.to_i
         used = state.tokens.to_i
         updated = state.updated_at
@@ -778,6 +794,8 @@ module Rubot
           # the budget, and "-12,000 left" is not a figure a reader should have
           # to reason about at the end of a long day.
           remaining: [ max_tokens - used, 0 ].max,
+          # What draws the turning ring, in the card and on the toggle.
+          running: running ? true : false,
           # Not drawn: this is what orders the cards, so the loop that moved last
           # is the one at the top.
           age_seconds: updated ? [ (Time.now - updated.to_time).to_i, 0 ].max : 0
@@ -788,6 +806,16 @@ module Rubot
       # the same partial the page drew, so the panel and the answer to its poll
       # can never disagree about a loop.
       def loop_rows_markup(sid, rows = loop_rows(sid)) = View.render("_loop_rows", loops: rows)
+
+      # The mark on the toggle, out of band. The panel's poll only replaces the
+      # cards, and a toggle that kept turning after its loop stopped -- or stayed
+      # still while one began -- is the mark lying about the thing it exists to
+      # say. So the same answer carries the toggle's state beside the rows, and
+      # the element in the page is the one the sheet drew.
+      def loop_state_markup(rows)
+        %(<span class="loop-state" id="loop-state" hx-swap-oob="innerHTML">) +
+          View.render("_loop_state", loops: rows) + %(</span>)
+      end
 
       # The sheet whole, drawn for a page that is already open. A loop
       # beginning or ending changes whether the toggle exists at all, and a
@@ -806,9 +834,20 @@ module Rubot
       # Only the rows, for the case where the panel's own existence has not
       # changed: replacing the whole sheet would close an open panel under the
       # reader's cursor, and a second loop starting is no reason to lose their
-      # place in the first.
+      # place in the first. The toggle's mark travels with them, because a card
+      # that stopped saying "working" while the ring above it kept turning would
+      # be the same two answers for one fact this channel keeps out.
       def loop_body_markup(sid, rows = loop_rows(sid))
-        %(<div id="loop-sheet-body" hx-swap-oob="innerHTML">#{loop_rows_markup(sid, rows)}</div>)
+        loop_state_markup(rows) +
+          %(<div id="loop-sheet-body" hx-swap-oob="innerHTML">#{loop_rows_markup(sid, rows)}</div>)
+      end
+
+      # The answer to the panel's own poll: the rows, which land in the body the
+      # request targeted, and the toggle's mark beside them as an out-of-band
+      # swap. Only the poll needs both -- a push either redraws the whole sheet
+      # or replaces the body (see #push_loop_sheet).
+      def loop_poll_markup(sid, rows = loop_rows(sid))
+        loop_state_markup(rows) + loop_rows_markup(sid, rows)
       end
 
       # Told to the conversation's open pages, if it has any: with none open
@@ -899,8 +938,10 @@ module Rubot
              # The panel redrawn for a page that is already open. Public for the
              # same reason: what a loop beginning does to the footer is a fact
              # about the channel, and the test can only see it if the push is
-             # callable.
-             :loop_sheet_markup, :loop_body_markup, :push_loop_sheet
+             # callable. The poll is here for the same reason, and because its
+             # answer is the only place the toggle's mark is kept true while the
+             # panel is open.
+             :loop_sheet_markup, :loop_body_markup, :loop_poll_markup, :push_loop_sheet
     end
   end
 end

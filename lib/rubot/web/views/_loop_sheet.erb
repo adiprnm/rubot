@@ -14,11 +14,13 @@
     the numbers are written to a file in between -- so the body polls while it
     is open and never while it is closed: a closed panel is not a thing the
     reader is looking at, and a timer that kept asking would be one request
-    every three seconds for the rest of the session. -%>
+    every three seconds for the rest of the session. The mark on the toggle is
+    outside the body that poll targets, so the same answer carries it as an
+    out-of-band swap (see Web::Loops#loop_state_markup). -%>
 <%- hidden = loops.empty? -%>
 <details class="usage-sheet usage-sheet-loops" id="loop-sheet"<%= " hidden" if hidden %>>
   <summary class="usage-toggle" title="<%= h(I18n.t("web.loops.title")) %>" aria-label="<%= h(I18n.t("web.loops.title")) %>">
-    <%= usage_icon(:loop) %><span class="loop-label"><%= h(I18n.t("web.loops.toggle")) %></span>
+    <%= usage_icon(:loop) %><span class="loop-label"><%= h(I18n.t("web.loops.toggle")) %></span><span class="loop-state" id="loop-state"><%= View.render("_loop_state", loops: loops) %></span>
   </summary>
 
   <div class="usage-panel" role="group" aria-label="<%= h(I18n.t("web.loops.title")) %>">

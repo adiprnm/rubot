@@ -584,12 +584,20 @@ module Rubot
       # want the same pixel size — they want the same answer to "how big is
       # this line". A literal px here would have to be re-matched by hand every
       # time a row changes size, which is what the fraction is for.
+      #
+      # The loop's mark is in both places the subagent's is: the toggle in the
+      # same footer row and the ring inside a panel row. It is read from the
+      # same rules rather than from copies, so the two controls cannot drift
+      # into two drawings that merely started out equal — and "same rule" is
+      # asked of the selector list below, not inferred from two identical
+      # bodies, because two copies that agree today are exactly the drift this
+      # is guarding against.
       def test_the_marks_are_a_fraction_of_the_line_they_sit_in
         css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
-        box = css[/^\.subagent-run \{[^}]*\}/]
-        ring = css[/^\.subagent-run \.subagent-spinner \{[^}]*\}/]
-        working_mark = css[/^\.row \.mark \{[^}]*\}/]
-        row_ring = css[/^\.subagent-mark \.subagent-spinner \{[^}]*\}/]
+        box = declarations_for(css, ".subagent-run")
+        ring = declarations_for(css, ".subagent-run .subagent-spinner")
+        working_mark = declarations_for(css, ".row .mark")
+        row_ring = declarations_for(css, ".subagent-mark .subagent-spinner")
 
         refute_nil box, "the .subagent-run rule is missing from app.css"
         refute_nil ring, "the ring has no rule of its own"
@@ -618,6 +626,116 @@ module Rubot
         refute_nil row_ring, "the ring inside a row has no rule of its own"
         assert_includes row_ring, "width: 0.8em",
                         "a row's ring is sized by the line it sits in, like the working mark"
+      end
+
+      # The loop's two marks are the subagent's two marks, from the same rule in
+      # each place — toggle box, toggle ring, row ring, and the line the row ring
+      # is aligned on. This is what the user asked for when they chose "make the
+      # position the same first": not a card tuned until it matched, but one
+      # drawing used twice, which is the only version that stays matched.
+      def test_a_loop_mark_is_the_subagent_mark_and_not_a_copy_of_it
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+
+        {
+          ".subagent-run" => ".loop-run",
+          ".subagent-run .subagent-spinner" => ".loop-run .loop-spinner",
+          ".subagent-mark .subagent-spinner" => ".loop-mark .loop-spinner",
+          ".subagent-summary" => ".loop-rows .loop-goal"
+        }.each do |subagent_selector, loop_selector|
+          shared = shared_rules(css, subagent_selector, loop_selector)
+
+          assert_equal 1, shared.size,
+                       "#{loop_selector} must be in the rule that declares #{subagent_selector}: " \
+                       "two rules that say the same thing today is the drift this guards against"
+        end
+      end
+
+      # The placement itself, which is what "same position" came down to: the
+      # ring is nudged onto the baseline in both places, the text starts the same
+      # gap away from it, and the line is allowed to be narrower than its text.
+      # Asserted on the shared rule, because a copy that disagreed would still
+      # pass a test that only asked whether the marks were the same size.
+      def test_a_loop_card_line_is_placed_the_way_a_subagent_row_is
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        line = shared_rules(css, ".subagent-summary", ".loop-rows .loop-goal").first&.last.to_s
+
+        assert_includes line, "align-items: baseline",
+                        "a ring on a line is placed against the text's baseline, not its box"
+        assert_includes line, "gap: 0.45rem", "the ring and the words it annotates keep one gap"
+        assert_includes line, "min-width: 0",
+                        "without this the line refuses to be narrower than its text, and the " \
+                        "goal stops ellipsizing"
+      end
+
+      # A ring that a long goal can squeeze is an oval, and an oval turning is a
+      # wobble. The span is the flex item, so the refusal belongs on the span.
+      def test_a_loop_card_mark_cannot_be_squeezed_by_its_goal
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+        mark = declarations_for(css, ".loop-rows .loop-mark")
+
+        refute_nil mark, "the card's mark has no rule of its own"
+        assert_includes mark, "flex: 0 0 auto", "the mark is the item a long goal would shrink"
+      end
+
+      # The guard the two tests above cannot be: an override *beside* a shared
+      # rule. Keeping the group and adding `.loop-rows .loop-goal { gap: 0.3rem }`
+      # below it leaves the shared rule intact and the page drawing 0.3rem, and
+      # every test that reads the shared rule would still pass. So a control may
+      # not declare one property in two rules: the second rule is always the one
+      # that wins, and it is never the one that was reviewed.
+      def test_no_loop_control_declares_a_property_in_two_rules
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+
+        %w[
+          .loop-run .loop-run\ .loop-spinner .loop-mark\ .loop-spinner
+          .loop-rows\ .loop-goal .loop-rows\ .loop-mark
+        ].each do |selector|
+          refute_empty rules_for(css, selector), "#{selector} is not declared at all"
+          assert_equal [], duplicated_properties(css, selector),
+                       "#{selector} sets these properties in more than one rule, so the rule " \
+                       "these tests read is not the one the page draws"
+        end
+      end
+
+      # The properties a selector declares more than once across all of its
+      # rules. One property, one rule, one place to change.
+      def duplicated_properties(css, selector)
+        declared = rules_for(css, selector).flat_map { |_selectors, body| body.scan(/^\s*([a-z-]+)\s*:/).flatten }
+
+        declared.tally.select { |_name, count| count > 1 }.keys
+      end
+
+      # Every rule whose selector list holds `selector`.
+      def rules_for(css, selector)
+        css_rules(css).select { |selectors, _body| selectors.include?(selector) }
+      end
+
+      # The rules whose selector list holds both controls. One is what "the same
+      # drawing twice" means, and none is a copy.
+      def shared_rules(css, first, second)
+        rules_for(css, first).select { |selectors, _body| selectors.include?(second) }
+      end
+
+      # The declarations of the one rule that declares `selector`. Two rules for
+      # one selector is a failure rather than a first match: an override added
+      # below would leave this test reading the rule the page no longer draws.
+      def declarations_for(css, selector)
+        found = rules_for(css, selector)
+        flunk "#{selector} is declared by #{found.size} rules; this test reads the one" if found.size > 1
+
+        found.first&.last
+      end
+
+      # Every rule in the stylesheet as [selectors, body] pairs, comments taken
+      # out first: a block of prose above a selector is not part of the selector,
+      # and the prose in this file is longer than the rules it explains.
+      #
+      # Rules nested in an at-rule are read as one body with the at-rule's own
+      # prelude for a selector, which is enough for a question about a top-level
+      # rule and keeps this from being a CSS parser.
+      def css_rules(css)
+        css.gsub(%r{/\*.*?\*/}m, "").scan(/([^{}]+)\{([^}]*)\}/)
+           .map { |selectors, body| [ selectors.split(",").map(&:strip), body ] }
       end
     end
   end
