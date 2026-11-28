@@ -158,6 +158,23 @@ module Rubot
                         "a row that no longer resolves has to be dropped from the set"
       end
 
+      # A row can be out of the page for one swap and back on the next: the
+      # footer's list is written as an out-of-band swap, so this runs at the
+      # moment when the row being replaced has left the document and the
+      # replacement has not landed. Forgetting the id on that miss closed a
+      # brief the reader had opened, a second after they opened it.
+      def test_a_row_is_not_forgotten_while_a_swap_is_still_in_flight
+        js = File.read(File.expand_path("../lib/rubot/web/assets/app.js", __dir__))
+        restore = js[/function restoreSubagentBriefs\(\) \{.*?\n\}/m]
+
+        refute_nil restore, "restoreSubagentBriefs is missing from app.js"
+        assert_includes restore, "missingSubagentBriefs.add(id)",
+                        "the first miss has to be remembered, not acted on"
+        assert_match(/if \(missingSubagentBriefs\.has\(id\)\) \{\s*\n\s*openSubagentBriefs\.delete\(id\)/,
+                     restore,
+                     "an id is dropped on the second miss, and only then")
+      end
+
       # A brief is three kilobytes and the row it belongs to is a footnote: a
       # panel that grows with the text would push the conversation off the
       # screen on the one device this was built for. And the pointer belongs to
