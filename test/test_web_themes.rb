@@ -31,6 +31,27 @@ module Rubot
         css[/^#{Regexp.escape(selector)} \{\n(.*?)\n\}/m, 1].to_s
       end
 
+      # The body of every media block, found by counting braces rather than by
+      # scanning for one rule's shape: a block that holds another is still read
+      # whole, and a rule written in a nested block cannot fall outside the
+      # guard by being one level deeper than the one it was written for.
+      def media_bodies(css)
+        bodies = []
+        offset = 0
+        while (open = css.match(/@media[^{]*\{/, offset))
+          depth = 1
+          cursor = open.end(0)
+          while cursor < css.length && depth.positive?
+            depth += 1 if css[cursor] == "{"
+            depth -= 1 if css[cursor] == "}"
+            cursor += 1
+          end
+          bodies << css[open.end(0)...(cursor - 1)]
+          offset = open.end(0)
+        end
+        bodies
+      end
+
       # --- themes ---------------------------------------------------------
 
       # The settings page as the reader gets it, for the tests about controls
@@ -93,20 +114,35 @@ module Rubot
         assert_includes field, "font-size: var(--prompt-size)",
                         "the field is the prose's size, not a number of its own"
 
-        # One value means one: a media block that restates `--prompt-size` is a
-        # second answer to the same question, and the guard above only ever
-        # reads the first one.
-        stated = css.scan(/--prompt-size:\s*[\d.]+px/).flatten.uniq
+        # One value means one. A media block that restates `--prompt-size` is a
+        # second answer to the same question even when the number matches: the
+        # value is then written twice, and the next edit can move one of them
+        # alone. `.uniq` used to hide exactly that, so the count is of raw
+        # statements.
+        stated = css.scan(/--prompt-size:\s*[\d.]+px/)
         assert_equal 1, stated.size,
                      "the prose size is stated once, not overridden per surface"
 
         # The phone tightens the row a phone has less of, not the type: a size
-        # written here is a second answer to the question above.
-        phone = css.scan(/^[ \t]*\.composer-box textarea \{([^}]*)\}/).flatten
-        refute_empty phone, "the phone block has to draw the field it shortens"
-        phone.each do |body|
+        # written here is a second answer to the question above. Every textarea
+        # rule inside a media block is read, not only the one in
+        # `.composer-box` — the field's own `.composer textarea` restating the
+        # size in the same block is the same drift, and naming one selector
+        # let the other through.
+        in_media = media_bodies(css).flat_map do |body|
+          body.scan(/([^{}]*textarea[^{}]*)\{([^{}]*)\}/)
+        end
+        # A capture runs back to the closing brace of the rule above, so it
+        # carries that rule's trailing comment and blank lines. The selector is
+        # the last line of it.
+        in_media = in_media.map { |selector, body| [ selector.lines.last.to_s.strip, body ] }
+        assert(
+          in_media.any? { |selector, _| selector == ".composer-box textarea" },
+          "the phone block has to draw the field it shortens"
+        )
+        in_media.each do |selector, body|
           refute_includes body, "font-size",
-                          "the phone does not restate the size of the field"
+                          "#{selector} does not restate the size of the field"
         end
       end
 
