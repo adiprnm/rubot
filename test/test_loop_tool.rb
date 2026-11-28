@@ -567,6 +567,47 @@ class TestLoopTool < Minitest::Test
     assert_equal 0, @store.load(state.id).takeovers, "the takeover is the runner's to count, not the tool's"
   end
 
+  # A runner with a voice. The web channel's answers in words, and a tool that
+  # speaks over them reports a wake the runner refused.
+  class SpeakingRunner
+    def initialize(answer) = @answer = answer
+    def resume(_id) = @answer
+  end
+
+  # The runner is the part that knows whether a wake became a run, so a refusal
+  # is carried rather than overruled: "resumed" for a loop that stayed put is the
+  # same optimism as a resume with nothing behind it, one level up.
+  def test_a_runner_that_refuses_the_wake_is_quoted_instead_of_overruled
+    state = create
+    @tool.loop_runner = SpeakingRunner.new(
+      "OK: loop #{state.id} stays paused: resume refused: spent 6000 of 5000 tokens"
+    )
+
+    result = @tool.execute("operation" => "resume", "id" => state.id)
+
+    assert_ok result
+    assert_includes result, "stays paused"
+    refute_includes result, "resumed", "the runner refused, so nothing was resumed"
+  end
+
+  # The note survives the hopeless path too: a cap raised on a loop this channel
+  # cannot run is still a cap raised, and the sentence about nothing iterating
+  # must not throw away the one thing the write bought.
+  def test_a_resume_that_cannot_run_still_says_what_it_changed
+    state = create
+    @store.update(state.id) do |loop|
+      loop.status = "paused"
+      loop.iterations = 2
+    end
+
+    result = @tool.execute("operation" => "resume", "id" => state.id, "max_iterations" => 6)
+
+    assert_ok result
+    assert_includes result, "its cap is now 6", "the raise happened, so the answer says so"
+    assert_includes result, "nothing is iterating it"
+    assert_equal 6, @store.load(state.id).max_iterations
+  end
+
   # A resume with no runner and no agent is a write and nothing else: no part of
   # this channel can iterate a loop, so the file keeps saying paused and no
   # iteration follows. Answering "resumed" promised work nobody here would do.

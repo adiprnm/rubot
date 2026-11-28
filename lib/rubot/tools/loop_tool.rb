@@ -261,10 +261,13 @@ module Rubot
         end
         note = raised_note(cap, budget)
         if @loop_runner
-          @loop_runner.resume(state.id)
-          return "OK: loop #{state.id} resumed; #{note}; the runner was asked to continue" unless note.empty?
-
-          return "OK: loop #{state.id} resumed; the runner was asked to continue"
+          told = @loop_runner.resume(state.id)
+          told = "loop #{state.id} resumed; the runner was asked to continue" unless told.is_a?(String)
+          # The answer keeps the tool's own envelope either way: a runner that
+          # answers in words says what happened, and one that answers in
+          # something other than words leaves only the fact that it was asked.
+          told = "OK: #{told}" unless told.match?(/\A(?:OK|ERROR): /)
+          return [ told, note ].reject(&:empty?).join("; ")
         end
 
         handed = request_from_agent(:resume, state.id)
@@ -272,11 +275,13 @@ module Rubot
 
         # A resume with nothing to resume it is a promise this channel cannot
         # keep: the file keeps saying paused, and no iteration follows. What the
-        # write changed (a cap, a budget) is said by the note; that nothing is
-        # iterating is said here, rather than answering "resumed" for a loop that
-        # will sit exactly where it was.
-        "OK: loop #{state.id} is not running: no runner is attached to this channel, " \
-          "so nothing is iterating it; start it from a channel that can run loops"
+        # write changed (a cap, a budget) is said by the note and kept here, since
+        # a raise that really happened is still the answer to "what did I buy";
+        # that nothing is iterating is said beside it, rather than answering
+        # "resumed" for a loop that will sit exactly where it was.
+        changed = note.empty? ? "" : "#{note}; "
+        "OK: loop #{state.id} is not running: #{changed}no runner is attached to this " \
+          "channel, so nothing is iterating it; start it from a channel that can run loops"
       end
 
       # What a resume changed, in the reader's words: the two facts that stop a
