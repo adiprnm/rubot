@@ -128,6 +128,9 @@ model_presets:
   #   provider: ollama
   #   api_base: http://localhost:11434
 
+# The tools an agent may call. This block is an allowlist: a tool not named
+# here is not offered, and a name that no longer exists is an error. The names
+# below are the ones this build registers (see lib/rubot/tools/registry.rb).
 tools:
   shell_exec:
     enabled: true          # Execute shell commands
@@ -143,9 +146,18 @@ tools:
     enabled: true          # Schedule recurring and one-time jobs
   send_files:
     enabled: true          # Send generated files/images back to the chat
+  notify:
+    enabled: true          # Wake the user's devices when the turn ends
+  instagram:
+    enabled: true          # Connect an Instagram account and schedule posts
   delegate:
     enabled: true          # Let an agent hand a task to another persona
-  # memory is always enabled when workspace exists
+  loop:
+    enabled: true          # Work a goal through repeated iterations
+  ask_user:
+    enabled: true          # Let the model ask instead of guessing
+  # memory is always enabled when workspace exists, and subagent_results is
+  # added whenever delegate is, so neither needs a line of its own.
 
 # Sub-agent delegation. Off by default: enabling it costs extra provider
 # requests. A sub agent runs in the same session actor, uses the target
