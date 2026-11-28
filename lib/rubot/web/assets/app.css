@@ -1645,15 +1645,33 @@ select:focus-visible { outline: none; }
    animation only ever answers that action — never a page load. */
 .turn { animation: enter 170ms ease-out both; }
 
-/* `.turn.is-report` carries no look: it is a marker for the page's script. A
-   report from the background is not the turn the reader is watching, so the
-   thread must not scroll to it — that moved the answer being read upward every
-   time one arrived (see `isFollowedContent` in app.js). */
+/* `.turn.is-report` carries no look of its own: it is a marker for the page's
+   script, and the one animation it opts out of. A report from the background is
+   not the turn the reader is watching, so the thread must not scroll to it —
+   that moved the answer being read upward every time one arrived (see
+   `isFollowedContent` in app.js). The entry animation is off because the block
+   is drawn twice: once when it opens, and again when the answer is complete and
+   the cursor has to go with it (see Web::Reports#report_block), and replaying it
+   for the second would read as the answer flashing. */
+.turn.is-report { animation: none; }
 
 @keyframes enter {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: none; }
 }
+
+/* The rule a report is introduced by: work coming back from somewhere else,
+   rather than the continuation of the answer above it. Quiet on purpose — it
+   separates two answers, it does not announce itself — and it borrows the
+   hairline the prose's own rule uses. A report that opens the thread has
+   nothing above it to be separated from, so the rule is not drawn. */
+.report-sep {
+  margin: 1.5rem 0 1rem;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.turn:first-child .report-sep { display: none; }
 
 /* The bubble is a quotation of what the person typed, and it is rendered as
    markdown like the answer: bold, lists, tables and code fences all arrive as

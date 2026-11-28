@@ -11,6 +11,7 @@
                             landed: landed) %>
 <% else -%>
 <div class="turn is-done<%= " is-landed" if landed %>"<% if entry[:idx] %> id="m-<%= entry[:idx] %>"<% end %>>
+  <%= View.render("_report_sep") if entry[:report] -%>
   <div class="turn-body"><%= View.render("_timeline", items: entry[:items],
                                           token_query: token_query,
                                           ig_accounts: ig_accounts,
