@@ -22,6 +22,16 @@ module Rubot
         size.to_f
       end
 
+      # Every statement of the prose size, whichever unit it is written in. The
+      # property name is what gets counted, not the px value: a media block that
+      # restates `--prompt-size: 1rem` is the same second answer to the same
+      # question, and a guard that matched only px read it as the one statement
+      # it was looking for. A `var(--prompt-size)` reader does not match, because
+      # it names the property without assigning it.
+      def stated_sizes(css)
+        css.scan(/^\s*--prompt-size\s*:/)
+      end
+
       # The body of one rule, anchored to a selector that opens its own line.
       # A selector also appears in one-line rules — `.composer textarea {
       # grid-column: 1 / -1; }` sits above the real one — and an unanchored
@@ -29,6 +39,27 @@ module Rubot
       # never looking at and stays green while the rule it names loses it.
       def rule_body(css, selector)
         css[/^#{Regexp.escape(selector)} \{\n(.*?)\n\}/m, 1].to_s
+      end
+
+      # The body of every media block, found by counting braces rather than by
+      # scanning for one rule's shape: a block that holds another is still read
+      # whole, and a rule written in a nested block cannot fall outside the
+      # guard by being one level deeper than the one it was written for.
+      def media_bodies(css)
+        bodies = []
+        offset = 0
+        while (open = css.match(/@media[^{]*\{/, offset))
+          depth = 1
+          cursor = open.end(0)
+          while cursor < css.length && depth.positive?
+            depth += 1 if css[cursor] == "{"
+            depth -= 1 if css[cursor] == "}"
+            cursor += 1
+          end
+          bodies << css[open.end(0)...(cursor - 1)]
+          offset = open.end(0)
+        end
+        bodies
       end
 
       # --- themes ---------------------------------------------------------
@@ -93,21 +124,69 @@ module Rubot
         assert_includes field, "font-size: var(--prompt-size)",
                         "the field is the prose's size, not a number of its own"
 
-        # One value means one: a media block that restates `--prompt-size` is a
-        # second answer to the same question, and the guard above only ever
-        # reads the first one.
-        stated = css.scan(/--prompt-size:\s*[\d.]+px/).flatten.uniq
+        # One value means one. A media block that restates `--prompt-size` is a
+        # second answer to the same question even when the number matches: the
+        # value is then written twice, and the next edit can move one of them
+        # alone. `.uniq` used to hide exactly that, so the count is of raw
+        # statements — and of statements, not of px, since the same value as
+        # `1rem` is the same drift.
+        stated = stated_sizes(css)
         assert_equal 1, stated.size,
                      "the prose size is stated once, not overridden per surface"
 
         # The phone tightens the row a phone has less of, not the type: a size
-        # written here is a second answer to the question above.
-        phone = css.scan(/^[ \t]*\.composer-box textarea \{([^}]*)\}/).flatten
-        refute_empty phone, "the phone block has to draw the field it shortens"
-        phone.each do |body|
-          refute_includes body, "font-size",
-                          "the phone does not restate the size of the field"
+        # written here is a second answer to the question above. Every textarea
+        # rule inside a media block is read, not only the one in
+        # `.composer-box` — the field's own `.composer textarea` restating the
+        # size in the same block is the same drift, and naming one selector
+        # let the other through.
+        in_media = media_bodies(css).flat_map do |body|
+          body.scan(/([^{}]*textarea[^{}]*)\{([^{}]*)\}/)
         end
+        # A capture runs back to the closing brace of the rule above, so it
+        # carries that rule's trailing comment and blank lines. The selector is
+        # the last line of it.
+        in_media = in_media.map { |selector, body| [ selector.lines.last.to_s.strip, body ] }
+        assert(
+          in_media.any? { |selector, _| selector == ".composer-box textarea" },
+          "the phone block has to draw the field it shortens"
+        )
+        in_media.each do |selector, body|
+          refute_includes body, "font-size",
+                          "#{selector} does not restate the size of the field"
+        end
+      end
+
+      # The count is of statements, not of one unit. A block that restates the
+      # size as `1rem` used to pass a guard that only matched px, which is the
+      # drift the guard claims to catch.
+      def test_a_size_restated_in_another_unit_is_a_second_statement
+        css = <<~CSS
+          :root {
+            --prompt-size: 16px;
+          }
+          @media (max-width: 40rem) {
+            .composer textarea {
+              --prompt-size: 1rem;
+            }
+          }
+        CSS
+
+        assert_equal 2, stated_sizes(css).size,
+                     "a restatement in another unit is still a second answer"
+      end
+
+      # Reading the value is not stating it, or every `var(--prompt-size)` rule
+      # would count as a second statement and the count could never reach one.
+      def test_reading_the_size_is_not_stating_it
+        css = <<~CSS
+          :root {
+            --prompt-size: 16px;
+          }
+          .thread { font-size: var(--prompt-size); }
+        CSS
+
+        assert_equal 1, stated_sizes(css).size
       end
 
       # A diff is a file's lines, not the reader's own words, so it sits under

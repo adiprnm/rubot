@@ -82,10 +82,16 @@ module Rubot
     # That is why the question is one non-blocking call and nothing more: the
     # shorter it is, the smaller the window two readers of the same loop can
     # widen between them.
+    #
+    # Nor may asking leave anything behind. A lock file that is not there is a
+    # lease nobody has taken, and the directory it would live in need not exist
+    # either: opening the file for writing made both, so every question left a
+    # `loops` directory and an empty `.id.run` behind. The file is opened
+    # read-only instead, and a missing one is answered by that same open rather
+    # than by a look at whether the path exists in front of it -- one question to
+    # the kernel, with no window between two.
     def self.held?(dir, id)
-      path = path_for(dir, id)
-      FileUtils.mkdir_p(dir)
-      io = File.open(path, File::RDONLY | File::CREAT, 0o600)
+      io = File.open(path_for(dir, id), File::RDONLY)
       begin
         return true unless io.flock(File::LOCK_SH | File::LOCK_NB)
       ensure
@@ -94,6 +100,10 @@ module Rubot
         # and there is an ask every three seconds a panel is open.
         io.close
       end
+      false
+    rescue Errno::ENOENT
+      # Nothing to open is nothing held: the lock file is the lease, so a file
+      # that was never made is a loop that was never run.
       false
     rescue SystemCallError, IOError
       # A lock file that cannot be opened cannot be proved free either, so the

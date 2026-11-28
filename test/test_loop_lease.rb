@@ -3,6 +3,7 @@
 require_relative "test_helper"
 require "tmpdir"
 require "fileutils"
+require "rbconfig"
 
 require "rubot/loop_lease"
 
@@ -60,6 +61,19 @@ class TestLoopLease < Minitest::Test
     refute Rubot::LoopLease.held?(@dir, ID), "a released lease is free again"
   end
 
+  # A question must not leave anything behind either. Opening the lock file for
+  # writing made it, and the directory it lives in, for a loop nobody had ever
+  # run -- a file that answers "free" forever plus a `loops` directory born of a
+  # question. Nobody can hold a lease that was never taken, so the answer is free
+  # without anything being opened for writing.
+  def test_asking_about_a_loop_that_never_ran_creates_nothing
+    dir = File.join(@tmp, "never")
+
+    refute Rubot::LoopLease.held?(dir, ID), "no lease was ever taken, so none is held"
+    refute File.exist?(dir), "the question must not create the loops directory"
+    refute File.exist?(Rubot::LoopLease.path_for(dir, ID)), "nor the lock file inside it"
+  end
+
   # A reader is not a run. The footer's loop mark asks this every three seconds
   # while the panel is open, and an exclusive probe made two askers look like
   # holders to each other: the ring turned over a loop whose run had died, which
@@ -115,6 +129,32 @@ class TestLoopLease < Minitest::Test
 
     lease = hold
     refute_nil lease, "a killed holder takes nothing with it: the lock is the kernel's to drop"
+  end
+
+  # rubot forks for tool execution, and a forked child inherits the parent's
+  # open file descriptions -- and the locks on them. close_on_exec is what keeps
+  # the lease with the process that took it: without it an exec'd child outlives
+  # the parent as a loop nobody is working, and every resume of that loop answers
+  # "already active" until the child happens to go away. The child here takes the
+  # lease and replaces itself with another program, which is the only place the
+  # boundary can be seen: after an exec the lock must be gone.
+  def test_a_lease_does_not_survive_an_exec_in_a_forked_child
+    skip "fork is not available here" unless Process.respond_to?(:fork)
+    skip "flock is not honoured on this filesystem" unless leases_conflict?
+
+    marker = File.join(@tmp, "exec")
+    child = fork do
+      Rubot::LoopLease.hold(@dir, ID)
+      exec(RbConfig.ruby, "-e", "File.write(#{marker.inspect}, '1'); sleep 30")
+    end
+
+    begin
+      wait_for(marker)
+      refute_nil hold, "the child that replaced itself holds nothing, so the lease is free"
+    ensure
+      Process.kill("KILL", child)
+      Process.waitpid(child)
+    end
   end
 
   # A lock file that cannot be opened is neither free nor held, and the caller

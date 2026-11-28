@@ -717,6 +717,8 @@ class TestLoopRunner < Minitest::Test
     assert_equal "paused", reread.status
     assert_equal 1, reread.log.count { |entry| entry.text.include?("max_tokens") },
                  "one entry saying how to get going again, not one per wake"
+    assert(first.state.log.any? { |entry| entry.text.include?("raise max_tokens") },
+           "the answer carries the entry the refusal just wrote, not the copy read before it")
   end
 
   # What the loop tool writes when the reader names a bigger budget: the run
@@ -905,6 +907,9 @@ class TestLoopRunner < Minitest::Test
     assert_includes entry.text, Rubot::LoopLease::MAX_TAKEOVERS.to_s
     assert_includes result.message, Rubot::LoopLease::MAX_TAKEOVERS.to_s
     assert_includes result.message, "deliberate resume", "and what gets it going again"
+    assert_includes result.message, "reached a verdict",
+                    "the count empties on a verdict, not on a completed iteration"
+    refute_includes result.message, "completed iteration", "a NOT_YET verdict is a verdict too"
   end
 
   # A wake that cannot get as far as a worktree is not a run, so the file must

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "../../tool_names"
+
 module Rubot
   module Channels
     class Telegram < Channel
@@ -14,8 +16,8 @@ module Rubot
       module Status
         TOOL_EMOJIS = {
           "shell_exec"  => "💻",
-          "file_read"   => "📄",
-          "file_write"  => "✏️",
+          ToolNames::FILE_READ  => "📄",
+          ToolNames::FILE_WRITE => "✏️",
           "web_fetch"   => "🌐",
           "memory"      => "🧠",
           "cron"        => "⏰"

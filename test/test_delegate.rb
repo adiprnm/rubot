@@ -572,9 +572,10 @@ class TestDelegate < Minitest::Test
   # what this test reproduces.
   def test_read_only_is_derived_from_the_tool_list_on_every_spawn_path
     agent = actor_built_agent("code_reviewer")
+    definitions = agent.tool_definitions
 
-    assert agent.read_only?
-    assert_equal %w[file_read search], agent.tool_definitions.map(&:name)
+    refute definitions.any?(&:writes?), "a role offered no writing tool cannot write"
+    assert_equal %w[file_read search], definitions.map(&:name)
   end
 
   def test_actor_built_reviewer_cannot_write_a_file

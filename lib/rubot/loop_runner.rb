@@ -109,32 +109,22 @@ module Rubot
     # wake that did nothing as a loop that moved.
     def resume(id)
       state = @store.load(id)
-      refusal = spent_refusal(id)
-      return result(@store.load(id), :budget, iterations_of(state), refusal) if refusal
+      refusal = spent_refusal(id, state)
+      return refuse(id, state, refusal) if refusal
 
-      status = state&.status.to_s
-      # An explicit wake is the reader saying "run it again", and it is written by
-      # `run` under the lease rather than here: a file that was woken before the
-      # lease was taken is a file saying `active` with nobody holding it, and a
-      # run that then stops on a worktree error leaves it that way -- after which
-      # the next resume reads the file's own wake as a takeover. The count is
-      # cleared in the same write, for the same reason: this is not a run picked
-      # up off a dead process.
-      return run(id, wake: true) if RESUMABLE.include?(status)
-      return run(id) unless status == "active"
-      # A run is really in flight: nothing changes, and one run per loop still
-      # holds. run(id) answers the refusal, so the words are the same here as
-      # they are for any other caller.
-      return run(id) if LoopLease.held?(@store.dir, id)
-
-      takeover(id, state)
+      wake_loop(id, state)
     end
 
     # The note a spent loop gets instead of another wake, nil when it still has
     # room. Public because the channel asks before it spawns a thread: a wake
     # that buys nothing must not answer as if it had started something.
-    def spent_refusal(id)
-      state = @store.load(id) or return nil
+    #
+    # The state is passed in when the caller already has one, so a resume reads
+    # the file once instead of asking this question about a copy of its own; a
+    # caller with no state in hand (the channel's) still gets the load it needs.
+    def spent_refusal(id, state = nil)
+      state = state || @store.load(id)
+      return nil if state.nil?
       # Only a loop a wake can move: a finished loop is not re-armed by a bigger
       # budget, and an active one is already spending it.
       return nil unless RESUMABLE.include?(state.status.to_s)
@@ -158,6 +148,36 @@ module Rubot
 
     private
 
+    # The budget answer: nothing is woken. The refusal has just written the one
+    # entry that says why, so the state carried back is read after that write --
+    # a reader looking at the log sees the sentence that explains the stillness.
+    def refuse(id, state, text)
+      result(@store.load(id) || state, :budget, iterations_of(state), text)
+    end
+
+    # Which of the three wakes a resume is. Kept out of `resume` so each decision
+    # reads as the one thing it decides: a deliberate wake, a first run, or a loop
+    # picked up off a process that died.
+    #
+    # An explicit wake is the reader saying "run it again", and it is written by
+    # `run` under the lease rather than here: a file that was woken before the
+    # lease was taken is a file saying `active` with nobody holding it, and a run
+    # that then stops on a worktree error leaves it that way -- after which the
+    # next resume reads the file's own wake as a takeover. The count is cleared in
+    # the same write, for the same reason: this is not a run picked up off a dead
+    # process.
+    def wake_loop(id, state)
+      status = state&.status.to_s
+      return run(id, wake: true) if RESUMABLE.include?(status)
+      return run(id) unless status == "active"
+      # A run is really in flight: nothing changes, and one run per loop still
+      # holds. run(id) answers the refusal, so the words are the same here as they
+      # are for any other caller.
+      return run(id) if LoopLease.held?(@store.dir, id)
+
+      takeover(id, state)
+    end
+
     # An `active` file and a free lease: the process that was running this loop is
     # gone. A run per loop still holds -- the lease just proved nobody is running
     # it -- so the loop is picked up where its file says it stopped, unless being
@@ -172,19 +192,19 @@ module Rubot
       count = state.takeovers.to_i
       if count >= LoopLease::MAX_TAKEOVERS
         # Taking it over again would spend another iteration on a loop that has
-        # never finished one since it started dying, and the run -- or what the
+        # not had one judged since it started dying, and the run -- or what the
         # run does -- is the best explanation there is. Stalled rather than
-        # silently restarted, and said plainly: the count and what clears it are
+        # silently restarted, and said plainly: the count and what empties it are
         # the two facts a reader needs, and neither is in the file before this.
-        message = "taken over #{count} times since its last completed iteration, which is " \
+        message = "taken over #{count} times since an iteration last reached a verdict, which is " \
                   "probably what kills the process; it is stalled now, and a deliberate resume " \
                   "clears the count and runs it again"
-        @store.update(id) do |loop|
+        stuck = @store.update(id) do |loop|
           loop.status = "stalled"
           loop.add_entry(entry(message))
         end
         log("loop #{id}: #{message}")
-        return result(@store.load(id), :stalled, iterations_of(state), message)
+        return result(stuck, :stalled, iterations_of(stuck), message)
       end
 
       run(id, takeover: true)

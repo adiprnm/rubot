@@ -119,7 +119,7 @@ module Rubot
         # honest answer, and it is recorded once rather than once per wake.
         def resume(id)
           refusal = @runner.spent_refusal(id)
-          return "OK: loop #{id} is paused: #{refusal}" if refusal
+          return "OK: loop #{id} stays paused: #{refusal}" if refusal
 
           launch(:resume, id)
         end

@@ -10,6 +10,7 @@ require "securerandom"
 require_relative "../formatting"
 require_relative "../image_info"
 require_relative "../model_catalog"
+require_relative "../tool_names"
 require_relative "../persona"
 require_relative "../persona_store"
 require_relative "../session"
@@ -672,7 +673,7 @@ module Rubot
         case tool_name
         when "shell_exec"
           "Shell command: `#{args["command"][0..120]}`"
-        when "file_write"
+        when ToolNames::FILE_WRITE
           "File operation: `#{args["operation"]}` on `#{args["path"]}`"
         else
           "#{tool_name}: #{args.inspect[0..120]}"
@@ -684,7 +685,7 @@ module Rubot
       def confirmation_title(tool_name, args)
         operation = args.is_a?(Hash) ? args["operation"].to_s : ""
         case tool_name.to_s
-        when "file_write"
+        when ToolNames::FILE_WRITE
           operation == "delete" ? "Delete this file?" : "Overwrite this file?"
         when "shell_exec"
           "Run this command?"
