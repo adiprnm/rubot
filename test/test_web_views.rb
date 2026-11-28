@@ -106,7 +106,7 @@ module Rubot
       def test_timeline_marks_a_skill_load_as_one
         rows = lambda do |skills|
           View.render("_timeline", items: [
-                        { kind: :tool, name: "file_ops", detail: "Memuat skill brain",
+                        { kind: :tool, name: "file_read", detail: "Memuat skill brain",
                           state: :ok, epoch: Time.now.to_f, elapsed: nil, skills: skills }
                       ])
         end
@@ -123,7 +123,7 @@ module Rubot
       # wrote, neither of them set apart.
       def test_timeline_keeps_the_sentence_the_dictionary_wrote_for_two_skills
         html = View.render("_timeline", items: [
-                             { kind: :tool, name: "file_ops",
+                             { kind: :tool, name: "file_read",
                                detail: "Memuat skill brain dan grill",
                                state: :ok, epoch: Time.now.to_f, elapsed: nil,
                                skills: %w[brain grill] }
@@ -138,9 +138,9 @@ module Rubot
       # added after it.
       def test_a_short_skill_name_is_not_matched_inside_a_longer_word
         args = { "path" => "/x/.rubot/skills/in/SKILL.md" }
-        detail = Rubot::I18n.with_locale("en") { ToolCaption.caption("file_ops", args) }
+        detail = Rubot::I18n.with_locale("en") { ToolCaption.caption("file_read", args) }
         html = View.render("_timeline", items: [
-                             { kind: :tool, name: "file_ops", detail: detail,
+                             { kind: :tool, name: "file_read", detail: detail,
                                state: :ok, epoch: Time.now.to_f, elapsed: nil, skills: [ "in" ] }
                            ])
 
@@ -154,7 +154,7 @@ module Rubot
       # skill was loaded.
       def test_a_name_missing_from_the_sentence_is_still_said
         html = View.render("_timeline", items: [
-                             { kind: :tool, name: "file_ops", detail: "Memuat skill",
+                             { kind: :tool, name: "file_read", detail: "Memuat skill",
                                state: :ok, epoch: Time.now.to_f, elapsed: nil,
                                skills: [ "brain" ] }
                            ])
@@ -166,7 +166,7 @@ module Rubot
       # one by one, across the whole sentence.
       def test_a_live_skill_row_keeps_the_light_across_the_name
         html = View.render("_timeline", items: [
-                             { kind: :tool, name: "file_ops", detail: "Memuat skill brain",
+                             { kind: :tool, name: "file_read", detail: "Memuat skill brain",
                                state: :running, epoch: Time.now.to_f, elapsed: nil,
                                skills: [ "brain" ] }
                            ])
@@ -1151,7 +1151,7 @@ module Rubot
         channel = Rubot::Channels::Web.new(channel_config: {})
         results = { "c1" => "ERROR: nope" }
         call = { "id" => "c1",
-                 "function" => { "name" => "file_ops", "arguments" => %({"path":"x"}) } }
+                 "function" => { "name" => "file_read", "arguments" => %({"path":"x"}) } }
 
         assert_equal :failed, channel.history_tool_items(call, results, {}, "web_rubot").first[:state]
       end
@@ -1267,7 +1267,7 @@ module Rubot
         channel = Rubot::Channels::Web.new(channel_config: {})
         turn = build
 
-        channel.tool_finished(turn, "file_ops", "[Exit code: 0] Written 8 characters",
+        channel.tool_finished(turn, "file_read", "[Exit code: 0] Written 8 characters",
                      { "path" => "x.rb", "before" => "a\nb\n", "after" => "a\nB\n" })
 
         diff = turn.items.find { |item| item[:kind] == :diff }
@@ -1279,7 +1279,7 @@ module Rubot
       def test_history_draws_the_hunks_under_their_tool_row
         channel = Rubot::Channels::Web.new(channel_config: {})
         call = { "id" => "c1",
-                 "function" => { "name" => "file_ops", "arguments" => %({"path":"x.rb"}) } }
+                 "function" => { "name" => "file_read", "arguments" => %({"path":"x.rb"}) } }
         diffs = { "c1" => { "path" => "x.rb", "before" => "a\n", "after" => "a\nb\n" } }
 
         items = channel.history_tool_items(call, { "c1" => "[Exit code: 0]" }, diffs, "web_rubot")

@@ -527,6 +527,17 @@ module Rubot
             next
           end
 
+          # A tool this agent was not offered does not run: not a name the model
+          # invented, and not a write when the role carries only the reading
+          # tool. It still gets its row and its result, so the transcript says
+          # what was refused, but nothing is asked about it and nothing runs.
+          unless offered_tool?(tool_name)
+            callbacks.tool_call&.call(tool_name, arguments, nil)
+            pending << { name: tool_name, arguments: arguments, id: tool_call_id,
+                         snapshot: nil, result: refusal_for(tool_name) }
+            next
+          end
+
           tool = tool_instance(tool_name)
 
           # A question is the call itself: it blocks this thread until the

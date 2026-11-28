@@ -10,7 +10,34 @@ module Rubot
     # approval stays there and only the running lives here, which is why these
     # two methods take a call list and nothing else.
     module ToolExecution
+      # Run one call. The set of tools this agent was offered is the whole
+      # permission model: a name outside it does not run, whether the model
+      # invented it, or a channel asks for it outside a turn. Public because
+      # the channel handle executes a tool through the same door.
+      def execute_tool(name, arguments)
+        return refusal_for(name) unless offered_tool?(name)
+
+        @tools.execute(name, arguments)
+      end
+
       private
+
+      # Whether this agent was offered a tool for this turn. `tool_definitions`
+      # is what the provider is sent, so asking it cannot drift from what the
+      # model was shown.
+      def offered_tool?(name)
+        definitions = tool_definitions
+        return false if definitions.nil?
+
+        definitions.any? { |tool| tool.name == name.to_s }
+      end
+
+      # The answer a refused call gets: which tool, and why. A model that names
+      # a tool it was not offered (an invented name, or a write when only the
+      # reading tool is present) is told plainly instead of running it.
+      def refusal_for(name)
+        "ERROR: Refused: '#{name}' is not one of the tools offered to this agent."
+      end
 
       # Run the approved tool calls, several at a time, and return them in the
       # order they were asked for — a caller walking the result sees a transcript
@@ -47,7 +74,7 @@ module Rubot
       # request: a read can return a PNG, and an error is reported to the model
       # rather than raised, because a failed tool is a thing to answer about.
       def run_one_tool(call)
-        result = @tools.execute(call[:name], call[:arguments], read_only: read_only_role?)
+        result = execute_tool(call[:name], call[:arguments])
         Session.normalize_utf8(result.to_s)
       rescue StandardError => e
         "ERROR: #{e.class}: #{e.message}"

@@ -578,8 +578,8 @@ module Rubot
     def test_error_tool_result_is_marked_as_a_failure
       repl = build_repl
       ev = repl.instance_variable_get(:@events)
-      ev << [ :tool_call, "file_ops", { "operation" => "read", "path" => "/nope" } ]
-      ev << [ :tool_done, "file_ops", nil, "ERROR: Errno::ENOENT: no such file" ]
+      ev << [ :tool_call, "file_read", { "operation" => "read", "path" => "/nope" } ]
+      ev << [ :tool_done, "file_read", nil, "ERROR: Errno::ENOENT: no such file" ]
       app = repl.instance_variable_get(:@app)
       app.send(:run_timers)
 
@@ -741,8 +741,8 @@ module Rubot
       repl = build_repl
       ev = repl.instance_variable_get(:@events)
       path = File.expand_path("~/.rubot/workspace/skills/kanyaah-brand/SKILL.md")
-      ev << [ :tool_call, "file_ops", { "operation" => "read", "path" => path } ]
-      ev << [ :tool_done, "file_ops" ]
+      ev << [ :tool_call, "file_read", { "operation" => "read", "path" => path } ]
+      ev << [ :tool_done, "file_read" ]
       app = repl.instance_variable_get(:@app)
       app.send(:run_timers)
 
@@ -760,7 +760,7 @@ module Rubot
       repl = build_repl
       ev = repl.instance_variable_get(:@events)
       path = File.expand_path("~/.rubot/workspace/skills/writing/SKILL.md")
-      ev << [ :tool_call, "file_ops", { "operation" => "read", "path" => path } ]
+      ev << [ :tool_call, "file_read", { "operation" => "read", "path" => path } ]
       app = repl.instance_variable_get(:@app)
       app.send(:run_timers)
 
@@ -785,8 +785,8 @@ module Rubot
       repl = build_repl
       ev = repl.instance_variable_get(:@events)
       path = File.expand_path("~/.rubot/workspace/skills/new-skill/SKILL.md")
-      ev << [ :tool_call, "file_ops", { "operation" => "write", "path" => path } ]
-      ev << [ :tool_done, "file_ops" ]
+      ev << [ :tool_call, "file_write", { "operation" => "write", "path" => path } ]
+      ev << [ :tool_done, "file_read" ]
       app = repl.instance_variable_get(:@app)
       app.send(:run_timers)
 
@@ -798,7 +798,7 @@ module Rubot
     def test_regular_file_read_stays_a_tool_row
       repl = build_repl
       ev = repl.instance_variable_get(:@events)
-      ev << [ :tool_call, "file_ops", { "operation" => "read", "path" => "/tmp/notes.md" } ]
+      ev << [ :tool_call, "file_read", { "operation" => "read", "path" => "/tmp/notes.md" } ]
       app = repl.instance_variable_get(:@app)
       app.send(:run_timers)
 
@@ -812,10 +812,10 @@ module Rubot
       repl = build_repl
       ev = repl.instance_variable_get(:@events)
       ev << [ :stream_start ]
-      ev << [ :tool_call, "file_ops", { "operation" => "read", "path" => "a.rb" } ]
-      ev << [ :tool_done, "file_ops" ]
-      ev << [ :tool_call, "file_ops", { "operation" => "read", "path" => "b.rb" } ]
-      ev << [ :tool_done, "file_ops" ]
+      ev << [ :tool_call, "file_read", { "operation" => "read", "path" => "a.rb" } ]
+      ev << [ :tool_done, "file_read" ]
+      ev << [ :tool_call, "file_read", { "operation" => "read", "path" => "b.rb" } ]
+      ev << [ :tool_done, "file_read" ]
       app = repl.instance_variable_get(:@app)
       app.send(:run_timers)
 

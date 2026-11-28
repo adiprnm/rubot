@@ -642,8 +642,8 @@ module Rubot
 
       def test_failed_tool_is_marked_failed
         turn = build
-        turn.tool_started("file_ops", "nope")
-        turn.tool_finished("file_ops", false)
+        turn.tool_started("file_read", "nope")
+        turn.tool_finished("file_read", false)
 
         assert_equal :failed, turn.items.first[:state]
       end
@@ -656,8 +656,8 @@ module Rubot
         turn = build
         turn.tool_started("shell_exec", "ls")
         turn.tool_finished("shell_exec", true)
-        turn.tool_started("file_ops", "a.rb")
-        turn.tool_finished("file_ops", true)
+        turn.tool_started("file_read", "a.rb")
+        turn.tool_finished("file_read", true)
 
         awake = turn.items.select { |item| item[:awake] }
         assert_equal %w[a.rb], awake.map { |item| item[:detail] },
@@ -688,8 +688,8 @@ module Rubot
       # that is not.
       def test_a_failed_call_does_not_keep_the_light
         turn = build
-        turn.tool_started("file_ops", "nope")
-        turn.tool_finished("file_ops", false)
+        turn.tool_started("file_read", "nope")
+        turn.tool_finished("file_read", false)
 
         refute turn.items.last[:awake]
       end
@@ -723,12 +723,12 @@ module Rubot
       def test_the_light_lands_on_no_row_when_the_newest_call_was_dropped
         clock = FakeClock.new
         turn = Turn.new(id: "t1", session_id: "s1", tool_output: "compact", clock: clock)
-        turn.tool_started("file_ops", "catatan.md", op: "write")
-        turn.tool_finished("file_ops", true)
+        turn.tool_started("file_write", "catatan.md", op: "write")
+        turn.tool_finished("file_write", true)
         clock.advance(5.0)
         turn.thinking("mikir")
-        turn.tool_started("file_ops", "a.rb", op: "edit")
-        turn.tool_finished("file_ops", true)
+        turn.tool_started("file_write", "a.rb", op: "edit")
+        turn.tool_finished("file_read", true)
 
         rows = turn.items
         assert_equal [ "catatan.md" ], rows.select { |item| item[:kind] == :tool }.map { |item| item[:detail] },

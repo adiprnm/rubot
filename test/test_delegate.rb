@@ -314,7 +314,7 @@ class TestDelegate < Minitest::Test
     sub = agent.send(:build_subagent,
                      Rubot::PersonaStore.new(dir: @tmpdir)["writer"],
                      "writer", "abc123", nil)
-    names = sub.send(:tool_definitions).map(&:name)
+    names = sub.tool_definitions.map(&:name)
 
     refute_includes names, "delegate"
     refute_includes names, "subagent_results"
@@ -335,7 +335,7 @@ class TestDelegate < Minitest::Test
     }.to_yaml)
     agent = Rubot::Agent.new(config: Rubot::Config.new(@config_path),
                              provider: AnswerProvider.new, session_id: "lead")
-    names = agent.send(:tool_definitions).map(&:name)
+    names = agent.tool_definitions.map(&:name)
 
     assert_includes names, "delegate"
     assert_includes names, "subagent_results"
@@ -350,7 +350,7 @@ class TestDelegate < Minitest::Test
     }.to_yaml)
     agent = Rubot::Agent.new(config: Rubot::Config.new(@config_path),
                              provider: AnswerProvider.new, session_id: "lead")
-    names = agent.send(:tool_definitions).map(&:name)
+    names = agent.tool_definitions.map(&:name)
 
     refute_includes names, "subagent_results"
   end
@@ -423,7 +423,8 @@ class TestDelegate < Minitest::Test
 
     assert_equal "Implementer", persona.name
     assert persona.internal
-    assert_equal Rubot::SubagentRegistry.allowed_tools("implementer"), %w[file_ops search shell_exec]
+    assert_equal Rubot::SubagentRegistry.allowed_tools("implementer"),
+                 %w[file_read file_write search shell_exec]
     refute store.all.key?("implementer")
   end
 
@@ -440,7 +441,7 @@ class TestDelegate < Minitest::Test
     sub = agent.send(:build_subagent,
                      Rubot::PersonaStore.new(dir: @tmpdir)["researcher"],
                      "researcher", "abc123", nil)
-    names = sub.send(:tool_definitions).map(&:name)
+    names = sub.tool_definitions.map(&:name)
 
     assert_equal [ "web_fetch" ], names
   end
@@ -463,84 +464,117 @@ class TestDelegate < Minitest::Test
     assert persona.to_h["internal"]
   end
 
-  # A role that may only look must not be handed the tool that writes. The
-  # prompt said "do not" for a year and nothing enforced it, which is how a
-  # reviewer ended up editing the file it was reviewing.
-  def test_read_only_roles_are_never_given_a_shell
+  # Every role names its tools. The list is the whole declaration of what the
+  # role may do, so a definition that forgot it fails instead of meaning "all".
+  def test_every_role_names_the_tools_it_may_call
     Rubot::SubagentRegistry::DEFINITIONS.each do |definition|
-      next unless definition["read_only"]
+      allowed = definition["allowed_tools"]
 
-      refute_includes definition["allowed_tools"], "shell_exec",
-                      "#{definition["slug"]}: a shell can write any file the guard would refuse"
+      refute_nil allowed, "#{definition["slug"]} must name its tools"
+      refute_empty allowed, "#{definition["slug"]} must name at least one tool"
     end
   end
 
-  def test_reviewer_gets_a_read_only_tool_set
-    names = build_sub("code_reviewer").send(:tool_definitions).map(&:name)
+  def test_a_role_that_names_no_tools_is_an_error
+    ghost = Rubot::Persona.new(slug: "ghost", name: "Ghost", internal: true)
+    agent = Rubot::Agent.new(config: @config, session_id: "lead~sub-ghost", persona: ghost)
 
-    assert_equal %w[file_ops search], names
+    error = assert_raises(ArgumentError) { agent.tool_definitions }
+
+    assert_match(/ghost/, error.message)
+  end
+
+  # A list with no writing tool is the definition of read-only, and such a list
+  # never carries a shell: a shell can write any file the list was trying to
+  # exclude.
+  def test_a_role_without_the_write_tool_has_no_shell
+    Rubot::SubagentRegistry::DEFINITIONS.each do |definition|
+      next if definition["allowed_tools"].include?("file_write")
+
+      refute_includes definition["allowed_tools"], "shell_exec",
+                      "#{definition["slug"]}: a shell can write any file the list leaves out"
+    end
+  end
+
+  def test_reviewer_is_offered_the_reading_tools_only
+    tools = build_sub("code_reviewer").tool_definitions
+
+    assert_equal %w[file_read search], tools.map(&:name)
+    assert(tools.none?(&:writes?), "every tool a reviewer is offered must be a reading tool")
   end
 
   def test_reviewer_is_offered_no_write_operation
-    tool = build_sub("code_reviewer").send(:tool_definitions).find { |t| t.name == "file_ops" }
+    tool = build_sub("code_reviewer").tool_definitions.find { |t| t.name == "file_read" }
 
-    assert tool.read_only?
-    refute_includes tool.parameters["properties"]["operation"]["enum"], "write"
+    assert_equal %w[read list info], tool.parameters["properties"]["operation"]["enum"]
     refute_match(/^- (edit|write|append|delete):/, tool.description)
+    refute_match(/\bwrite\b/, tool.description)
   end
 
-  def test_reviewer_write_is_refused_even_when_the_model_asks_for_it
+  def test_reviewer_cannot_write_through_the_write_tool
     sub = build_sub("code_reviewer")
     path = File.join(@workspace, "target.txt")
     File.write(path, "keep me\n")
 
-    result = sub.tools.execute(
-      "file_ops", { "operation" => "write", "path" => path, "content" => "gone" }, read_only: true
-    )
+    result = sub.execute_tool("file_write", { "operation" => "write", "path" => path, "content" => "gone" })
 
-    assert_match(/read-only/, result)
+    assert_match(/Refused/, result)
+    assert_match(/file_write/, result)
     assert_equal "keep me\n", File.read(path)
+  end
+
+  def test_a_hallucinated_tool_name_is_refused
+    sub = build_sub("code_reviewer")
+
+    assert_match(/Refused/, sub.execute_tool("make_it_up", { "path" => @workspace }))
+    assert_match(/Refused/, sub.execute_tool("shell_exec", { "command" => "true" }))
+  end
+
+  # A read-only role is refused every tool it was not offered, not only the
+  # file ones: a registered tool is still out of reach when the list leaves it
+  # out.
+  def test_every_tool_outside_the_offered_set_is_refused
+    sub = build_sub("code_reviewer")
+    refused = %w[shell_exec cron loop memory notify send_files instagram delegate file_write]
+    registered = refused.select { |name| sub.tools.get(name) }
+
+    refute_empty registered, "the registry should have tools outside a reviewer's list"
+    registered.each do |name|
+      result = sub.execute_tool(name, { "operation" => "list" })
+
+      assert_match(/Refused/, result, "#{name} must not reach a read-only role")
+      assert_match(/#{name}/, result)
+    end
   end
 
   def test_read_only_agent_has_no_shell_to_run
     sub = build_sub("code_reviewer")
     marker = File.join(@workspace, "touched")
 
-    error = assert_raises(RuntimeError) do
-      sub.tools.execute("shell_exec", { "command" => "touch #{marker}" }, read_only: true)
-    end
+    result = sub.execute_tool("shell_exec", { "command" => "touch #{marker}" })
 
-    assert_match(/read-only/, error.message)
+    assert_match(/Refused/, result)
     refute File.exist?(marker)
   end
 
   def test_write_roles_still_get_their_write_tools
-    tools = build_sub("implementer").send(:tool_definitions)
-    file_ops = tools.find { |t| t.name == "file_ops" }
+    tools = build_sub("implementer").tool_definitions
+    names = tools.map(&:name)
 
-    assert_includes tools.map(&:name), "shell_exec"
-    refute file_ops.read_only?
-    assert_includes file_ops.parameters["properties"]["operation"]["enum"], "write"
+    assert_includes names, "shell_exec"
+    assert_includes names, "file_read"
+    assert_includes names, "file_write"
+    assert(tools.any?(&:writes?))
   end
 
-  # Fail closed: a definition that forgets the key, and a slug with no
-  # definition at all, must not come back writable.
-  def test_read_only_is_the_default
-    assert Rubot::SubagentRegistry.read_only?("code_reviewer")
-    assert Rubot::SubagentRegistry.read_only?("planner")
-    assert Rubot::SubagentRegistry.read_only?("no-such-role")
-    refute Rubot::SubagentRegistry.read_only?("implementer")
-    refute Rubot::SubagentRegistry.read_only?("test_writer")
-  end
-
-  # B1: the guard used to hang off @subagent, which only the synchronous spawn
-  # path sets. A background run is built by SessionActor from a persona alone,
-  # which is what this test reproduces.
-  def test_read_only_role_does_not_depend_on_the_spawn_path
+  # The spawn path does not decide the capability: the tools the role is offered
+  # do. A background run is built by SessionActor from a persona alone, which is
+  # what this test reproduces.
+  def test_read_only_is_derived_from_the_tool_list_on_every_spawn_path
     agent = actor_built_agent("code_reviewer")
 
     assert agent.read_only?
-    assert_equal %w[file_ops search], agent.send(:tool_definitions).map(&:name)
+    assert_equal %w[file_read search], agent.tool_definitions.map(&:name)
   end
 
   def test_actor_built_reviewer_cannot_write_a_file
@@ -548,39 +582,11 @@ class TestDelegate < Minitest::Test
     path = File.join(@workspace, "taboo.txt")
     File.write(path, "keep\n")
 
-    result = agent.send(:run_one_tool,
-                        { name: "file_ops", id: "call-1",
-                          arguments: { "operation" => "write", "path" => path, "content" => "gone" } })
+    result = agent.execute_tool("file_write",
+                                { "operation" => "write", "path" => path, "content" => "gone" })
 
-    assert_match(/read-only/, result)
+    assert_match(/Refused/, result)
     assert_equal "keep\n", File.read(path)
-  end
-
-  # B3: the first version named only file_ops and shell_exec, so every other
-  # tool that can change the workspace walked through the guard.
-  def test_write_capable_tools_outside_the_allowlist_are_refused
-    tools = Rubot::Tools::Registry.new
-    refused = %w[shell_exec cron loop memory notify send_files instagram].select { |name| tools.get(name) }
-
-    refute_empty refused, "the registry should have write-capable tools to refuse"
-    refused.each do |name|
-      error = assert_raises(RuntimeError, "#{name} must not reach a read-only caller") do
-        tools.execute(name, { "operation" => "list" }, read_only: true)
-      end
-
-      assert_match(/read-only/, error.message)
-    end
-  end
-
-  # B2: the guard is a property of the class, so the workspace and guard that
-  # every construction writes onto the instance cannot turn it off.
-  def test_the_read_only_face_cannot_be_written_into_writable
-    face = Rubot::Tools::Registry.new.read_only_tool("file_ops")
-    face.workspace = @workspace
-    face.safety_guard = nil
-
-    assert_instance_of Rubot::Tools::FileReadTool, face
-    assert face.read_only?
   end
 
   # The web channel's background path builds a sub agent from a user persona.
@@ -590,14 +596,14 @@ class TestDelegate < Minitest::Test
       config: @config, session_id: "lead~sub-run1",
       persona: { "slug" => "writer", "name" => "Writer", "system_prompt" => "You write." }
     )
-    names = agent.send(:tool_definitions).map(&:name)
+    names = agent.tool_definitions.map(&:name)
 
     refute_includes names, "delegate"
     refute_includes names, "cron"
     refute_includes names, "instagram"
   end
 
-  def test_read_only_key_does_not_leak_into_the_persona
+  def test_the_role_definition_carries_no_capability_flag
     refute Rubot::SubagentRegistry["code_reviewer"].key?("read_only")
     refute Rubot::SubagentRegistry["code_reviewer"].key?("allowed_tools")
   end

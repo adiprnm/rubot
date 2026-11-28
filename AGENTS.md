@@ -62,8 +62,13 @@ bundle exec rubocop                # lint (RuboCop Rails Omakase, Rails cops off
   is private, make that method public in the class with one documented block
   naming it (`public :pump, :apply_event, ...` — see `Telegram` and `TUI`) and
   say in the comment why it is a seam; anything not named there stays private.
-- Edit files with `file_ops edit` (targeted); use `write` only for new files or
-  full rewrites. Never edit in place with `sed -i` or shell redirection.
+- Manage files with `file_read` and `file_write`: read with `file_read`, change
+  with `file_write edit` (targeted), and use `write` only for new files or full
+  rewrites. Never edit in place with `sed -i` or shell redirection.
+- A capability is a tool, not a flag: `file_read` carries the reading
+  operations and `file_write` the ones that change a file. A role that must not
+  write is one that is not offered `file_write`, so do not reintroduce a
+  read-only guard, a second face of a tool, or an allowlist of tool names.
 - Do not commit unless the user explicitly asks. Commit only after changes
   are confirmed good.
 
@@ -178,7 +183,8 @@ lib/rubot/
   config.rb           YAML config loader
   config/             model presets, provider settings
   provider.rb, providers/   OpenAI/Anthropic/Ollama/OpenCode
-  tool.rb, tools/     tool base + implementations (shell, file_ops, web, ...)
+  tool.rb, tools/     tool base + implementations (shell, file_read, file_write,
+                      web, ...)
   channel.rb, channels/     TUI, Telegram, Web (HTMX + SSE)
     channels/telegram/      transport, attachments, status, commands,
                             messaging, scheduling, persona, persona_wizard

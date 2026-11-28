@@ -131,8 +131,10 @@ model_presets:
 tools:
   shell_exec:
     enabled: true          # Execute shell commands
-  file_ops:
-    enabled: true          # Read/edit/write/list files
+  file_read:
+    enabled: true          # Read/list/inspect files and directories
+  file_write:
+    enabled: true          # Edit/create/append/delete files
   search:
     enabled: true          # Find files and matching lines (grep/glob)
   web_fetch:

@@ -162,10 +162,10 @@ module Rubot
 
     def test_a_file_row_names_the_file_rather_than_the_workspace
       assert_equal "Membaca isi …/rubot/web/turn.rb",
-                   ToolCaption.caption("file_ops", { "operation" => "read", "path" => LONG_PATH })
+                   ToolCaption.caption("file_read", { "operation" => "read", "path" => LONG_PATH })
       assert_equal "Mengubah isi lib/rubot/web/turn.rb",
-                   ToolCaption.caption("file_ops", { "operation" => "edit",
-                                                     "path" => "lib/rubot/web/turn.rb" }),
+                   ToolCaption.caption("file_write", { "operation" => "edit",
+                                                       "path" => "lib/rubot/web/turn.rb" }),
                    "a path the reader can already place is left alone"
     end
 
@@ -183,10 +183,11 @@ module Rubot
 
     def test_every_file_operation_gets_a_sentence
       assert_equal ToolCaption::FILE_OPERATIONS.sort, FILE_ROWS.keys.sort,
-                   "the operations the tool takes and the rows they draw are one list"
+                   "the operations the tools take and the rows they draw are one list"
 
       FILE_ROWS.each do |operation, sentence|
-        assert_equal sentence, ToolCaption.caption("file_ops", { "operation" => operation, "path" => "notes.md" })
+        tool = ToolCaption::READ_OPERATIONS.include?(operation) ? "file_read" : "file_write"
+        assert_equal sentence, ToolCaption.caption(tool, { "operation" => operation, "path" => "notes.md" })
       end
     end
 
@@ -214,16 +215,16 @@ module Rubot
     end
 
     def test_a_file_row_without_an_operation_reads_like_a_read
-      assert_equal "Membaca isi notes.md", ToolCaption.caption("file_ops", { "path" => "notes.md" })
+      assert_equal "Membaca isi notes.md", ToolCaption.caption("file_read", { "path" => "notes.md" })
     end
 
     def test_a_multi_file_read_counts_the_files
       assert_equal "Membaca isi 3 berkas",
-                   ToolCaption.caption("file_ops", { "operation" => "read", "paths" => %w[a b c] })
+                   ToolCaption.caption("file_read", { "operation" => "read", "paths" => %w[a b c] })
       assert_equal "Membaca isi a.md",
-                   ToolCaption.caption("file_ops", { "operation" => "read", "paths" => [ "a.md" ] })
+                   ToolCaption.caption("file_read", { "operation" => "read", "paths" => [ "a.md" ] })
       assert_equal "Membaca isi",
-                   ToolCaption.caption("file_ops", { "operation" => "read", "paths" => [] })
+                   ToolCaption.caption("file_read", { "operation" => "read", "paths" => [] })
     end
 
     def test_search_says_what_it_is_looking_for
@@ -294,7 +295,7 @@ module Rubot
 
     def test_arguments_that_are_not_a_hash_never_raise
       assert_equal "Menjalankan perintah di terminal", ToolCaption.caption("shell_exec", nil)
-      assert_equal "Membaca isi", ToolCaption.caption("file_ops", "nope")
+      assert_equal "Membaca isi", ToolCaption.caption("file_read", "nope")
       assert_equal "Mengirim berkas", ToolCaption.caption("send_files", {})
       assert_equal "", ToolCaption.raw("shell_exec", nil)
       assert_equal "", ToolCaption.raw("shell_exec", {})
@@ -314,14 +315,14 @@ module Rubot
     def test_the_live_web_row_draws_the_sentence_and_hovers_the_call
       turn = Web::Turn.new(id: "t1", session_id: "s1")
       args = { "operation" => "read", "path" => LONG_PATH }
-      turn.tool_started("file_ops", ToolCaption.caption("file_ops", args),
-                        op: "read", title: ToolCaption.tooltip("file_ops", args))
+      turn.tool_started("file_read", ToolCaption.caption("file_read", args),
+                        op: "read", title: ToolCaption.tooltip("file_read", args))
 
       html = Web::View.turn_body(turn)
 
       assert_includes html, "Membaca isi …/rubot/web/turn.rb"
       refute_includes html, "tool-name", "the tool's own name is not the reader's word for it"
-      assert_includes html, %(title="file_ops · #{LONG_PATH}"), "the call stays reachable on hover"
+      assert_includes html, %(title="file_read · #{LONG_PATH}"), "the call stays reachable on hover"
     end
 
     # A row with nothing to show carries no tooltip at all: an empty title
@@ -337,20 +338,20 @@ module Rubot
     # what the live turn said.
     def test_the_replayed_transcript_says_the_same_thing_as_the_live_row
       args = { "operation" => "read", "path" => LONG_PATH }
-      call = { "id" => "c1", "function" => { "name" => "file_ops", "arguments" => args.to_json } }
+      call = { "id" => "c1", "function" => { "name" => "file_read", "arguments" => args.to_json } }
       view = Object.new.extend(Web::HistoryView)
       view.define_singleton_method(:sent_attachments) { |*_args| [] }
 
       row = view.history_tool_items(call, {}, {}, "s1").first
 
-      assert_equal ToolCaption.caption("file_ops", args), row[:detail]
-      assert_equal ToolCaption.tooltip("file_ops", args), row[:title]
+      assert_equal ToolCaption.caption("file_read", args), row[:detail]
+      assert_equal ToolCaption.tooltip("file_read", args), row[:title]
     end
 
     def test_the_tui_row_wears_the_same_sentence_inside_its_cell_budget
       args = { "operation" => "read", "path" => LONG_PATH }
 
-      assert_equal ToolCaption.caption("file_ops", args), TUI::Transcript.tool_summary("file_ops", args)
+      assert_equal ToolCaption.caption("file_read", args), TUI::Transcript.tool_summary("file_read", args)
       long = TUI::Transcript.tool_summary("search", { "pattern" => "x" * 200 })
       assert long.end_with?("…"), "the cut is marked"
       assert_operator long.length, :<=, 64
@@ -358,7 +359,7 @@ module Rubot
 
     # The row itself no longer starts with the tool's name, in either renderer.
     def test_the_tui_row_draws_the_sentence_without_the_tool_name
-      segments = TUI::Transcript.tool_done("file_ops", "Membaca isi a.rb")
+      segments = TUI::Transcript.tool_done("file_read", "Membaca isi a.rb")
       text = segments.map(&:first).join
 
       assert_equal "✓ Membaca isi a.rb", text
@@ -368,7 +369,7 @@ module Rubot
       assert_equal "Menjalankan test",
                    ToolCaption.caption("shell_exec", { "command" => "bundle exec rake test" })
       assert_equal "Membaca isi lib/rubot/agent.rb",
-                   ToolCaption.caption("file_ops", { "operation" => "read", "path" => "lib/rubot/agent.rb" })
+                   ToolCaption.caption("file_read", { "operation" => "read", "path" => "lib/rubot/agent.rb" })
     end
 
     # --- loading a skill -------------------------------------------------
@@ -377,7 +378,7 @@ module Rubot
     # that is what the row says: the file it opened is the tooltip's business.
     def test_loading_a_skill_reads_as_loading_that_skill
       assert_equal "Memuat skill brain",
-                   ToolCaption.caption("file_ops", { "operation" => "read",
+                   ToolCaption.caption("file_read", { "operation" => "read",
                                                      "path" => "/home/adipurnm/.rubot/skills/brain/SKILL.md" })
       assert_equal "Memuat skill grill",
                    ToolCaption.caption("shell_exec",
@@ -388,7 +389,7 @@ module Rubot
     def test_loading_a_skill_is_said_in_the_readers_language
       args = { "operation" => "read", "path" => "/home/adipurnm/.rubot/skills/brain/SKILL.md" }
 
-      english = I18n.with_locale("en") { ToolCaption.caption("file_ops", args) }
+      english = I18n.with_locale("en") { ToolCaption.caption("file_read", args) }
 
       assert_equal "Loading the brain skill", english
     end
@@ -397,7 +398,7 @@ module Rubot
     # and the row must not fall back to "reading <path>".
     def test_a_read_without_an_operation_reads_as_loading_the_skill
       assert_equal "Memuat skill brain",
-                   ToolCaption.caption("file_ops", { "path" => "/home/adipurnm/.rubot/skills/brain/SKILL.md" })
+                   ToolCaption.caption("file_read", { "path" => "/home/adipurnm/.rubot/skills/brain/SKILL.md" })
     end
 
     # Several skills in one call are one sentence, joined the way the reader's
@@ -406,9 +407,9 @@ module Rubot
       args = { "paths" => [ "/home/adipurnm/.rubot/skills/brain/SKILL.md",
                             "/home/adipurnm/.rubot/skills/grill/SKILL.md" ] }
 
-      assert_equal "Memuat skill brain dan grill", ToolCaption.caption("file_ops", args)
+      assert_equal "Memuat skill brain dan grill", ToolCaption.caption("file_read", args)
       assert_equal "Loading the brain and grill skills",
-                   I18n.with_locale("en") { ToolCaption.caption("file_ops", args) }
+                   I18n.with_locale("en") { ToolCaption.caption("file_read", args) }
     end
 
     # Three of them need the comma the two of them do not: the list is built
@@ -418,9 +419,9 @@ module Rubot
                             "/home/adipurnm/.rubot/skills/grill/SKILL.md",
                             "/home/adipurnm/.rubot/skills/pr/SKILL.md" ] }
 
-      assert_equal "Memuat skill brain, grill dan pr", ToolCaption.caption("file_ops", args)
+      assert_equal "Memuat skill brain, grill dan pr", ToolCaption.caption("file_read", args)
       assert_equal "Loading the brain, grill and pr skills",
-                   I18n.with_locale("en") { ToolCaption.caption("file_ops", args) }
+                   I18n.with_locale("en") { ToolCaption.caption("file_read", args) }
     end
 
     # The TUI row is the same fact in its shorter shape: the mark, the word the
@@ -428,15 +429,15 @@ module Rubot
     def test_the_tui_skill_row_takes_its_word_from_the_dictionary
       args = { "paths" => [ "/home/adipurnm/.rubot/skills/brain/SKILL.md",
                             "/home/adipurnm/.rubot/skills/grill/SKILL.md" ] }
-      names = TUI::Transcript.skill_load("file_ops", args)
-      row = TUI::Transcript.tool_done("file_ops", names, names).map(&:first).join
+      names = TUI::Transcript.skill_load("file_read", args)
+      row = TUI::Transcript.tool_done("file_read", names, names).map(&:first).join
 
       assert_equal "brain dan grill", names
       assert_equal "✓ skill brain dan grill", row
     end
 
     def test_writing_a_skill_file_does_not_read_as_loading_it
-      caption = ToolCaption.caption("file_ops", { "operation" => "write",
+      caption = ToolCaption.caption("file_write", { "operation" => "write",
                                                   "path" => "/home/adipurnm/.rubot/skills/brain/SKILL.md" })
 
       refute_includes caption, "Memuat skill"
@@ -447,7 +448,7 @@ module Rubot
     # drew: the sentence and the mark it wears.
     def test_the_replayed_transcript_marks_a_skill_load_the_same_way
       args = { "operation" => "read", "path" => "/home/adipurnm/.rubot/skills/brain/SKILL.md" }
-      call = { "id" => "c1", "function" => { "name" => "file_ops", "arguments" => args.to_json } }
+      call = { "id" => "c1", "function" => { "name" => "file_read", "arguments" => args.to_json } }
       view = Object.new.extend(Web::HistoryView)
       view.define_singleton_method(:sent_attachments) { |*_args| [] }
 

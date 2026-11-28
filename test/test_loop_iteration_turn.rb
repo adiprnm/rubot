@@ -64,7 +64,7 @@ class TestLoopIterationTurn < Minitest::Test
       "id" => id,
       "type" => "function",
       "function" => {
-        "name" => "file_ops",
+        "name" => "file_read",
         "arguments" => JSON.generate({ "operation" => "list", "path" => @workspace })
       }
     }

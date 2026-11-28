@@ -504,9 +504,9 @@ module Rubot
       @persona&.to_h
     end
 
-    # Whether this agent may only look at files, never change them. The rule
-    # lives in ToolWiring#read_only_role?; this is its public face, for the
-    # channels that execute a tool through a handle instead of a turn.
+    # Whether this agent may only look at files, never change them. Derived from
+    # the tools it is offered: a role that must not write is a role whose list
+    # holds no writing tool, so there is no second rule to keep in step.
     def read_only?
       read_only_role?
     end
@@ -773,11 +773,11 @@ module Rubot
     FILE_EDIT_RULE = <<~PROMPT.strip.freeze
       # Editing Files
 
-      Change an existing file with the file tool's `edit` operation: read the
-      part you need, then replace an exact `old_string` with `new_string`. Use
-      enough surrounding lines for `old_string` to be unique. Use `write` only
-      when creating a file or genuinely rewriting all of it, and `append` to
-      add to the end.
+      Change an existing file with `file_write`'s `edit` operation: read the
+      part you need with `file_read`, then replace an exact `old_string` with
+      `new_string`. Use enough surrounding lines for `old_string` to be unique.
+      Use `write` only when creating a file or genuinely rewriting all of it,
+      and `append` to add to the end.
 
       Read with `offset`/`limit` when a file is long; the reply says which lines
       came back, so continue from there instead of re-reading the whole file.

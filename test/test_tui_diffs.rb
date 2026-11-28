@@ -237,7 +237,7 @@ module Rubot
         "id" => "call_1",
         "type" => "function",
         "function" => {
-          "name" => "file_ops",
+          "name" => "file_write",
           "arguments" => JSON.generate({ "operation" => "write", "path" => "notes.md",
                                           "content" => "one\nTWO\nthree\n" })
         }
@@ -268,7 +268,7 @@ module Rubot
         { "role" => "user", "content" => "edit it" },
         { "role" => "assistant", "content" => "", "tool_calls" => [
           { "id" => "call_1", "type" => "function",
-            "function" => { "name" => "file_ops",
+            "function" => { "name" => "file_write",
                             "arguments" => JSON.generate({ "operation" => "write",
                                                            "path" => "notes.md" }) } }
         ] },
@@ -307,12 +307,12 @@ module Rubot
       callback = repl.confirm_callback
       answer = nil
       worker = Thread.new do
-        answer = callback.call("file_ops", { "operation" => "write", "path" => "/tmp/notes.md" })
+        answer = callback.call("file_write", { "operation" => "write", "path" => "/tmp/notes.md" })
       end
 
       event = repl.instance_variable_get(:@events).pop
       assert_equal :confirm, event[0], "the ask is published to the App thread"
-      assert_equal "file_ops", event[1]
+      assert_equal "file_write", event[1]
       list = repl.instance_variable_get(:@confirm_prompt)
       log = repl.instance_variable_get(:@log)
       before = log.entry_count
@@ -344,7 +344,7 @@ module Rubot
       answer = nil
       worker = Thread.new do
         answer = replit.confirm_callback
-                     .call("file_ops", { "operation" => "write", "path" => "/tmp/a" })
+                     .call("file_write", { "operation" => "write", "path" => "/tmp/a" })
       end
       replit.apply_event(replit.instance_variable_get(:@events).pop)
 
@@ -375,14 +375,14 @@ module Rubot
       repl = build_repl
       callback = repl.confirm_callback
 
-      first = Thread.new { callback.call("file_ops", { "operation" => "write", "path" => "/tmp/a" }) }
+      first = Thread.new { callback.call("file_write", { "operation" => "write", "path" => "/tmp/a" }) }
       first_event = repl.instance_variable_get(:@events).pop
       repl.apply_event(first_event)
       repl.instance_variable_get(:@confirm_prompt).handle_key(::TUI::Key.new(:left))
       repl.instance_variable_get(:@confirm_prompt).handle_key(::TUI::Key.new(:enter))
       assert first.join(2)
 
-      second = Thread.new { callback.call("file_ops", { "operation" => "write", "path" => "/tmp/b" }) }
+      second = Thread.new { callback.call("file_write", { "operation" => "write", "path" => "/tmp/b" }) }
       second_event = repl.instance_variable_get(:@events).pop
       refute_equal first_event[3], second_event[3], "an old answer cannot leak into the next ask"
       repl.apply_event(second_event)
@@ -468,7 +468,7 @@ module Rubot
     # command can be drag-selected and copied before answering.
     def test_selection_keys_reach_the_log_while_the_confirmation_is_up
       list = Rubot::TUI::ConfirmPrompt.new(log: Rubot::TUI::LogView.new)
-      list.ask("file_ops", { "operation" => "write", "path" => "/tmp/x" }, answered: Queue.new)
+      list.ask("file_write", { "operation" => "write", "path" => "/tmp/x" }, answered: Queue.new)
 
       refute list.handle_key(::TUI::Key.new(:mouse_press)), "mouse keys pass through to the log bindings"
       refute list.handle_key(::TUI::Key.new(:page_up)), "scrolling passes through too"
@@ -479,7 +479,7 @@ module Rubot
     def test_stray_keys_are_swallowed_while_the_confirmation_is_up
       list = Rubot::TUI::ConfirmPrompt.new(log: Rubot::TUI::LogView.new)
       answered = Queue.new
-      list.ask("file_ops", { "operation" => "write", "path" => "/tmp/x" }, answered: answered)
+      list.ask("file_write", { "operation" => "write", "path" => "/tmp/x" }, answered: answered)
 
       assert list.handle_key(::TUI::Key.printable("n")), "unchosen keys are eaten"
       assert_empty answered, "typewriting never answers"

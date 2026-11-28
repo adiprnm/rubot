@@ -44,6 +44,15 @@ module Rubot
       raise NotImplementedError, "#{self.class} must implement #execute"
     end
 
+    # Does this tool change the workspace? The default is yes, deliberately: a
+    # tool added later has to opt out instead of being assumed harmless. The
+    # reading tools answer no, and a role whose tools all answer no is read-only
+    # (see Agent#read_only?). This is the one place that question is answered,
+    # so a new write-capable tool cannot quietly widen a read-only role.
+    def writes?
+      true
+    end
+
     # Returns true if the given arguments represent an action that could cause
     # data loss (e.g., overwriting an existing file, deleting files, destructive
     # shell commands). Used by the Agent to request user confirmation before

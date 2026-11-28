@@ -672,7 +672,7 @@ module Rubot
         case tool_name
         when "shell_exec"
           "Shell command: `#{args["command"][0..120]}`"
-        when "file_ops"
+        when "file_write"
           "File operation: `#{args["operation"]}` on `#{args["path"]}`"
         else
           "#{tool_name}: #{args.inspect[0..120]}"
@@ -684,7 +684,7 @@ module Rubot
       def confirmation_title(tool_name, args)
         operation = args.is_a?(Hash) ? args["operation"].to_s : ""
         case tool_name.to_s
-        when "file_ops"
+        when "file_write"
           operation == "delete" ? "Delete this file?" : "Overwrite this file?"
         when "shell_exec"
           "Run this command?"

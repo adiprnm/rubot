@@ -135,14 +135,14 @@ class TestProviders < Minitest::Test
     registry = Rubot::Tools::Registry.new
 
     defs = provider.format_tools(registry.all)
-    assert_equal 12, defs.size
+    assert_equal 13, defs.size
 
     shell_def = defs.find { |d| d["function"]["name"] == "shell_exec" }
     assert shell_def
     assert_equal "function", shell_def["type"]
     assert_includes shell_def["function"]["description"], "shell"
 
-    file_def = defs.find { |d| d["function"]["name"] == "file_ops" }
+    file_def = defs.find { |d| d["function"]["name"] == "file_read" }
     assert file_def
     assert_equal "function", file_def["type"]
 
@@ -282,7 +282,7 @@ class TestProviders < Minitest::Test
     registry = Rubot::Tools::Registry.new
 
     defs = provider.format_tools(registry.all)
-    assert_equal 12, defs.size
+    assert_equal 13, defs.size
 
     shell_def = defs.find { |d| d["name"] == "shell_exec" }
     assert shell_def
@@ -344,7 +344,7 @@ class TestProviders < Minitest::Test
     registry = Rubot::Tools::Registry.new
 
     defs = provider.format_tools(registry.all)
-    assert_equal 12, defs.size
+    assert_equal 13, defs.size
 
     shell_def = defs.find { |d| d["function"]["name"] == "shell_exec" }
     assert shell_def

@@ -77,7 +77,7 @@ module Rubot
 
       lines = []
       lines << "The following skills provide specialized instructions for specific tasks."
-      lines << "Use the file tool to load a skill's file when the task matches its description."
+      lines << "Use `file_read` to load a skill's file when the task matches its description."
       lines << "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands."
       lines << ""
       lines << "<available_skills>"

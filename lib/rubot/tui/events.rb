@@ -173,7 +173,7 @@ module Rubot
       end
 
       # The row for a tool call in flight. A skill load is not shown as
-      # `file_ops read …/SKILL.md` but as its own line, so the transcript says
+      # `file_read …/SKILL.md` but as its own line, so the transcript says
       # plainly that the agent picked a skill up — the same way a tool call shows.
       def tool_call_segments(name, summary, skill)
         Rubot::TUI::Transcript.tool_call(name, summary, skill)

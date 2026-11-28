@@ -14,7 +14,8 @@ module Rubot
       module Status
         TOOL_EMOJIS = {
           "shell_exec"  => "💻",
-          "file_ops"    => "📄",
+          "file_read"   => "📄",
+          "file_write"  => "✏️",
           "web_fetch"   => "🌐",
           "memory"      => "🧠",
           "cron"        => "⏰"

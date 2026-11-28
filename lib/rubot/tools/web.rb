@@ -94,6 +94,10 @@ module Rubot
         "web_fetch"
       end
 
+      def writes?
+        false
+      end
+
       def description
         <<~DESC.strip
           Fetch content from a URL via HTTP GET, following redirects. Useful for

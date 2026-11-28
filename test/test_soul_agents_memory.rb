@@ -292,7 +292,8 @@ class TestMemoryProtectionViaFileTool < Minitest::Test
   def setup
     @tmpdir = Dir.mktmpdir
     @guard = Rubot::SafetyGuard.new(workspace: @tmpdir, restrict_to_workspace: false)
-    @file_tool = Rubot::Tools::FileTool.new(safety_guard: @guard)
+    @file_tool = Rubot::Tools::FileWrite.new(safety_guard: @guard)
+    @file_reader = Rubot::Tools::FileRead.new(safety_guard: @guard)
   end
 
   def teardown
@@ -328,7 +329,7 @@ class TestMemoryProtectionViaFileTool < Minitest::Test
     mem_path = File.join(@tmpdir, "MEMORY.md")
     File.write(mem_path, "# Memory\n\n## Facts\n- Read test")
 
-    result = @file_tool.execute({
+    result = @file_reader.execute({
       "operation" => "read",
       "path" => mem_path
     })

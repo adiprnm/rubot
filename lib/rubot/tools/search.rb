@@ -30,6 +30,10 @@ module Rubot
         "search"
       end
 
+      def writes?
+        false
+      end
+
       def description
         desc = <<~DESC.strip
           Find files or matching lines under a directory, without shelling out.

@@ -17,7 +17,7 @@ module Rubot
   # (see Web::SubagentLine).
   #
   # The sentence is the whole row, not a tail on the tool's name: `shell_exec`
-  # and `file_ops` are the agent's words, not the reader's, and a row that said
+  # and `file_write` are the agent's words, not the reader's, and a row that said
   # them first made the reader translate before they could read. What the call
   # actually asked for is still one hover away (see `tooltip`).
   #
@@ -61,7 +61,12 @@ module Rubot
     # and a key in both languages, nothing else. An operation this does not
     # list still reads as a sentence, through `tool.operation_unknown`, rather
     # than as the bare word the model happened to send.
-    FILE_OPERATIONS = %w[read write edit append delete list info].freeze
+    # The two file tools split the operations between them, and the dictionary
+    # owes an entry for every one of them (`tool.file.read`, …). The split is
+    # here too so a row for a write never falls back to reading wording.
+    READ_OPERATIONS = %w[read list info].freeze
+    WRITE_OPERATIONS = %w[edit write append delete].freeze
+    FILE_OPERATIONS = (READ_OPERATIONS + WRITE_OPERATIONS).freeze
     MEMORY_OPERATIONS = %w[read append update_section].freeze
     CRON_OPERATIONS = %w[add list detail remove enable disable].freeze
     # `start` is absent on purpose: it is the one operation with something to
@@ -153,7 +158,8 @@ module Rubot
     def self.row_for(name, args)
       case name
       when "shell_exec" then command_caption(args)
-      when "file_ops" then file_caption(args)
+      when "file_read" then file_caption(args, READ_OPERATIONS, fallback: "read")
+      when "file_write" then file_caption(args, WRITE_OPERATIONS, fallback: "write")
       when "search" then search_caption(args)
       when "web_fetch" then fetch_caption(args)
       when "delegate" then delegate_caption(args)
@@ -479,12 +485,12 @@ module Rubot
 
     # --- the other tools --------------------------------------------------
 
-    # One entry per operation the tool accepts (see FILE_OPERATIONS), and the
-    # path is the variable each of them places: after the verb, or after the
-    # noun the language puts first.
-    def self.file_caption(args)
+    # One entry per operation the tool accepts (see READ_OPERATIONS and
+    # WRITE_OPERATIONS), and the path is the variable each of them places: after
+    # the verb, or after the noun the language puts first.
+    def self.file_caption(args, operations, fallback:)
       operation = args["operation"].to_s
-      operation = "read" unless FILE_OPERATIONS.include?(operation)
+      operation = fallback unless operations.include?(operation)
       path = args["path"].to_s.strip
       target = path.empty? ? paths_target(args["paths"]) : place(path)
 
