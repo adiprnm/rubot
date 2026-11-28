@@ -72,10 +72,16 @@ module Rubot
     # lease taken out of a live run's hands. So a lock it does get is given
     # straight back, and the answer is that nobody held it.
     #
-    # Asking leaves an empty lock file behind for a loop nobody ever ran, which
-    # is cheap: the file has no content worth keeping, and the alternative (skip
-    # the open when the file is missing) is a race between the check and the open.
+    # Nor may asking leave anything behind. Only `hold` creates a lock file, so a
+    # file that is not there is a lease nobody has taken -- and the directory it
+    # would live in need not exist either. Opening it regardless created both, so
+    # a mere question about a loop nobody had run left a `loops` directory and an
+    # empty `.id.run` in it. The absence answers itself, and it is not a race
+    # with a run: a run takes the lease before it writes anything, so a loop this
+    # method is asked about exists by the time the answer can be "active".
     def self.held?(dir, id)
+      return false unless File.exist?(path_for(dir, id))
+
       lease = hold(dir, id)
       return true if lease.nil?
 

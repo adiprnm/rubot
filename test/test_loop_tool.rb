@@ -567,6 +567,23 @@ class TestLoopTool < Minitest::Test
     assert_equal 0, @store.load(state.id).takeovers, "the takeover is the runner's to count, not the tool's"
   end
 
+  # A resume with no runner and no agent is a write and nothing else: no part of
+  # this channel can iterate a loop, so the file keeps saying paused and no
+  # iteration follows. Answering "resumed" promised work nobody here would do.
+  def test_resume_without_a_runner_or_an_agent_says_nothing_is_iterating_it
+    state = create
+    @store.update(state.id) { |loop| loop.status = "paused" }
+
+    result = @tool.execute("operation" => "resume", "id" => state.id)
+
+    assert_ok result
+    assert_includes result, "nothing is iterating it"
+    refute_includes result, "resumed", "nothing was resumed, and the answer must not say so"
+    reread = @store.load(state.id)
+    assert_equal "paused", reread.status, "nothing ran, so nothing was woken"
+    assert_equal 0, reread.takeovers, "and no run was picked up off a dead process"
+  end
+
   # -- the budget on resume --------------------------------------------------
 
   # A spent budget is the one stop a resume cannot walk away from: the run stops

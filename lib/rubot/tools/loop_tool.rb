@@ -270,7 +270,13 @@ module Rubot
         handed = request_from_agent(:resume, state.id)
         return [ handed, note ].reject(&:empty?).join("; ") if handed
 
-        "OK: loop #{state.id} resumed; no runner is attached to this channel"
+        # A resume with nothing to resume it is a promise this channel cannot
+        # keep: the file keeps saying paused, and no iteration follows. What the
+        # write changed (a cap, a budget) is said by the note; that nothing is
+        # iterating is said here, rather than answering "resumed" for a loop that
+        # will sit exactly where it was.
+        "OK: loop #{state.id} is not running: no runner is attached to this channel, " \
+          "so nothing is iterating it; start it from a channel that can run loops"
       end
 
       # What a resume changed, in the reader's words: the two facts that stop a
