@@ -2910,12 +2910,23 @@ select:focus-visible { outline: none; }
    taken off — the row already has a mark of its own at its left end, and a
    triangle in front of it would be two glyphs saying "look here". The pointer is
    on the summary alone: a row with nothing to open wears the same flex block,
-   and a hand over it would promise a tap that does nothing. */
-.subagent-summary {
+   and a hand over it would promise a tap that does nothing.
+
+   The loop card's goal line is the same line, so it is the same rule: a mark at
+   the left end, a gap, then text that may be cut short. Both places put their
+   ring at the same fraction of the line (see `.loop-mark .loop-spinner`) and
+   both align it on the baseline, so the two controls read as one drawing rather
+   than as two that were matched by hand once. What each line does differently
+   stays in its own rule below: this one takes the marker off, the card's one
+   caps its width. */
+.subagent-summary,
+.loop-rows .loop-goal {
   display: flex;
   align-items: baseline;
   gap: 0.45rem;
   min-width: 0;
+}
+.subagent-summary {
   list-style: none;
 }
 summary.subagent-summary { cursor: pointer; }
@@ -2992,8 +3003,15 @@ summary.subagent-summary { cursor: pointer; }
    It is drawn at the same fraction of the line as that mark — `0.8em`, so 8px
    in this 10px row and 12px in a transcript row set for reading — rather than
    at its own idea of readable: a footnote that is louder than the row it
-   annotates is a second thing to look at, not a note. */
-.subagent-run {
+   annotates is a second thing to look at, not a note.
+
+   A loop's toggle wears it too, from the same rules: both marks answer "is
+   background work happening right now?", and two controls in one row whose
+   marks were drawn a fraction apart would read as a bug before they read as
+   two things. Only what turns the mark on differs (Web::Loops asks the lease,
+   Web::SubagentJobs asks the run's phase). */
+.subagent-run,
+.loop-run {
   margin-left: 0.22rem;
   color: var(--yellow);
   display: inline-flex;
@@ -3008,7 +3026,8 @@ summary.subagent-summary { cursor: pointer; }
   line-height: 0;
 }
 
-.subagent-run .subagent-spinner {
+.subagent-run .subagent-spinner,
+.loop-run .loop-spinner {
   flex: 0 0 auto;
   display: block;
   /* The same fraction of the line as the working mark in the transcript, so
@@ -3028,8 +3047,13 @@ summary.subagent-summary { cursor: pointer; }
    even though the name and the mark are 10.5px. Same language, not the same
    pixel count; a row set at 10px and a row set at 13.6px do not want the same
    mark. The baseline nudge is there because a text mark gets one from the font
-   for free. */
-.subagent-mark .subagent-spinner {
+   for free.
+
+   The loop card's ring is the same drawing in the same kind of box, so it takes
+   the same rule rather than a copy of it: a copy drifts the first time one of
+   the two is nudged, and the two marks sit in rows of the same 12px. */
+.subagent-mark .subagent-spinner,
+.loop-mark .loop-spinner {
   display: inline-block;
   width: 0.8em;
   height: 0.8em;
@@ -3069,6 +3093,23 @@ summary.subagent-summary { cursor: pointer; }
 .subagent-rows .subagent-name { font-size: 11px; white-space: nowrap; }
 .subagent-rows .subagent-detail { font-size: 11px; }
 
+/* The same ring inside a card, in front of the goal: a reader who has the panel
+   open should not have to look up at the toggle to find out whether the loop
+   they are reading about is moving. Its ring is the row ring's rule, and its
+   line is the row summary's rule (see `.subagent-summary, .loop-rows
+   .loop-goal`), so nothing about it is a copy that could drift. What is left
+   here is the two things a card says for itself: the ring takes its turn in the
+   line rather than being squeezed by it, and the goal's text is the part that
+   ellipsizes.
+
+   `flex: 0 0 auto` belongs on this span rather than on the ring inside it: the
+   span is the flex item, so it is the span that would be squeezed to an oval by
+   a long goal. The ring is laid out inside the span and never sees the line. */
+.loop-rows .loop-mark {
+  flex: 0 0 auto;
+  color: var(--yellow);
+}
+
 /* One card per loop in flight. A loop is read in two lines — what it was asked
    for, and where it got to — so the card stacks them instead of trying to fit
    them on the one line a subagent row gets. The facts at the bottom are the
@@ -3089,10 +3130,13 @@ summary.subagent-summary { cursor: pointer; }
   font-size: 12px;
 }
 .loop-rows .loop-goal {
+  max-width: 26rem;
+}
+.loop-rows .loop-goal-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 26rem;
 }
 .loop-rows .loop-facts {
   font-size: 11px;

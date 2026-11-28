@@ -17,14 +17,19 @@
 
     The rows are drawn on the page and then again by the poll in _loop_sheet,
     which is why nothing here talks to the store: it is handed the rows
-    (see Web::Loops#loop_rows) and only places them. -%>
+    (see Web::Loops#loop_rows) and only places them.
+
+    A card wears one mark that is not a figure: the ring in front of the goal,
+    drawn while the loop's lease is held. It is the only thing on the card that
+    says "something is happening now" — the numbers move once per iteration,
+    which can be minutes — and it is decided by loop_rows, not here. -%>
 <% if loops.empty? -%>
   <p class="usage-note"><%= h(I18n.t("web.loops.empty")) %></p>
 <% else -%>
   <ul class="loop-rows">
 <% loops.each do |loop| -%>
     <li class="loop">
-      <span class="loop-goal" title="<%= h(loop[:goal]) %>"><%= h(loop[:goal]) %></span>
+      <span class="loop-goal" title="<%= h(loop[:goal]) %>"><%- if loop[:running] -%><span class="loop-mark" title="<%= h(I18n.t("web.loops.running_one")) %>" aria-label="<%= h(I18n.t("web.loops.running_one")) %>"><%= View.spinner_mark("loop-spinner") %></span><%- end -%><span class="loop-goal-text"><%= h(loop[:goal]) %></span></span>
       <span class="loop-facts">
         <%= h(I18n.t("web.loops.iterations", done: loop[:iterations], max: loop[:max_iterations])) %>
         · <%= h(I18n.t("web.loops.remaining", left: num(loop[:remaining]), total: num(loop[:max_tokens]))) %>

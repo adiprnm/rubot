@@ -1,0 +1,22 @@
+<%# Whether a loop is being worked right now, on the toggle itself.
+
+    A loop's card is only visible with the panel open, and the toggle looked the
+    same whether the loop was moving or the process holding it had died -- which
+    is a question with two very different answers for a reader watching money
+    being spent. The mark is the same ring the subagent toggle wears, because
+    both say one thing: background work is in flight.
+
+    It is asked of the lease, not of the status word (see LoopLease): a loop's
+    file says `active` from the moment it starts until something pauses it, and
+    a mark drawn from that would turn forever after the run died. Nothing is
+    drawn once nothing is held -- a tick here would claim an ending this panel
+    does not outlive: the sheet goes away with the last loop.
+
+    Replaced out of band by the panel's own poll and by every push, because the
+    toggle is outside the element those answers target (see
+    Web::Loops#loop_state_markup). -%>
+<%- running = loops.count { |loop| loop[:running] } -%>
+<%- unless running.zero? -%>
+<%-   label = I18n.t(running == 1 ? "web.loops.running_one" : "web.loops.running", count: running) -%>
+<span class="loop-run" title="<%= h(label) %>" aria-label="<%= h(label) %>"><%= View.spinner_mark("loop-spinner") %></span>
+<%- end -%>

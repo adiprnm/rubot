@@ -699,6 +699,11 @@ module Rubot
             "empty" => "No loop running.",
             "iterations" => "%{done}/%{max} iterations",
             "remaining" => "%{left} of %{total} left",
+            # The one word a turning ring carries, on the toggle and on the card.
+            # The lease is the fact behind it, so it says "being worked", never
+            # "active": active is what the file says, and it outlives the run.
+            "running_one" => "the loop is being worked",
+            "running" => "%{count} loops are being worked",
             # What a budget warning says and what it offers. Each option names an
             # operation the loop tool already has: keep is the pause the loop is
             # already in, drop is `undo`, raise is `raise` and then `resume`.
@@ -1573,6 +1578,12 @@ module Rubot
             "empty" => "Tidak ada loop berjalan.",
             "iterations" => "%{done}/%{max} iterasi",
             "remaining" => "sisa %{left} dari %{total}",
+            # Kata yang dibawa cincin yang berputar, di toggle dan di kartu:
+            # lease adalah faktanya, jadi kalimatnya "sedang dikerjakan", bukan
+            # "active" — active itu yang tertulis di file, dan bisa hidup lebih
+            # lama daripada run-nya.
+            "running_one" => "loop sedang dikerjakan",
+            "running" => "%{count} loop sedang dikerjakan",
             # What a budget warning says and what it offers, in the same words
             # the English block uses: keep, drop and raise name operations the
             # loop tool already has, and an unverified iteration is called

@@ -60,6 +60,23 @@ class TestLoopLease < Minitest::Test
     refute Rubot::LoopLease.held?(@dir, ID), "a released lease is free again"
   end
 
+  # A reader is not a run. The footer's loop mark asks this every three seconds
+  # while the panel is open, and an exclusive probe made two askers look like
+  # holders to each other: the ring turned over a loop whose run had died, which
+  # is the one thing the lease exists to be able to tell apart.
+  def test_a_reader_is_not_seen_as_a_run
+    path = Rubot::LoopLease.path_for(@dir, ID)
+    reader = File.open(path, File::RDONLY | File::CREAT, 0o600)
+    reader.flock(File::LOCK_SH)
+
+    refute Rubot::LoopLease.held?(@dir, ID), "a shared read is not somebody working"
+    refute Rubot::LoopLease.held?(@dir, ID), "and two readers do not make one"
+
+    assert_nil Rubot::LoopLease.hold(@dir, ID), "a real lease still does not get it"
+  ensure
+    reader&.close
+  end
+
   # It runs in an ensure, so a second call is normal rather than a bug: an ensure
   # that raised on the second release would hide whatever was already leaving.
   def test_release_twice_does_not_raise_and_frees_the_lease
