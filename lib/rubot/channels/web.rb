@@ -176,6 +176,13 @@ module Rubot
         # now. Set before the report turn is run, so a second run landing in the
         # same breath cannot report the same answers twice.
         @subagent_reporting = {}
+        # Which conversations have a report thread on its way but not yet
+        # claimed, and the ticket that thread holds. Two arms for one pile of
+        # answers would mean two threads and two report turns; this is what the
+        # second one finds (see Subagents#report_later). The ticket, not a flag,
+        # is what lets the report that armed it take the claim back when it
+        # finishes and asks again for the batch that landed while it ran.
+        @subagent_armed = {}
         # Which scheduled hiding is still the current one. A run that starts
         # while an older timer is asleep bumps the token, so that timer wakes up
         # to a conversation it no longer speaks for and does nothing.

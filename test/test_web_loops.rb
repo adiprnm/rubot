@@ -801,10 +801,12 @@ class TestWebLoops < Minitest::Test
     def session_for(_sid)
       advance = -> { @last_index += 1 }
       fake = Object.new
-      fake.define_singleton_method(:process_background) do |_text, label: "", tools: true, &_chunk|
+      fake.define_singleton_method(:process_background) do |_text, label: "", tools: true,
+                                                            max_rounds: nil, id: nil, &_chunk|
         advance.call
         "dibaca"
       end
+      fake.define_singleton_method(:cancel!) { |_id = nil| true }
       fake
     end
   end

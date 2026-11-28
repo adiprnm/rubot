@@ -410,6 +410,14 @@ module Rubot
       # Not every ending deserves a turn (see ANNOUNCED_STOPS), and none of them
       # may cost the loop anything: a failure here is the runner's to log, which
       # is why nothing is rescued on this side.
+      #
+      # No in-flight gate here, unlike a batch of subagent answers
+      # (see Subagents#claim_subagent_results): that one holds unread answers it
+      # would have to mark read, so starting a second turn while one runs would
+      # queue the reader twice for the same silence. This report carries its
+      # outcome in hand and marks nothing read, so waiting behind another report
+      # costs only the wait after `wait_for_quiet_turn` — skipping it would lose
+      # the announcement with nothing left to re-arm it.
       def report_loop_finished(sid, id, outcome)
         reason = outcome.stop_reason.to_s.to_sym
         return unless ANNOUNCED_STOPS.include?(reason)

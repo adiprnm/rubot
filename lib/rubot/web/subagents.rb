@@ -36,6 +36,18 @@ module Rubot
       # which is where most of it is spent.
       TURN_NOTIFY_CHARS = Rubot::Web::Routes::Cron::TURN_NOTIFY_CHARS
 
+      # Rounds an acting report may take. Small on purpose: the turn answers one
+      # batch, and the step it may carry on with — commit, push the branch, open
+      # the pull request — has a shape already known, so the conversation's
+      # ceiling of a thousand is not a budget for it.
+      ACTING_REPORT_MAX_ROUNDS = 20
+      # How long an acting report may hold the conversation, in seconds. The
+      # number is paid outside this turn: a background turn holds the session's
+      # actor, so a reader who types while it runs waits in the queue behind it.
+      # Five minutes is enough for tests, a push and a forge round trip, and it
+      # is the most a reader can be asked to wait for a report nobody typed.
+      ACTING_REPORT_TIMEOUT_SECONDS = 300
+
       # The footer's subagent sheet, moved without a reload. A background run
       # has no turn to report into, so this is the only thing that tells an open
       # page it started, moved, or came back.
@@ -197,23 +209,66 @@ module Rubot
       # finishing together produce one report, not three. Answers the model has
       # already pulled with `subagent_results` are not repeated — the store marks
       # what it handed over.
-      def report_subagents_when_done(sid)
+      #
+      # `ticket` is the arm this report answered (see #report_later), handed on
+      # only so the re-arm below can recognise the mark it finds as its own. A
+      # report started any other way — the `ensure` of a delegate run, the
+      # failed-persona path — passes nothing.
+      def report_subagents_when_done(sid, ticket: nil)
         claim = claim_subagent_results(sid)
         return unless claim
 
+        failed = false
         begin
           prepare_delivery(sid)
           deliver_subagent_report(sid, claim)
-          broadcast_sessions
-          broadcast_usage(sid)
+          # The answer is on the page from here on, so the redraw around it is
+          # best effort: a session list that failed to render must not hand
+          # answers that have already been shown back to the unread pile, where
+          # the next report would say the same thing a second time.
+          broadcast_after_report(sid)
         rescue StandardError => e
+          failed = true
           warn "[subagent] could not report results: #{e.class}: #{e.message}"
           # Answers marked read and then lost are the one thing a background run
-          # cannot come back from, so a report that failed hands them back.
+          # cannot come back from, so a report that failed hands them back — a
+          # report that ran out of time included: it marks them read on the way
+          # in exactly like a report that answers.
           release_report(sid, claim)
         ensure
           @subagent_mutex.synchronize { @subagent_reporting.delete(sid) }
+          # The claim is gone, so this is the moment the pile is fair game again.
+          # Nothing else asks: the only other arming is the end of a turn, and a
+          # batch that landed from the `ensure` of a run while the conversation
+          # sat idle would wait for the reader to happen to speak.
+          #
+          # `ticket` is what makes that ask possible from here: the mark this
+          # thread left while it was on its way is still standing, and passing
+          # the ticket in is how the arm below tells it from another thread's.
+          #
+          # A report that just failed is not re-armed from here. Its answers are
+          # back in the pile, and retrying a provider that just failed in a loop
+          # is worse than waiting for the next turn, which asks again anyway.
+          #
+          # A report that quoted a batch while naming what is still waiting does
+          # not arm itself either: the instalments of a backlog were deferred on
+          # purpose, with a line telling the model how to fetch the rest, and
+          # turning that into another turn nobody asked for is how one long
+          # backlog becomes a chain of report turns. What has to be armed is the
+          # batch this report could not even see — it landed while the lock was
+          # held, so it was skipped with nothing said about it at all.
+          report_later(sid, mine: ticket) unless failed || claim[:more]
         end
+      end
+
+      # The page around a report that has already been drawn. Never raises: the
+      # answers it sits beside are already marked read, and losing them to a
+      # failed redraw is worse than a stale sidebar.
+      def broadcast_after_report(sid)
+        broadcast_sessions
+        broadcast_usage(sid)
+      rescue StandardError => e
+        warn "[subagent] could not redraw after a report: #{e.class}: #{e.message}"
       end
 
       # Best effort, and never a second failure: the pile is for the next
@@ -229,11 +284,22 @@ module Rubot
 
       # The report a finished batch becomes: what came back, handed to the shared
       # delivery (see Reports#deliver_report). Only the text belongs here.
+      #
+      # This is the one report that acts. The turn is given the toolset and a
+      # handful of rounds, so it can carry on with what the reader already asked
+      # for in this conversation — "kalau reviewer bilang aman, langsung commit
+      # dan buat PR" — instead of only describing it. Nothing here decides
+      # whether that request exists: no verdict is parsed and no switch is read,
+      # because the reader's own words are in the transcript and the model is the
+      # one reading them. Without a request like that it says what came back and
+      # changes nothing (see Reports::REPORT_ACT_INSTRUCTION).
       def deliver_subagent_report(sid, claim)
         text = subagent_report_text(claim[:results], more: claim[:more])
         label = "Hasil subagent yang sudah selesai, dari kerja yang kamu delegasikan:\n\n"
 
-        deliver_report(sid, text: text, label: label)
+        deliver_report(sid, text: text, label: label, act: true,
+                       max_rounds: ACTING_REPORT_MAX_ROUNDS,
+                       timeout: ACTING_REPORT_TIMEOUT_SECONDS)
       end
 
       # The report runs a turn of its own, so it must never hold the caller: a
@@ -268,6 +334,15 @@ module Rubot
           # of a turn asks again (see Web#report_later).
           next nil if live_turn(sid)
           next nil if @subagent_jobs.running_count(sid).positive?
+          # One report turn at a time per conversation, and a report may now
+          # act: it can hold the actor for minutes (see
+          # ACTING_REPORT_TIMEOUT_SECONDS). Claiming these answers while one is
+          # still running would only queue a second turn behind it — the reader
+          # waiting again for the same silence — so the pile is left where it is.
+          # The report that holds the lock asks again the moment it lets go
+          # (see #report_subagents_when_done); waiting for a turn to end instead
+          # meant a batch that landed with nobody typing stayed unread.
+          next nil if report_in_flight?(sid)
 
           store = Rubot::Archive.current
           next nil unless store
@@ -306,14 +381,82 @@ module Rubot
       # Hand a finished batch over on a thread of its own: the turn that just
       # ended is done, and a report is a provider request the reader should not
       # wait for through this one.
-      def report_later(sid)
-        return unless @subagent_reporting[sid].nil?
-        return if @subagent_jobs.runs(sid).empty?
+      #
+      # Arming is idempotent, because the callers overlap — the end of a turn,
+      # the end of a report, a run finishing — and each of them would otherwise
+      # start a thread for the same pile of answers. `@subagent_armed` is the
+      # claim a thread leaves while it is on its way, before it has anything to
+      # show in `@subagent_reporting`.
+      #
+      # The claim is a ticket rather than a flag, and it is handed to the thread
+      # that runs it: a report that re-arms from its own `ensure` is asking while
+      # that claim is still standing, and a mark nobody may take back would have
+      # it wait for the very thread asking. `mine` is the ticket this thread is
+      # finishing under, which is what turns "already armed" into "armed by me".
+      def report_later(sid, mine: nil)
+        ticket = arm_report(sid, mine: mine)
+        return unless ticket
 
         Thread.new do
           Thread.current.report_on_exception = false
-          report_subagents_when_done(sid)
+          begin
+            report_subagents_when_done(sid, ticket: ticket)
+          ensure
+            release_arm(sid, ticket)
+          end
         end
+      rescue ThreadError => e
+        # A mark that outlives the thread it was waiting for silences the
+        # conversation for good: every later arm finds it and gives up, so a
+        # batch landing with nobody typing is never reported again.
+        release_arm(sid, ticket)
+        warn "[subagent] could not start the report thread: #{e.class}: #{e.message}"
+        nil
+      end
+
+      # Whether a report is worth starting: nothing claimed, no thread already on
+      # its way, and something the conversation was never told about. Answers
+      # with the ticket the new thread will hold, or nil.
+      #
+      # What is unread is the question, not what is still running. The sheet a
+      # page draws is forgotten once its finished mark times out
+      # (see SubagentJobs#forget), so asking `runs` whether there is anything to
+      # report means the answer is "no" exactly when the news is oldest — the
+      # batch that landed from the `ensure` of a run with nothing else going on.
+      def arm_report(sid, mine: nil)
+        ticket = @subagent_mutex.synchronize do
+          next nil if @subagent_reporting[sid]
+
+          held = @subagent_armed[sid]
+          next nil if held && !held.equal?(mine)
+
+          @subagent_armed[sid] = Object.new
+        end
+        return nil unless ticket
+        return ticket if pending_subagent_answers?(sid)
+
+        release_arm(sid, ticket)
+        nil
+      end
+
+      # Drop a claim, but only the one this thread is holding. A report that
+      # re-armed itself leaves the ticket of the thread it started, and the
+      # thread that came before it must not take that thread's claim away.
+      def release_arm(sid, ticket)
+        return unless ticket
+
+        @subagent_mutex.synchronize { @subagent_armed.delete(sid) if @subagent_armed[sid].equal?(ticket) }
+      end
+
+      # One question to the store, cheaper than the report turn that follows it.
+      def pending_subagent_answers?(sid)
+        store = Rubot::Archive.current
+        return false unless store
+
+        !store.pending_subagent_results(sid, limit: 1, newest_first: true).empty?
+      rescue StandardError => e
+        warn "[subagent] could not read pending answers: #{e.class}: #{e.message}"
+        false
       end
 
       # The delegated runs of a conversation, and the note that they have just
