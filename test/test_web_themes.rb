@@ -22,6 +22,16 @@ module Rubot
         size.to_f
       end
 
+      # Every statement of the prose size, whichever unit it is written in. The
+      # property name is what gets counted, not the px value: a media block that
+      # restates `--prompt-size: 1rem` is the same second answer to the same
+      # question, and a guard that matched only px read it as the one statement
+      # it was looking for. A `var(--prompt-size)` reader does not match, because
+      # it names the property without assigning it.
+      def stated_sizes(css)
+        css.scan(/^\s*--prompt-size\s*:/)
+      end
+
       # The body of one rule, anchored to a selector that opens its own line.
       # A selector also appears in one-line rules — `.composer textarea {
       # grid-column: 1 / -1; }` sits above the real one — and an unanchored
@@ -118,8 +128,9 @@ module Rubot
         # second answer to the same question even when the number matches: the
         # value is then written twice, and the next edit can move one of them
         # alone. `.uniq` used to hide exactly that, so the count is of raw
-        # statements.
-        stated = css.scan(/--prompt-size:\s*[\d.]+px/)
+        # statements — and of statements, not of px, since the same value as
+        # `1rem` is the same drift.
+        stated = stated_sizes(css)
         assert_equal 1, stated.size,
                      "the prose size is stated once, not overridden per surface"
 
@@ -144,6 +155,38 @@ module Rubot
           refute_includes body, "font-size",
                           "#{selector} does not restate the size of the field"
         end
+      end
+
+      # The count is of statements, not of one unit. A block that restates the
+      # size as `1rem` used to pass a guard that only matched px, which is the
+      # drift the guard claims to catch.
+      def test_a_size_restated_in_another_unit_is_a_second_statement
+        css = <<~CSS
+          :root {
+            --prompt-size: 16px;
+          }
+          @media (max-width: 40rem) {
+            .composer textarea {
+              --prompt-size: 1rem;
+            }
+          }
+        CSS
+
+        assert_equal 2, stated_sizes(css).size,
+                     "a restatement in another unit is still a second answer"
+      end
+
+      # Reading the value is not stating it, or every `var(--prompt-size)` rule
+      # would count as a second statement and the count could never reach one.
+      def test_reading_the_size_is_not_stating_it
+        css = <<~CSS
+          :root {
+            --prompt-size: 16px;
+          }
+          .thread { font-size: var(--prompt-size); }
+        CSS
+
+        assert_equal 1, stated_sizes(css).size
       end
 
       # A diff is a file's lines, not the reader's own words, so it sits under
