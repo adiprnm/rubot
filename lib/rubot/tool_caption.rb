@@ -160,7 +160,8 @@ module Rubot
       case name
       when "shell_exec" then command_caption(args)
       when ToolNames::FILE_READ then file_caption(args, READ_OPERATIONS, fallback: "read")
-      when ToolNames::FILE_WRITE then file_caption(args, WRITE_OPERATIONS, fallback: "write")      when "search" then search_caption(args)
+      when ToolNames::FILE_WRITE then file_caption(args, WRITE_OPERATIONS, fallback: "write")
+      when "search" then search_caption(args)
       when "web_fetch" then fetch_caption(args)
       when "delegate" then delegate_caption(args)
       when "subagent_results" then I18n.t("tool.subagent_results")

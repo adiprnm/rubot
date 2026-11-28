@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "tool_names"
+
 module Rubot
   # Whether a tool call is loading a skill, and which ones.
   #
@@ -44,7 +46,7 @@ module Rubot
       return [] unless read_operation?(tool_name, args)
 
       case tool_name
-      when "file_read", "file_write"
+      when ToolNames::FILE_READ, ToolNames::FILE_WRITE
         read_paths(args)
       when "shell_exec"
         command = args["command"].to_s
@@ -71,7 +73,7 @@ module Rubot
       operation = args["operation"].to_s
       return true if operation == "read"
 
-      operation.empty? && tool_name.to_s != "file_write"
+      operation.empty? && tool_name.to_s != ToolNames::FILE_WRITE
     end
   end
 end

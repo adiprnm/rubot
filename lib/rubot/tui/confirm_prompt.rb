@@ -2,6 +2,8 @@
 
 require "tui"
 
+require_relative "../tool_names"
+
 module Rubot
   class TUI
     # The turn's ask, in the terminal: a dangerous-action confirmation, or a
@@ -254,7 +256,7 @@ module Rubot
           case tool_name.to_s
           when "shell_exec"
             [ "dangerous shell command:", args["command"].to_s[0, 400] ]
-          when "file_write"
+          when ToolNames::FILE_WRITE
             [ "#{args["operation"]} #{args["path"]}" ]
           else
             [ "#{tool_name} #{args.inspect[0, 400]}" ]

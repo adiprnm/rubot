@@ -787,16 +787,16 @@ class TestAgentToolList < Minitest::Test
     alias chat_stream chat
   end
 
-  def test_an_empty_tools_list_is_an_error
-    error = assert_raises(ArgumentError) { agent_with({}).tool_definitions }
+  # The list is config, so a mistake in it fails the build rather than the
+  # first turn that happens to ask for definitions.
+  def test_an_empty_tools_list_fails_when_the_agent_is_built
+    error = assert_raises(ArgumentError) { agent_with({}) }
 
     assert_match(/names no tool/, error.message)
   end
 
-  def test_a_stale_tool_name_is_reported
-    error = assert_raises(ArgumentError) do
-      agent_with({ "file_ops" => { "enabled" => true } }).tool_definitions
-    end
+  def test_a_stale_tool_name_fails_when_the_agent_is_built
+    error = assert_raises(ArgumentError) { agent_with({ "file_ops" => { "enabled" => true } }) }
 
     assert_match(/file_ops/, error.message)
   end
