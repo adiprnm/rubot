@@ -182,12 +182,17 @@ module Rubot
         said = []
         channel.define_singleton_method(:session_for) do |_sid|
           fake = Object.new
-          fake.define_singleton_method(:process_background) do |text, label: "", fresh: false, tools: true, &chunk|
-            said << { text: text, label: label, fresh: fresh, tools: tools }
+          fake.define_singleton_method(:process_background) do |text, label: "", fresh: false,
+                                                              tools: true, max_rounds: nil, id: nil,
+                                                              &chunk|
+            said << { text: text, label: label, fresh: fresh, tools: tools, max_rounds: max_rounds,
+                      id: id }
             chunk&.call("Siap, ")
             chunk&.call("hasilnya kubaca.")
             "Siap, hasilnya kubaca."
           end
+          # The stop a deadline sends, which names the turn it is meant for.
+          fake.define_singleton_method(:cancel!) { |_id = nil| true }
           fake.define_singleton_method(:tools) do
             tools = Object.new
             tools.define_singleton_method(:get) { |_name| nil }

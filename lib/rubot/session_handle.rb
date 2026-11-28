@@ -46,10 +46,18 @@ module Rubot
       # request: the actor is busy running the turn, so the request would only
       # be read after it finished. The signal goes straight to the watcher
       # thread that lives inside the session Ractor.
-      def cancel!
+      #
+      # `id` names the background turn the stop is meant for (see
+      # #process_background). A caller that started a turn which nobody typed —
+      # a report on its deadline — has to name it: the message can be waiting in
+      # the queue behind a turn of the reader's, and a stop without an identity
+      # ends whichever turn is running, which is the reader's. Naming it also
+      # withdraws the turn if it never started. Without an id the stop is the
+      # reader's and reaches whatever is running, as it always did.
+      def cancel!(id = nil)
         return false unless @stop_port
 
-        @stop_port << :stop
+        @stop_port << (id ? [ :stop, id ] : :stop)
         true
       rescue Ractor::ClosedError
         false
@@ -198,15 +206,20 @@ module Rubot
       # A turn the reader did not speak: the text is context, the answer is what
       # lands in the transcript. A block is handed the answer as it is written,
       # so the channel can show it arriving.
-      def process_background(text, label: "", fresh: false, tools: true, &on_chunk)
+      # `id` names this turn for anyone who may want to stop it later without
+      # stopping the reader's own turn: a report's deadline is exactly that case
+      # (see Web::Reports#deliver_report), and the actor uses it to withdraw the
+      # message if it is still waiting in the queue when the stop arrives.
+      def process_background(text, label: "", fresh: false, tools: true, max_rounds: nil, id: nil,
+                             &on_chunk)
         events = Ractor::Port.new
         # A background turn waits on a port that only the actor can write to, so
         # when it never answers there is nothing in this Ractor that can say
         # where it went: the id here is what a log line on the other side has to
         # be matched against.
         warn "[actor] background -> #{@session_id} via #{@ractor.object_id}" if Rubot.debug?
-        @ractor.send({ type: :background, text: text, label: label, fresh: fresh,
-                       tools: tools, events: events })
+        @ractor.send({ type: :background, id: id, text: text, label: label, fresh: fresh,
+                       tools: tools, max_rounds: max_rounds, events: events })
 
         loop do
           event = events.receive

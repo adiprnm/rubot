@@ -253,8 +253,10 @@ module Rubot
         channel.report_subagents_when_done("web_rubot")
 
         assert_equal 1, said.size
-        assert_equal false, said.first[:tools],
-                     "a report is words, not work: the turn must not be handed the toolset"
+        assert_equal true, said.first[:tools],
+                     "a batch may act on what the reader asked for, so the turn needs its tools"
+        assert_equal Rubot::Web::Subagents::ACTING_REPORT_MAX_ROUNDS, said.first[:max_rounds],
+                     "and no more rounds than the shape of the job needs"
         sent = []
         sent << queue.pop until queue.empty?
         appends = sent.select { |item| item.is_a?(Array) && item[0] == :append }

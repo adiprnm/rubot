@@ -28,6 +28,80 @@ module Rubot
     # as an `[:control, port]` event: Ractor::Port#receive only works from the
     # Ractor that created the port.
     class SessionActor
+      # Which background turn the session is on, and which ones were stopped
+      # before they ever got to run.
+      #
+      # A `:stop` used to carry nothing but itself, so it reached whichever turn
+      # happened to be running. A report writes itself through a background turn
+      # that waits in the same queue as the reader's message, and its deadline
+      # starts when it is *handed over*, not when it begins: a deadline that
+      # expired while the reader's own turn was running cancelled that turn, and
+      # the report then started afterwards on a freshly started token — past its
+      # own deadline, with nobody listening on its port.
+      #
+      # This is the identity check and nothing else. The cancelling is still
+      # `Cancellation`'s: all this decides is whether the stop names the turn that
+      # is running (`:cancel`), names one still in the queue (`:queued`, and it
+      # never runs) or names neither (`:none`, and the watcher does nothing).
+      class TurnLedger
+        def initialize
+          @mutex = Mutex.new
+          @running = nil
+          @queued = {}
+          @withdrawn = {}
+        end
+
+        # A background message has arrived in the actor and is about to be
+        # queued. The window this closes is the one a stop would otherwise arrive
+        # in: without it, a turn stopped while queued is indistinguishable from a
+        # turn that finished, and it would run anyway.
+        def submit(id)
+          return if id.nil?
+
+          @mutex.synchronize { @queued[id] = true }
+        end
+
+        # The runner is about to run this turn. False means it was stopped while
+        # it waited and must not run at all.
+        def begin(id)
+          return true if id.nil?
+
+          @mutex.synchronize do
+            @queued.delete(id)
+            if @withdrawn.delete(id)
+              false
+            else
+              @running = id
+              true
+            end
+          end
+        end
+
+        def finish(id)
+          return if id.nil?
+
+          @mutex.synchronize { @running = nil if @running == id }
+        end
+
+        # What a stop of `id` is for. Nil is the reader's own stop: it names no
+        # turn, so it reaches whatever is running, exactly as it always did.
+        def stop(id)
+          return :cancel if id.nil?
+
+          @mutex.synchronize do
+            if @running == id
+              :cancel
+            elsif @queued.key?(id)
+              @queued.delete(id)
+              @withdrawn[id] = true
+              :queued
+            else
+              :none
+            end
+          end
+        end
+      end
+
       attr_reader :ractor, :session_id, :stop_port
 
       def initialize(config_data:, config_path:, session_id:, cron_actor: nil, persona: nil,
@@ -54,6 +128,9 @@ module Rubot
         ) do |args, boot|
           stop_port = Ractor::Port.new
           cancellation = Rubot::Cancellation.new
+          # Which background turn is running, shared by the watcher (which
+          # receives the stops) and the runner (which runs the turns).
+          ledger = TurnLedger.new
           # The watcher starts before the agent exists so a stop or a steer
           # can land during construction instead of queueing behind it.
           agent = nil
@@ -65,6 +142,11 @@ module Rubot
 
               if signal.is_a?(Array) && signal[0] == :steer
                 agent&.steer(signal[1])
+              elsif signal.is_a?(Array) && signal[0] == :stop
+                # A stop that names a turn stops that turn or nothing: cancelling
+                # the token here would end whichever turn is running, which is
+                # how a report deadline used to kill the reader's own turn.
+                cancellation.cancel! if ledger.stop(signal[1]) == :cancel
               else
                 cancellation.cancel!
               end
@@ -84,7 +166,8 @@ module Rubot
           )
           agent.cancellation = cancellation
           agent.cron_ractor = args[:cron_actor] if args[:cron_actor]
-          SessionActor.serve(agent, args[:session_id], stop_port: stop_port, watcher: watcher)
+          SessionActor.serve(agent, args[:session_id], stop_port: stop_port, watcher: watcher,
+                             ledger: ledger)
         end
 
         @stop_port = bootstrap.receive
@@ -92,7 +175,7 @@ module Rubot
       end
 
       # Runs inside the Ractor.
-      def self.serve(agent, session_id, stop_port: nil, watcher: nil)
+      def self.serve(agent, session_id, stop_port: nil, watcher: nil, ledger: nil)
         # Turns run on a thread of their own. The loop below must stay free to
         # answer requests: with the turn inlined here, every /command sent
         # while it ran sat in the Ractor's inbox until the answer was done.
@@ -110,8 +193,18 @@ module Rubot
             break if msg == :shutdown
 
             warn "[actor] runner picked #{msg.is_a?(Hash) ? msg[:type].inspect : msg.inspect}" if Rubot.debug?
+            if ledger && msg.is_a?(Hash) && msg[:type] == :background && !ledger.begin(msg[:id])
+              # Stopped while it waited: the turn is withdrawn, not run. Its
+              # caller is told, because a message nobody answers leaves a thread
+              # blocked on an event port for good — and a caller that gave up
+              # already has a closed port, which is what `emit_event` swallows.
+              warn "[actor] withdrew background turn #{msg[:id].inspect} for #{session_id}"
+              emit_event(msg[:events], [ :error, "Rubot::Cancelled",
+                                        "background turn withdrawn before it started" ])
+              next
+            end
             begin
-              handle_message(agent, msg)
+              handle_message(agent, msg, ledger: ledger)
             rescue StandardError => e
               # handle_message reports its own errors; this only keeps a
               # surprise from killing the thread that later turns need.
@@ -124,7 +217,12 @@ module Rubot
           msg = Ractor.receive
           warn "[actor] serve recv #{msg[:type].inspect}" if Rubot.debug?
           case msg[:type]
-          when :message, :background
+          when :message
+            turns << msg
+          when :background
+            # Registered before it is queued, so a stop that arrives while it
+            # waits finds it instead of mistaking it for a turn that is gone.
+            ledger&.submit(msg[:id])
             turns << msg
           when :request
             handle_request(agent, session_id, msg)
@@ -140,10 +238,10 @@ module Rubot
         watcher&.join(1)
       end
 
-      def self.handle_message(agent, msg)
+      def self.handle_message(agent, msg, ledger: nil)
         events = msg[:events]
 
-        return handle_background(agent, msg) if msg[:type] == :background
+        return handle_background(agent, msg, ledger: ledger) if msg[:type] == :background
 
         # Ractor::Port#receive is only allowed in the Ractor that created the
         # port, so the confirmation channel is created here and sent to the
@@ -228,17 +326,42 @@ module Rubot
       # Every write is guarded: a channel that gave up on the answer closes the
       # port, and a turn that finishes late must not take the actor's thread with
       # it — the next prompt of that conversation would have nothing to run on.
-      def self.handle_background(agent, msg)
+      def self.handle_background(agent, msg, ledger: nil)
         events = msg[:events]
         warn "[actor] background turn in #{Ractor.current.object_id}" if Rubot.debug?
-        response = agent.process_background(
-          msg[:text],
-          label: msg[:label].to_s,
-          fresh: msg[:fresh] ? true : false,
-          tools: msg.fetch(:tools, true)
-        ) { |text| emit_event(events, [ :chunk, text ]) }
+        # A background turn is stoppable like any other. Without this the token
+        # was never running for one, so a `:stop` on the port reached
+        # `Cancellation#cancel!` with nothing to cancel and the turn kept going
+        # to the end of its own deadline — while its actor, which serves one
+        # turn at a time, held the conversation. The channel's deadline for a
+        # report depends on this (see Web::Reports#deliver_report).
+        #
+        # The token is taken here and not inside Agent#process_background: a
+        # `process_cron` request is answered on this Ractor's own thread while a
+        # turn may be running on another, and a second `start!` there would clear
+        # the token of the turn actually in flight.
+        token = agent.cancellation.start!
+        Thread.current[:rubot_cancellation] = token
+        begin
+          response = agent.process_background(
+            msg[:text],
+            label: msg[:label].to_s,
+            fresh: msg[:fresh] ? true : false,
+            tools: msg.fetch(:tools, true),
+            # A background turn may be a job with a cap of its own (see
+            # Web::Subagents::ACTING_REPORT_MAX_ROUNDS); nil keeps the agent's
+            # ceiling.
+            max_rounds: msg[:max_rounds]
+          ) { |text| emit_event(events, [ :chunk, text ]) }
 
-        emit_event(events, [ :done, response ])
+          emit_event(events, [ :done, response ])
+        ensure
+          Thread.current[:rubot_cancellation] = nil
+          token.finish!
+          # After the token: a stop that names this turn and arrives in that
+          # window must not cancel a turn that is already over.
+          ledger&.finish(msg[:id])
+        end
       rescue StandardError => e
         emit_event(events, [ :error, e.class.name, e.message, Array(e.backtrace).first(5) ])
       end

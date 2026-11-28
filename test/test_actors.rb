@@ -674,14 +674,24 @@ end
 
 # A background turn has no prompt behind it, so it travels as a message type of
 # its own — and its answer comes back passage by passage, which is what lets a
-# page show the report being written instead of waiting for the whole thing.
+# page show the report being written instead of waiting for the whole thing. The
+# round cap travels with it: a background turn may be a job with a ceiling of its
+# own (see Web::Subagents::ACTING_REPORT_MAX_ROUNDS), and the actor hands it to
+# the agent untouched.
 def test_session_handle_streams_a_background_turn
   ractor = Ractor.new do
     agent = Class.new do
-      def process_background(_text, label: "", fresh: false, tools: true, &on_chunk)
+      # The actor runs a background turn under the agent's cancellation token,
+      # so a stop (or a channel deadline) can end it (see
+      # Rubot::Actors::SessionActor.handle_background).
+      def cancellation
+        @cancellation ||= Rubot::Cancellation.new
+      end
+
+      def process_background(_text, label: "", fresh: false, tools: true, max_rounds: nil, &on_chunk)
         on_chunk&.call("Halo")
         on_chunk&.call("Halo dunia")
-        "Halo dunia"
+        "#{max_rounds}:#{tools} Halo dunia"
       end
     end.new
 
@@ -696,10 +706,12 @@ def test_session_handle_streams_a_background_turn
   handle = Rubot::Actors::SessionHandle.new(ractor, "background")
   written = []
   answer = Timeout.timeout(5) do
-    handle.process_background("hasil subagent", label: "Hasil: ") { |text| written << text }
+    handle.process_background("hasil subagent", label: "Hasil: ", max_rounds: 12) do |text|
+      written << text
+    end
   end
 
-  assert_equal "Halo dunia", answer
+  assert_equal "12:true Halo dunia", answer, "the cap and the tools reach the agent"
   assert_equal [ "Halo", "Halo dunia" ], written
 ensure
   begin
@@ -708,6 +720,97 @@ ensure
     nil
   end
   ractor&.join
+end
+
+# A background turn used to run with no cancellation token, so a stop could only
+# stop the caller from waiting: the turn itself kept the actor — and the reader's
+# next message queued behind it. The actor now opens the agent's token for the
+# turn, which is what a channel's deadline reaches (see
+# Web::Reports#deliver_report).
+def test_stop_ends_a_background_turn_and_frees_the_actor
+  api_base = start_sse_server(delay: 1)
+  config = write_config(api_base: api_base)
+  pool = Rubot::Actors::SessionPool.new(config: config)
+
+  begin
+    handle = pool.for("background-stop-test")
+    error = nil
+    runner = Thread.new do
+      handle.process_background("laporan panjang")
+    rescue StandardError => e
+      error = e
+    end
+
+    sleep 0.2
+    # The actor is busy reading a provider that has not answered, so only the
+    # stop port can reach it — the same signal a report deadline sends.
+    assert pool.for("background-stop-test").cancel!, "the stop signal reaches the busy actor"
+    assert runner.join(10), "a background turn ends on a stop instead of holding the actor"
+
+    refute_nil error, "the turn is cancelled, not completed"
+    assert_includes error.message, "Cancelled"
+  ensure
+    pool.shutdown
+  end
+end
+
+# The identity on a stop. A background turn that a deadline owns — a report —
+# waits in the same queue as the reader's message, and its deadline starts when
+# it is handed over, not when it begins. A stop that named nothing ended
+# whichever turn held the token, which was the reader's; the report then started
+# afterwards on a freshly started token, past its own deadline and with nobody
+# listening on its port.
+def test_a_stop_naming_one_turn_leaves_another_running
+  api_base = start_sse_server(delay: 1)
+  config = write_config(api_base: api_base)
+  pool = Rubot::Actors::SessionPool.new(config: config)
+
+  begin
+    handle = pool.for("background-identity-test")
+    error = nil
+    runner = Thread.new do
+      handle.process_background("laporan panjang", id: "turn-a")
+    rescue StandardError => e
+      error = e
+    end
+
+    sleep 0.2
+    same = pool.for("background-identity-test")
+    assert same.cancel!("turn-b"), "the stop is sent"
+    assert_nil runner.join(0.3), "a stop that names another turn does not end this one"
+
+    assert same.cancel!("turn-a"), "the stop naming the running turn reaches it"
+    assert runner.join(10), "the turn it names ends"
+    refute_nil error, "the turn is cancelled, not completed"
+    assert_includes error.message, "Cancelled"
+  ensure
+    pool.shutdown
+  end
+end
+
+# The other half of the identity, and the one with no turn to cancel: a message
+# still waiting in the queue is withdrawn. It must never run — a report whose
+# deadline passed while it waited cannot act on a repo minutes later — and its
+# caller must be answered rather than left blocked on an event port.
+def test_a_background_turn_stopped_while_queued_never_runs
+  ledger = Rubot::Actors::SessionActor::TurnLedger.new
+  ledger.submit("turn-a")
+
+  assert_equal :queued, ledger.stop("turn-a"), "the turn has not started, so it is withdrawn"
+  refute ledger.begin("turn-a"), "a turn stopped while it waited does not run"
+  assert_equal :none, ledger.stop("turn-a"), "and the withdrawal is spent"
+end
+
+def test_a_stop_without_an_identity_still_stops_whatever_runs
+  ledger = Rubot::Actors::SessionActor::TurnLedger.new
+  assert ledger.begin("turn-a")
+
+  assert_equal :none, ledger.stop("turn-b"), "a turn that is neither queued nor running is not this one"
+  assert_equal :cancel, ledger.stop("turn-a"), "the turn it names is cancelled"
+  assert_equal :cancel, ledger.stop(nil), "the reader's own stop names nothing and reaches what runs"
+
+  ledger.finish("turn-a")
+  assert_equal :none, ledger.stop("turn-a"), "a finished turn is not cancelled again"
 end
 
   # Regression: the confirmation port must be created by the session Ractor,

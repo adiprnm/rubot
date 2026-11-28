@@ -35,7 +35,12 @@ module Rubot
       # call per passage. A background turn is exactly the one nobody is watching,
       # so a channel that can show it arriving does — otherwise the reader waits
       # through the whole answer in silence and then reads it all at once.
-      def process_background(message, fresh: false, label: "", tools: true, &on_chunk)
+      # `max_rounds` caps this one turn below the agent's own ceiling. It exists
+      # for work that is a job rather than a conversation — the report turn that
+      # may carry on into a commit and a pull request (see
+      # Web::Reports::REPORT_ACT_INSTRUCTION) — where the conversation's 1000
+      # rounds are not a budget for a step whose shape is already known.
+      def process_background(message, fresh: false, label: "", tools: true, max_rounds: nil, &on_chunk)
         # Build local messages from session history ONLY (up to the last assistant response)
         # Do NOT include the current user message — this is a separate conversation turn
         @turn_start_index = @session.messages.size
@@ -51,7 +56,16 @@ module Rubot
         # round limit is a thousand: a loop's report overran its own deadline
         # that way and the reader was told nothing. One round and no tools is the
         # shape that cannot wander (see Web::Reports).
-        limit = tools ? max_rounds : 1
+        #
+        # A caller that names its own cap is a job with a known shape (see
+        # Web::Subagents::ACTING_REPORT_MAX_ROUNDS); `self.max_rounds` and not
+        # the keyword, which shadows the agent's own ceiling. Neither can be
+        # nil: the token and the config both answer with a positive number.
+        #
+        # A cap of zero is not a cap: it is what a config with the field left
+        # empty looks like once it is read as an integer, and it is truthy, so it
+        # would slip past the fallback and leave the turn with no rounds at all.
+        limit = tools ? (max_rounds.to_i.positive? ? max_rounds : self.max_rounds) : 1
         tool_list = tools ? tool_definitions : []
         # A report turn cannot make a call, so a call the model writes into its
         # prose is noise: it is dropped before it reaches the transcript or the
