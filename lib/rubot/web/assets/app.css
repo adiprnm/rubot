@@ -63,10 +63,17 @@
      value. The "mono" choice is the one where the two meet on purpose. */
   --reading: var(--serif);
 
-  /* The size prose arrives in: the reader's own prompt and the answer to it.
-     One value rather than 17px written twice, so a row that has to match the
-     prompt can say so and stay matched. */
-  --prompt-size: 17px;
+  /* The size prose arrives in: the reader's own prompt, the answer to it, and
+     the field they type it into. One value rather than the three literals that
+     had drifted apart — 17px on the body, 16.5px in the field, 16px on a phone
+     — so each of them can say "the prose's size" and stay matched.
+
+     16px is a floor as well as a size. A phone zooms the viewport when a
+     focused field is set below it, so a smaller number would buy a slightly
+     tighter page at the price of the page jumping the moment the reader
+     starts typing — and the field would then disagree with the answer it is
+     replying to, which is the whole reason this is one value. */
+  --prompt-size: 16px;
 
   /* The size of the rows under the answer: a thought, a call, the working row,
      the compaction seam. Set in the reader's face they read smaller than the
@@ -1671,7 +1678,7 @@ select:focus-visible { outline: none; }
 .msg.user .bubble.text > *:last-child { margin-bottom: 0; }
 .msg.user .bubble :is(h1, h2, h3, h4, h5, h6) {
   margin: 0.45em 0 0.3em;
-  font-size: 1rem;
+  font-size: 1em;
   font-weight: 600;
 }
 .msg.user .bubble :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }
@@ -2002,7 +2009,12 @@ select:focus-visible { outline: none; }
 .tok-com { color: var(--fg-faint); font-style: italic; }
 
 /* A heading in an answer is not a page heading: the prose is the body, so a
-   heading steps out of it by weight and space before it does by size. */
+   heading steps out of it by weight and space before it does by size.
+
+   `em`, not `rem`: the ladder is a set of ratios against the prose, and `rem`
+   would measure it against the browser's 16px instead — the outline would
+   grow every time `--prompt-size` came down, which is the drift this file
+   spends its custom properties avoiding. */
 .text h1,
 .text h2,
 .text h3,
@@ -2015,13 +2027,13 @@ select:focus-visible { outline: none; }
   letter-spacing: -0.01em;
 }
 
-.text h1 { font-size: 1.34rem; }
-.text h2 { font-size: 1.18rem; }
-.text h3 { font-size: 1.04rem; }
+.text h1 { font-size: 1.34em; }
+.text h2 { font-size: 1.18em; }
+.text h3 { font-size: 1.04em; }
 .text h4,
 .text h5,
 .text h6 {
-  font-size: 0.92rem;
+  font-size: 0.92em;
   letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--fg-dim);
@@ -2559,7 +2571,11 @@ select:focus-visible { outline: none; }
   border-radius: 6px;
   background: var(--bg-dim);
   font-family: var(--mono);
-  font-size: 13px;
+  /* 12px against a 16px prose is the step the block has always had, kept
+     rather than recomputed: mono reads larger than the reading face at the
+     same number, and these are a file's lines rather than the reader's own
+     words. */
+  font-size: 12px;
   letter-spacing: -0.03em;
   overflow: hidden;
 }
@@ -3173,7 +3189,7 @@ summary.subagent-summary { cursor: pointer; }
   background: none;
   color: var(--fg);
   font-family: var(--reading);
-  font-size: 16.5px;
+  font-size: var(--prompt-size);
   line-height: 1.6;
   resize: none;
   outline: none;
@@ -4805,7 +4821,11 @@ html:not(.js) .settings-tabs { display: none; }
      the thread uses, so the box stays in line with the conversation. */
   .composer-box { row-gap: 0.6rem; }
 
-  .composer-box textarea { min-height: 1.4rem; font-size: 16px; line-height: 1.45; }
+  /* The field keeps the size of the prose here too, and says nothing about it:
+     a phone used to state its own 16px here, so the same words changed size
+     the moment they were sent. Only the height changes on a phone, because the
+     row is shorter. */
+  .composer-box textarea { min-height: 1.4rem; line-height: 1.45; }
 
   /* 2.1rem is a circle a thumb can hit, and the pill grows to the same height
      so the two control rows read as one set. */

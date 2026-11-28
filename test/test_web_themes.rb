@@ -10,6 +10,27 @@ module Rubot
     class TestWebThemes < Minitest::Test
       include WebChannelSupport
 
+      # --- reading the stylesheet -----------------------------------------
+
+      # The size the prose is set in. Read once, so the tests below cannot
+      # disagree about it — and refused outright when the sheet stops stating
+      # it in px, rather than quietly comparing against `nil.to_f`, which is
+      # zero and would let every "smaller than the prose" check pass.
+      def prompt_size(css)
+        size = css[/--prompt-size:\s*([\d.]+)px/, 1]
+        refute_nil size, "the sheet has to state the prose size in px"
+        size.to_f
+      end
+
+      # The body of one rule, anchored to a selector that opens its own line.
+      # A selector also appears in one-line rules — `.composer textarea {
+      # grid-column: 1 / -1; }` sits above the real one — and an unanchored
+      # capture runs on into the rule below, so a guard reads a property it was
+      # never looking at and stays green while the rule it names loses it.
+      def rule_body(css, selector)
+        css[/^#{Regexp.escape(selector)} \{\n(.*?)\n\}/m, 1].to_s
+      end
+
       # --- themes ---------------------------------------------------------
 
       # The settings page as the reader gets it, for the tests about controls
@@ -41,16 +62,84 @@ module Rubot
       def test_the_status_rows_stay_under_the_size_of_the_prose
         css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
 
-        prompt = css[/--prompt-size:\s*([\d.]+)px/, 1].to_f
-        row = css[/--row-size:\s*([\d.]+)px/, 1].to_f
+        prompt = prompt_size(css)
+        row = css[/--row-size:\s*([\d.]+)px/, 1]
+        refute_nil row, "a caption still has a size of its own"
 
-        assert_operator prompt, :>, 0, "the prose needs a size to measure against"
-        assert_operator row, :>, 0, "a caption still has a size of its own"
-        assert_operator row, :<, prompt, "a status row is not the size of the prompt"
+        assert_operator row.to_f, :<, prompt, "a status row is not the size of the prompt"
         %w[.row .compaction-row .tool-row].each do |selector|
-          body = css[/^#{Regexp.escape(selector)} \{(.*?)\n\}/m, 1].to_s
+          body = rule_body(css, selector)
+          refute_empty body, "#{selector} has to be drawn"
           assert_includes body, "font-size: var(--row-size)",
                           "#{selector} has to take the shared size, not a literal"
+        end
+      end
+
+      # The field is where the reader writes, the thread is where they read it
+      # back. Both used to carry their own number — 16.5px in the box, 17px in
+      # the thread — so the same words changed size the moment they were sent,
+      # and a phone dropped the field to a 16px literal on top of that. One
+      # value now, and the phone is the surface that has to keep it: 16px is
+      # also the size below which a phone zooms a focused field and moves the
+      # page out from under the reader's thumb.
+      def test_the_field_takes_the_size_of_the_prose_on_every_surface
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+
+        prompt = prompt_size(css)
+        assert_operator prompt, :>=, 16, "a phone zooms a field set below 16px"
+
+        field = rule_body(css, ".composer textarea")
+        refute_empty field, "the sheet has to draw the field"
+        assert_includes field, "font-size: var(--prompt-size)",
+                        "the field is the prose's size, not a number of its own"
+
+        # One value means one: a media block that restates `--prompt-size` is a
+        # second answer to the same question, and the guard above only ever
+        # reads the first one.
+        stated = css.scan(/--prompt-size:\s*[\d.]+px/).flatten.uniq
+        assert_equal 1, stated.size,
+                     "the prose size is stated once, not overridden per surface"
+
+        # The phone tightens the row a phone has less of, not the type: a size
+        # written here is a second answer to the question above.
+        phone = css.scan(/^[ \t]*\.composer-box textarea \{([^}]*)\}/).flatten
+        refute_empty phone, "the phone block has to draw the field it shortens"
+        phone.each do |body|
+          refute_includes body, "font-size",
+                          "the phone does not restate the size of the field"
+        end
+      end
+
+      # A diff is a file's lines, not the reader's own words, so it sits under
+      # the prose rather than beside it. The number is small on purpose: mono
+      # reads larger than the reading face at the same size, which is why a
+      # block that matched the prose's number would still come out bigger on
+      # the page.
+      def test_the_diff_stays_under_the_size_of_the_prose
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+
+        prompt = prompt_size(css)
+        block = rule_body(css, ".diff")
+        refute_empty block, "the sheet has to draw a diff"
+
+        diff = block[/font-size:\s*([\d.]+)px/, 1]
+        refute_nil diff, "the diff block draws at a size of its own"
+        assert_operator diff.to_f, :<, prompt, "a diff is not the size of the prose"
+      end
+
+      # A heading in an answer is the same prose, larger, so its ladder is a
+      # set of ratios against the prose and not lengths of its own. In `rem` it
+      # would measure against the browser's 16px instead, and the outline would
+      # grow every time the prose came down — which is what happened when the
+      # prose moved to 16px and every heading stayed at its pixel value.
+      def test_a_heading_scales_with_the_prose_it_sits_in
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+
+        %w[h1 h2 h3].each do |tag|
+          rule = css[/^\.text #{tag} \{([^}]*)\}/, 1].to_s
+          refute_empty rule, "the sheet sets the size of .text #{tag}"
+          assert_match(/font-size: [\d.]+em/, rule,
+                       "#{tag} takes its size from the prose, not from the page")
         end
       end
 
