@@ -47,7 +47,8 @@ module Rubot
     # Does this tool change the workspace? The default is yes, deliberately: a
     # tool added later has to opt out instead of being assumed harmless. The
     # reading tools answer no, and a role whose tools all answer no is read-only
-    # (see Agent#read_only?). This is the one place that question is answered,
+    # because its list holds no writing tool: the list is the whole rule, with
+    # no flag to keep in step. This is the one place that question is answered,
     # so a new write-capable tool cannot quietly widen a read-only role.
     def writes?
       true

@@ -3,6 +3,7 @@
 require "fileutils"
 require "pathname"
 require_relative "../tool"
+require_relative "../tool_names"
 
 module Rubot
   module Tools
@@ -527,11 +528,11 @@ module Rubot
       OPERATIONS = READ_OPERATIONS
 
       def name
-        "file_read"
+        ToolNames::FILE_READ
       end
 
       # The one question every tool answers; a role is read-only when all the
-      # tools in its list answer no. See Agent#read_only?.
+      # tools in its list answer no.
       def writes?
         false
       end
@@ -588,7 +589,7 @@ module Rubot
       OPERATIONS = WRITE_OPERATIONS
 
       def name
-        "file_write"
+        ToolNames::FILE_WRITE
       end
 
       def parameters

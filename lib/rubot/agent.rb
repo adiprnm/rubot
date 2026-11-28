@@ -16,6 +16,7 @@ require_relative "session"
 require_relative "usage"
 require_relative "provider"
 require_relative "tools/registry"
+require_relative "tool_names"
 require_relative "safety_guard"
 require_relative "soul"
 require_relative "memory"
@@ -350,6 +351,10 @@ module Rubot
       # Apply AGENTS.md overrides to config
       apply_agents_overrides if @agents_file.enabled?
 
+      # The tool list is checked once, here: a misspelling in config fails the
+      # build instead of the first turn that asks for tool definitions.
+      validate_tool_config!
+
       # Set workspace on cron tool so jobs persist to disk
       configure_cron_tool
       @cron_ractor = nil
@@ -502,13 +507,6 @@ module Rubot
     # Ractor boundary).
     def persona_info
       @persona&.to_h
-    end
-
-    # Whether this agent may only look at files, never change them. Derived from
-    # the tools it is offered: a role that must not write is a role whose list
-    # holds no writing tool, so there is no second rule to keep in step.
-    def read_only?
-      read_only_role?
     end
 
     # Apply a persona to this agent. Accepts a Persona, a Hash, or nil to

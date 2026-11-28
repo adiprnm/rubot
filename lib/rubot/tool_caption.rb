@@ -2,6 +2,8 @@
 
 require_relative "i18n"
 require_relative "skill_load"
+require_relative "tool_names"
+require_relative "tools/file_tool"
 
 module Rubot
   # What a call is doing, in one sentence a reader who never saw the arguments
@@ -60,9 +62,11 @@ module Rubot
     # than as the bare word the model happened to send.
     # The two file tools split the operations between them, and the dictionary
     # owes an entry for every one of them (`tool.file.read`, …). The split is
-    # here too so a row for a write never falls back to reading wording.
-    READ_OPERATIONS = %w[read list info].freeze
-    WRITE_OPERATIONS = %w[edit write append delete].freeze
+    # the tools' own (see Tools::FileTool): these are aliases, not a second
+    # copy, so a writing row can never fall back to reading wording because
+    # the two lists drifted apart.
+    READ_OPERATIONS = Tools::FileRead::OPERATIONS
+    WRITE_OPERATIONS = Tools::FileWrite::OPERATIONS
     FILE_OPERATIONS = (READ_OPERATIONS + WRITE_OPERATIONS).freeze
     MEMORY_OPERATIONS = %w[read append update_section].freeze
     CRON_OPERATIONS = %w[add list detail remove enable disable].freeze
@@ -155,9 +159,8 @@ module Rubot
     def self.row_for(name, args)
       case name
       when "shell_exec" then command_caption(args)
-      when "file_read" then file_caption(args, READ_OPERATIONS, fallback: "read")
-      when "file_write" then file_caption(args, WRITE_OPERATIONS, fallback: "write")
-      when "search" then search_caption(args)
+      when ToolNames::FILE_READ then file_caption(args, READ_OPERATIONS, fallback: "read")
+      when ToolNames::FILE_WRITE then file_caption(args, WRITE_OPERATIONS, fallback: "write")      when "search" then search_caption(args)
       when "web_fetch" then fetch_caption(args)
       when "delegate" then delegate_caption(args)
       when "subagent_results" then I18n.t("tool.subagent_results")

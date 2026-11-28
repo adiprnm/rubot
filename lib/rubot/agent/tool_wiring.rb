@@ -50,17 +50,6 @@ module Rubot
         @session.id.to_s.include?("~sub-")
       end
 
-      # Whether this agent may only look. Derived from the tools it is offered,
-      # never from a flag: a role that must not write is a role whose list holds
-      # no writing tool, so the list is the whole answer. Every tool answers
-      # `writes?`, and the default there is yes.
-      def read_only_role?
-        definitions = tool_definitions
-        return false if definitions.nil? || definitions.empty?
-
-        definitions.none?(&:writes?)
-      end
-
       # Inject the safety guard into all tools that support it.
       # Called after @tools is assigned, ensuring the guard is applied
       # regardless of whether tools came from the Agent's constructor
@@ -145,23 +134,38 @@ module Rubot
         (tool_definitions || []).map(&:name)
       end
 
+      # The tool names a config declares, checked once when the agent is built
+      # rather than on every #tool_definitions call. The list is config, not
+      # something a turn can change, so a typo belongs at startup — where the
+      # person who wrote it is still looking — instead of on the first turn
+      # that happens to ask for the definitions.
+      def validate_tool_config!
+        return unless @config.tools_enabled
+
+        enabled_list = @config.enabled_tools
+        if enabled_list.empty?
+          # A tools key that was written and left empty names no tool. Granting
+          # everything there is is the opposite of what naming tools is for, so
+          # it is an error rather than a silent default.
+          if @config.tools_declared?
+            raise ArgumentError, "tools names no tool; list the tools this agent may use"
+          end
+          return
+        end
+
+        unknown = enabled_list - @tools.names
+        raise ArgumentError, "tools names unknown tool(s): #{unknown.join(", ")}" unless unknown.empty?
+      end
+
       def tool_definitions
         return nil unless @config.tools_enabled
         enabled_list = @config.enabled_tools
 
+        # The names were checked when the agent was built (#validate_tool_config!),
+        # so this only selects.
         tools = if enabled_list.empty?
-          # A tools key that was written and left empty names no tool. Granting
-          # everything there is the opposite of what naming tools is for, so it
-          # is an error rather than a silent default.
-          if @config.tools_declared?
-            raise ArgumentError, "tools names no tool; list the tools this agent may use"
-          end
-
           @tools.all
         else
-          unknown = enabled_list - @tools.names
-          raise ArgumentError, "tools names unknown tool(s): #{unknown.join(", ")}" unless unknown.empty?
-
           @tools.all.select { |t| enabled_list.include?(t.name) }
         end
 
@@ -213,8 +217,8 @@ module Rubot
       # to touch. nil for reads and every other tool: the write tool is the only
       # one that changes a file, so it is the only one that has a diff to draw.
       def file_ui_snapshot(tool_name, arguments)
-        return nil unless tool_name == "file_write" && arguments.is_a?(Hash)
-        return nil unless %w[write append edit delete].include?(arguments["operation"].to_s)
+        return nil unless tool_name == ToolNames::FILE_WRITE && arguments.is_a?(Hash)
+        return nil unless Tools::FileWrite::OPERATIONS.include?(arguments["operation"].to_s)
 
         path = arguments["path"].to_s
         return nil if path.empty?
