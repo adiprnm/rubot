@@ -42,11 +42,13 @@ module Rubot
 
     # The lease, or nil when somebody else holds it. Never waits: a run that is
     # already in flight is an answer the caller has to give, not a line to stand
-    # in.
-    def self.hold(dir, id)
+    # in. `create: false` is how a question opens a lease without leaving one
+    # behind: nothing is made, and a missing file is the caller's `ENOENT` to
+    # answer rather than something this method fixes by creating it.
+    def self.hold(dir, id, create: true)
       path = path_for(dir, id)
-      FileUtils.mkdir_p(dir)
-      io = File.open(path, File::RDWR | File::CREAT, 0o600)
+      FileUtils.mkdir_p(dir) if create
+      io = File.open(path, create ? (File::RDWR | File::CREAT) : File::RDWR, 0o600)
       # rubot forks for tool execution, and a forked child inherits the parent's
       # open file descriptions, and with them the lock. Closing this one on exec
       # keeps the lease with the process that took it, so a child that outlives
@@ -73,19 +75,21 @@ module Rubot
     # straight back, and the answer is that nobody held it.
     #
     # Nor may asking leave anything behind. Only `hold` creates a lock file, so a
-    # file that is not there is a lease nobody has taken -- and the directory it
-    # would live in need not exist either. Opening it regardless created both, so
-    # a mere question about a loop nobody had run left a `loops` directory and an
-    # empty `.id.run` in it. The absence answers itself, and it is not a race
-    # with a run: a run takes the lease before it writes anything, so a loop this
-    # method is asked about exists by the time the answer can be "active".
+    # question about a loop nobody has run finds nothing to open -- and the
+    # directory it would live in need not exist either. Creating both on the way
+    # to an answer left a `loops` directory and an empty `.id.run` behind for
+    # every question, so the file is opened without `CREAT` and a missing one is
+    # answered from that same open: one question to the kernel, with no separate
+    # look at whether the path exists in front of it.
     def self.held?(dir, id)
-      return false unless File.exist?(path_for(dir, id))
-
-      lease = hold(dir, id)
+      lease = hold(dir, id, create: false)
       return true if lease.nil?
 
       lease.release
+      false
+    rescue Errno::ENOENT
+      # Nothing to open is nothing held: the lock file is the lease, so a file
+      # that was never made is a loop that was never run.
       false
     rescue SystemCallError, IOError
       # A lock file that cannot be opened cannot be proved free either, so the
