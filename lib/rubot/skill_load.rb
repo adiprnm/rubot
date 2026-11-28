@@ -4,7 +4,7 @@ module Rubot
   # Whether a tool call is loading a skill, and which ones.
   #
   # A skill never arrives through a tool of its own: the model picks one up by
-  # reading its SKILL.md through the file tool, or by catting it in a shell,
+  # reading its SKILL.md through `file_read`, or by catting it in a shell,
   # because that is what the system prompt tells it to do (see
   # SkillRegistry#to_system_prompt). Read that way a skill load looks like any
   # other file read, which is why every surface asks this module before it
@@ -36,14 +36,15 @@ module Rubot
 
     # What the call asked to read: one path, several, or the whole shell line,
     # which is searched for a skill path as it stands. A write, a listing and a
-    # tool that takes no path all come back empty.
+    # tool that takes no path all come back empty. The decision is about the
+    # operation, not the tool name, so a reading tool added later is covered
+    # without touching this module.
     def self.read_arguments(tool_name, args)
       args = {} unless args.is_a?(Hash)
+      return [] unless read_operation?(tool_name, args)
 
       case tool_name
-      when "file_ops"
-        return [] unless read_operation?(args)
-
+      when "file_read", "file_write"
         read_paths(args)
       when "shell_exec"
         command = args["command"].to_s
@@ -63,11 +64,14 @@ module Rubot
       [ args["path"].to_s ].reject(&:empty?)
     end
 
-    # The file tool reads when told nothing: a model that leaves the operation
-    # out gets a read, and the row has to say so rather than call it a write.
-    def self.read_operation?(args)
+    # A reading tool reads when told nothing (file_read defaults to read); the
+    # writing tool has no such default, so a call to it that names no operation
+    # is not a load.
+    def self.read_operation?(tool_name, args)
       operation = args["operation"].to_s
-      operation.empty? || operation == "read"
+      return true if operation == "read"
+
+      operation.empty? && tool_name.to_s != "file_write"
     end
   end
 end

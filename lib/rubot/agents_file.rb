@@ -14,8 +14,9 @@ module Rubot
   #   temperature: 0.7
   #   max_rounds: 50
   #   tools:
-  #     exec: true
-  #     file_ops: true
+  #     shell_exec: true
+  #     file_read: true
+  #     file_write: true
   #     web_fetch: true
   #   ---
   #

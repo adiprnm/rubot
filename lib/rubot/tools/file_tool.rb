@@ -21,30 +21,19 @@ module Rubot
       # loss; a one-line fix keeps ~99%, so it never asks.
       DESTRUCTIVE_WRITE_RATIO = 0.7
 
-      # The operations that change a file. A read-only instance advertises none
-      # of them and refuses all of them.
+      # The two capabilities the file tool was split along. Reading and writing
+      # are disjoint: an operation sent to the wrong tool is unknown to it, and
+      # an agent that must not write is simply not offered FileWrite. Two tools
+      # rather than one tool with a flag, because what a role may do is then a
+      # plain list of tool names instead of a guard that has to stay correct.
+      READ_OPERATIONS = %w[read list info].freeze
       WRITE_OPERATIONS = %w[edit write append delete].freeze
-      WRITE_NAMES = %w[read edit write append delete list info].freeze
-      READ_NAMES = %w[read list info].freeze
 
       attr_accessor :safety_guard
       attr_reader :last_read_path
 
-      # The guard lives in the class, not in a value stored on the instance.
-      # The registry holding this tool is shared by every agent in a Ractor and
-      # the workspace and safety guard are written onto the instance on every
-      # construction, so an instance flag is a value another agent can overwrite
-      # while this one is running. See FileReadTool below.
       def initialize(safety_guard: nil)
         @safety_guard = safety_guard
-      end
-
-      def read_only?
-        false
-      end
-
-      def name
-        "file_ops"
       end
 
       def description
@@ -57,8 +46,10 @@ module Rubot
         end
       end
 
+      # What this tool answers. Each subclass names its own list; the dispatch
+      # below refuses anything outside it.
       def operation_names
-        read_only? ? READ_NAMES : WRITE_NAMES
+        self.class::OPERATIONS
       end
 
       READ_HELP = <<~DOC.strip.freeze
@@ -82,88 +73,51 @@ module Rubot
       LIST_HELP = "- list:  List directory contents"
       INFO_HELP = "- info:  Get file/directory information"
 
-      private
+      def parameters
+        raise NotImplementedError, "#{self.class} must name the properties its operations take"
+      end
 
+      # The description's first line. Each tool says what it is for, and the
+      # reading tool never mentions a write: a model shown an operation it does
+      # not have wastes a round asking for it.
       def intro_line
-        return "Read files, make targeted edits, create and delete files, list directories, and inspect paths." unless read_only?
-
-        "Read files, list directories, and inspect paths. This agent is read-only: " \
-        "report the change a file needs instead of making it."
+        raise NotImplementedError, "#{self.class} must describe what it is for"
       end
 
       def operation_help
-        help = [ READ_HELP ]
-        help << WRITE_HELP unless read_only?
-        help << LIST_HELP << INFO_HELP
+        raise NotImplementedError, "#{self.class} must describe its operations"
       end
 
-      public
-
-      def parameters
-        {
-          "type" => "object",
-          "properties" => {
-            "operation" => {
-              "type" => "string",
-              "enum" => operation_names,
-              "description" => "The file operation to perform (default: read)"
-            },
-            "path" => {
-              "type" => "string",
-              "description" => "File or directory path. Optional when `paths` is given."
-            },
-            "paths" => {
-              "type" => "array",
-              "items" => { "type" => "string" },
-              "description" => "Several paths to read in one call (read operation). " \
-                               "Cheaper than one call per file: each is answered under its own header."
-            },
-            "content" => {
-              "type" => "string",
-              "description" => "Content to write or append (for write/append operations)"
-            },
-            "old_string" => {
-              "type" => "string",
-              "description" => "Exact text to replace (for the edit operation). Include enough surrounding lines to be unique."
-            },
-            "new_string" => {
-              "type" => "string",
-              "description" => "Replacement text (for the edit operation). Use an empty string to delete the matched text."
-            },
-            "replace_all" => {
-              "type" => "boolean",
-              "description" => "Replace every occurrence instead of requiring exactly one (edit operation)"
-            },
-            "offset" => {
-              "type" => "integer",
-              "description" => "First line to read, 1-based (read operation, optional)"
-            },
-            "limit" => {
-              "type" => "integer",
-              "description" => "How many lines to read (read operation, optional)"
-            }
-          },
-          "required" => [ "operation" ]
-        }
+      # A call with only a path means read for the reading tool, because models
+      # routinely leave the operation out for the most common case. The writing
+      # tool has no default: a call that names no operation did not say what to
+      # do with the file.
+      def default_operation
+        nil
       end
 
       def execute(arguments)
-        # A call with only a path means read: models routinely leave the
-        # operation out for the most common case, and rejecting it burned a
-        # full provider round every time.
+        arguments = {} unless arguments.is_a?(Hash)
         operation = arguments["operation"].to_s
-        paths = Array(arguments["paths"]).map { |entry| entry.to_s }.reject(&:empty?)
-        path = arguments["path"]
-        operation = "read" if operation.empty? && !(path.to_s.empty? && paths.empty?)
-        content = arguments["content"]
+        operation = default_operation if operation.empty?
 
-        # The guard is here, not only in the description and the enum: those
-        # are what the model is shown, and a model can always send an operation
-        # that was not offered. This is the one place a write would happen.
-        if read_only? && WRITE_OPERATIONS.include?(operation)
-          return "ERROR: this agent is read-only: '#{operation}' is not available. " \
-                 "Report the change you want instead of making it."
+        # A model can always send an operation the tool does not answer, and the
+        # parameter list is only what it was shown. This is the one place a file
+        # would change, so it is also where the operation set is enforced.
+        unless operation_names.include?(operation)
+          return "ERROR: Unknown operation #{operation.inspect} for #{name}. " \
+                 "Use: #{operation_names.join(", ")}"
         end
+
+        dispatch(operation, arguments)
+      rescue StandardError => e
+        "ERROR: #{e.class}: #{e.message}"
+      end
+
+      def dispatch(operation, arguments)
+        path = arguments["path"]
+        paths = Array(arguments["paths"]).map { |entry| entry.to_s }.reject(&:empty?)
+        content = arguments["content"]
 
         case operation
         when "read"    then read_files(paths, path, offset: arguments["offset"], limit: arguments["limit"])
@@ -175,10 +129,7 @@ module Rubot
         when "delete"  then delete_file(path)
         when "list"    then list_dir(path)
         when "info"    then file_info(path)
-        else "ERROR: Unknown operation '#{operation.inspect}'. Use: read, edit, write, append, delete, list, info"
         end
-      rescue StandardError => e
-        "ERROR: #{e.class}: #{e.message}"
       end
 
       # Returns true if the operation could cause data loss.
@@ -569,13 +520,125 @@ module Rubot
       end
     end
 
-    # The read-only face of file_ops: same paths, same workspace, same guard,
-    # and no operation that changes a file. A separate class rather than a flag,
-    # because a subclass cannot be talked out of what it is by anything that
-    # mutates the instance.
-    class FileReadTool < FileTool
-      def read_only?
-        true
+    # Reading files, listing a directory, inspecting a path. It answers the
+    # reading operations and nothing else, so a role that must not write is one
+    # that is not offered FileWrite rather than one wearing a guard.
+    class FileRead < FileTool
+      OPERATIONS = READ_OPERATIONS
+
+      def name
+        "file_read"
+      end
+
+      # The one question every tool answers; a role is read-only when all the
+      # tools in its list answer no. See Agent#read_only?.
+      def writes?
+        false
+      end
+
+      def parameters
+        {
+          "type" => "object",
+          "properties" => {
+            "operation" => {
+              "type" => "string",
+              "enum" => operation_names,
+              "description" => "The file operation to perform (default: read)"
+            },
+            "path" => {
+              "type" => "string",
+              "description" => "File or directory path. Optional when `paths` is given."
+            },
+            "paths" => {
+              "type" => "array",
+              "items" => { "type" => "string" },
+              "description" => "Several paths to read in one call (read operation). " \
+                               "Cheaper than one call per file: each is answered under its own header."
+            },
+            "offset" => {
+              "type" => "integer",
+              "description" => "First line to read, 1-based (read operation, optional)"
+            },
+            "limit" => {
+              "type" => "integer",
+              "description" => "How many lines to read (read operation, optional)"
+            }
+          },
+          "required" => [ "operation" ]
+        }
+      end
+
+      def default_operation
+        "read"
+      end
+
+      def intro_line
+        "Read files, list directories, and inspect paths."
+      end
+
+      def operation_help
+        [ READ_HELP, LIST_HELP, INFO_HELP ]
+      end
+    end
+
+    # Editing, creating and deleting files. The mirror of FileRead: it answers
+    # the writing operations and nothing else, and its parameter list and
+    # description offer no read.
+    class FileWrite < FileTool
+      OPERATIONS = WRITE_OPERATIONS
+
+      def name
+        "file_write"
+      end
+
+      def parameters
+        {
+          "type" => "object",
+          "properties" => {
+            "operation" => {
+              "type" => "string",
+              "enum" => operation_names,
+              "description" => "The file operation to perform"
+            },
+            "path" => {
+              "type" => "string",
+              "description" => "File path"
+            },
+            "content" => {
+              "type" => "string",
+              "description" => "Content to write or append (for write/append operations)"
+            },
+            "old_string" => {
+              "type" => "string",
+              "description" => "Exact text to replace (for the edit operation). Include enough surrounding lines to be unique."
+            },
+            "new_string" => {
+              "type" => "string",
+              "description" => "Replacement text (for the edit operation). Use an empty string to delete the matched text."
+            },
+            "replace_all" => {
+              "type" => "boolean",
+              "description" => "Replace every occurrence instead of requiring exactly one (edit operation)"
+            },
+            "offset" => {
+              "type" => "integer",
+              "description" => "First line to replace, 1-based (edit by line range, optional)"
+            },
+            "limit" => {
+              "type" => "integer",
+              "description" => "How many lines to replace (edit by line range, optional)"
+            }
+          },
+          "required" => [ "operation" ]
+        }
+      end
+
+      def intro_line
+        "Make targeted edits, create and delete files."
+      end
+
+      def operation_help
+        [ WRITE_HELP ]
       end
     end
   end

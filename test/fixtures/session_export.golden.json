@@ -17,7 +17,7 @@
           "id": "call_1",
           "type": "function",
           "function": {
-            "name": "file_ops",
+            "name": "file_read",
             "arguments": "{\"operation\":\"read\"}"
           }
         }
@@ -46,7 +46,7 @@
   "task": "halo, tolong lihat berkasnya",
   "title": "Berkas",
   "summary": "ringkasan percakapan",
-  "forced_skill": "file_ops",
+  "forced_skill": "brain",
   "model_override": "openai/gpt-4o-mini",
   "model_preset": "cepat",
   "thinking_level": "low",

@@ -698,7 +698,7 @@ module Rubot
         call = lambda do |id, path|
           { "role" => "assistant", "content" => "",
             "tool_calls" => [ { "id" => id,
-                                "function" => { "name" => "file_ops",
+                                "function" => { "name" => "file_read",
                                                 "arguments" => JSON.generate({ "path" => path }) } } ] }
         end
         write_messages(channel, sid, [
@@ -1139,7 +1139,7 @@ module Rubot
         now += 0.1
         assert_nil turn.items.last[:swap_ms], "past the fade, the row is left alone"
 
-        turn.tool_started("file_ops", "a.rb", op: "edit")
+        turn.tool_started("file_write", "a.rb", op: "edit")
         assert_equal 0, turn.items.last[:swap_ms], "the next call starts its own fade"
         assert_equal 1, turn.items.count { |item| item[:kind] == :tool && item[:swap_ms] },
                      "and only itself: the call that came before stays put"
@@ -1153,12 +1153,12 @@ module Rubot
         turn = Turn.new(id: "t1", session_id: "s1", tool_output: "compact",
                         clock: -> { now }, epoch_clock: -> { now })
 
-        turn.tool_started("file_ops", "a.rb")
-        turn.tool_finished("file_ops", true)
+        turn.tool_started("file_read", "a.rb")
+        turn.tool_finished("file_read", true)
         turn.append_chunk("Isi a.rb sudah kubaca.")
         now += 1.0
-        turn.tool_started("file_ops", "b.rb")
-        turn.tool_finished("file_ops", true)
+        turn.tool_started("file_read", "b.rb")
+        turn.tool_finished("file_read", true)
 
         rows = turn.items.select { |item| item[:kind] == :tool }
         assert_equal %w[a.rb b.rb], rows.map { |item| item[:detail] }
@@ -1171,8 +1171,8 @@ module Rubot
       # a write, and a chip beside the sentence repeated what it already said.
       def test_a_file_tool_row_says_what_it_did_in_its_sentence
         edited = View.render("_timeline",
-                             items: [ { kind: :tool, name: "file_ops",
-                                        detail: ToolCaption.caption("file_ops",
+                             items: [ { kind: :tool, name: "file_write",
+                                        detail: ToolCaption.caption("file_write",
                                                                     { "operation" => "edit", "path" => "lib/a.rb" }),
                                         op: "edit", state: :ok, elapsed: nil } ])
         assert_includes edited, "Editing lib/a.rb"

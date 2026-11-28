@@ -89,32 +89,32 @@ class TestToolRows < Minitest::Test
   # …but a call the reader has to come back for keeps its own row: the batch is
   # not a licence to hide a file the turn changed.
   def test_a_batch_still_shows_the_call_that_changed_a_file
-    items = [ tool("file_ops", op: "edit"), diff_item("<pre>a</pre>"),
+    items = [ tool("file_write", op: "edit"), diff_item("<pre>a</pre>"),
               tool("read"), tool("grep") ]
 
-    assert_equal %w[file_ops grep], names(Rubot::Web::ToolRows.collapse(items))
+    assert_equal %w[file_write grep], names(Rubot::Web::ToolRows.collapse(items))
   end
 
   # A skill load keeps a line of its own too: it is the row that says why the
   # calls after it went the way they did, so collapsing it into the batch takes
   # away the one thing the reader would scroll back for.
   def test_a_skill_load_keeps_its_own_row_in_compact
-    items = [ tool("file_ops", skills: [ "brain" ]), tool("read"), tool("grep") ]
+    items = [ tool("file_read", skills: [ "brain" ]), tool("read"), tool("grep") ]
 
     kept = Rubot::Web::ToolRows.collapse(items)
 
-    assert_equal %w[file_ops grep], names(kept)
+    assert_equal %w[file_read grep], names(kept)
     assert_equal [ "brain" ], kept.first[:skills]
   end
 
   # Including when a thought sat above it: the pair is only dropped when the
   # call is a plain one.
   def test_a_thought_does_not_swallow_the_skill_load_under_it
-    items = [ thought(3), tool("file_ops", skills: [ "brain" ]), tool("grep") ]
+    items = [ thought(3), tool("file_read", skills: [ "brain" ]), tool("grep") ]
 
     kept = Rubot::Web::ToolRows.collapse(items)
 
-    assert_equal %w[file_ops grep], names(kept)
+    assert_equal %w[file_read grep], names(kept)
     assert_equal %i[thinking tool tool], kinds(kept)
   end
 
@@ -216,16 +216,16 @@ class TestToolRows < Minitest::Test
   # The operation is what tells a write from a read, because a write that
   # changed nothing draws no diff but still happened.
   def test_a_write_with_nothing_to_show_survives_a_later_call
-    items = [ tool("file_ops", op: "write"), thought(4), tool("file_ops", op: "read") ]
+    items = [ tool("file_write", op: "write"), thought(4), tool("file_read", op: "read") ]
 
     kept = Rubot::Web::ToolRows.collapse(items)
 
-    assert_equal %w[file_ops file_ops], names(kept)
+    assert_equal %w[file_write file_read], names(kept)
     assert_equal %w[write read], kept.select { |item| item[:kind] == :tool }.map { |item| item[:op] }
   end
 
   def test_a_read_is_still_just_a_log_line
-    items = [ tool("file_ops", op: "read"), tool("grep") ]
+    items = [ tool("file_read", op: "read"), tool("grep") ]
 
     assert_equal %w[grep], names(Rubot::Web::ToolRows.collapse(items))
   end
@@ -478,15 +478,15 @@ class TestToolRows < Minitest::Test
   def test_a_compact_turn_keeps_the_file_it_wrote
     turn, advance = build_turn("compact")
 
-    turn.tool_started("file_ops", "notes.md", op: "write")
-    turn.tool_finished("file_ops", true)
+    turn.tool_started("file_write", "notes.md", op: "write")
+    turn.tool_finished("file_write", true)
     advance.(5)
     turn.thinking
     advance.(4)
     turn.tool_started("read", "a.rb")
     turn.tool_finished("read", true)
 
-    assert_equal %w[file_ops read], names(turn.items)
+    assert_equal %w[file_write read], names(turn.items)
   end
 
   def test_a_verbose_turn_keeps_the_log

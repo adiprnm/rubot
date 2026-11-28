@@ -82,14 +82,15 @@ module Rubot
       agent.define_singleton_method(:process) do |_message, on_tool_call: nil, on_tool_result: nil, **_opts, &_blk|
         before = File.exist?(path) ? File.read(path, encoding: "UTF-8") : nil
         args = { "operation" => operation, "path" => path }
-        on_tool_call&.call("file_ops", args, { path: path, expanded: File.expand_path(path), before: before })
+        tool = %w[edit write append delete].include?(operation) ? "file_write" : "file_read"
+        on_tool_call&.call(tool, args, { path: path, expanded: File.expand_path(path), before: before })
         # nil after means the call removed the file, as `delete` does.
         after.nil? ? FileUtils.rm_f(path) : File.write(path, after)
         # The before-content is the one taken before the write; reading it now
         # (snapshot_after_write) is what a racing caller would see.
         seen = snapshot_after_write && File.exist?(path) ? File.read(path, encoding: "UTF-8") : before
         ui_diff = { "path" => path, "before" => seen, "after" => after }
-        on_tool_result&.call("file_ops", "ok", ui_diff)
+        on_tool_result&.call(tool, "ok", ui_diff)
         "done"
       end
       agent.define_singleton_method(:flush_learning) { nil }

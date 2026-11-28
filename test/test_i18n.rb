@@ -610,7 +610,7 @@ class TestI18n < Minitest::Test
         Rubot::ToolCaption.caption("shell_exec", { "command" => "grep -rn Turn lib" }),
         Rubot::ToolCaption.caption("shell_exec", { "command" => "find lib" }),
         Rubot::ToolCaption.caption("delegate", { "agent" => "planner" }),
-        Rubot::ToolCaption.caption("file_ops", { "operation" => "read", "path" => "lib/rubot/agent.rb" }),
+        Rubot::ToolCaption.caption("file_read", { "operation" => "read", "path" => "lib/rubot/agent.rb" }),
         Rubot::ToolCaption.caption("shell_exec", { "command" => "sleep 90" })
       ]
     end

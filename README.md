@@ -143,7 +143,8 @@ models:
 
 tools:
   shell_exec: { enabled: true }
-  file_ops:   { enabled: true }
+  file_read:  { enabled: true }
+  file_write: { enabled: true }
   search:     { enabled: true }
   web_fetch:  { enabled: true }
 ```
@@ -243,12 +244,13 @@ Scheduled jobs and explicitly requested announcements can wake the device throug
 
 ## Tools
 
-Rubot ships with eleven built-in tools:
+Rubot ships with twelve built-in tools:
 
 | Tool | Purpose |
 |------|---------|
 | `shell_exec` | Run shell commands in the launch directory; dangerous commands are blocked |
-| `file_ops` | Read, edit, write, append, delete, list, and inspect files |
+| `file_read` | Read files, list directories, and inspect paths |
+| `file_write` | Edit, write, append, and delete files; the operations that change anything live only here |
 | `search` | Find files by glob or matching lines by regex, skipping `.git`, `node_modules`, and build output |
 | `web_fetch` | Fetch a URL (follows redirects), preferring markdown from docs sites and falling back to plain text (5,000 char cap, 12,000 for markdown) |
 | `memory` | Read and update persistent memory (enabled when memory is on) |

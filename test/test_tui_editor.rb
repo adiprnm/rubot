@@ -1070,7 +1070,7 @@ module Rubot
             "tool_calls" => [ {
               "id" => "call-1",
               "type" => "function",
-              "function" => { "name" => "file_ops",
+              "function" => { "name" => "file_read",
                               "arguments" => JSON.generate("operation" => "read", "path" => "/src/parser.rb") }
             } ] },
           { "role" => "tool", "content" => "1: def parse", "tool_call_id" => "call-1" },
@@ -1138,7 +1138,7 @@ module Rubot
         { "role" => "assistant", "content" => "",
           "tool_calls" => [ {
             "id" => "call-1",
-            "function" => { "name" => "file_ops",
+            "function" => { "name" => "file_read",
                             "arguments" => JSON.generate("operation" => "read", "path" => "/w/skills/omarchy/SKILL.md") }
           } ] },
         { "role" => "tool", "content" => "...", "tool_call_id" => "call-1" }

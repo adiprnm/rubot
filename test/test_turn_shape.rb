@@ -64,7 +64,7 @@ class TestTurnShape < Minitest::Test
       "id" => id,
       "type" => "function",
       "function" => {
-        "name" => "file_ops",
+        "name" => "file_read",
         "arguments" => JSON.generate({ "operation" => "list", "path" => @workspace })
       }
     }
@@ -112,8 +112,8 @@ class TestTurnShape < Minitest::Test
     assert_equal "done", answer
     assert_equal [
       [ :text, "Checking." ],
-      [ :call, "file_ops" ],
-      [ :result, "file_ops" ],
+      [ :call, "file_read" ],
+      [ :result, "file_read" ],
       [ :progress, 1, 1 ]
     ], events
   end
@@ -130,10 +130,10 @@ class TestTurnShape < Minitest::Test
     assert_equal 2, provider.requests.size
     assert_equal [
       [ :text, "Batch." ],
-      [ :call, "file_ops" ],
-      [ :call, "file_ops" ],
-      [ :result, "file_ops" ],
-      [ :result, "file_ops" ],
+      [ :call, "file_read" ],
+      [ :call, "file_read" ],
+      [ :result, "file_read" ],
+      [ :result, "file_read" ],
       [ :progress, 1, 2 ]
     ], events
   end
@@ -152,12 +152,12 @@ class TestTurnShape < Minitest::Test
     assert_includes answer, "stopped after 2 rounds"
     assert_equal [
       [ :text, "Round." ],
-      [ :call, "file_ops" ],
-      [ :result, "file_ops" ],
+      [ :call, "file_read" ],
+      [ :result, "file_read" ],
       [ :progress, 1, 1 ],
       [ :text, "Round." ],
-      [ :call, "file_ops" ],
-      [ :result, "file_ops" ],
+      [ :call, "file_read" ],
+      [ :result, "file_read" ],
       [ :progress, 2, 1 ]
     ], events
   end

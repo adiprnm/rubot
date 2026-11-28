@@ -20,7 +20,8 @@ class TestTools < Minitest::Test
   def test_registry_has_default_tools
     names = @registry.names
     assert_includes names, "shell_exec"
-    assert_includes names, "file_ops"
+    assert_includes names, "file_read"
+    assert_includes names, "file_write"
     assert_includes names, "web_fetch"
     assert_includes names, "cron"
     assert_includes names, "send_files"
@@ -31,7 +32,7 @@ class TestTools < Minitest::Test
     assert_includes names, "subagent_results"
     assert_includes names, "loop"
     assert_includes names, "ask_user"
-    assert_equal 12, @registry.count
+    assert_equal 13, @registry.count
   end
 
   def test_registry_get_tool
@@ -41,6 +42,22 @@ class TestTools < Minitest::Test
 
   def test_registry_unknown_tool
     assert_raises(RuntimeError) { @registry.execute("nonexistent", {}) }
+  end
+
+  # The one place that answers "does this tool change the workspace?". A tool
+  # added later has to opt out, so the default is yes and only the reading tools
+  # say no. A role whose list holds only those is read-only.
+  def test_only_the_reading_tools_say_they_do_not_write
+    refute @registry.get("file_read").writes?
+    refute @registry.get("search").writes?
+    refute @registry.get("web_fetch").writes?
+
+    %w[shell_exec file_write cron loop notify send_files instagram delegate].each do |name|
+      tool = @registry.get(name)
+      next unless tool
+
+      assert tool.writes?, "#{name} changes the workspace and must say so"
+    end
   end
 
   def test_registry_clear
@@ -958,13 +975,13 @@ class TestTools < Minitest::Test
     end.new
 
     @registry.register(custom)
-    assert_equal 13, @registry.count
+    assert_equal 14, @registry.count
     assert_equal "done: {}", @registry.execute("custom_tool", {})
   end
 
   def test_registry_provider_definitions
     defs = @registry.to_provider_definitions("openai")
-    assert_equal 12, defs.size
+    assert_equal 13, defs.size
     assert defs.all? { |d| d["type"] == "function" }
     assert defs.all? { |d| d["function"]["name"] }
     assert defs.all? { |d| d["function"]["description"] }
@@ -1098,7 +1115,7 @@ class TestTools < Minitest::Test
     FileUtils.mkdir_p(workspace)
     @registry.all.each { |tool| tool.workspace = workspace if tool.respond_to?(:workspace=) }
 
-    result = @registry.execute("file_ops", {
+    result = @registry.execute("file_write", {
       "operation" => "write",
       "path" => "note.txt",
       "content" => "in the workspace"
@@ -1122,14 +1139,14 @@ class TestTools < Minitest::Test
 
   def test_file_write_and_read
     filepath = File.join(@tmpdir, "test.txt")
-    write_result = @registry.execute("file_ops", {
+    write_result = @registry.execute("file_write", {
       "operation" => "write",
       "path" => filepath,
       "content" => "Hello, Rubot!"
     })
     assert_includes write_result, "Written"
 
-    read_result = @registry.execute("file_ops", {
+    read_result = @registry.execute("file_read", {
       "operation" => "read",
       "path" => filepath
     })
@@ -1138,12 +1155,12 @@ class TestTools < Minitest::Test
 
   def test_file_append
     filepath = File.join(@tmpdir, "append.txt")
-    @registry.execute("file_ops", {
+    @registry.execute("file_write", {
       "operation" => "write",
       "path" => filepath,
       "content" => "Line 1\n"
     })
-    @registry.execute("file_ops", {
+    @registry.execute("file_write", {
       "operation" => "append",
       "path" => filepath,
       "content" => "Line 2\n"
@@ -1159,7 +1176,7 @@ class TestTools < Minitest::Test
     FileUtils.mkdir_p(File.dirname(filepath))
     File.write(filepath, "test")
 
-    result = @registry.execute("file_ops", {
+    result = @registry.execute("file_read", {
       "operation" => "list",
       "path" => File.join(@tmpdir, "listme")
     })
@@ -1170,7 +1187,7 @@ class TestTools < Minitest::Test
     filepath = File.join(@tmpdir, "info.txt")
     File.write(filepath, "some content")
 
-    result = @registry.execute("file_ops", {
+    result = @registry.execute("file_read", {
       "operation" => "info",
       "path" => filepath
     })
@@ -1179,7 +1196,7 @@ class TestTools < Minitest::Test
   end
 
   def test_file_read_nonexistent
-    result = @registry.execute("file_ops", {
+    result = @registry.execute("file_read", {
       "operation" => "read",
       "path" => "/nonexistent/file.txt"
     })
@@ -1188,7 +1205,7 @@ class TestTools < Minitest::Test
 
   def test_file_write_creates_directories
     filepath = File.join(@tmpdir, "nested", "deep", "file.txt")
-    result = @registry.execute("file_ops", {
+    result = @registry.execute("file_write", {
       "operation" => "write",
       "path" => filepath,
       "content" => "nested content"
@@ -1199,7 +1216,7 @@ class TestTools < Minitest::Test
 
   def test_file_write_without_content
     filepath = File.join(@tmpdir, "nocontent.txt")
-    result = @registry.execute("file_ops", {
+    result = @registry.execute("file_write", {
       "operation" => "write",
       "path" => filepath
     })
@@ -1214,7 +1231,7 @@ class TestTools < Minitest::Test
     filepath = File.join(@tmpdir, "default-read.txt")
     File.write(filepath, "read me\n")
 
-    result = @registry.execute("file_ops", { "path" => filepath })
+    result = @registry.execute("file_read", { "path" => filepath })
 
     assert_includes result, "read me"
   end
@@ -1223,7 +1240,7 @@ class TestTools < Minitest::Test
     filepath = File.join(@tmpdir, "long.txt")
     File.write(filepath, (1..50).map { |i| "line #{i}\n" }.join)
 
-    result = @registry.execute("file_ops", {
+    result = @registry.execute("file_read", {
       "operation" => "read", "path" => filepath, "offset" => 10, "limit" => 5
     })
 
@@ -1238,7 +1255,7 @@ class TestTools < Minitest::Test
     filepath = File.join(@tmpdir, "short.txt")
     File.write(filepath, "only\n")
 
-    result = @registry.execute("file_ops", {
+    result = @registry.execute("file_read", {
       "operation" => "read", "path" => filepath, "offset" => 10
     })
 
@@ -1249,7 +1266,7 @@ class TestTools < Minitest::Test
     filepath = File.join(@tmpdir, "big.txt")
     File.write(filepath, "x" * (Rubot::Tools::FileTool::MAX_READ + 100))
 
-    result = @registry.execute("file_ops", { "operation" => "read", "path" => filepath })
+    result = @registry.execute("file_read", { "operation" => "read", "path" => filepath })
 
     assert_includes result, "offset/limit"
   end
@@ -1263,7 +1280,7 @@ class TestTools < Minitest::Test
     File.write(first, "one\n")
     File.write(second, "two\n")
 
-    result = @registry.execute("file_ops", { "operation" => "read", "paths" => [ first, second ] })
+    result = @registry.execute("file_read", { "operation" => "read", "paths" => [ first, second ] })
 
     assert_includes result, "=== #{first} ==="
     assert_includes result, "=== #{second} ==="
@@ -1275,7 +1292,7 @@ class TestTools < Minitest::Test
     present = File.join(@tmpdir, "present.rb")
     File.write(present, "here\n")
 
-    result = @registry.execute("file_ops", {
+    result = @registry.execute("file_read", {
       "operation" => "read",
       "paths" => [ File.join(@tmpdir, "gone.rb"), present ]
     })
@@ -1290,7 +1307,7 @@ class TestTools < Minitest::Test
     present = File.join(@tmpdir, "solo.rb")
     File.write(present, "alone\n")
 
-    result = @registry.execute("file_ops", { "paths" => [ present ] })
+    result = @registry.execute("file_read", { "paths" => [ present ] })
 
     assert_includes result, "alone"
   end
@@ -1301,7 +1318,7 @@ class TestTools < Minitest::Test
     filepath = File.join(@tmpdir, "edit.rb")
     File.write(filepath, "def a\n  1\nend\n\ndef b\n  2\nend\n")
 
-    result = @registry.execute("file_ops", {
+    result = @registry.execute("file_write", {
       "operation" => "edit", "path" => filepath,
       "old_string" => "def b\n  2\nend", "new_string" => "def b\n  3\nend"
     })
@@ -1314,7 +1331,7 @@ class TestTools < Minitest::Test
     filepath = File.join(@tmpdir, "ambiguous.rb")
     File.write(filepath, "x = 1\nx = 1\n")
 
-    result = @registry.execute("file_ops", {
+    result = @registry.execute("file_write", {
       "operation" => "edit", "path" => filepath,
       "old_string" => "x = 1", "new_string" => "x = 2"
     })
@@ -1328,7 +1345,7 @@ class TestTools < Minitest::Test
     filepath = File.join(@tmpdir, "all.rb")
     File.write(filepath, "x = 1\nx = 1\n")
 
-    result = @registry.execute("file_ops", {
+    result = @registry.execute("file_write", {
       "operation" => "edit", "path" => filepath,
       "old_string" => "x = 1", "new_string" => "x = 2", "replace_all" => true
     })
@@ -1341,7 +1358,7 @@ class TestTools < Minitest::Test
     filepath = File.join(@tmpdir, "missing.rb")
     File.write(filepath, "hello\n")
 
-    result = @registry.execute("file_ops", {
+    result = @registry.execute("file_write", {
       "operation" => "edit", "path" => filepath,
       "old_string" => "not here", "new_string" => "x"
     })
@@ -1353,7 +1370,7 @@ class TestTools < Minitest::Test
   def test_file_edit_is_not_treated_as_an_overwrite
     filepath = File.join(@tmpdir, "safe_edit.rb")
     File.write(filepath, "a\n")
-    tool = @registry.get("file_ops")
+    tool = @registry.get("file_write")
 
     refute tool.dangerous_action?({ "operation" => "edit", "path" => filepath })
   end
@@ -1521,7 +1538,7 @@ class TestTools < Minitest::Test
     filepath = File.join(@tmpdir, "doomed.txt")
     File.write(filepath, "bye")
 
-    result = @registry.execute("file_ops", { "operation" => "delete", "path" => filepath })
+    result = @registry.execute("file_write", { "operation" => "delete", "path" => filepath })
 
     assert_includes result, "Deleted"
     refute File.exist?(filepath), "the file is gone"
@@ -1531,21 +1548,21 @@ class TestTools < Minitest::Test
     dir = File.join(@tmpdir, "tree")
     FileUtils.mkdir_p(dir)
 
-    result = @registry.execute("file_ops", { "operation" => "delete", "path" => dir })
+    result = @registry.execute("file_write", { "operation" => "delete", "path" => dir })
 
     assert_includes result, "Refusing to delete a directory"
     assert Dir.exist?(dir), "the directory survives"
   end
 
   def test_file_delete_reports_a_missing_file
-    result = @registry.execute("file_ops",
+    result = @registry.execute("file_write",
                                { "operation" => "delete", "path" => File.join(@tmpdir, "nope.txt") })
 
     assert_includes result, "File not found"
   end
 
   def test_file_tool_dangerous_delete_is_data_loss
-    file_tool = @registry.get("file_ops")
+    file_tool = @registry.get("file_write")
     filepath = File.join(@tmpdir, "doomed.txt")
     File.write(filepath, "bye")
 
@@ -1554,7 +1571,7 @@ class TestTools < Minitest::Test
   end
 
   def test_file_tool_dangerous_overwrite_existing_file
-    file_tool = @registry.get("file_ops")
+    file_tool = @registry.get("file_write")
     filepath = File.join(@tmpdir, "existing.txt")
     File.write(filepath, "existing content")
 
@@ -1565,7 +1582,7 @@ class TestTools < Minitest::Test
   # The false positive this fixes: rewriting a file to change one line looked
   # exactly like wiping it, so every second write asked the user to confirm.
   def test_file_tool_small_rewrite_is_not_data_loss
-    file_tool = @registry.get("file_ops")
+    file_tool = @registry.get("file_write")
     filepath = File.join(@tmpdir, "touched.rb")
     File.write(filepath, (1..50).map { |i| "line #{i}" }.join("\n") + "\n")
 
@@ -1577,7 +1594,7 @@ class TestTools < Minitest::Test
   end
 
   def test_file_tool_rewrite_that_drops_the_content_is_data_loss
-    file_tool = @registry.get("file_ops")
+    file_tool = @registry.get("file_write")
     filepath = File.join(@tmpdir, "shrunk.rb")
     File.write(filepath, (1..100).map { |i| "line #{i}" }.join("\n") + "\n")
 
@@ -1599,7 +1616,7 @@ class TestTools < Minitest::Test
   end
 
   def test_file_tool_dangerous_new_file_is_safe
-    file_tool = @registry.get("file_ops")
+    file_tool = @registry.get("file_write")
     filepath = File.join(@tmpdir, "new_file.txt")
 
     # write on non-existent file = safe (creating, not destroying)
@@ -1607,7 +1624,7 @@ class TestTools < Minitest::Test
   end
 
   def test_file_tool_dangerous_append_is_always_safe
-    file_tool = @registry.get("file_ops")
+    file_tool = @registry.get("file_write")
     filepath = File.join(@tmpdir, "append.txt")
     File.write(filepath, "existing content")
 
@@ -1616,7 +1633,7 @@ class TestTools < Minitest::Test
   end
 
   def test_file_tool_dangerous_read_operations_are_safe
-    file_tool = @registry.get("file_ops")
+    file_tool = @registry.get("file_read")
     refute file_tool.dangerous_action?({ "operation" => "read", "path" => "test.txt" })
     refute file_tool.dangerous_action?({ "operation" => "list", "path" => "." })
     refute file_tool.dangerous_action?({ "operation" => "info", "path" => "test.txt" })

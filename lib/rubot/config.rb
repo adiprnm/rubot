@@ -640,6 +640,13 @@ module Rubot
       tools.select { |_, t| t.is_a?(Hash) && t["enabled"] != false }.keys
     end
 
+    # Whether the config wrote a tools key at all. An absent key means "every
+    # tool"; a key that is present and empty means the list was forgotten, and
+    # that is an error rather than a licence to use everything.
+    def tools_declared?
+      data["tools"].is_a?(Hash)
+    end
+
     def debug?
       data["debug"] == true || ENV["RUBOT_DEBUG"] == "1"
     end

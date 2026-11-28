@@ -28,14 +28,14 @@ class TestSessionExportFormat < Minitest::Test
     session.add("user", "halo, tolong lihat berkasnya")
     session.add("assistant", "", reasoning_content: "saya baca dulu",
                 tool_calls: [ { "id" => "call_1", "type" => "function",
-                                "function" => { "name" => "file_ops", "arguments" => "{\"operation\":\"read\"}" } } ])
+                                "function" => { "name" => "file_read", "arguments" => "{\"operation\":\"read\"}" } } ])
     session.add("tool", "isi berkas", tool_call_id: "call_1",
                  ui_diff: { "path" => "a.txt", "before" => nil, "after" => "isi berkas" })
     session.add("assistant", "sudah saya baca", background: true)
 
     session.summary = "ringkasan percakapan"
     session.title = "Berkas"
-    session.forced_skill = "file_ops"
+    session.forced_skill = "brain"
     session.model_override = "openai/gpt-4o-mini"
     session.model_preset = "cepat"
     session.thinking_level = "low"

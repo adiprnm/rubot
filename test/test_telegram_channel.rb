@@ -25,6 +25,15 @@ module Rubot
       FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
     end
 
+    # The status card is scanned, not read: each file capability keeps an icon
+    # of its own so a topic says at a glance whether the bot read or wrote.
+    def test_reading_and_writing_keep_their_own_status_icon
+      emojis = Rubot::Channels::Telegram::Status::TOOL_EMOJIS
+
+      assert_equal "📄", emojis["file_read"]
+      assert_equal "✏️", emojis["file_write"]
+    end
+
     def test_start_returns_skip_response
       result = @tg.before_process("/start")
       assert_kind_of Array, result
@@ -419,7 +428,7 @@ module Rubot
     def test_finished_round_marks_the_step_done_and_hints_stop_once
       texts = capture_status_texts
 
-      @tg.notify_tool_started(42, 7, "file_ops", { "operation" => "read", "path" => "lib/rubot/agent.rb" })
+      @tg.notify_tool_started(42, 7, "file_read", { "operation" => "read", "path" => "lib/rubot/agent.rb" })
       @tg.notify_progress(42, 7, 2)
       refute_includes texts.last, "/stop", "two rounds is not yet worth a stop hint"
 

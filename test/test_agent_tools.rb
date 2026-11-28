@@ -38,7 +38,7 @@ class TestAgentCancellation < Minitest::Test
         "id" => id,
         "type" => "function",
         "function" => {
-          "name" => "file_ops",
+          "name" => "file_read",
           "arguments" => JSON.generate({ "operation" => "list", "path" => @path })
         }
       }
@@ -138,7 +138,7 @@ class TestAgentCancellation < Minitest::Test
       on_tool_result: ->(_name, result, _ui_diff) { seen << result })
 
     assert_equal 1, agent.provider.calls, "no further provider round after /stop"
-    assert_equal 1, seen.count("file_ops"), "only the first tool runs"
+    assert_equal 1, seen.count("file_read"), "only the first tool runs"
     assert_includes seen, Rubot::Agent::CANCELLED_TOOL_RESULT
     assert_includes response, "Stopped by user"
 
@@ -440,7 +440,7 @@ class TestAgentUiDiff < Minitest::Test
             "id" => "call_1",
             "type" => "function",
             "function" => {
-              "name" => "file_ops",
+              "name" => %w[edit write append delete].include?(@operation) ? "file_write" : "file_read",
               "arguments" => JSON.generate({
                 "operation" => @operation,
                 "path" => @path,
@@ -523,6 +523,23 @@ class TestAgentUiDiff < Minitest::Test
       assert_equal "one\ntwo\n", diff["before"]
       assert_nil diff["after"], "nothing is left to show as the new content"
       refute File.exist?(path), "the file is gone"
+    end
+  end
+
+  # Only a write has something to replay. A read is quiet: no snapshot, no
+  # diff, nothing for the transcript to draw under the row.
+  def test_a_read_produces_no_ui_diff
+    Dir.mktmpdir do |dir|
+      workspace = File.join(dir, "workspace")
+      FileUtils.mkdir_p(workspace)
+      path = File.join(workspace, "notes.md")
+      File.write(path, "one\ntwo\n")
+
+      agent = run_write(workspace, path, WriteProvider.new(path, operation: "read", content: nil))
+      tool = agent.session.messages.find { |msg| msg["role"] == "tool" }
+
+      assert_includes tool["content"], "one"
+      refute tool.key?("ui_diff"), "a read is not replayed as a diff"
     end
   end
 
@@ -729,5 +746,69 @@ class TestAgentAsksWithoutACeiling < Minitest::Test
     results = agent.session.messages.select { |m| m["role"] == "tool" }.map { |m| m["content"] }
     assert_equal ROUNDS, results.size
     results.each { |content| assert_includes content, "The user chose: A" }
+  end
+end
+
+# A tools list is the declaration of what an agent may call. A list that names
+# nothing, or names a tool this install does not have, is an error rather than
+# a silent "everything" or a silently ignored entry.
+class TestAgentToolList < Minitest::Test
+  def setup
+    @tmpdir = Dir.mktmpdir
+    @workspace = File.join(@tmpdir, "workspace")
+    FileUtils.mkdir_p(@workspace)
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmpdir) if File.directory?(@tmpdir)
+  end
+
+  def agent_with(tools)
+    config_path = File.join(@tmpdir, "config.yml")
+    File.write(config_path, {
+      "agents" => { "defaults" => { "workspace" => @workspace } },
+      "models" => [
+        { "name" => "test", "model" => "openai/gpt-4o-mini", "api_key" => "sk-test" }
+      ],
+      "tools" => tools
+    }.to_yaml)
+    Rubot::Agent.new(config: Rubot::Config.new(config_path), session_id: "tools",
+                     provider: OneCallProvider.new)
+  end
+
+  class OneCallProvider
+    def name
+      "openai"
+    end
+
+    def chat(_messages, tools: nil, on_retry: nil)
+      { "content" => "nothing to do" }
+    end
+    alias chat_stream chat
+  end
+
+  def test_an_empty_tools_list_is_an_error
+    error = assert_raises(ArgumentError) { agent_with({}).tool_definitions }
+
+    assert_match(/names no tool/, error.message)
+  end
+
+  def test_a_stale_tool_name_is_reported
+    error = assert_raises(ArgumentError) do
+      agent_with({ "file_ops" => { "enabled" => true } }).tool_definitions
+    end
+
+    assert_match(/file_ops/, error.message)
+  end
+
+  def test_a_named_list_offers_exactly_what_it_names
+    names = agent_with({ "file_read" => { "enabled" => true },
+                         "file_write" => { "enabled" => true } })
+            .tool_definitions.map(&:name)
+
+    assert_includes names, "file_read"
+    assert_includes names, "file_write"
+    refute_includes names, "shell_exec", "a tool the list does not name is not offered"
+    refute_includes names, "delegate"
   end
 end

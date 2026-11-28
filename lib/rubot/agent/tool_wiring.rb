@@ -26,13 +26,11 @@ module Rubot
         cron_tool.store_root = @config.catalog_dir if cron_tool.respond_to?(:store_root=)
       end
 
-      # Every tool instance this agent could reach, the read-only twins
-      # included: they carry the same workspace and guard as their writable
-      # original, or a read-only role would be jailed in the wrong directory.
+      # Every tool instance this agent could reach. The registry is shared, so
+      # the workspace, guard and persona are written onto each instance at the
+      # start of a turn; there is one list, not one per capability.
       def all_tool_instances
-        tools = @tools.all.dup
-        tools += @tools.read_only_tools.values if @tools.respond_to?(:read_only_tools)
-        tools
+        @tools.all
       end
 
       # Whether this agent is a delegated run. There is more than one spawn path
@@ -52,22 +50,15 @@ module Rubot
         @session.id.to_s.include?("~sub-")
       end
 
-      # Whether this agent may only look. Derived from the persona and its
-      # definition rather than from a flag: the persona travels on every spawn
-      # path, so no path can fail to set it, and the registry that holds the
-      # tools is shared, so per-turn state would be a race.
+      # Whether this agent may only look. Derived from the tools it is offered,
+      # never from a flag: a role that must not write is a role whose list holds
+      # no writing tool, so the list is the whole answer. Every tool answers
+      # `writes?`, and the default there is yes.
       def read_only_role?
-        return false unless @persona&.internal
+        definitions = tool_definitions
+        return false if definitions.nil? || definitions.empty?
 
-        SubagentRegistry.read_only?(@persona.slug)
-      end
-
-      # The same tool seen through a read-only role's eyes. The registry owns the
-      # allowlist, so this cannot drift from what #execute will accept.
-      def read_only_tool_for(tool)
-        return @tools.tool_for(tool.name, read_only: true) if @tools.respond_to?(:tool_for)
-
-        tool
+        definitions.none?(&:writes?)
       end
 
       # Inject the safety guard into all tools that support it.
@@ -158,10 +149,19 @@ module Rubot
         return nil unless @config.tools_enabled
         enabled_list = @config.enabled_tools
 
-        # If no explicit tool configuration, use all registered tools
-        tools = if enabled_list.nil? || enabled_list.empty?
+        tools = if enabled_list.empty?
+          # A tools key that was written and left empty names no tool. Granting
+          # everything there is the opposite of what naming tools is for, so it
+          # is an error rather than a silent default.
+          if @config.tools_declared?
+            raise ArgumentError, "tools names no tool; list the tools this agent may use"
+          end
+
           @tools.all
         else
+          unknown = enabled_list - @tools.names
+          raise ArgumentError, "tools names unknown tool(s): #{unknown.join(", ")}" unless unknown.empty?
+
           @tools.all.select { |t| enabled_list.include?(t.name) }
         end
 
@@ -184,11 +184,12 @@ module Rubot
         if subagent_role?
           tools = tools.reject { |t| SUBAGENT_FORBIDDEN_TOOLS.include?(t.name) }
           if @persona&.internal
+            # A role that names no tools is an error, not "everything": the
+            # allowed list is the whole declaration of what the role may do.
             allowed = SubagentRegistry.allowed_tools(@persona.slug)
-            tools = tools.select { |t| allowed.include?(t.name) } if allowed
+            tools = tools.select { |t| allowed.include?(t.name) }
           end
         end
-        tools = tools.filter_map { |tool| read_only_tool_for(tool) } if read_only_role?
         tools
       end
 
@@ -203,20 +204,16 @@ module Rubot
       # output limit looks like — so the caller can refuse to run it on a
       # half-read argument instead of silently executing with an empty hash.
       # The tool a call will actually run as, so the confirmation prompt, the
-      # diff snapshot and the execution all see the same instance: a read-only
-      # role confirms nothing about a write it has no tool for.
+      # diff snapshot and the execution all see the same instance.
       def tool_instance(name)
-        return nil unless @tools.respond_to?(:get)
-        return @tools.tool_for(name, read_only: read_only_role?) if @tools.respond_to?(:tool_for)
-
         @tools.get(name)
       end
 
-      # Before-content of a file a file_ops write/append/edit/delete is about to
-      # touch. nil for reads and every other tool.
+      # Before-content of a file a file_write edit/write/append/delete is about
+      # to touch. nil for reads and every other tool: the write tool is the only
+      # one that changes a file, so it is the only one that has a diff to draw.
       def file_ui_snapshot(tool_name, arguments)
-        return nil unless tool_name == "file_ops" && arguments.is_a?(Hash)
-        return nil if read_only_role?
+        return nil unless tool_name == "file_write" && arguments.is_a?(Hash)
         return nil unless %w[write append edit delete].include?(arguments["operation"].to_s)
 
         path = arguments["path"].to_s
@@ -264,6 +261,13 @@ module Rubot
       rescue JSON::ParserError, TypeError
         [ name, {}, false ]
       end
+
+      # The set of tools this turn offers the model: what the provider is sent,
+      # what `offered_tool?` checks a call against, and what a test reads to say
+      # which tools a role may call. That makes it a seam rather than an
+      # implementation detail, so it is named here instead of being reached for
+      # with `send`.
+      public :tool_definitions
     end
   end
 end

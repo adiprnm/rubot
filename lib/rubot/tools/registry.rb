@@ -2,22 +2,14 @@
 
 module Rubot
   module Tools
+    # Every tool this install can run, by name. What an agent may call is a
+    # separate question, answered by the list of tools it was offered for the
+    # turn (see Agent#tool_definitions); this registry only knows what exists.
     class Registry
-      # What a read-only caller may use. Deliberately an allowlist: a tool that
-      # can change the workspace and is not named here is denied, so a tool
-      # added later cannot quietly widen what a read-only role can do. A denylist
-      # was tried first and was already wrong, because it named file_ops and
-      # shell_exec while cron, loop and memory could write too.
-      #
-      # shell is absent on purpose, not by oversight: a shell command can write
-      # any file a guard would have to refuse, so there is no read-only shell.
-      READ_ONLY_SAFE_TOOLS = %w[file_ops search web_fetch].freeze
-
-      attr_reader :tools, :safety_guard, :read_only_tools
+      attr_reader :tools, :safety_guard
 
       def initialize(safety_guard: nil)
         @tools = {}
-        @read_only_tools = {}
         @safety_guard = safety_guard
         register_defaults
       end
@@ -26,30 +18,8 @@ module Rubot
         @tools[tool.name] = tool
       end
 
-      # The read-only face of a tool, for the few that have one. It is a second
-      # instance only because a name can map to one object at a time; the guard
-      # itself is a property of the class (see FileReadTool), so no agent can
-      # turn it off by writing to the instance.
-      def register_read_only(tool)
-        @read_only_tools[tool.name] = tool
-      end
-
       def get(name)
         @tools[name]
-      end
-
-      def read_only_tool(name)
-        @read_only_tools[name]
-      end
-
-      # The tool a call is about, as this caller is allowed to see it. nil means
-      # "not available to you": the confirmation step treats it as absent, and
-      # #execute says so in words.
-      def tool_for(name, read_only: false)
-        return nil unless @tools.key?(name)
-        return @tools[name] unless read_only
-
-        @read_only_tools[name] || (READ_ONLY_SAFE_TOOLS.include?(name) ? @tools[name] : nil)
       end
 
       def all
@@ -64,13 +34,9 @@ module Rubot
         @tools.key?(name)
       end
 
-      def execute(name, arguments, read_only: false)
-        tool = tool_for(name, read_only: read_only)
-        if tool.nil?
-          raise "Refused: '#{name}' is not available to a read-only agent." if read_only && @tools.key?(name)
-
-          raise "Unknown tool: #{name}"
-        end
+      def execute(name, arguments)
+        tool = @tools[name]
+        raise "Unknown tool: #{name}" if tool.nil?
 
         tool.execute(arguments)
       end
@@ -92,8 +58,8 @@ module Rubot
 
       def register_defaults
         register Shell.new(safety_guard: @safety_guard)
-        register FileTool.new(safety_guard: @safety_guard)
-        register_read_only FileReadTool.new(safety_guard: @safety_guard)
+        register FileRead.new(safety_guard: @safety_guard)
+        register FileWrite.new(safety_guard: @safety_guard)
         register AskUser.new
         register Search.new(safety_guard: @safety_guard)
         register Web.new

@@ -400,7 +400,7 @@ module Rubot
         sid = "web_rubot"
         calls = %w[a.rb b.rb].each_with_index.map do |path, index|
           { "id" => "c#{index + 1}",
-            "function" => { "name" => "file_ops",
+            "function" => { "name" => "file_read",
                             "arguments" => JSON.generate({ "path" => path }) } }
         end
         write_messages(channel, sid, [
@@ -417,7 +417,7 @@ module Rubot
         call = lambda do |id, path|
           { "role" => "assistant", "content" => "",
             "tool_calls" => [ { "id" => id,
-                                "function" => { "name" => "file_ops",
+                                "function" => { "name" => "file_read",
                                                 "arguments" => JSON.generate({ "path" => path }) } } ] }
         end
         write_messages(channel, sid, [

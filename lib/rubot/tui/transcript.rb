@@ -26,7 +26,7 @@ module Rubot
       # --- row builders shared with the live TUI -------------------------
 
       # The row is the sentence and the mark, nothing else: the tool's own name
-      # (`file_ops`, `shell_exec`) is the agent's vocabulary, not the reader's,
+      # (`file_read`, `shell_exec`) is the agent's vocabulary, not the reader's,
       # and the sentence already says what it did. `name` stays in the
       # signature because the live renderer keys a running row by it.
       def self.tool_call(name, summary, skill)

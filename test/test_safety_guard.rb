@@ -342,17 +342,18 @@ class TestSafetyGuard < Minitest::Test
 
   def test_filetool_with_safety_guard_allows_workspace
     guard = Rubot::SafetyGuard.new(workspace: @workspace, restrict_to_workspace: true)
-    filetool = Rubot::Tools::FileTool.new(safety_guard: guard)
+    writer = Rubot::Tools::FileWrite.new(safety_guard: guard)
+    reader = Rubot::Tools::FileRead.new(safety_guard: guard)
 
     filepath = File.join(@workspace, "test_safety.txt")
-    result = filetool.execute({
+    result = writer.execute({
       "operation" => "write",
       "path" => filepath,
       "content" => "safe content"
     })
     assert_includes result, "Written"
 
-    read_result = filetool.execute({
+    read_result = reader.execute({
       "operation" => "read",
       "path" => filepath
     })
@@ -361,9 +362,9 @@ class TestSafetyGuard < Minitest::Test
 
   def test_filetool_with_safety_guard_blocks_outside_write
     guard = Rubot::SafetyGuard.new(workspace: @workspace, restrict_to_workspace: true)
-    filetool = Rubot::Tools::FileTool.new(safety_guard: guard)
+    writer = Rubot::Tools::FileWrite.new(safety_guard: guard)
 
-    result = filetool.execute({
+    result = writer.execute({
       "operation" => "write",
       "path" => "/tmp/outside_write.txt",
       "content" => "evil"
@@ -374,9 +375,9 @@ class TestSafetyGuard < Minitest::Test
 
   def test_filetool_with_read_outside_allows_read
     guard = Rubot::SafetyGuard.new(workspace: @workspace, restrict_to_workspace: true, allow_read_outside: true)
-    filetool = Rubot::Tools::FileTool.new(safety_guard: guard)
+    reader = Rubot::Tools::FileRead.new(safety_guard: guard)
 
-    result = filetool.execute({
+    result = reader.execute({
       "operation" => "read",
       "path" => "/etc/hostname"
     })
@@ -386,9 +387,9 @@ class TestSafetyGuard < Minitest::Test
 
   def test_filetool_with_read_outside_blocks_write
     guard = Rubot::SafetyGuard.new(workspace: @workspace, restrict_to_workspace: true, allow_read_outside: true)
-    filetool = Rubot::Tools::FileTool.new(safety_guard: guard)
+    writer = Rubot::Tools::FileWrite.new(safety_guard: guard)
 
-    result = filetool.execute({
+    result = writer.execute({
       "operation" => "write",
       "path" => "/tmp/outside_write.txt",
       "content" => "evil"
@@ -955,7 +956,7 @@ class TestSafetyGuard < Minitest::Test
 
   def test_filetool_blocks_append_to_memory
     guard = Rubot::SafetyGuard.new(workspace: @workspace, restrict_to_workspace: true)
-    filetool = Rubot::Tools::FileTool.new(safety_guard: guard)
+    filetool = Rubot::Tools::FileWrite.new(safety_guard: guard)
 
     # Write is already blocked; now test append
     result = filetool.execute({
@@ -969,7 +970,7 @@ class TestSafetyGuard < Minitest::Test
 
   def test_filetool_blocks_append_to_memory_case_insensitive
     guard = Rubot::SafetyGuard.new(workspace: @workspace, restrict_to_workspace: true)
-    filetool = Rubot::Tools::FileTool.new(safety_guard: guard)
+    filetool = Rubot::Tools::FileWrite.new(safety_guard: guard)
 
     result = filetool.execute({
       "operation" => "append",
