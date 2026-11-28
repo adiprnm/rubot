@@ -21,11 +21,26 @@ module Rubot
       # loss; a one-line fix keeps ~99%, so it never asks.
       DESTRUCTIVE_WRITE_RATIO = 0.7
 
+      # The operations that change a file. A read-only instance advertises none
+      # of them and refuses all of them.
+      WRITE_OPERATIONS = %w[edit write append delete].freeze
+      WRITE_NAMES = %w[read edit write append delete list info].freeze
+      READ_NAMES = %w[read list info].freeze
+
       attr_accessor :safety_guard
       attr_reader :last_read_path
 
+      # The guard lives in the class, not in a value stored on the instance.
+      # The registry holding this tool is shared by every agent in a Ractor and
+      # the workspace and safety guard are written onto the instance on every
+      # construction, so an instance flag is a value another agent can overwrite
+      # while this one is running. See FileReadTool below.
       def initialize(safety_guard: nil)
         @safety_guard = safety_guard
+      end
+
+      def read_only?
+        false
       end
 
       def name
@@ -33,27 +48,7 @@ module Rubot
       end
 
       def description
-        desc = <<~DESC.strip
-          Read files, make targeted edits, create and delete files, list
-          directories, and inspect paths.
-          Operations: read, edit, write, append, delete, list, info
-          - read:  Read a file. Pass `offset` (1-based line) and `limit` (lines)
-                   to read part of a long file; the reply says which lines were
-                   returned so you can continue from there. Pass `paths` (an
-                   array) to read several files in one call: one round trip
-                   instead of one per file, each answered under its own header.
-          - edit:  Replace `old_string` with `new_string` in the file at
-                   `path`. Both `path` and `old_string` are required; `old_string`
-                   must appear exactly once unless `replace_all` is true. This is
-                   the preferred way to change an existing file — it does not
-                   rewrite the parts you did not touch.
-          - write: Write content to a file (overwrites the whole file)
-          - append: Append content to a file
-          - delete: Delete one file (directories are refused; delete their
-                   files one by one)
-          - list:  List directory contents
-          - info:  Get file/directory information
-        DESC
+        desc = [ intro_line, "Operations: #{operation_names.join(", ")}", *operation_help ].join("\n")
         if @safety_guard&.restrict_to_workspace
           ws = @safety_guard.workspace
           desc + "\nAll operations are restricted to the workspace: #{ws}"
@@ -62,13 +57,55 @@ module Rubot
         end
       end
 
+      def operation_names
+        read_only? ? READ_NAMES : WRITE_NAMES
+      end
+
+      READ_HELP = <<~DOC.strip.freeze
+        - read:  Read a file. Pass `offset` (1-based line) and `limit` (lines)
+                 to read part of a long file; the reply says which lines were
+                 returned so you can continue from there. Pass `paths` (an
+                 array) to read several files in one call: one round trip
+                 instead of one per file, each answered under its own header.
+      DOC
+      WRITE_HELP = <<~DOC.strip.freeze
+        - edit:  Replace `old_string` with `new_string` in the file at
+                 `path`. Both `path` and `old_string` are required; `old_string`
+                 must appear exactly once unless `replace_all` is true. This is
+                 the preferred way to change an existing file — it does not
+                 rewrite the parts you did not touch.
+        - write: Write content to a file (overwrites the whole file)
+        - append: Append content to a file
+        - delete: Delete one file (directories are refused; delete their
+                 files one by one)
+      DOC
+      LIST_HELP = "- list:  List directory contents"
+      INFO_HELP = "- info:  Get file/directory information"
+
+      private
+
+      def intro_line
+        return "Read files, make targeted edits, create and delete files, list directories, and inspect paths." unless read_only?
+
+        "Read files, list directories, and inspect paths. This agent is read-only: " \
+        "report the change a file needs instead of making it."
+      end
+
+      def operation_help
+        help = [ READ_HELP ]
+        help << WRITE_HELP unless read_only?
+        help << LIST_HELP << INFO_HELP
+      end
+
+      public
+
       def parameters
         {
           "type" => "object",
           "properties" => {
             "operation" => {
               "type" => "string",
-              "enum" => %w[read edit write append delete list info],
+              "enum" => operation_names,
               "description" => "The file operation to perform (default: read)"
             },
             "path" => {
@@ -119,6 +156,14 @@ module Rubot
         path = arguments["path"]
         operation = "read" if operation.empty? && !(path.to_s.empty? && paths.empty?)
         content = arguments["content"]
+
+        # The guard is here, not only in the description and the enum: those
+        # are what the model is shown, and a model can always send an operation
+        # that was not offered. This is the one place a write would happen.
+        if read_only? && WRITE_OPERATIONS.include?(operation)
+          return "ERROR: this agent is read-only: '#{operation}' is not available. " \
+                 "Report the change you want instead of making it."
+        end
 
         case operation
         when "read"    then read_files(paths, path, offset: arguments["offset"], limit: arguments["limit"])
@@ -521,6 +566,16 @@ module Rubot
         return true if basename == "memory.md" || basename == "memory_archive.md"
 
         basename.end_with?("_archive.md") && File.basename(File.dirname(path)) == "memory"
+      end
+    end
+
+    # The read-only face of file_ops: same paths, same workspace, same guard,
+    # and no operation that changes a file. A separate class rather than a flag,
+    # because a subclass cannot be talked out of what it is by anything that
+    # mutates the instance.
+    class FileReadTool < FileTool
+      def read_only?
+        true
       end
     end
   end

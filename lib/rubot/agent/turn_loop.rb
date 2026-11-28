@@ -527,7 +527,7 @@ module Rubot
             next
           end
 
-          tool = @tools.get(tool_name)
+          tool = tool_instance(tool_name)
 
           # A question is the call itself: it blocks this thread until the
           # reader answers, and the answer becomes the call's result. It is
