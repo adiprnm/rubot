@@ -140,6 +140,11 @@ module Rubot
               current[:last] = idx
             else
               current = { kind: :turn, items: items, idx: idx, last: idx }
+              # The stamp travels with the entry so the block can be introduced
+              # by the same rule the live one is (see _report_sep): the reader
+              # who reloads must be able to tell an answer nobody typed from the
+              # continuation of the one above it.
+              current[:report] = true if msg["background"]
               turns << current
             end
             # The seam belongs to the turn that carried on after the cut, not

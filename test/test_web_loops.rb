@@ -792,9 +792,7 @@ class TestWebLoops < Minitest::Test
     def next_entry_index(_sid) = @last_index + 1
 
     # Only the opening call is of interest: it is the one that claims the index.
-    def broadcast_report_entry(_sid, index, text)
-      return unless text.to_s.empty?
-
+    def open_report_entry(_sid, index)
       @recorded.synchronize { @openings << index }
     end
 

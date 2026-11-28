@@ -1178,6 +1178,44 @@ module Rubot
         assert_equal "Menjalankan perintah di terminal", detail
       end
 
+      # A report — the answer to something the reader never typed: a batch of sub
+      # agents coming back, a loop that stopped, a fired job — is introduced by a
+      # rule, and the live block draws the same one (see
+      # Web::Reports#report_block). This is the half a reload has to keep: the
+      # stamp is all that survives in the transcript.
+      def test_a_report_entry_is_introduced_by_a_rule
+        channel = channel_with_archive(
+          personas: { "rubot" => { "name" => "Rubot" } },
+          messages: { "web_rubot" => [ [ "user", "Halo" ], [ "assistant", "Siap." ] ] }
+        )
+        Rubot::Session.store.append_messages("web_rubot", [
+          { "role" => "assistant", "content" => "Batch-nya selesai.", "background" => true,
+            "timestamp" => "2026-11-10T09:00:00Z" }
+        ], start_index: 2)
+
+        report = channel.history("web_rubot").last
+        assert report[:report], "an answer nobody prompted is a block of its own"
+        assert_equal 2, report[:idx]
+
+        html = View.render("_entry", entry: report, landed: false, token_query: "",
+                                     ig_accounts: [], ig_linkable_accounts: [], ig_persona: "")
+        assert_includes html, %(<hr class="report-sep">)
+        assert_includes html, "Batch-nya selesai."
+      end
+
+      # The answer to the reader's own prompt carries no rule: the separator is
+      # what makes a report mean something, and drawing it everywhere would make
+      # it mean nothing.
+      def test_an_ordinary_turn_has_no_rule_above_it
+        html = View.render("_entry",
+                           entry: { kind: :turn, idx: 1,
+                                    items: [ { kind: :text, text: "Siap." } ] },
+                           landed: false, token_query: "",
+                           ig_accounts: [], ig_linkable_accounts: [], ig_persona: "")
+
+        refute_includes html, "report-sep"
+      end
+
       # --- diff -----------------------------------------------------------
 
       # A tool that changed a file has to show what it did. The row says which

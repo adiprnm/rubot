@@ -167,7 +167,7 @@ module Rubot
 
         said = record_reports(channel)
         appended = []
-        channel.define_singleton_method(:broadcast_report_entry) do |sid, _index, text|
+        channel.define_singleton_method(:close_report_entry) do |sid, _index, text|
           appended << [ sid, text ]
         end
 
@@ -260,16 +260,100 @@ module Rubot
         appends = sent.select { |item| item.is_a?(Array) && item[0] == :append }
         refute_empty appends, "the reply is appended to the thread"
 
-        # First the block where the answer will be written, then the prose inside
-        # it — and only the prose. The block is never re-created while it streams:
-        # the entry carries the animation that plays when a turn arrives, and
-        # replaying that on every passage made the answer blink instead of grow.
+        # The block opens unfinished: a rule above it, because the answer is not
+        # the continuation of the one over it, and a live row inside it, which is
+        # what makes the page blink the same cursor a turn of the reader's own
+        # wears while it is being written.
         assert_includes appends.first[1], %(id="thread" hx-swap-oob="beforeend")
-        assert_includes appends.first[1], %(class="turn is-done is-report")
-        assert_includes appends.last[1], %(hx-swap-oob="innerHTML")
-        assert_includes appends.last[1], "Siap, hasilnya kubaca."
-        refute_includes appends.last[1], %(class="turn"),
-                        "the block around the answer is left standing while it is written"
+        assert_includes appends.first[1], %(class="turn is-report")
+        assert_includes appends.first[1], %(<hr class="report-sep">)
+        assert_includes appends.first[1], %(class="text is-live")
+
+        # The passages in between replace the prose inside that block and nothing
+        # else: the block is never re-created while it streams, because the entry
+        # carries the animation that plays when a turn arrives, and replaying that
+        # on every passage made the answer blink instead of grow.
+        assert_includes appends[1][1], %(hx-swap-oob="innerHTML")
+        assert_includes appends[1][1], "Siap, "
+        refute_includes appends[1][1], %(class="turn")
+
+        # The last one is the block itself, because retiring the cursor is a
+        # change to the block and not to its words — and it is drawn in the shape
+        # a reload finds in the archive.
+        final = appends.last[1]
+        assert_includes final, %(hx-swap-oob="true")
+        assert_includes final, %(class="turn is-done is-report")
+        assert_includes final, %(<hr class="report-sep">)
+        assert_includes final, "Siap, hasilnya kubaca."
+        refute_includes final, "is-live", "the answer is complete, so the cursor goes with it"
+      end
+
+      # The answer a report turn gives, as the page hears it: the passages it
+      # yields while it writes and the reply it ends with.
+      def stub_report_session(channel, passages, reply)
+        channel.define_singleton_method(:session_for) do |_sid|
+          fake = Object.new
+          fake.define_singleton_method(:process_background) do |_text, **_kwargs, &chunk|
+            passages.each { |passage| chunk&.call(passage) }
+            reply
+          end
+          fake
+        end
+      end
+
+      def appended_markup(channel, sid)
+        queue = Queue.new
+        channel.listen_for_events(sid, queue)
+        yield
+        sent = []
+        sent << queue.pop until queue.empty?
+        sent.select { |item| item.is_a?(Array) && item[0] == :append }.map { |item| item[1] }
+      end
+
+      # A passage can clean down to nothing: the model wrote a tool call into its
+      # prose, and dropping the markup left an empty string (see
+      # Formatting.without_tool_markup). Read as "open the block", that drew a
+      # second one under the same id — two rules, two cursors, and only the first
+      # one ever retired.
+      def test_a_passage_that_cleans_to_nothing_does_not_open_a_second_block
+        channel = channel_with_archive(
+          personas: { "rubot" => { "name" => "Rubot" } },
+          messages: { "web_rubot" => [ [ "user", "Halo" ], [ "assistant", "Siap." ] ] }
+        )
+        channel.instance_variable_set(:@running, true)
+        stub_report_session(channel, [ "", "Hasilnya jadi." ], "Hasilnya jadi.")
+
+        appends = appended_markup(channel, "web_rubot") do
+          channel.deliver_report("web_rubot", text: "laporan", label: "x:\n\n")
+        end
+
+        assert_equal 1, appends.count { |markup| markup.include?(%(class="turn is-report")) },
+                     "the block is opened once, whatever a passage cleans to"
+        assert_includes appends.last, %(class="turn is-done is-report")
+        assert_includes appends.last, "Hasilnya jadi."
+      end
+
+      # A conversation with no archive has no message index to name, and still
+      # gets the same block: it falls back to an id of its own, so the report is
+      # opened, streamed into and closed the way any other one is.
+      def test_a_report_without_an_archive_is_opened_and_closed_too
+        channel = channel_with_archive(
+          personas: { "rubot" => { "name" => "Rubot" } },
+          messages: { "web_rubot" => [ [ "user", "Halo" ], [ "assistant", "Siap." ] ] }
+        )
+        channel.instance_variable_set(:@running, true)
+        channel.define_singleton_method(:next_entry_index) { |_sid| nil }
+        stub_report_session(channel, [ "Hasilnya " ], "Hasilnya jadi.")
+
+        appends = appended_markup(channel, "web_rubot") do
+          channel.deliver_report("web_rubot", text: "laporan", label: "x:\n\n")
+        end
+
+        assert_includes appends.first, %(id="report-block-live")
+        assert_includes appends.first, %(class="text is-live")
+        assert_includes appends[1], %(id="report-text-live")
+        assert_includes appends.last, %(hx-swap-oob="true")
+        assert_includes appends.last, "Hasilnya jadi."
       end
 
       # A report that could not be delivered must not leave its answers marked
