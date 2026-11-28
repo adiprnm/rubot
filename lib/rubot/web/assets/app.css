@@ -2922,6 +2922,25 @@ summary.subagent-summary { cursor: pointer; }
 .subagent-summary::-webkit-details-marker { display: none; }
 .subagent-summary::marker { content: ""; }
 
+/* A thumb has no pointer, so the hand above is a promise only a mouse can see.
+   On a surface without hover the row that opens says so with a mark of its
+   own, at its right end — the left end already carries the run's mark, and a
+   second glyph there would be two saying "look here". It sits on the summary
+   alone, so a row with nothing to open still shows nothing, and it turns when
+   the row is open instead of vanishing, so the beak keeps saying which way the
+   panel went. */
+@media (hover: none) {
+  summary.subagent-summary::after {
+    content: "▸";
+    margin-left: auto;
+    padding-left: 0.4rem;
+    color: var(--fg-faint);
+    font-size: 0.62rem;
+    transition: transform .12s;
+  }
+  details[open] > summary.subagent-summary::after { transform: rotate(90deg); }
+}
+
 /* What the row opens onto. Set in the fixed-width face and wrapped rather than
    scrolled sideways: a brief is markdown with its own line breaks, and one
    written as a single paragraph would otherwise run off a phone. The height is

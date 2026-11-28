@@ -197,7 +197,51 @@ module Rubot
         assert_includes opening, "cursor: pointer", "the row has to say it opens"
       end
 
+      # The hand above is drawn by the pointer, and a thumb has none: on a touch
+      # screen the row that opens said nothing about it. So a surface without
+      # hover gets a mark of its own, at the row's right end rather than in
+      # front of the run's own mark. It belongs to the summary alone — a row with
+      # nothing behind it keeps showing nothing, which is what an absent marker
+      # promises there — and it turns when the row is open so the beak keeps
+      # telling the reader which way the panel went instead of disappearing.
+      def test_a_row_that_opens_says_so_where_there_is_no_pointer
+        css = File.read(File.expand_path("../lib/rubot/web/assets/app.css", __dir__))
+
+        block = hoverless_blocks(css).find { |body| body.include?("subagent-summary::after") }
+        refute_nil block, "a touch screen needs its own hint that the row opens"
+
+        mark = block[/summary\.subagent-summary::after \{([^}]*)\}/, 1].to_s
+        assert_match(/content: "[^"]+"/, mark, "the hint is a mark, not an empty box")
+        assert_includes mark, "margin-left: auto",
+                        "it sits at the row's right end; the left end carries the run's mark"
+        assert_includes block, "details[open] > summary.subagent-summary::after",
+                        "and it turns when the row is open, rather than lying about it"
+        refute_match(/^\.subagent-summary::after/, css,
+                     "the rows with nothing to open must not wear the mark")
+      end
+
       private
+
+      # Every `@media (hover: none)` block, found by counting braces rather than
+      # by scanning for one rule's shape: the block this file is looking for
+      # holds two rules, and a scan that stopped at the first closing brace would
+      # read half of it and call the rotation missing.
+      def hoverless_blocks(css)
+        blocks = []
+        offset = 0
+        while (open = css.match(/@media \(hover: none\) \{/, offset))
+          depth = 1
+          cursor = open.end(0)
+          while cursor < css.length && depth.positive?
+            depth += 1 if css[cursor] == "{"
+            depth -= 1 if css[cursor] == "}"
+            cursor += 1
+          end
+          blocks << css[open.end(0)...(cursor - 1)]
+          offset = open.end(0)
+        end
+        blocks
+      end
 
       def render_rows(run_id: "r1", phase: "tool", agent: "writer", line: "2 langkah",
                       task: nil, result: nil, error: nil)
