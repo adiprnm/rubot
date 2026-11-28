@@ -47,9 +47,6 @@ module Rubot
     # What says "run this, as the same command": they change who runs it, not
     # what it does, so the sentence is about what follows them.
     WRAPPERS = %w[sudo time nohup exec env command builtin].freeze
-    # How a compound line is cut before anything is read out of it: the first
-    # command is the one the reader asked for, and the rest is plumbing.
-    SEPARATORS = /&&|\|\||;|\|/
     # An argument `sleep` accepts as a duration: everything coreutils takes, so
     # that the forms a runaway waiter actually writes are read rather than
     # ignored. `infinity` is in it because an unbounded wait is the one case
@@ -231,9 +228,81 @@ module Rubot
     # The line's first real command: a leading `cd somewhere &&` says where the
     # work happened, not what the work was.
     def self.first_segment(command)
-      segments = command.split(SEPARATORS).map(&:strip).reject(&:empty?)
+      segments = segments_of(command)
       segments.shift while segments.first.to_s.match?(/\Acd\s/)
       segments.first.to_s
+    end
+
+    # The commands a line is made of, cut at the separators that sit between
+    # them. A separator inside quotes is not one: `grep -n "a\|b" file` is a
+    # single search for a pattern with a pipe in it, and splitting there left
+    # the reader with `Mencari "a\"` — the rest of the pattern gone, and a
+    # backslash stranded at the end of the word.
+    def self.segments_of(command)
+      segments = []
+      current = +""
+      quote = nil
+      text = command.to_s
+      index = 0
+
+      while index < text.length
+        char = text[index]
+
+        if quote
+          # Inside double quotes a backslash hides whatever follows it, which is
+          # how a quoted pattern carries a quote of its own (`"say \"hi\""`).
+          # Inside single quotes it hides nothing — there it is an ordinary
+          # character, even in front of the closing quote.
+          if quote == '"' && char == "\\" && index + 1 < text.length
+            current << char << text[index + 1]
+            index += 2
+            next
+          end
+
+          current << char
+          quote = nil if char == quote
+          index += 1
+          next
+        end
+
+        # Out of quotes a backslash does the same job: `grep -rn a\|b` searches
+        # for `a|b`, and the pipe in it is part of the pattern rather than the
+        # start of a second command.
+        if char == "\\" && index + 1 < text.length
+          current << char << text[index + 1]
+          index += 2
+          next
+        end
+
+        case char
+        when '"', "'"
+          quote = char
+          current << char
+          index += 1
+        when "&", "|"
+          # `&&` and `||` are one separator each; a lone `&` backgrounds a job
+          # and does not start a command of its own.
+          doubled = text[index + 1] == char
+          if char == "|" || doubled
+            segments << current
+            current = +""
+            index += doubled ? 2 : 1
+          else
+            current << char
+            index += 1
+          end
+        when ";"
+          segments << current
+          current = +""
+          index += 1
+        else
+          current << char
+          index += 1
+        end
+      end
+
+      segments << current
+      segments.map(&:strip).reject(&:empty?)
     end
 
     def self.wrapper?(token)
@@ -360,13 +429,35 @@ module Rubot
 
     # The pattern is read off the line rather than off the split tokens: a
     # pattern with a space in it arrives quoted, and "def caption" split in two
-    # would report a search for "def".
+    # would report a search for "def". The quotes are read with an eye on the
+    # backslash in front of them: a grep for `settings["api_key"]` writes its
+    # pattern as `"settings[\"api_key\"]"`, and stopping at the first quote —
+    # escaped or not — ended the row on a bare backslash and dropped the other
+    # half of what was searched for.
     def self.search_intent(segment)
-      match = segment.match(/\A\S+\s+(?:-\S+\s+)*("[^"]*"|'[^']*'|\S+)/)
-      pattern = match ? match[1].delete_prefix('"').delete_suffix('"').delete_prefix("'").delete_suffix("'") : ""
+      match = segment.match(/\A\S+\s+(?:-\S+\s+)*("(?:\\.|[^"\\])*"|'[^']*'|\S+)/)
+      pattern = match ? shell_word(match[1]) : ""
       return I18n.t("tool.shell.grep_bare") if pattern.empty?
 
       I18n.t("tool.shell.grep", pattern: "\"#{clip(pattern, PATTERN_CHARS)}\"")
+    end
+
+    # The word the shell would hand to grep: the quotes come off, and the
+    # backslashes they were hiding are resolved the way the shell resolves them.
+    # Inside double quotes that is only `\"`, `\\`, `\$` and a backtick, so a
+    # pattern written as `"a\|b"` really does keep its backslash — the reader
+    # typed it, and the row shows what was searched for. An unquoted word loses
+    # the backslash in front of any character, because there the shell uses it
+    # to take that character's meaning away.
+    def self.shell_word(word)
+      word = word.to_s
+      if word.length > 1 && word.start_with?("'") && word.end_with?("'")
+        word[1..-2].to_s
+      elsif word.length > 1 && word.start_with?('"') && word.end_with?('"')
+        word[1..-2].to_s.gsub(/\\(["\\$`])/, '\1')
+      else
+        word.gsub(/\\(.)/, '\1')
+      end
     end
 
     def self.git_intent(words)
@@ -506,7 +597,32 @@ module Rubot
       files = args["operation"].to_s == "files"
       return I18n.t(files ? "tool.search.files" : "tool.search.code") if pattern.empty?
 
-      I18n.t(files ? "tool.search.files_named" : "tool.search.code_for", pattern: clip(pattern, PATTERN_CHARS))
+      # A file search is a glob, not a regex, and its backslashes mean something
+      # the glob needs (see `relax_escapes`).
+      label = files ? pattern : relax_escapes(pattern)
+      I18n.t(files ? "tool.search.files_named" : "tool.search.code_for",
+             pattern: clip(label, PATTERN_CHARS))
+    end
+
+    # The punctuation a regex escapes only to say "this character, the literal
+    # one": `Session\.store` is a row about a method, not about a backslash, and
+    # the reader searching for it does not type the backslash either. The
+    # escapes that name something else — `\b`, `\s`, `\d`, `\w` — are kept,
+    # because taken off they become plain letters and the row then says
+    # something the model never searched for.
+    #
+    # A pattern that is a glob rather than a regex is left alone (see
+    # `search_caption`): in a glob `[1]` is a character class, so taking the
+    # backslash off `\[1\]` would change what the file name has to look like.
+    #
+    # The shell's own grep row keeps its backslashes too (see `shell_word`):
+    # there the pattern is read in grep's dialect, where `\(` and `\|` are the
+    # grouping the reader asked for.
+    def self.relax_escapes(pattern)
+      # `\\` is a literal backslash and is matched first, so it is handed back
+      # as it came: without that, a pattern like `path\\b` would lose the
+      # backslash it meant and gain a word boundary nobody asked for.
+      pattern.to_s.gsub(/(\\\\)|\\([.()\[\]{}?*+^$|\/-])/) { Regexp.last_match(1) || Regexp.last_match(2) }
     end
 
     def self.fetch_caption(args)
@@ -593,9 +709,19 @@ module Rubot
     # line on a phone.
     def self.clip(text, limit)
       value = text.to_s.strip
-      return value if value.length <= limit
+      return trim_escape(value) if value.length <= limit
 
-      "#{value[0, limit - 1].rstrip}…"
+      "#{trim_escape(value[0, limit - 1].rstrip)}…"
+    end
+
+    # A backslash at the end of a label has nothing left to escape: it is either
+    # what a cut left behind or a pattern that cannot be used as it stands.
+    # Dropped in both cases rather than left hanging. Runs of two are the
+    # pattern's own and stay as they are.
+    def self.trim_escape(value)
+      return value unless value[/\\+\z/].to_s.length.odd?
+
+      value[0, value.length - 1]
     end
 
     def self.unknown_caption(name, args)
