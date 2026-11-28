@@ -46,6 +46,49 @@ module Rubot
       assert_equal "Mencari \"def caption\" di dalam berkas", command("rg 'def caption'")
     end
 
+    # A quoted pattern carries quotes of its own often enough — a call grep for
+    # `settings["api_key"]` has to escape them — and the pattern is read off the
+    # line as the shell would see it. Cutting at the first escaped quote left
+    # the row ending on a bare backslash and dropped the rest of the pattern.
+    def test_a_search_whose_pattern_escapes_its_quotes_keeps_the_whole_pattern
+      assert_equal 'Mencari "setting("api_key")" di dalam berkas',
+                   command('grep -rn "setting(\"api_key\")" lib/rubot')
+      assert_equal 'Mencari "sse-swap\|addEventListener("htmx" di dalam berkas',
+                   command('grep -n "sse-swap\|addEventListener(\"htmx" lib/rubot/web/assets/app.js')
+    end
+
+    # The escape belongs to the shell, not to the row: what the reader searched
+    # for was `settings["api_key"]`, and that is the thing to show them.
+    def test_a_backslash_the_shell_resolves_is_not_shown
+      assert_equal 'Mencari "settings["api_key"]" di dalam berkas',
+                   command('grep -rn "settings[\"api_key\"]" lib/rubot')
+      assert_equal 'Mencari "a|b" di dalam berkas', command('grep -rn a\|b lib')
+    end
+
+    # A line is cut at the separators that sit between commands, and a pipe or
+    # a semicolon inside a pattern sits inside one command: it is part of what
+    # was searched for, not the start of something else.
+    def test_a_separator_inside_a_pattern_does_not_start_a_new_command
+      assert_equal 'Mencari "a\|b" di dalam berkas', command('grep -rn "a\|b" lib')
+      assert_equal 'Mencari "a;b" di dalam berkas', command('grep -rn "a;b" lib')
+      assert_equal "Mencari \"Turn\" di dalam berkas", command("rg -n Turn lib | head -5")
+      assert_equal "Memeriksa status git", command("git status && ls")
+      assert_equal "Membaca isi lib/a.rb", command("cat lib/a.rb; echo done")
+    end
+
+    # A cut in the middle of an escape must not leave the row ending on a
+    # backslash the reader never typed, and a short pattern gets the same
+    # treatment: a lone trailing backslash has nothing left to escape either way
+    # (see `trim_escape`).
+    def test_a_cut_pattern_does_not_end_on_a_backslash
+      cut_mid_escape = ("x" * 58) + '\b' + "yyy"
+      assert_equal "Mencari \"#{'x' * 58}…\" di dalam kode",
+                   ToolCaption.caption("search", { "pattern" => cut_mid_escape })
+
+      assert_equal 'Mencari "foo" di dalam kode',
+                   ToolCaption.caption("search", { "pattern" => "foo\\" })
+    end
+
     def test_common_git_commands_get_their_own_sentence
       assert_equal "Memeriksa status git", command("git status")
       assert_equal "Melihat riwayat commit", command("git log --oneline -3")
@@ -234,6 +277,50 @@ module Rubot
       assert_equal "Mencari berkas bernama \"**/*.rb\"",
                    ToolCaption.caption("search", { "operation" => "files", "pattern" => "**/*.rb" })
       assert_equal "Mencari di dalam kode", ToolCaption.caption("search", { "pattern" => "" })
+    end
+
+    # The row is for a reader, not for the engine. A pattern escapes the
+    # punctuation it means literally, and that backslash is noise in a sentence
+    # — `Session\.store` is a search for a method. An escape that names a
+    # character class is a different thing: taken off, `\bfoo\b` reads as
+    # `bfoob`, which is not what the model searched for.
+    def test_a_search_pattern_loses_the_backslashes_that_only_escape_punctuation
+      assert_equal 'Mencari "Session.store|StoreService.request" di dalam kode',
+                   ToolCaption.caption("search", { "pattern" => 'Session\.store|StoreService\.request' })
+      assert_equal 'Mencari "tool_call(" di dalam kode',
+                   ToolCaption.caption("search", { "pattern" => 'tool_call\(' })
+      assert_equal 'Mencari "\bfoo\b|\s+\d" di dalam kode',
+                   ToolCaption.caption("search", { "pattern" => '\bfoo\b|\s+\d' })
+    end
+
+    # Punctuation a regex escapes to take its meaning away is unscathed by the
+    # row, which keeps the escape that is still doing work.
+    def test_a_search_pattern_keeps_its_class_escapes
+      assert_equal 'Mencari "a|b" di dalam kode',
+                   ToolCaption.caption("search", { "pattern" => 'a\|b' })
+      assert_equal 'Mencari "^start$\d" di dalam kode',
+                   ToolCaption.caption("search", { "pattern" => '^start\$\d' })
+      assert_equal 'Mencari "https://example.com/a" di dalam kode',
+                   ToolCaption.caption("search", { "pattern" => 'https:\/\/example.com\/a' })
+    end
+
+    # A doubled backslash is a literal one, and it is handed back as it came:
+    # taking half of it off would turn the pattern's own backslash into the
+    # escape of whatever character followed it.
+    def test_a_search_pattern_keeps_a_literal_backslash_whole
+      assert_equal "Mencari \"path\\\\b|path\\\\s\" di dalam kode",
+                   ToolCaption.caption("search", { "pattern" => "path\\\\b|path\\\\s" })
+      assert_equal "Mencari \"foo\\\\\" di dalam kode",
+                   ToolCaption.caption("search", { "pattern" => "foo\\\\" })
+    end
+
+    # A file search takes a glob, not a regex, and a glob's brackets mean a
+    # character class that its backslashes are there to take away.
+    def test_a_file_search_keeps_the_glob_as_it_was_written
+      assert_equal 'Mencari berkas bernama "app\[1\].rb"',
+                   ToolCaption.caption("search", { "operation" => "files", "pattern" => 'app\[1\].rb' })
+      assert_equal 'Mencari berkas bernama "**/*.rb"',
+                   ToolCaption.caption("search", { "operation" => "files", "pattern" => "**/*.rb" })
     end
 
     def test_a_fetch_names_the_page
