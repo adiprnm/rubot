@@ -598,12 +598,17 @@ class TestWebLoops < Minitest::Test
       on_finish: ->(id, outcome) { channel.report_loop_finished("s1", id, outcome) }
     )
 
-    2.times do
-      runner.resume(state.id)
+    answers = 2.times.map do
+      answer = runner.resume(state.id)
       runner.join(5)
+      answer
     end
 
     assert_empty turns, "a loop that has spent its budget buys no turn"
+    refute_includes answers.first, "resumed",
+                    "the answer cannot claim a wake that did not happen"
+    assert_includes answers.first, "stays paused",
+                    "it says where the loop is instead of what did not happen"
     assert_empty delivered, "the same stop is not announced to the conversation twice"
     reread = @store.load(state.id)
     assert_equal "paused", reread.status
