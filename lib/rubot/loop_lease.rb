@@ -67,19 +67,33 @@ module Rubot
     end
 
     # Whether somebody holds the lease. It must not steal one on the way to the
-    # answer: asked while a run is in flight -- which is every time the loop tool
-    # is asked to resume an active loop -- a lease it managed to take would be a
-    # lease taken out of a live run's hands. So a lock it does get is given
-    # straight back, and the answer is that nobody held it.
+    # answer, and it must not look like a holder to anything else that asks.
     #
-    # Asking leaves an empty lock file behind for a loop nobody ever ran, which
-    # is cheap: the file has no content worth keeping, and the alternative (skip
-    # the open when the file is missing) is a race between the check and the open.
+    # A shared lock is what buys the second half. A run takes the lease
+    # exclusively (see .hold); a reader takes it shared -- LOCK_SH -- and gives it
+    # straight back. Two shared locks coexist, so two pages asking at the same
+    # moment both read "free", which is the answer the loop's file already gives.
+    # Asked of an exclusive lock instead -- which is what this was -- the second
+    # asker took the first asker for a run: a dead loop wore a turning ring, and
+    # a resume landing in that window was refused as already active.
+    #
+    # A reader still brushes against a real run for the instant it holds the
+    # file, because an exclusive lock cannot land while a shared one is open.
+    # That is why the question is one non-blocking call and nothing more: the
+    # shorter it is, the smaller the window two readers of the same loop can
+    # widen between them.
     def self.held?(dir, id)
-      lease = hold(dir, id)
-      return true if lease.nil?
-
-      lease.release
+      path = path_for(dir, id)
+      FileUtils.mkdir_p(dir)
+      io = File.open(path, File::RDONLY | File::CREAT, 0o600)
+      begin
+        return true unless io.flock(File::LOCK_SH | File::LOCK_NB)
+      ensure
+        # The lock lives in the open file description, so closing is releasing;
+        # a probe that left a description behind would be one descriptor per ask,
+        # and there is an ask every three seconds a panel is open.
+        io.close
+      end
       false
     rescue SystemCallError, IOError
       # A lock file that cannot be opened cannot be proved free either, so the
